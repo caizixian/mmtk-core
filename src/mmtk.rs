@@ -1,12 +1,14 @@
 //! MMTk instance.
 use crate::plan::Plan;
 use crate::policy::sft_map::{create_sft_map, SFTMap};
+use crate::policy::space::print_vm_map;
 use crate::scheduler::GCWorkScheduler;
 
 #[cfg(feature = "extreme_assertions")]
 use crate::util::edge_logger::EdgeLogger;
 use crate::util::finalizable_processor::FinalizableProcessor;
 use crate::util::heap::layout::{self, Mmapper, VMMap};
+use crate::util::metadata::side_metadata::{GLOBAL_SIDE_METADATA_BASE_ADDRESS, GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS, LOCAL_SIDE_METADATA_BASE_ADDRESS};
 use crate::util::opaque_pointer::*;
 use crate::util::options::Options;
 use crate::util::reference_processor::ReferenceProcessors;
@@ -95,6 +97,9 @@ pub struct MMTK<VM: VMBinding> {
 
 impl<VM: VMBinding> MMTK<VM> {
     pub fn new(options: Arc<Options>) -> Self {
+        dbg!(GLOBAL_SIDE_METADATA_BASE_ADDRESS);
+        dbg!(GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS);
+        dbg!(LOCAL_SIDE_METADATA_BASE_ADDRESS);
         // Initialize SFT first in case we need to use this in the constructor.
         // The first call will initialize SFT map. Other calls will be blocked until SFT map is initialized.
         SFT_MAP.initialize_once(&create_sft_map);
@@ -126,6 +131,13 @@ impl<VM: VMBinding> MMTK<VM> {
         if *options.transparent_hugepages {
             MMAPPER.set_mmap_strategy(crate::util::memory::MmapStrategy::TransparentHugePages);
         }
+
+        let spaces = plan.get_spaces();
+        let mut buf= String::new();
+        for space in spaces {
+            print_vm_map(space, &mut buf).unwrap();
+        }
+        println!("{}", buf);
 
         MMTK {
             options,

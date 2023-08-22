@@ -153,7 +153,7 @@ mod space_map {
         /// If any of these changes, the test `test_address_arithmetic()` may fail, and this constant will need to be updated.
         /// Currently our spaces are using address range 0x0000_0200_0000_0000 to 0x0000_2200_0000_0000 (with a maximum of 16 spaces).
         /// When masked with this constant, the index is 1 to 16. If we mask any arbitrary address with this mask, we will get 0 to 31 (32 entries).
-        pub const ADDRESS_MASK: usize = 0x0000_3f00_0000_0000usize;
+        pub const ADDRESS_MASK: usize = 0x0000_003e_0000_0000usize;
 
         /// Create a new space map.
         #[allow(clippy::assertions_on_constants)] // We assert to make sure the constants

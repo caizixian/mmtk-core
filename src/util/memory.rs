@@ -97,6 +97,9 @@ pub fn mmap_fixed(
     strategy: MmapStrategy,
 ) -> Result<()> {
     let ptr = start.to_mut_ptr();
+    println!("mmap {} 0x{:x}", start, size);
+    assert!((start.as_usize() & !0x0000003fffffffff) == 0, "sv39");
+    assert!((start.add(size).as_usize() & !0x0000003fffffffff) == 0, "sv39");
     wrap_libc_call(
         &|| unsafe { libc::mmap(start.to_mut_ptr(), size, prot, flags, -1, 0) },
         ptr,
