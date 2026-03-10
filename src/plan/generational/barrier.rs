@@ -1,6 +1,7 @@
 //! Generational read/write barrier implementations.
 
 use crate::plan::barriers::BarrierSemantics;
+use crate::plan::NurseryTracePolicy;
 use crate::plan::PlanTraceObject;
 use crate::plan::VectorQueue;
 use crate::policy::gc_work::DEFAULT_TRACE;
@@ -11,7 +12,6 @@ use crate::vm::slot::MemorySlice;
 use crate::vm::VMBinding;
 use crate::MMTK;
 
-use super::gc_work::GenNurseryProcessEdges;
 use super::gc_work::ProcessModBuf;
 use super::gc_work::ProcessRegionModBuf;
 use super::global::GenerationalPlanExt;
@@ -46,7 +46,7 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>>
         let buf = self.modbuf.take();
         if !buf.is_empty() {
             self.mmtk.scheduler.work_buckets[WorkBucketStage::Closure]
-                .add(ProcessModBuf::<GenNurseryProcessEdges<VM, P, DEFAULT_TRACE>>::new(buf));
+                .add(ProcessModBuf::<VM, NurseryTracePolicy<VM, P, DEFAULT_TRACE>>::new(buf));
         }
     }
 
@@ -55,7 +55,8 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>>
         if !buf.is_empty() {
             debug_assert!(!buf.is_empty());
             self.mmtk.scheduler.work_buckets[WorkBucketStage::Closure].add(ProcessRegionModBuf::<
-                GenNurseryProcessEdges<VM, P, DEFAULT_TRACE>,
+                VM,
+                NurseryTracePolicy<VM, P, DEFAULT_TRACE>,
             >::new(buf));
         }
     }
