@@ -1222,3 +1222,73 @@ impl<VM: VMBinding> ProcessEdgesWork for UnsupportedProcessEdges<VM> {
         panic!("unsupported!")
     }
 }
+
+// ============================================================================
+// ObjectTracePolicy: A new, simpler trait that captures only the "how to trace
+// an object" concern, decoupled from slot processing and work packet plumbing.
+//
+// This is the first step in an incremental refactoring of ProcessEdgesWork.
+// See https://github.com/mmtk/mmtk-core/issues/599
+// ============================================================================
+
+use crate::plan::ObjectQueue;
+
+/// A policy that defines how a GC algorithm traces objects during heap traversal.
+///
+/// This trait captures only the plan/algorithm-specific aspect of tracing: given an object,
+/// what should happen to it? (Mark it? Copy it? Forward it?) The trait is independent of
+/// how slots are processed, how work packets are created, and how workers are managed.
+///
+/// # Motivation
+///
+/// The existing [`ProcessEdgesWork`] trait conflates three concerns:
+/// 1. Object tracing (`trace_object`)
+/// 2. Slot processing (`process_slot`, `process_slots`)
+/// 3. Work packet plumbing (`create_scan_work`, `flush`, `start_or_dispatch_scan_work`)
+///
+/// `ObjectTracePolicy` extracts concern #1 into a standalone trait, enabling:
+/// - Simpler plan-specific code (plans only define tracing behavior)
+/// - Reuse of generic slot-processing and scanning work packets
+/// - Easier composition of tracing behaviors
+///
+/// # Backward Compatibility
+///
+/// A blanket implementation bridges from `ProcessEdgesWork` to `ObjectTracePolicy`,
+/// so all existing `ProcessEdgesWork` implementations automatically satisfy this trait.
+/// Plans can incrementally migrate to `ObjectTracePolicy` without breaking changes.
+pub trait ObjectTracePolicy: Send + 'static {
+    /// The VM binding type.
+    type VM: VMBinding;
+
+    /// Whether this trace may move objects.
+    ///
+    /// If true, slot contents will be updated after tracing to reflect moved objects.
+    /// This corresponds to `ProcessEdgesWork::OVERWRITE_REFERENCE` and
+    /// `PlanTraceObject::may_move_objects`.
+    const MAY_MOVE_OBJECTS: bool;
+
+    /// Trace an object according to this policy.
+    ///
+    /// The implementation should determine which space the object resides in and
+    /// invoke the appropriate space-specific tracing logic (mark, copy, forward, etc.).
+    ///
+    /// If the object is visited for the first time, the implementation should enqueue it
+    /// into `queue` so that its children will be scanned later.
+    ///
+    /// Returns the (possibly new) object reference. If the object was copied/moved,
+    /// the new reference is returned; otherwise the original reference is returned.
+    fn trace_object<Q: ObjectQueue>(
+        &mut self,
+        queue: &mut Q,
+        object: ObjectReference,
+        worker: &mut GCWorker<Self::VM>,
+    ) -> ObjectReference;
+
+    /// Post-scan hook called after an object's children have been enumerated.
+    ///
+    /// Policies that need to perform actions after scanning (e.g., Immix line marking)
+    /// should override this. The default implementation does nothing.
+    fn post_scan_object(&self, _object: ObjectReference) {
+        // No-op by default.
+    }
+}
