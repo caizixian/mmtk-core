@@ -290,6 +290,15 @@ pub(crate) struct ProcessEdgesWorkTracerContext<E: ProcessEdgesWork> {
     phantom_data: PhantomData<E>,
 }
 
+impl<E: ProcessEdgesWork> ProcessEdgesWorkTracerContext<E> {
+    pub fn new(stage: WorkBucketStage) -> Self {
+        Self {
+            stage,
+            phantom_data: PhantomData,
+        }
+    }
+}
+
 impl<E: ProcessEdgesWork> Clone for ProcessEdgesWorkTracerContext<E> {
     fn clone(&self) -> Self {
         Self { ..*self }
@@ -353,10 +362,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for VMProcessWeakRefs<E> {
         let stage = WorkBucketStage::VMRefClosure;
 
         let need_to_repeat = {
-            let tracer_factory = ProcessEdgesWorkTracerContext::<E> {
-                stage,
-                phantom_data: PhantomData,
-            };
+            let tracer_factory = ProcessEdgesWorkTracerContext::<E>::new(stage);
             <E::VM as VMBinding>::VMScanning::process_weak_refs(worker, tracer_factory)
         };
 
@@ -395,10 +401,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for VMForwardWeakRefs<E> {
 
         let stage = WorkBucketStage::VMRefForwarding;
 
-        let tracer_factory = ProcessEdgesWorkTracerContext::<E> {
-            stage,
-            phantom_data: PhantomData,
-        };
+        let tracer_factory = ProcessEdgesWorkTracerContext::<E>::new(stage);
         <E::VM as VMBinding>::VMScanning::forward_weak_refs(worker, tracer_factory)
     }
 }
@@ -1049,6 +1052,30 @@ impl<VM: VMBinding> ProcessEdgesWork for UnsupportedProcessEdges<VM> {
     }
 }
 
+/// An `ObjectTracePolicy` type that panics when any of its methods is used.
+/// This is currently used for plans that do not support transitively pinning.
+pub struct UnsupportedTracePolicy<VM: VMBinding> {
+    phantom: PhantomData<VM>,
+}
+
+impl<VM: VMBinding> ObjectTracePolicy for UnsupportedTracePolicy<VM> {
+    type VM = VM;
+    const MAY_MOVE_OBJECTS: bool = false;
+
+    fn from_mmtk(_mmtk: &'static MMTK<Self::VM>) -> Self {
+        panic!("unsupported!")
+    }
+
+    fn trace_object<Q: ObjectQueue>(
+        &mut self,
+        _queue: &mut Q,
+        _object: ObjectReference,
+        _worker: &mut GCWorker<Self::VM>,
+    ) -> ObjectReference {
+        panic!("unsupported!")
+    }
+}
+
 // ============================================================================
 // ObjectTracePolicy: A new, simpler trait that captures only the "how to trace
 // an object" concern, decoupled from slot processing and work packet plumbing.
@@ -1059,37 +1086,7 @@ impl<VM: VMBinding> ProcessEdgesWork for UnsupportedProcessEdges<VM> {
 
 use crate::plan::ObjectQueue;
 
-/// A lightweight adapter that wraps a mutable reference to a [`ProcessEdgesWork`]
-/// and implements [`ObjectTracer`] by forwarding `trace_object` calls.
-///
-/// This enables infrastructure code that only needs `trace_object()` (such as
-/// [`Finalizable::keep_alive`](crate::vm::Finalizable::keep_alive),
-/// reference processing, and finalization) to use the simpler `ObjectTracer`
-/// abstraction instead of requiring the full `ProcessEdgesWork` interface.
-///
-/// # Example
-///
-/// ```ignore
-/// fn process<E: ProcessEdgesWork>(e: &mut E, obj: ObjectReference) {
-///     let mut tracer = ProcessEdgesWorkAsTracer::new(e);
-///     // Now use tracer where ObjectTracer is needed
-///     let new_obj = tracer.trace_object(obj);
-/// }
-/// ```
-pub struct ProcessEdgesWorkAsTracer<'a, E: ProcessEdgesWork>(pub &'a mut E);
 
-impl<'a, E: ProcessEdgesWork> ProcessEdgesWorkAsTracer<'a, E> {
-    pub fn new(edges: &'a mut E) -> Self {
-        Self(edges)
-    }
-}
-
-impl<E: ProcessEdgesWork> ObjectTracer for ProcessEdgesWorkAsTracer<'_, E> {
-    #[inline(always)]
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        self.0.trace_object(object)
-    }
-}
 
 /// A policy that defines how a GC algorithm traces objects during heap traversal.
 ///

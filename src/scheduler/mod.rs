@@ -35,3 +35,4 @@ pub use gc_work::ProcessEdgesWork;
 pub use gc_work::ObjectTracePolicy;
 pub use gc_work::PlanObjectTracePolicy;
 pub use gc_work::PolicyDrivenProcessEdges;
+pub use gc_work::UnsupportedTracePolicy;
