@@ -1222,3 +1222,181 @@ impl<VM: VMBinding> ProcessEdgesWork for UnsupportedProcessEdges<VM> {
         panic!("unsupported!")
     }
 }
+
+// ============================================================================
+// New TracePolicy-based architecture
+// ============================================================================
+
+use crate::plan::GenerationalPlanExt;
+
+/// The plan-specific tracing policy. This is the **only** thing a plan needs to provide.
+///
+/// A `TracePolicy` encapsulates how to trace a single object (i.e., mark or copy it),
+/// and optionally what to do after scanning each object. All other concerns —
+/// slot processing, node queue management, work packet lifecycle, scan work creation —
+/// are handled generically by [`GCProcessEdges`] and [`GCScanObjects`].
+///
+/// This trait replaces the overloaded [`ProcessEdgesWork`] trait for new code.
+pub trait TracePolicy<VM: VMBinding>: Send + Clone + 'static {
+    /// Whether this trace may move objects (determines if slots need updating).
+    fn may_move_objects(&self) -> bool;
+
+    /// Trace one object. If this is the first visit, enqueue it in `queue`.
+    fn trace_object(
+        &self,
+        queue: &mut VectorObjectQueue,
+        object: ObjectReference,
+        worker: &mut GCWorker<VM>,
+    ) -> ObjectReference;
+
+    /// Hook called after scanning each object (e.g., Immix line marking).
+    /// The default is a no-op.
+    fn post_scan_object(&self, _object: ObjectReference) {}
+
+    /// Construct this policy from an MMTK instance.
+    /// Used when creating new work packets internally.
+    fn from_mmtk(mmtk: &'static MMTK<VM>) -> Self;
+}
+
+/// A `TracePolicy` that traces objects using [`PlanTraceObject::trace_object`] with
+/// a specific [`TraceKind`]. This is the most common trace policy, used by most plans.
+///
+/// Replaces `PlanProcessEdges<VM, P, KIND>`.
+pub struct MatureTracePolicy<
+    VM: VMBinding,
+    P: Plan<VM = VM> + PlanTraceObject<VM>,
+    const KIND: TraceKind,
+> {
+    plan: &'static P,
+    _phantom: PhantomData<VM>,
+}
+
+impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind> Clone
+    for MatureTracePolicy<VM, P, KIND>
+{
+    fn clone(&self) -> Self {
+        Self {
+            plan: self.plan,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
+    TracePolicy<VM> for MatureTracePolicy<VM, P, KIND>
+{
+    fn may_move_objects(&self) -> bool {
+        P::may_move_objects::<KIND>()
+    }
+
+    fn trace_object(
+        &self,
+        queue: &mut VectorObjectQueue,
+        object: ObjectReference,
+        worker: &mut GCWorker<VM>,
+    ) -> ObjectReference {
+        self.plan.trace_object::<VectorObjectQueue, KIND>(queue, object, worker)
+    }
+
+    fn post_scan_object(&self, object: ObjectReference) {
+        self.plan.post_scan_object(object);
+    }
+
+    fn from_mmtk(mmtk: &'static MMTK<VM>) -> Self {
+        let plan = mmtk.get_plan().downcast_ref::<P>().unwrap();
+        Self {
+            plan,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+/// A `TracePolicy` for nursery GC in generational plans.
+/// Traces using [`GenerationalPlanExt::trace_object_nursery`].
+///
+/// Replaces `GenNurseryProcessEdges<VM, P, KIND>`.
+pub struct NurseryTracePolicy<
+    VM: VMBinding,
+    P: GenerationalPlanExt<VM> + PlanTraceObject<VM>,
+    const KIND: TraceKind,
+> {
+    plan: &'static P,
+    _phantom: PhantomData<VM>,
+}
+
+impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>, const KIND: TraceKind> Clone
+    for NurseryTracePolicy<VM, P, KIND>
+{
+    fn clone(&self) -> Self {
+        Self {
+            plan: self.plan,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>, const KIND: TraceKind>
+    TracePolicy<VM> for NurseryTracePolicy<VM, P, KIND>
+{
+    fn may_move_objects(&self) -> bool {
+        // Nursery always moves objects (copies from nursery to mature).
+        true
+    }
+
+    fn trace_object(
+        &self,
+        queue: &mut VectorObjectQueue,
+        object: ObjectReference,
+        worker: &mut GCWorker<VM>,
+    ) -> ObjectReference {
+        self.plan.trace_object_nursery::<VectorObjectQueue, KIND>(queue, object, worker)
+    }
+
+    fn post_scan_object(&self, object: ObjectReference) {
+        self.plan.post_scan_object(object);
+    }
+
+    fn from_mmtk(mmtk: &'static MMTK<VM>) -> Self {
+        let plan = mmtk.get_plan().downcast_ref::<P>().unwrap();
+        Self {
+            plan,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+/// A `TracePolicy` that panics at runtime. Used for plans that don't support
+/// pinning or transitive pinning roots.
+///
+/// Replaces `UnsupportedProcessEdges<VM>`.
+#[derive(Default)]
+pub struct UnsupportedTracePolicy<VM: VMBinding> {
+    _phantom: PhantomData<VM>,
+}
+
+impl<VM: VMBinding> Clone for UnsupportedTracePolicy<VM> {
+    fn clone(&self) -> Self {
+        Self {
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<VM: VMBinding> TracePolicy<VM> for UnsupportedTracePolicy<VM> {
+    fn may_move_objects(&self) -> bool {
+        panic!("unsupported!")
+    }
+
+    fn trace_object(
+        &self,
+        _queue: &mut VectorObjectQueue,
+        _object: ObjectReference,
+        _worker: &mut GCWorker<VM>,
+    ) -> ObjectReference {
+        panic!("unsupported!")
+    }
+
+    fn from_mmtk(_mmtk: &'static MMTK<VM>) -> Self {
+        panic!("unsupported!")
+    }
+}
