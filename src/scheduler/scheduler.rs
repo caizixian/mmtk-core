@@ -217,8 +217,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         // `VMProcessWeakRefs` packet can be an ordinary packet (doesn't have to be a sentinel)
         // because there are no other packets in the bucket.  We set it as sentinel for
         // consistency.
-        self.work_buckets[WorkBucketStage::VMRefClosure]
-            .set_sentinel(Box::new(VMProcessWeakRefs::<VM, C::DefaultTracePolicy>::new()));
+        self.work_buckets[WorkBucketStage::VMRefClosure].set_sentinel(Box::new(
+            VMProcessWeakRefs::<VM, C::DefaultTracePolicy>::new(),
+        ));
 
         if plan.constraints().needs_forward_after_liveness {
             // VM-specific weak ref forwarding

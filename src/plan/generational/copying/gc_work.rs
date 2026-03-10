@@ -3,7 +3,6 @@ use crate::plan::{MatureTracePolicy, NurseryTracePolicy, UnsupportedTracePolicy}
 use crate::vm::*;
 
 use crate::policy::gc_work::DEFAULT_TRACE;
-use crate::scheduler::gc_work::{PlanProcessEdges, UnsupportedProcessEdges};
 
 pub struct GenCopyNurseryGCWorkContext<VM: VMBinding>(std::marker::PhantomData<VM>);
 impl<VM: VMBinding> crate::scheduler::GCWorkContext for GenCopyNurseryGCWorkContext<VM> {

@@ -1,5 +1,4 @@
 use super::global::GenImmix;
-use crate::plan::generational::gc_work::GenNurseryProcessEdges;
 use crate::plan::{MatureTracePolicy, NurseryTracePolicy, UnsupportedTracePolicy};
 use crate::policy::gc_work::TraceKind;
 use crate::policy::gc_work::DEFAULT_TRACE;

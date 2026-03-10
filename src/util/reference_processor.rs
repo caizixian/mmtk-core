@@ -10,8 +10,8 @@ use crate::scheduler::gc_work::GCTracerContext;
 use crate::scheduler::WorkBucketStage;
 use crate::util::ObjectReference;
 use crate::util::VMWorkerThread;
-use crate::vm::{ObjectTracer, ObjectTracerContext, ReferenceGlue};
 use crate::vm::VMBinding;
+use crate::vm::{ObjectTracer, ObjectTracerContext, ReferenceGlue};
 
 /// Holds all reference processors for each weak reference Semantics.
 /// Currently this is based on Java's weak reference semantics (soft/weak/phantom).
@@ -91,7 +91,8 @@ impl ReferenceProcessors {
         trace: &mut impl ObjectTracer,
         mmtk: &'static MMTK<VM>,
     ) {
-        self.soft.retain::<VM>(trace, is_nursery_gc(mmtk.get_plan()));
+        self.soft
+            .retain::<VM>(trace, is_nursery_gc(mmtk.get_plan()));
     }
 
     /// Scan soft references.
@@ -321,9 +322,7 @@ impl ReferenceProcessor {
                 );
             }
 
-            if let Some(old_referent) =
-                VM::VMReferenceGlue::get_referent(reference)
-            {
+            if let Some(old_referent) = VM::VMReferenceGlue::get_referent(reference) {
                 let new_referent = ReferenceProcessor::trace_forward_object(trace, old_referent);
                 VM::VMReferenceGlue::set_referent(reference, new_referent);
 
@@ -441,8 +440,7 @@ impl ReferenceProcessor {
             }
             num_live += 1;
             // Reference is definitely reachable.  Retain the referent.
-            if let Some(referent) = VM::VMReferenceGlue::get_referent(*reference)
-            {
+            if let Some(referent) = VM::VMReferenceGlue::get_referent(*reference) {
                 Self::keep_referent_alive(trace, referent);
                 num_retained += 1;
                 trace!(" ~> {:?} (retained)", referent);
@@ -563,7 +561,8 @@ impl<VM: VMBinding, T: TracePolicy<VM>> GCWork<VM> for SoftRefProcessing<VM, T> 
                 _phantom: PhantomData,
             };
             tracer_context.with_tracer(worker, |tracer| {
-                mmtk.reference_processors.retain_soft_refs::<VM>(tracer, mmtk);
+                mmtk.reference_processors
+                    .retain_soft_refs::<VM>(tracer, mmtk);
             });
         } else {
             // Scan soft references immediately without retaining.

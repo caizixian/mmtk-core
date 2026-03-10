@@ -144,8 +144,9 @@ impl<VM: VMBinding> Plan for Compressor<VM> {
         }
 
         // VM-specific weak ref processing
-        scheduler.work_buckets[WorkBucketStage::VMRefClosure]
-            .set_sentinel(Box::new(VMProcessWeakRefs::<VM, MarkingTracePolicy<VM>>::new()));
+        scheduler.work_buckets[WorkBucketStage::VMRefClosure].set_sentinel(Box::new(
+            VMProcessWeakRefs::<VM, MarkingTracePolicy<VM>>::new(),
+        ));
 
         // VM-specific weak ref forwarding
         scheduler.work_buckets[WorkBucketStage::VMRefForwarding]

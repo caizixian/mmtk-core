@@ -91,4 +91,3 @@ pub trait GCWorkContext: Send + 'static {
     /// type member.
     type PinningTracePolicy: TracePolicy<Self::VM>;
 }
-

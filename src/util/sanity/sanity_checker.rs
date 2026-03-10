@@ -136,23 +136,25 @@ impl<P: Plan> GCWork<P::VM> for ScheduleSanityGC<P> {
         {
             let sanity_checker = mmtk.sanity_checker.lock().unwrap();
             for roots in &sanity_checker.root_slots {
-                scheduler.work_buckets[WorkBucketStage::Closure].add(
-                    GCProcessEdges::<P::VM, SanityTracePolicy<P::VM>>::new(
-                        roots.clone(),
-                        true,
-                        mmtk,
-                        WorkBucketStage::Closure,
-                    ),
-                );
+                scheduler.work_buckets[WorkBucketStage::Closure].add(GCProcessEdges::<
+                    P::VM,
+                    SanityTracePolicy<P::VM>,
+                >::new(
+                    roots.clone(),
+                    true,
+                    mmtk,
+                    WorkBucketStage::Closure,
+                ));
             }
             for roots in &sanity_checker.root_nodes {
-                scheduler.work_buckets[WorkBucketStage::Closure].add(
-                    GCProcessRootNodes::<P::VM, SanityTracePolicy<P::VM>>::new(
-                        roots.clone(),
-                        WorkBucketStage::Closure,
-                        mmtk,
-                    ),
-                );
+                scheduler.work_buckets[WorkBucketStage::Closure].add(GCProcessRootNodes::<
+                    P::VM,
+                    SanityTracePolicy<P::VM>,
+                >::new(
+                    roots.clone(),
+                    WorkBucketStage::Closure,
+                    mmtk,
+                ));
             }
         }
         // Prepare global/collectors/mutators
