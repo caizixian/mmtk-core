@@ -1,4 +1,5 @@
 use super::global::PageProtect;
+use crate::plan::MatureTracePolicy;
 use crate::policy::gc_work::DEFAULT_TRACE;
 use crate::scheduler::gc_work::PlanProcessEdges;
 use crate::vm::VMBinding;
@@ -9,4 +10,6 @@ impl<VM: VMBinding> crate::scheduler::GCWorkContext for PPGCWorkContext<VM> {
     type PlanType = PageProtect<VM>;
     type DefaultProcessEdges = PlanProcessEdges<Self::VM, PageProtect<VM>, DEFAULT_TRACE>;
     type PinningProcessEdges = PlanProcessEdges<Self::VM, PageProtect<VM>, DEFAULT_TRACE>;
+    type DefaultTracePolicy = MatureTracePolicy<VM, PageProtect<VM>, DEFAULT_TRACE>;
+    type PinningTracePolicy = MatureTracePolicy<VM, PageProtect<VM>, DEFAULT_TRACE>;
 }

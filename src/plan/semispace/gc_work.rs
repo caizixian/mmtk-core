@@ -1,4 +1,5 @@
 use super::global::SemiSpace;
+use crate::plan::{MatureTracePolicy, UnsupportedTracePolicy};
 use crate::policy::gc_work::DEFAULT_TRACE;
 use crate::scheduler::gc_work::{PlanProcessEdges, UnsupportedProcessEdges};
 use crate::vm::VMBinding;
@@ -9,4 +10,6 @@ impl<VM: VMBinding> crate::scheduler::GCWorkContext for SSGCWorkContext<VM> {
     type PlanType = SemiSpace<VM>;
     type DefaultProcessEdges = PlanProcessEdges<Self::VM, SemiSpace<VM>, DEFAULT_TRACE>;
     type PinningProcessEdges = UnsupportedProcessEdges<VM>;
+    type DefaultTracePolicy = MatureTracePolicy<VM, SemiSpace<VM>, DEFAULT_TRACE>;
+    type PinningTracePolicy = UnsupportedTracePolicy<VM>;
 }

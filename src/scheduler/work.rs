@@ -59,7 +59,7 @@ pub trait GCWork<VM: VMBinding>: 'static + Send {
 }
 
 use super::gc_work::ProcessEdgesWork;
-use crate::plan::Plan;
+use crate::plan::{Plan, TracePolicy};
 
 /// This trait provides a group of associated types that are needed to
 /// create GC work packets for a certain plan. For example, `GCWorkScheduler.schedule_common_work()`
@@ -98,4 +98,13 @@ pub trait GCWorkContext: Send + 'static {
     /// If a plan does not support object pinning, it should use `UnsupportedProcessEdges` for this
     /// type member.
     type PinningProcessEdges: ProcessEdgesWork<VM = Self::VM>;
+
+    /// The [`TracePolicy`] for default (non-pinning) tracing.
+    /// This is the TracePolicy-based equivalent of `DefaultProcessEdges`.
+    type DefaultTracePolicy: TracePolicy<Self::VM>;
+
+    /// The [`TracePolicy`] for pinning tracing.
+    /// This is the TracePolicy-based equivalent of `PinningProcessEdges`.
+    type PinningTracePolicy: TracePolicy<Self::VM>;
 }
+
