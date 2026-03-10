@@ -6,7 +6,7 @@ use std::vec::Vec;
 
 use crate::plan::is_nursery_gc;
 use crate::scheduler::gc_work::ObjectTraceProvider;
-use crate::scheduler::ProcessEdgesWork;
+
 use crate::scheduler::WorkBucketStage;
 use crate::util::ObjectReference;
 use crate::util::VMWorkerThread;
@@ -536,8 +536,8 @@ impl<VM: VMBinding> GCWork<VM> for RescanReferences<VM> {
 }
 
 #[derive(Default)]
-pub(crate) struct SoftRefProcessing<E: ProcessEdgesWork>(PhantomData<E>);
-impl<E: ProcessEdgesWork> GCWork<E::VM> for SoftRefProcessing<E> {
+pub(crate) struct SoftRefProcessing<E: ObjectTraceProvider>(PhantomData<E>);
+impl<E: ObjectTraceProvider> GCWork<E::VM> for SoftRefProcessing<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         if !mmtk.state.is_emergency_collection() {
             // Postpone the scanning to the end of the transitive closure from strongly reachable
@@ -550,8 +550,8 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for SoftRefProcessing<E> {
             worker.scheduler().work_buckets[WorkBucketStage::SoftRefClosure].set_sentinel(rescan);
 
             // Retain soft references.  This will expand the transitive closure.  We create an
-            // instance of `E` for this.
-            let mut w = E::new(vec![], false, mmtk, WorkBucketStage::SoftRefClosure);
+            // ObjectTraceProvider instance for this.
+            let mut w = E::new_provider(mmtk, WorkBucketStage::SoftRefClosure);
             w.set_worker(worker);
             mmtk.reference_processors.retain_soft_refs(&mut w, mmtk);
             w.flush();
@@ -561,7 +561,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for SoftRefProcessing<E> {
         }
     }
 }
-impl<E: ProcessEdgesWork> SoftRefProcessing<E> {
+impl<E: ObjectTraceProvider> SoftRefProcessing<E> {
     pub fn new() -> Self {
         Self(PhantomData)
     }
@@ -594,16 +594,16 @@ impl<VM: VMBinding> PhantomRefProcessing<VM> {
 }
 
 #[derive(Default)]
-pub(crate) struct RefForwarding<E: ProcessEdgesWork>(PhantomData<E>);
-impl<E: ProcessEdgesWork> GCWork<E::VM> for RefForwarding<E> {
+pub(crate) struct RefForwarding<E: ObjectTraceProvider>(PhantomData<E>);
+impl<E: ObjectTraceProvider> GCWork<E::VM> for RefForwarding<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        let mut w = E::new(vec![], false, mmtk, WorkBucketStage::RefForwarding);
+        let mut w = E::new_provider(mmtk, WorkBucketStage::RefForwarding);
         w.set_worker(worker);
         mmtk.reference_processors.forward_refs(&mut w, mmtk);
         w.flush();
     }
 }
-impl<E: ProcessEdgesWork> RefForwarding<E> {
+impl<E: ObjectTraceProvider> RefForwarding<E> {
     pub fn new() -> Self {
         Self(PhantomData)
     }
