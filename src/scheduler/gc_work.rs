@@ -2,7 +2,7 @@ use super::work_bucket::WorkBucketStage;
 use super::*;
 use crate::global_state::GcStatus;
 use crate::plan::ObjectsClosure;
-use crate::plan::VectorObjectQueue;
+use crate::plan::{VectorObjectQueue, VectorQueue};
 use crate::util::*;
 use crate::vm::slot::Slot;
 use crate::vm::*;
@@ -1222,3 +1222,381 @@ impl<VM: VMBinding> ProcessEdgesWork for UnsupportedProcessEdges<VM> {
         panic!("unsupported!")
     }
 }
+
+// ============================================================================
+// New TracePolicy-based generic work packets
+// ============================================================================
+//
+// These types replace the ProcessEdgesWork + ScanObjectsWork infrastructure.
+// Unlike the old approach:
+//   - No ProcessEdgesBase or Deref/DerefMut boilerplate
+//   - No raw worker pointer
+//   - Parameterized by TracePolicy instead of per-plan types
+//   - ObjectsClosure is used inline (created fresh per scan)
+
+use crate::plan::TracePolicy;
+
+/// Generic slot-processing work packet parameterized by [`TracePolicy`].
+///
+/// This replaces plan-specific `ProcessEdgesWork` implementations.
+/// All plans share this single work packet type — the plan-specific behavior
+/// is provided by the `T: TracePolicy<VM>` parameter.
+///
+/// ```text
+///   VM roots / ObjectsClosure
+///         │
+///         ▼
+///   GCProcessEdges<VM, T>    (this type)
+///   ├── load slot → trace_object (via T)
+///   ├── buffer traced nodes
+///   └── flush → GCScanObjects<VM, T>
+/// ```
+pub(crate) struct GCProcessEdges<VM: VMBinding, T: TracePolicy<VM>> {
+    /// The slots to process.
+    slots: Vec<VM::VMSlot>,
+    /// Traced objects waiting to be scanned.
+    nodes: VectorObjectQueue,
+    /// Whether the slots come from root scanning.
+    roots: bool,
+    /// Reference to the MMTK instance.
+    mmtk: &'static MMTK<VM>,
+    /// The trace policy (plan-specific tracing behavior).
+    policy: T,
+    /// Which work bucket this packet belongs to.
+    bucket: WorkBucketStage,
+}
+
+impl<VM: VMBinding, T: TracePolicy<VM>> GCProcessEdges<VM, T> {
+    pub fn new(
+        slots: Vec<VM::VMSlot>,
+        roots: bool,
+        mmtk: &'static MMTK<VM>,
+        bucket: WorkBucketStage,
+    ) -> Self {
+        let policy = T::from_mmtk(mmtk);
+        Self {
+            slots,
+            nodes: VectorObjectQueue::new(),
+            roots,
+            mmtk,
+            policy,
+            bucket,
+        }
+    }
+
+    /// Process all slots using the given worker reference.
+    fn process_slots_with_worker(&mut self, worker: &mut GCWorker<VM>) {
+        probe!(mmtk, process_slots, self.slots.len(), self.roots);
+        let may_move = self.policy.may_move_objects();
+        for i in 0..self.slots.len() {
+            let slot = self.slots[i];
+            let Some(object) = slot.load() else {
+                continue;
+            };
+            let new_object =
+                self.policy
+                    .trace_object(&mut self.nodes, object, worker);
+            if may_move && new_object != object {
+                slot.store(new_object);
+            }
+        }
+    }
+
+    /// Flush the node buffer by creating a GCScanObjects work packet.
+    fn flush_nodes(&mut self, worker: &mut GCWorker<VM>) {
+        let nodes = self.nodes.take();
+        if !nodes.is_empty() {
+            let policy = self.policy.clone();
+            let mut scan_work =
+                GCScanObjects::<VM, T>::new(policy, nodes, false, self.bucket);
+            // Execute immediately for better locality.
+            scan_work.do_work_inner(worker, self.mmtk);
+        }
+    }
+}
+
+impl<VM: VMBinding, T: TracePolicy<VM>> GCWork<VM> for GCProcessEdges<VM, T> {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        self.process_slots_with_worker(worker);
+        if !self.nodes.is_empty() {
+            self.flush_nodes(worker);
+        }
+        #[cfg(feature = "sanity")]
+        if self.roots && !_mmtk.is_in_sanity() {
+            _mmtk.sanity_checker
+                .lock()
+                .unwrap()
+                .add_root_slots(self.slots.clone());
+        }
+        trace!("GCProcessEdges End");
+    }
+}
+
+/// Generic scan-objects work packet parameterized by [`TracePolicy`].
+///
+/// This replaces `ScanObjects` and `PlanScanObjects`. It handles both
+/// slot-enqueuing scanning (via `ObjectsClosure`) and node-enqueuing scanning
+/// (via `GCTracerContext`).
+///
+/// ```text
+///   GCProcessEdges (flush)
+///         │
+///         ▼
+///   GCScanObjects<VM, T>     (this type)
+///   ├── scan_object (slot-enqueuing) → ObjectsClosure → new GCProcessEdges
+///   ├── scan_object_and_trace_edges (node-enqueuing) → GCTracerContext
+///   └── post_scan_object (via T)
+/// ```
+pub(crate) struct GCScanObjects<VM: VMBinding, T: TracePolicy<VM>> {
+    /// The trace policy.
+    policy: T,
+    /// Objects to scan.
+    buffer: Vec<ObjectReference>,
+    /// Whether these are root objects.
+    roots: bool,
+    /// Which work bucket this packet belongs to.
+    bucket: WorkBucketStage,
+    _phantom: PhantomData<VM>,
+}
+
+impl<VM: VMBinding, T: TracePolicy<VM>> GCScanObjects<VM, T> {
+    pub fn new(
+        policy: T,
+        buffer: Vec<ObjectReference>,
+        roots: bool,
+        bucket: WorkBucketStage,
+    ) -> Self {
+        Self {
+            policy,
+            buffer,
+            roots,
+            bucket,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Inner work method, callable directly (for inline scan optimization).
+    pub(crate) fn do_work_inner(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        let tls = worker.tls;
+
+        // Scan objects that support slot-enqueuing. Postpone others.
+        let mut scan_later = vec![];
+        {
+            let mut closure = GCObjectsClosure::<VM, T>::new(worker, self.bucket, mmtk);
+
+            // Count live bytes if enabled.
+            if crate::util::rust_util::unlikely(*mmtk.get_options().count_live_bytes_in_gc) {
+                let mut live_bytes_stats =
+                    closure.worker.shared.live_bytes_per_space.borrow_mut();
+                for object in self.buffer.iter().copied() {
+                    crate::scheduler::worker::GCWorkerShared::<VM>::increase_live_bytes(
+                        &mut live_bytes_stats,
+                        object,
+                    );
+                }
+            }
+
+            for object in self.buffer.iter().copied() {
+                if <VM as VMBinding>::VMScanning::support_slot_enqueuing(tls, object) {
+                    trace!("Scan object (slot) {}", object);
+                    <VM as VMBinding>::VMScanning::scan_object(tls, object, &mut closure);
+                    self.policy.post_scan_object(object);
+                } else {
+                    scan_later.push(object);
+                }
+            }
+        }
+
+        let total_objects = self.buffer.len();
+        let scan_and_trace = scan_later.len();
+        probe!(mmtk, scan_objects, total_objects, scan_and_trace);
+
+        // For objects that don't support slot-enqueuing, use node-enqueuing.
+        if !scan_later.is_empty() {
+            let tracer_context = GCTracerContext::<VM, T> {
+                stage: self.bucket,
+                _phantom: PhantomData,
+            };
+            tracer_context.with_tracer(worker, |object_tracer| {
+                for object in scan_later.iter().copied() {
+                    trace!("Scan object (node) {}", object);
+                    <VM as VMBinding>::VMScanning::scan_object_and_trace_edges(
+                        tls,
+                        object,
+                        object_tracer,
+                    );
+                    self.policy.post_scan_object(object);
+                }
+            });
+        }
+    }
+}
+
+impl<VM: VMBinding, T: TracePolicy<VM>> GCWork<VM> for GCScanObjects<VM, T> {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        trace!("GCScanObjects");
+        self.do_work_inner(worker, mmtk);
+        trace!("GCScanObjects End");
+    }
+}
+
+/// An `ObjectsClosure`-like slot visitor for the new TracePolicy-based system.
+///
+/// This buffers slots during object scanning and flushes them as new
+/// `GCProcessEdges<VM, T>` work packets when the buffer is full.
+struct GCObjectsClosure<'a, VM: VMBinding, T: TracePolicy<VM>> {
+    buffer: VectorQueue<VM::VMSlot>,
+    worker: &'a mut GCWorker<VM>,
+    bucket: WorkBucketStage,
+    mmtk: &'static MMTK<VM>,
+    _phantom: PhantomData<T>,
+}
+
+impl<'a, VM: VMBinding, T: TracePolicy<VM>> GCObjectsClosure<'a, VM, T> {
+    fn new(
+        worker: &'a mut GCWorker<VM>,
+        bucket: WorkBucketStage,
+        mmtk: &'static MMTK<VM>,
+    ) -> Self {
+        Self {
+            buffer: VectorQueue::new(),
+            worker,
+            bucket,
+            mmtk,
+            _phantom: PhantomData,
+        }
+    }
+
+    fn flush(&mut self) {
+        let buf = self.buffer.take();
+        if !buf.is_empty() {
+            self.worker.add_work(
+                self.bucket,
+                GCProcessEdges::<VM, T>::new(buf, false, self.mmtk, self.bucket),
+            );
+        }
+    }
+}
+
+impl<VM: VMBinding, T: TracePolicy<VM>> SlotVisitor<VM::VMSlot>
+    for GCObjectsClosure<'_, VM, T>
+{
+    fn visit_slot(&mut self, slot: VM::VMSlot) {
+        #[cfg(debug_assertions)]
+        {
+            use crate::vm::slot::Slot;
+            trace!(
+                "(GCObjectsClosure) Visit slot {:?} (pointing to {:?})",
+                slot,
+                slot.load()
+            );
+        }
+        self.buffer.push(slot);
+        if self.buffer.is_full() {
+            self.flush();
+        }
+    }
+}
+
+impl<VM: VMBinding, T: TracePolicy<VM>> Drop for GCObjectsClosure<'_, VM, T> {
+    fn drop(&mut self) {
+        self.flush();
+    }
+}
+
+/// Wraps policy and node queue to implement [`ObjectTracer`].
+///
+/// Used for node-enqueuing scanning and weak reference processing,
+/// where the scan callback traces objects directly instead of enqueuing slots.
+pub(crate) struct GCTracer<VM: VMBinding, T: TracePolicy<VM>> {
+    /// Traced objects waiting to be scanned.
+    nodes: VectorObjectQueue,
+    /// The trace policy.
+    policy: T,
+    /// Raw pointer to the current GC worker.  
+    /// Set by `GCTracerContext::with_tracer` before the closure is called.
+    /// # Safety  
+    /// Valid only during the `with_tracer` closure. The pointer must not
+    /// outlive the `GCWorker` reference it was derived from.
+    worker: *mut GCWorker<VM>,
+    /// Reference to MMTK instance, for creating work packets on drop.
+    mmtk: &'static MMTK<VM>,
+    /// Which work bucket to add scan work to.
+    stage: WorkBucketStage,
+}
+
+impl<VM: VMBinding, T: TracePolicy<VM>> ObjectTracer for GCTracer<VM, T> {
+    /// Forward the `trace_object` call to the policy.
+    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+        let worker: &mut GCWorker<VM> = unsafe { &mut *self.worker };
+        self.policy
+            .trace_object(&mut self.nodes, object, worker)
+    }
+}
+
+impl<VM: VMBinding, T: TracePolicy<VM>> Drop for GCTracer<VM, T> {
+    fn drop(&mut self) {
+        // When the tracer is dropped, flush any remaining traced nodes
+        // as a new GCScanObjects work packet scheduled via the scheduler.
+        let nodes = self.nodes.take();
+        if !nodes.is_empty() {
+            let policy = self.policy.clone();
+            let bucket = self.stage;
+            crate::memory_manager::add_work_packet(
+                self.mmtk,
+                bucket,
+                GCScanObjects::<VM, T>::new(policy, nodes, false, bucket),
+            );
+        }
+    }
+}
+
+/// [`ObjectTracerContext`] implementation for the TracePolicy-based system.
+///
+/// This creates a temporary [`GCTracer`],
+/// providing the `ObjectTracer` interface needed by weak reference processing,
+/// finalizable processing, and node-enqueuing scanning.
+pub(crate) struct GCTracerContext<VM: VMBinding, T: TracePolicy<VM>> {
+    pub stage: WorkBucketStage,
+    pub _phantom: PhantomData<(VM, T)>,
+}
+
+impl<VM: VMBinding, T: TracePolicy<VM>> Clone for GCTracerContext<VM, T> {
+    fn clone(&self) -> Self {
+        Self {
+            stage: self.stage,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<VM: VMBinding, T: TracePolicy<VM>> ObjectTracerContext<VM>
+    for GCTracerContext<VM, T>
+{
+    type TracerType = GCTracer<VM, T>;
+
+    fn with_tracer<R, F>(&self, worker: &mut GCWorker<VM>, func: F) -> R
+    where
+        F: FnOnce(&mut Self::TracerType) -> R,
+    {
+        let mmtk = worker.mmtk;
+        let policy = T::from_mmtk(mmtk);
+
+        let mut tracer = GCTracer {
+            nodes: VectorObjectQueue::new(),
+            policy,
+            worker: worker as *mut GCWorker<VM>,
+            mmtk,
+            stage: self.stage,
+        };
+
+        let result = func(&mut tracer);
+
+        // The tracer's Drop impl will flush remaining nodes.
+        drop(tracer);
+
+        result
+    }
+}
+
+
