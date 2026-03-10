@@ -429,10 +429,10 @@ impl<C: GCWorkContext> GCWork<C::VM> for ScanMutatorRoots<C> {
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
         trace!("ScanMutatorRoots for mutator {:?}", self.0.get_tls());
         let mutators = <C::VM as VMBinding>::VMActivePlan::number_of_mutators();
-        let factory = ProcessEdgesWorkRootsWorkFactory::<
+        let factory = GCRootsWorkFactory::<
             C::VM,
-            C::DefaultProcessEdges,
-            C::PinningProcessEdges,
+            C::DefaultTracePolicy,
+            C::PinningTracePolicy,
         >::new(mmtk);
         <C::VM as VMBinding>::VMScanning::scan_roots_in_mutator_thread(
             worker.tls,
@@ -462,10 +462,10 @@ impl<C: GCWorkContext> ScanVMSpecificRoots<C> {
 impl<C: GCWorkContext> GCWork<C::VM> for ScanVMSpecificRoots<C> {
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
         trace!("ScanStaticRoots");
-        let factory = ProcessEdgesWorkRootsWorkFactory::<
+        let factory = GCRootsWorkFactory::<
             C::VM,
-            C::DefaultProcessEdges,
-            C::PinningProcessEdges,
+            C::DefaultTracePolicy,
+            C::PinningTracePolicy,
         >::new(mmtk);
         <C::VM as VMBinding>::VMScanning::scan_vm_specific_roots(worker.tls, factory);
     }
@@ -1734,5 +1734,149 @@ impl<VM: VMBinding, T: TracePolicy<VM>> GCWork<VM> for GCScanObjects<VM, T> {
         trace!("GCScanObjects");
         self.do_work_inner(worker, mmtk);
         trace!("GCScanObjects End");
+    }
+}
+
+/// An implementation of `RootsWorkFactory` based on `TracePolicy`, replacing
+/// `ProcessEdgesWorkRootsWorkFactory`. `DT` is the default trace policy (for normal roots),
+/// `PT` is the pinning trace policy (for pinning/transitive-pinning roots).
+pub(crate) struct GCRootsWorkFactory<
+    VM: VMBinding,
+    DT: TracePolicy<VM>,
+    PT: TracePolicy<VM>,
+> {
+    mmtk: &'static MMTK<VM>,
+    _phantom: PhantomData<(DT, PT)>,
+}
+
+impl<VM: VMBinding, DT: TracePolicy<VM>, PT: TracePolicy<VM>> Clone
+    for GCRootsWorkFactory<VM, DT, PT>
+{
+    fn clone(&self) -> Self {
+        Self {
+            mmtk: self.mmtk,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<VM: VMBinding, DT: TracePolicy<VM>, PT: TracePolicy<VM>>
+    GCRootsWorkFactory<VM, DT, PT>
+{
+    pub fn new(mmtk: &'static MMTK<VM>) -> Self {
+        Self {
+            mmtk,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<VM: VMBinding, DT: TracePolicy<VM>, PT: TracePolicy<VM>>
+    RootsWorkFactory<VM::VMSlot> for GCRootsWorkFactory<VM, DT, PT>
+{
+    fn create_process_roots_work(&mut self, slots: Vec<VM::VMSlot>) {
+        probe!(mmtk, roots, RootsKind::NORMAL, slots.len());
+        crate::memory_manager::add_work_packet(
+            self.mmtk,
+            WorkBucketStage::Closure,
+            GCProcessEdges::<VM, DT>::new(slots, true, self.mmtk, WorkBucketStage::Closure),
+        );
+    }
+
+    fn create_process_pinning_roots_work(&mut self, nodes: Vec<ObjectReference>) {
+        probe!(mmtk, roots, RootsKind::PINNING, nodes.len());
+        crate::memory_manager::add_work_packet(
+            self.mmtk,
+            WorkBucketStage::PinningRootsTrace,
+            GCProcessRootNodes::<VM, PT, DT>::new(nodes, WorkBucketStage::Closure),
+        );
+    }
+
+    fn create_process_tpinning_roots_work(&mut self, nodes: Vec<ObjectReference>) {
+        probe!(mmtk, roots, RootsKind::TPINNING, nodes.len());
+        crate::memory_manager::add_work_packet(
+            self.mmtk,
+            WorkBucketStage::TPinningClosure,
+            GCProcessRootNodes::<VM, PT, PT>::new(nodes, WorkBucketStage::TPinningClosure),
+        );
+    }
+}
+
+/// Process root nodes using TracePolicy. Replaces `ProcessRootNodes<VM, R2OPE, O2OPE>`.
+///
+/// `PT` (Pinning Trace) is the policy used for tracing root objects (must not move objects).
+/// `DT` (Default Trace) is the policy used for scanning the children of root objects.
+///
+/// For pinning roots: PT = PinningTracePolicy, DT = DefaultTracePolicy
+/// For transitive pinning roots: PT = PinningTracePolicy, DT = PinningTracePolicy
+pub(crate) struct GCProcessRootNodes<
+    VM: VMBinding,
+    PT: TracePolicy<VM>,
+    DT: TracePolicy<VM>,
+> {
+    _phantom: PhantomData<(VM, PT, DT)>,
+    roots: Vec<ObjectReference>,
+    bucket: WorkBucketStage,
+}
+
+impl<VM: VMBinding, PT: TracePolicy<VM>, DT: TracePolicy<VM>>
+    GCProcessRootNodes<VM, PT, DT>
+{
+    pub fn new(nodes: Vec<ObjectReference>, bucket: WorkBucketStage) -> Self {
+        Self {
+            _phantom: PhantomData,
+            roots: nodes,
+            bucket,
+        }
+    }
+}
+
+impl<VM: VMBinding, PT: TracePolicy<VM>, DT: TracePolicy<VM>> GCWork<VM>
+    for GCProcessRootNodes<VM, PT, DT>
+{
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        trace!("GCProcessRootNodes");
+
+        #[cfg(feature = "sanity")]
+        {
+            if !mmtk.is_in_sanity() {
+                mmtk.sanity_checker
+                    .lock()
+                    .unwrap()
+                    .add_root_nodes(self.roots.clone());
+            }
+        }
+
+        let num_roots = self.roots.len();
+
+        // Trace root objects using the pinning policy (must not move objects).
+        let root_objects_to_scan = {
+            let mut process_edges =
+                GCProcessEdges::<VM, PT>::new(vec![], true, mmtk, WorkBucketStage::PinningRootsTrace);
+            process_edges.set_worker(worker);
+
+            for object in self.roots.iter().copied() {
+                let new_object = process_edges.trace_object(object);
+                debug_assert_eq!(
+                    object, new_object,
+                    "Object moved while tracing root unmovable root object: {} -> {}",
+                    object, new_object
+                );
+            }
+
+            process_edges.pop_nodes()
+        };
+
+        let num_enqueued_nodes = root_objects_to_scan.len();
+        probe!(mmtk, process_root_nodes, num_roots, num_enqueued_nodes);
+
+        // Create scan work using the default policy for children.
+        if !root_objects_to_scan.is_empty() {
+            let policy = DT::from_mmtk(mmtk);
+            let work = GCScanObjects::<VM, DT>::new(policy, root_objects_to_scan, false, self.bucket);
+            crate::memory_manager::add_work_packet(mmtk, self.bucket, work);
+        }
+
+        trace!("GCProcessRootNodes End");
     }
 }
