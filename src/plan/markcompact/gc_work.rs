@@ -1,7 +1,7 @@
 use super::global::MarkCompact;
 use crate::policy::markcompactspace::MarkCompactSpace;
 use crate::policy::markcompactspace::{TRACE_KIND_FORWARD, TRACE_KIND_MARK};
-use crate::scheduler::gc_work::PlanProcessEdges;
+
 use crate::scheduler::gc_work::*;
 use crate::scheduler::GCWork;
 use crate::scheduler::GCWorker;
@@ -92,10 +92,7 @@ impl<VM: VMBinding> Compact<VM> {
     }
 }
 
-/// Marking trace
-pub type MarkingProcessEdges<VM> = PlanProcessEdges<VM, MarkCompact<VM>, TRACE_KIND_MARK>;
-/// Forwarding trace
-pub type ForwardingProcessEdges<VM> = PlanProcessEdges<VM, MarkCompact<VM>, TRACE_KIND_FORWARD>;
+
 
 pub struct MarkCompactGCWorkContext<VM: VMBinding>(std::marker::PhantomData<VM>);
 impl<VM: VMBinding> crate::scheduler::GCWorkContext for MarkCompactGCWorkContext<VM> {

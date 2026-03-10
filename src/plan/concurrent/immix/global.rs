@@ -376,8 +376,6 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
 
         // Deal with weak ref and finalizers
         // TODO: Check against schedule_common_work and see if we are still missing any work packet
-        type RefProcessingEdges<VM> =
-            crate::scheduler::gc_work::PlanProcessEdges<VM, ConcurrentImmix<VM>, TRACE_KIND_FAST>;
         // Reference processing
         if !*self.base().options.no_reference_types {
             use crate::util::reference_processor::{
