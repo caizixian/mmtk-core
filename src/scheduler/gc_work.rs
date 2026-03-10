@@ -695,6 +695,10 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
 /// (such as [`ProcessEdgesWorkTracer`], [`VMProcessWeakRefs`], and [`ScanObjectsWork`])
 /// from the full [`ProcessEdgesWork`] trait which also handles slot loading/storing.
 ///
+/// In addition to tracing, this trait provides construction and lifecycle methods
+/// (`new_provider`, `set_worker`, `flush`) so that consumers can create and manage
+/// tracer instances without needing `ProcessEdgesWork::new()`.
+///
 /// A blanket implementation is provided for all types implementing [`ProcessEdgesWork`],
 /// so existing code continues to work unchanged.
 pub trait ObjectTraceProvider: Send + 'static {
@@ -724,6 +728,22 @@ pub trait ObjectTraceProvider: Send + 'static {
 
     /// Get the MMTK reference.
     fn mmtk(&self) -> &'static MMTK<Self::VM>;
+
+    /// Create a new instance of this provider for object tracing (without slots, non-root).
+    ///
+    /// This is the key method that decouples construction from `ProcessEdgesWork::new()`.
+    /// Consumers that only need object tracing can call this instead of requiring the
+    /// full `ProcessEdgesWork` trait.
+    fn new_provider(
+        mmtk: &'static MMTK<Self::VM>,
+        bucket: WorkBucketStage,
+    ) -> Self where Self: Sized;
+
+    /// Set the worker for this provider. Must be called before tracing.
+    fn set_worker(&mut self, worker: &mut GCWorker<Self::VM>);
+
+    /// Flush any queued nodes by creating and dispatching scan work packets.
+    fn flush(&mut self);
 }
 
 /// Blanket implementation of [`ObjectTraceProvider`] for all [`ProcessEdgesWork`] types.
@@ -766,6 +786,23 @@ impl<E: ProcessEdgesWork> ObjectTraceProvider for E {
 
     fn mmtk(&self) -> &'static MMTK<Self::VM> {
         ProcessEdgesBase::mmtk(self.deref())
+    }
+
+    fn new_provider(
+        mmtk: &'static MMTK<Self::VM>,
+        bucket: WorkBucketStage,
+    ) -> Self {
+        // Construct a ProcessEdgesWork with empty slots, non-root.
+        // This is the standard pattern used by SoftRefProcessing, RefForwarding, etc.
+        ProcessEdgesWork::new(vec![], false, mmtk, bucket)
+    }
+
+    fn set_worker(&mut self, worker: &mut GCWorker<Self::VM>) {
+        ProcessEdgesBase::set_worker(self.deref_mut(), worker);
+    }
+
+    fn flush(&mut self) {
+        ProcessEdgesWork::flush(self);
     }
 }
 
