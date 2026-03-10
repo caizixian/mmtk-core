@@ -1267,6 +1267,13 @@ pub trait ObjectTracePolicy: Send + 'static {
     /// `PlanTraceObject::may_move_objects`.
     const MAY_MOVE_OBJECTS: bool;
 
+    /// Create this policy from an MMTK instance.
+    ///
+    /// This factory is called by [`PolicyDrivenProcessEdges::new`] to create the policy
+    /// when a work packet is constructed. Implementations typically downcast the plan
+    /// and store a reference to it.
+    fn from_mmtk(mmtk: &'static MMTK<Self::VM>) -> Self;
+
     /// Trace an object according to this policy.
     ///
     /// The implementation should determine which space the object resides in and
@@ -1345,6 +1352,11 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKin
         true
     };
 
+    fn from_mmtk(mmtk: &'static MMTK<VM>) -> Self {
+        let plan = mmtk.get_plan().downcast_ref::<P>().unwrap();
+        Self::new(plan)
+    }
+
     #[inline(always)]
     fn trace_object<Q: ObjectQueue>(
         &mut self,
@@ -1358,5 +1370,139 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKin
     #[inline(always)]
     fn post_scan_object(&self, object: ObjectReference) {
         self.plan.post_scan_object(object);
+    }
+}
+
+// ============================================================================
+// PolicyDrivenProcessEdges: A generic ProcessEdgesWork that uses ObjectTracePolicy.
+// This is the key type that eliminates per-plan ProcessEdgesWork boilerplate.
+// ============================================================================
+
+/// A generic [`ProcessEdgesWork`] implementation that delegates tracing to an
+/// [`ObjectTracePolicy`].
+///
+/// This type replaces per-plan `ProcessEdgesWork` implementations. Instead of each
+/// plan defining its own struct (e.g., `PlanProcessEdges<VM, P, KIND>`), plans can
+/// use `PolicyDrivenProcessEdges<VM, MyTracePolicy>` with a simple `ObjectTracePolicy`.
+///
+/// The `PolicyDrivenProcessEdges` handles all the work packet plumbing (slot processing,
+/// node queue management, scanning dispatch) generically, delegating only the
+/// plan-specific `trace_object` call to the policy.
+///
+/// # Example
+///
+/// ```ignore
+/// // Old way: manually implement ProcessEdgesWork for each plan
+/// // New way: define a trace policy and use PolicyDrivenProcessEdges
+/// type MyProcessEdges = PolicyDrivenProcessEdges<VM, PlanObjectTracePolicy<VM, MyPlan<VM>, DEFAULT_TRACE>>;
+/// ```
+pub struct PolicyDrivenProcessEdges<VM: VMBinding, T: ObjectTracePolicy<VM = VM>> {
+    base: ProcessEdgesBase<VM>,
+    policy: T,
+}
+
+impl<VM: VMBinding, T: ObjectTracePolicy<VM = VM>> ProcessEdgesWork
+    for PolicyDrivenProcessEdges<VM, T>
+{
+    type VM = VM;
+    type ScanObjectsWorkType = PolicyDrivenScanObjects<VM, T>;
+
+    const OVERWRITE_REFERENCE: bool = T::MAY_MOVE_OBJECTS;
+    const SCAN_OBJECTS_IMMEDIATELY: bool = true;
+
+    fn new(
+        slots: Vec<SlotOf<Self>>,
+        roots: bool,
+        mmtk: &'static MMTK<VM>,
+        bucket: WorkBucketStage,
+    ) -> Self {
+        let base = ProcessEdgesBase::new(slots, roots, mmtk, bucket);
+        let policy = T::from_mmtk(mmtk);
+        Self { base, policy }
+    }
+
+    #[inline(always)]
+    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+        // We cannot borrow `self` twice in a call, so we extract `worker` as a local variable.
+        let worker = self.worker();
+        self.policy
+            .trace_object::<VectorObjectQueue>(&mut self.base.nodes, object, worker)
+    }
+
+    fn create_scan_work(&self, nodes: Vec<ObjectReference>) -> Self::ScanObjectsWorkType {
+        PolicyDrivenScanObjects::<VM, T>::new(nodes, false, self.bucket, self.base.mmtk())
+    }
+}
+
+impl<VM: VMBinding, T: ObjectTracePolicy<VM = VM>> Deref
+    for PolicyDrivenProcessEdges<VM, T>
+{
+    type Target = ProcessEdgesBase<VM>;
+    fn deref(&self) -> &Self::Target {
+        &self.base
+    }
+}
+
+impl<VM: VMBinding, T: ObjectTracePolicy<VM = VM>> DerefMut
+    for PolicyDrivenProcessEdges<VM, T>
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.base
+    }
+}
+
+/// A generic [`ScanObjectsWork`] implementation that pairs with
+/// [`PolicyDrivenProcessEdges`].
+///
+/// This scan work packet calls [`ObjectTracePolicy::post_scan_object`] after
+/// scanning each object, enabling policy-specific post-scan hooks.
+pub struct PolicyDrivenScanObjects<VM: VMBinding, T: ObjectTracePolicy<VM = VM>> {
+    buffer: Vec<ObjectReference>,
+    #[allow(dead_code)]
+    concurrent: bool,
+    bucket: WorkBucketStage,
+    mmtk: &'static MMTK<VM>,
+    _phantom: PhantomData<T>,
+}
+
+impl<VM: VMBinding, T: ObjectTracePolicy<VM = VM>> PolicyDrivenScanObjects<VM, T> {
+    fn new(
+        buffer: Vec<ObjectReference>,
+        concurrent: bool,
+        bucket: WorkBucketStage,
+        mmtk: &'static MMTK<VM>,
+    ) -> Self {
+        Self {
+            buffer,
+            concurrent,
+            bucket,
+            mmtk,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<VM: VMBinding, T: ObjectTracePolicy<VM = VM>> ScanObjectsWork<VM>
+    for PolicyDrivenScanObjects<VM, T>
+{
+    type E = PolicyDrivenProcessEdges<VM, T>;
+
+    fn get_bucket(&self) -> WorkBucketStage {
+        self.bucket
+    }
+
+    fn post_scan_object(&self, object: ObjectReference) {
+        let policy = T::from_mmtk(self.mmtk);
+        policy.post_scan_object(object);
+    }
+}
+
+impl<VM: VMBinding, T: ObjectTracePolicy<VM = VM>> GCWork<VM>
+    for PolicyDrivenScanObjects<VM, T>
+{
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        trace!("PolicyDrivenScanObjects");
+        self.do_work_common(&self.buffer, worker, mmtk);
+        trace!("PolicyDrivenScanObjects End");
     }
 }
