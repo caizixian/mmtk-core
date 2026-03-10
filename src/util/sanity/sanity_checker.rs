@@ -1,15 +1,13 @@
 use crate::plan::Plan;
 use crate::scheduler::gc_work::*;
 use crate::util::ObjectReference;
-use crate::vm::slot::Slot;
 use crate::vm::*;
 use crate::MMTK;
 use crate::{scheduler::*, ObjectQueue};
 use std::collections::HashSet;
-use std::ops::{Deref, DerefMut};
 
 #[allow(dead_code)]
-pub struct SanityChecker<SL: Slot> {
+pub struct SanityChecker<SL: crate::vm::slot::Slot> {
     /// Visited objects
     refs: HashSet<ObjectReference>,
     /// Cached root slots for sanity root scanning
@@ -18,13 +16,13 @@ pub struct SanityChecker<SL: Slot> {
     root_nodes: Vec<Vec<ObjectReference>>,
 }
 
-impl<SL: Slot> Default for SanityChecker<SL> {
+impl<SL: crate::vm::slot::Slot> Default for SanityChecker<SL> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<SL: Slot> SanityChecker<SL> {
+impl<SL: crate::vm::slot::Slot> SanityChecker<SL> {
     pub fn new() -> Self {
         Self {
             refs: HashSet::new(),
@@ -74,20 +72,11 @@ impl<P: Plan> GCWork<P::VM> for ScheduleSanityGC<P> {
 
         // We use the cached roots for sanity gc, based on the assumption that
         // the stack scanning triggered by the selected plan is correct and precise.
-        // FIXME(Wenyu,Tianle): When working on eager stack scanning on OpenJDK,
-        // the stack scanning may be broken. Uncomment the following lines to
-        // collect the roots again.
-        // Also, remember to call `DerivedPointerTable::update_pointers(); DerivedPointerTable::clear();`
-        // in openjdk binding before the second round of roots scanning.
-        // for mutator in <P::VM as VMBinding>::VMActivePlan::mutators() {
-        //     scheduler.work_buckets[WorkBucketStage::Prepare]
-        //         .add(ScanMutatorRoots::<SanityGCProcessEdges<P::VM>>(mutator));
-        // }
         {
             let sanity_checker = mmtk.sanity_checker.lock().unwrap();
             for roots in &sanity_checker.root_slots {
                 scheduler.work_buckets[WorkBucketStage::Closure].add(
-                    SanityGCProcessEdges::<P::VM>::new(
+                    GCProcessEdges::<P::VM, SanityTracePolicy<P::VM>>::new(
                         roots.clone(),
                         true,
                         mmtk,
@@ -96,14 +85,13 @@ impl<P: Plan> GCWork<P::VM> for ScheduleSanityGC<P> {
                 );
             }
             for roots in &sanity_checker.root_nodes {
-                scheduler.work_buckets[WorkBucketStage::Closure].add(ProcessRootNodes::<
-                    P::VM,
-                    SanityGCProcessEdges<P::VM>,
-                    SanityGCProcessEdges<P::VM>,
-                >::new(
-                    roots.clone(),
-                    WorkBucketStage::Closure,
-                ));
+                scheduler.work_buckets[WorkBucketStage::Closure].add(
+                    GCProcessRootNodes::<
+                        P::VM,
+                        SanityTracePolicy<P::VM>,
+                        SanityTracePolicy<P::VM>,
+                    >::new(roots.clone(), WorkBucketStage::Closure),
+                );
             }
         }
         // Prepare global/collectors/mutators
@@ -153,50 +141,29 @@ impl<P: Plan> GCWork<P::VM> for SanityRelease<P> {
     }
 }
 
-// #[derive(Default)]
-pub struct SanityGCProcessEdges<VM: VMBinding> {
-    base: ProcessEdgesBase<VM>,
+/// A `TracePolicy` for sanity GC. Instead of actually tracing objects through spaces,
+/// it verifies sanity invariants (object validity, VO bit, plan sanity checks) and
+/// "marks" objects in a HashSet to detect the full transitive closure.
+#[derive(Clone)]
+pub struct SanityTracePolicy<VM: VMBinding> {
+    mmtk: &'static MMTK<VM>,
 }
 
-impl<VM: VMBinding> Deref for SanityGCProcessEdges<VM> {
-    type Target = ProcessEdgesBase<VM>;
-    fn deref(&self) -> &Self::Target {
-        &self.base
-    }
-}
-
-impl<VM: VMBinding> DerefMut for SanityGCProcessEdges<VM> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.base
-    }
-}
-
-impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
-    type VM = VM;
-    type ScanObjectsWorkType = ScanObjects<Self>;
-
-    const OVERWRITE_REFERENCE: bool = false;
-    fn new(
-        slots: Vec<SlotOf<Self>>,
-        roots: bool,
-        mmtk: &'static MMTK<VM>,
-        bucket: WorkBucketStage,
-    ) -> Self {
-        Self {
-            base: ProcessEdgesBase::new(slots, roots, mmtk, bucket),
-            // ..Default::default()
-        }
-    }
-
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        let mut sanity_checker = self.mmtk().sanity_checker.lock().unwrap();
+impl<VM: VMBinding> TracePolicy<VM> for SanityTracePolicy<VM> {
+    fn trace_object(
+        &mut self,
+        queue: &mut impl ObjectQueue,
+        object: ObjectReference,
+        _worker: &mut GCWorker<VM>,
+    ) -> ObjectReference {
+        let mut sanity_checker = self.mmtk.sanity_checker.lock().unwrap();
         if !sanity_checker.refs.contains(&object) {
             // FIXME steveb consider VM-specific integrity check on reference.
             assert!(object.is_sane(), "Invalid reference {:?}", object);
 
             // Let plan check object
             assert!(
-                self.mmtk().get_plan().sanity_check_object(object),
+                self.mmtk.get_plan().sanity_check_object(object),
                 "Invalid reference {:?}",
                 object
             );
@@ -211,7 +178,7 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
             // Object is not "marked"
             sanity_checker.refs.insert(object); // "Mark" it
             trace!("Sanity mark object {}", object);
-            self.nodes.enqueue(object);
+            queue.enqueue(object);
         }
 
         // If the valid object (VO) bit metadata is enabled, all live objects should have the VO
@@ -224,7 +191,11 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
         object
     }
 
-    fn create_scan_work(&self, nodes: Vec<ObjectReference>) -> Self::ScanObjectsWorkType {
-        ScanObjects::<Self>::new(nodes, false, WorkBucketStage::Closure)
+    fn may_move_objects(&self) -> bool {
+        false
+    }
+
+    fn from_mmtk(mmtk: &'static MMTK<VM>) -> Self {
+        Self { mmtk }
     }
 }

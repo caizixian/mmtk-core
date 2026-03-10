@@ -1,6 +1,5 @@
-use crate::plan::concurrent::concurrent_marking_work::ProcessRootSlots;
 use crate::plan::concurrent::global::ConcurrentPlan;
-use crate::plan::concurrent::immix::gc_work::ConcurrentImmixGCWorkContext;
+use crate::plan::concurrent::immix::gc_work::ConcurrentImmixConcurrentGCWorkContext;
 use crate::plan::concurrent::immix::gc_work::ConcurrentImmixSTWGCWorkContext;
 use crate::plan::concurrent::Pause;
 use crate::plan::global::BasePlan;
@@ -18,7 +17,7 @@ use crate::policy::immix::TRACE_KIND_FAST;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::Release;
 use crate::scheduler::gc_work::StopMutators;
-use crate::scheduler::gc_work::UnsupportedProcessEdges;
+
 use crate::scheduler::gc_work::VMProcessWeakRefs;
 use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
@@ -355,10 +354,10 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
         self.set_ref_closure_buckets_enabled(false);
 
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<
-            ConcurrentImmixGCWorkContext<ProcessRootSlots<VM, Self, TRACE_KIND_FAST>>,
+            ConcurrentImmixConcurrentGCWorkContext<VM>,
         >::new());
         scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
-            ConcurrentImmixGCWorkContext<UnsupportedProcessEdges<VM>>,
+            ConcurrentImmixConcurrentGCWorkContext<VM>,
         >::new(self));
     }
 
@@ -367,11 +366,11 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
 
         // Skip root scanning in the final mark
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<
-            ConcurrentImmixGCWorkContext<ProcessRootSlots<VM, Self, TRACE_KIND_FAST>>,
+            ConcurrentImmixConcurrentGCWorkContext<VM>,
         >::new_no_scan_roots());
 
         scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
-            ConcurrentImmixGCWorkContext<UnsupportedProcessEdges<VM>>,
+            ConcurrentImmixConcurrentGCWorkContext<VM>,
         >::new(self));
 
         // Deal with weak ref and finalizers

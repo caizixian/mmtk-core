@@ -3,7 +3,6 @@
 
 use std::marker::PhantomData;
 
-use crate::scheduler::gc_work::ProcessEdgesWork;
 use crate::scheduler::{GCWorker, WorkBucketStage, EDGES_WORK_BUFFER_SIZE};
 use crate::util::{ObjectReference, VMThread, VMWorkerThread};
 use crate::vm::{Scanning, SlotVisitor, VMBinding};
@@ -101,17 +100,6 @@ pub(crate) trait SlotWorkFactory<VM: VMBinding>: Send + 'static {
     );
 }
 
-/// Blanket implementation: every `ProcessEdgesWork` is a `SlotWorkFactory`.
-impl<E: ProcessEdgesWork> SlotWorkFactory<E::VM> for E {
-    fn add_slot_processing_work(
-        worker: &mut GCWorker<E::VM>,
-        slots: Vec<<E::VM as VMBinding>::VMSlot>,
-        mmtk: &'static crate::MMTK<E::VM>,
-        bucket: WorkBucketStage,
-    ) {
-        worker.add_work(bucket, E::new(slots, false, mmtk, bucket));
-    }
-}
 
 /// A transitive closure visitor to collect the slots from objects.
 /// It maintains a buffer for the slots, and flushes slots to a new work packet
