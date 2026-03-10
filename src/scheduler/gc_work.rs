@@ -334,30 +334,30 @@ impl<E: ProcessEdgesWork> ObjectTracerContext<E::VM> for ProcessEdgesWorkTracerC
 /// VM binding to process weak references.
 ///
 /// NOTE: This will replace `{Soft,Weak,Phantom}RefProcessing` and `Finalization` in the future.
-pub struct VMProcessWeakRefs<E: ProcessEdgesWork> {
-    phantom_data: PhantomData<E>,
+pub struct VMProcessWeakRefs<VM: VMBinding, T: TracePolicy<VM>> {
+    _phantom: PhantomData<(VM, T)>,
 }
 
-impl<E: ProcessEdgesWork> VMProcessWeakRefs<E> {
+impl<VM: VMBinding, T: TracePolicy<VM>> VMProcessWeakRefs<VM, T> {
     pub fn new() -> Self {
         Self {
-            phantom_data: PhantomData,
+            _phantom: PhantomData,
         }
     }
 }
 
-impl<E: ProcessEdgesWork> GCWork<E::VM> for VMProcessWeakRefs<E> {
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
+impl<VM: VMBinding, T: TracePolicy<VM>> GCWork<VM> for VMProcessWeakRefs<VM, T> {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         trace!("VMProcessWeakRefs");
 
         let stage = WorkBucketStage::VMRefClosure;
 
         let need_to_repeat = {
-            let tracer_factory = ProcessEdgesWorkTracerContext::<E> {
+            let tracer_factory = GCTracerContext::<VM, T> {
                 stage,
-                phantom_data: PhantomData,
+                _phantom: PhantomData,
             };
-            <E::VM as VMBinding>::VMScanning::process_weak_refs(worker, tracer_factory)
+            VM::VMScanning::process_weak_refs(worker, tracer_factory)
         };
 
         if need_to_repeat {
@@ -377,29 +377,29 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for VMProcessWeakRefs<E> {
 /// VM binding to process weak references.
 ///
 /// NOTE: This will replace `RefForwarding` and `ForwardFinalization` in the future.
-pub struct VMForwardWeakRefs<E: ProcessEdgesWork> {
-    phantom_data: PhantomData<E>,
+pub struct VMForwardWeakRefs<VM: VMBinding, T: TracePolicy<VM>> {
+    _phantom: PhantomData<(VM, T)>,
 }
 
-impl<E: ProcessEdgesWork> VMForwardWeakRefs<E> {
+impl<VM: VMBinding, T: TracePolicy<VM>> VMForwardWeakRefs<VM, T> {
     pub fn new() -> Self {
         Self {
-            phantom_data: PhantomData,
+            _phantom: PhantomData,
         }
     }
 }
 
-impl<E: ProcessEdgesWork> GCWork<E::VM> for VMForwardWeakRefs<E> {
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
+impl<VM: VMBinding, T: TracePolicy<VM>> GCWork<VM> for VMForwardWeakRefs<VM, T> {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         trace!("VMForwardWeakRefs");
 
         let stage = WorkBucketStage::VMRefForwarding;
 
-        let tracer_factory = ProcessEdgesWorkTracerContext::<E> {
+        let tracer_factory = GCTracerContext::<VM, T> {
             stage,
-            phantom_data: PhantomData,
+            _phantom: PhantomData,
         };
-        <E::VM as VMBinding>::VMScanning::forward_weak_refs(worker, tracer_factory)
+        VM::VMScanning::forward_weak_refs(worker, tracer_factory)
     }
 }
 

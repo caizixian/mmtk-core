@@ -376,15 +376,15 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
 
         // Deal with weak ref and finalizers
         // TODO: Check against schedule_common_work and see if we are still missing any work packet
-        type RefProcessingEdges<VM> =
-            crate::scheduler::gc_work::PlanProcessEdges<VM, ConcurrentImmix<VM>, TRACE_KIND_FAST>;
+        type RefProcessingTracePolicy<VM> =
+            crate::plan::MatureTracePolicy<VM, ConcurrentImmix<VM>, TRACE_KIND_FAST>;
         // Reference processing
         if !*self.base().options.no_reference_types {
             use crate::util::reference_processor::{
                 PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
             };
             scheduler.work_buckets[WorkBucketStage::SoftRefClosure]
-                .add(SoftRefProcessing::<RefProcessingEdges<VM>>::new());
+                .add(SoftRefProcessing::<VM, RefProcessingTracePolicy<VM>>::new());
             scheduler.work_buckets[WorkBucketStage::WeakRefClosure]
                 .add(WeakRefProcessing::<VM>::new());
             scheduler.work_buckets[WorkBucketStage::PhantomRefClosure]
@@ -399,14 +399,14 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
             use crate::util::finalizable_processor::Finalization;
             // finalization
             scheduler.work_buckets[WorkBucketStage::FinalRefClosure]
-                .add(Finalization::<RefProcessingEdges<VM>>::new());
+                .add(Finalization::<VM, RefProcessingTracePolicy<VM>>::new());
         }
 
         // VM-specific weak ref processing
         // Note that ConcurrentImmix does not have a separate forwarding stage,
         // so we don't schedule the `VMForwardWeakRefs` work packet.
         scheduler.work_buckets[WorkBucketStage::VMRefClosure]
-            .set_sentinel(Box::new(VMProcessWeakRefs::<RefProcessingEdges<VM>>::new()));
+            .set_sentinel(Box::new(VMProcessWeakRefs::<VM, RefProcessingTracePolicy<VM>>::new()));
     }
 
     pub fn concurrent_marking_in_progress(&self) -> bool {

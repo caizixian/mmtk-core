@@ -94,6 +94,12 @@ pub type MarkingProcessEdges<VM> = PlanProcessEdges<VM, Compressor<VM>, TRACE_KI
 /// Forwarding trace
 pub type ForwardingProcessEdges<VM> = PlanProcessEdges<VM, Compressor<VM>, TRACE_KIND_FORWARD_ROOT>;
 
+/// Marking trace policy
+pub(crate) type MarkingTracePolicy<VM> = MatureTracePolicy<VM, Compressor<VM>, TRACE_KIND_MARK>;
+/// Forwarding trace policy
+pub(crate) type ForwardingTracePolicy<VM> =
+    MatureTracePolicy<VM, Compressor<VM>, TRACE_KIND_FORWARD_ROOT>;
+
 pub struct CompressorWorkContext<VM: VMBinding>(std::marker::PhantomData<VM>);
 impl<VM: VMBinding> crate::scheduler::GCWorkContext for CompressorWorkContext<VM> {
     type VM = VM;

@@ -98,6 +98,12 @@ pub type MarkingProcessEdges<VM> = PlanProcessEdges<VM, MarkCompact<VM>, TRACE_K
 /// Forwarding trace
 pub type ForwardingProcessEdges<VM> = PlanProcessEdges<VM, MarkCompact<VM>, TRACE_KIND_FORWARD>;
 
+/// Marking trace policy
+pub(crate) type MarkingTracePolicy<VM> = MatureTracePolicy<VM, MarkCompact<VM>, TRACE_KIND_MARK>;
+/// Forwarding trace policy
+pub(crate) type ForwardingTracePolicy<VM> =
+    MatureTracePolicy<VM, MarkCompact<VM>, TRACE_KIND_FORWARD>;
+
 pub struct MarkCompactGCWorkContext<VM: VMBinding>(std::marker::PhantomData<VM>);
 impl<VM: VMBinding> crate::scheduler::GCWorkContext for MarkCompactGCWorkContext<VM> {
     type VM = VM;
