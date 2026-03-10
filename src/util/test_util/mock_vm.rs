@@ -4,7 +4,7 @@
 use crate::plan::ObjectQueue;
 use crate::scheduler::gc_work::ProcessEdgesWorkRootsWorkFactory;
 use crate::scheduler::gc_work::ProcessEdgesWorkTracerContext;
-use crate::scheduler::gc_work::SFTProcessEdges;
+use crate::scheduler::gc_work::UnsupportedProcessEdges;
 use crate::scheduler::*;
 use crate::util::alloc::AllocationError;
 use crate::util::copy::*;
@@ -176,7 +176,7 @@ pub fn no_cleanup() {}
 /// has a signature of `fn(&mut GCWorker<VM>, impl ObjectTracerContext<VM>`.
 /// `ObjectTracerContext` is not object safe. So we just use `Box<MockAny>`
 /// in `MockVM`, and initiate it with a concrete type of `ObjectTracerContext`, such as
-/// `Box::new((MockMethod::<(&'static mut GCWorker<Self>,ProcessEdgesWorkTracerContext<SFTProcessEdges<Self>>,),bool>::new_unimplemented())`.
+/// `Box::new((MockMethod::<(&'static mut GCWorker<Self>,ProcessEdgesWorkTracerContext<UnsupportedProcessEdges<Self>>,),bool>::new_unimplemented()))`.
 ///
 /// Note that when `MockAny` is used, one needs to make sure that the types of the actual arguments match the argument types used for creating the `MockMethod`.
 /// We provide a default implementation for those `MockAny` methods, and it is very possible that the types in the default implementation do not
@@ -331,8 +331,8 @@ impl Default for MockVM {
                     &'static mut Mutator<MockVM>,
                     ProcessEdgesWorkRootsWorkFactory<
                         MockVM,
-                        SFTProcessEdges<MockVM>,
-                        SFTProcessEdges<MockVM>,
+                        UnsupportedProcessEdges<MockVM>,
+                        UnsupportedProcessEdges<MockVM>,
                     >,
                 ),
                 (),
@@ -343,8 +343,8 @@ impl Default for MockVM {
                     VMWorkerThread,
                     ProcessEdgesWorkRootsWorkFactory<
                         MockVM,
-                        SFTProcessEdges<MockVM>,
-                        SFTProcessEdges<MockVM>,
+                        UnsupportedProcessEdges<MockVM>,
+                        UnsupportedProcessEdges<MockVM>,
                     >,
                 ),
                 (),
@@ -356,7 +356,7 @@ impl Default for MockVM {
             process_weak_refs: Box::new(MockMethod::<
                 (
                     &'static mut GCWorker<Self>,
-                    ProcessEdgesWorkTracerContext<SFTProcessEdges<MockVM>>,
+                    ProcessEdgesWorkTracerContext<UnsupportedProcessEdges<MockVM>>,
                 ),
                 bool,
             >::new_unimplemented()),
@@ -364,7 +364,7 @@ impl Default for MockVM {
             forward_weak_refs: Box::new(MockMethod::<
                 (
                     &'static mut GCWorker<Self>,
-                    ProcessEdgesWorkTracerContext<SFTProcessEdges<MockVM>>,
+                    ProcessEdgesWorkTracerContext<UnsupportedProcessEdges<MockVM>>,
                 ),
                 (),
             >::new_default()),

@@ -681,49 +681,6 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
     }
 }
 
-/// A general implementation of [`ProcessEdgesWork`] using SFT. A plan can always implement their
-/// own [`ProcessEdgesWork`] instances. However, most plans can use this work packet for tracing amd
-/// they do not need to provide a plan-specific trace object work packet. If they choose to use this
-/// type, they need to provide a correct implementation for some related methods (such as
-/// `Space.set_copy_for_sft_trace()`, `SFT.sft_trace_object()`). Some plans are not using this type,
-/// mostly due to more complex tracing. Either it is impossible to use this type, or there is
-/// performance overheads for using this general trace type. In such cases, they implement their
-/// specific [`ProcessEdgesWork`] instances.
-// TODO: This is not used any more. Should we remove it?
-#[allow(dead_code)]
-pub struct SFTProcessEdges<VM: VMBinding> {
-    pub base: ProcessEdgesBase<VM>,
-}
-
-impl<VM: VMBinding> ProcessEdgesWork for SFTProcessEdges<VM> {
-    type VM = VM;
-    type ScanObjectsWorkType = ScanObjects<Self>;
-
-    fn new(
-        slots: Vec<SlotOf<Self>>,
-        roots: bool,
-        mmtk: &'static MMTK<VM>,
-        bucket: WorkBucketStage,
-    ) -> Self {
-        let base = ProcessEdgesBase::new(slots, roots, mmtk, bucket);
-        Self { base }
-    }
-
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        use crate::policy::sft::GCWorkerMutRef;
-
-        // Erase <VM> type parameter
-        let worker = GCWorkerMutRef::new(self.worker());
-
-        // Invoke trace object on sft
-        let sft = unsafe { crate::mmtk::SFT_MAP.get_unchecked(object.to_raw_address()) };
-        sft.sft_trace_object(&mut self.base.nodes, object, worker)
-    }
-
-    fn create_scan_work(&self, nodes: Vec<ObjectReference>) -> ScanObjects<Self> {
-        ScanObjects::<Self>::new(nodes, false, self.bucket)
-    }
-}
 
 /// An implementation of `RootsWorkFactory` that creates work packets based on `ProcessEdgesWork`
 /// for handling roots.  The `DPE` and the `PPE` type parameters correspond to the
@@ -809,18 +766,7 @@ impl<VM: VMBinding, DPE: ProcessEdgesWork<VM = VM>, PPE: ProcessEdgesWork<VM = V
     }
 }
 
-impl<VM: VMBinding> Deref for SFTProcessEdges<VM> {
-    type Target = ProcessEdgesBase<VM>;
-    fn deref(&self) -> &Self::Target {
-        &self.base
-    }
-}
 
-impl<VM: VMBinding> DerefMut for SFTProcessEdges<VM> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.base
-    }
-}
 
 /// Trait for a work packet that scans objects
 pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {

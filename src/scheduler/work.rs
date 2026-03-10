@@ -75,8 +75,8 @@ pub trait GCWorkContext: Send + 'static {
     type VM: VMBinding;
     type PlanType: Plan<VM = Self::VM>;
 
-    // FIXME: We should use `SFTProcessEdges` as the default value for `DefaultProcessEdges`, and
-    // `UnsupportedProcessEdges` for `PinningProcessEdges`.  However, this requires
+    // FIXME: We should provide default values for `DefaultProcessEdges` and
+    // `PinningProcessEdges` (e.g. `UnsupportedProcessEdges`). However, this requires
     // `associated_type_defaults` which has not yet been stablized.
     // See: https://github.com/rust-lang/rust/issues/29661
 
