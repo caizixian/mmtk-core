@@ -3,10 +3,9 @@
 
 use std::marker::PhantomData;
 
-use crate::scheduler::gc_work::{ProcessEdgesWork, SlotOf};
-use crate::scheduler::{GCWorker, WorkBucketStage, EDGES_WORK_BUFFER_SIZE};
+use crate::scheduler::{GCWorker, EDGES_WORK_BUFFER_SIZE};
 use crate::util::{ObjectReference, VMThread, VMWorkerThread};
-use crate::vm::{Scanning, SlotVisitor, VMBinding};
+use crate::vm::{Scanning, VMBinding};
 
 /// This trait represents an object queue to enqueue objects during tracing.
 pub trait ObjectQueue {
@@ -89,64 +88,6 @@ impl ObjectQueue for VectorQueue<ObjectReference> {
     }
 }
 
-/// A transitive closure visitor to collect the slots from objects.
-/// It maintains a buffer for the slots, and flushes slots to a new work packet
-/// if the buffer is full or if the type gets dropped.
-pub struct ObjectsClosure<'a, E: ProcessEdgesWork> {
-    buffer: VectorQueue<SlotOf<E>>,
-    pub(crate) worker: &'a mut GCWorker<E::VM>,
-    bucket: WorkBucketStage,
-}
-
-impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
-    /// Create an [`ObjectsClosure`].
-    ///
-    /// Arguments:
-    /// * `worker`: the current worker. The objects closure should not leave the context of this worker.
-    /// * `bucket`: new work generated will be push ed to the bucket.
-    pub fn new(worker: &'a mut GCWorker<E::VM>, bucket: WorkBucketStage) -> Self {
-        Self {
-            buffer: VectorQueue::new(),
-            worker,
-            bucket,
-        }
-    }
-
-    fn flush(&mut self) {
-        let buf = self.buffer.take();
-        if !buf.is_empty() {
-            self.worker.add_work(
-                self.bucket,
-                E::new(buf, false, self.worker.mmtk, self.bucket),
-            );
-        }
-    }
-}
-
-impl<E: ProcessEdgesWork> SlotVisitor<SlotOf<E>> for ObjectsClosure<'_, E> {
-    fn visit_slot(&mut self, slot: SlotOf<E>) {
-        #[cfg(debug_assertions)]
-        {
-            use crate::vm::slot::Slot;
-            trace!(
-                "(ObjectsClosure) Visit slot {:?} (pointing to {:?})",
-                slot,
-                slot.load()
-            );
-        }
-        self.buffer.push(slot);
-        if self.buffer.is_full() {
-            self.flush();
-        }
-    }
-}
-
-impl<E: ProcessEdgesWork> Drop for ObjectsClosure<'_, E> {
-    fn drop(&mut self) {
-        self.flush();
-    }
-}
-
 // ============================================================================
 // TracePolicy: plan-specific tracing abstraction
 // ============================================================================
@@ -185,8 +126,8 @@ impl<E: ProcessEdgesWork> Drop for ObjectsClosure<'_, E> {
 //   - NurseryTracePolicy<VM, P, KIND> — nursery trace for generational plans
 //   - UnsupportedTracePolicy<VM>      — runtime panic placeholder
 
-use crate::plan::global::PlanTraceObject;
 use crate::plan::generational::global::GenerationalPlanExt;
+use crate::plan::global::PlanTraceObject;
 use crate::plan::Plan;
 use crate::policy::gc_work::TraceKind;
 use crate::MMTK;
@@ -243,8 +184,8 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKin
     }
 }
 
-impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
-    TracePolicy<VM> for MatureTracePolicy<VM, P, KIND>
+impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind> TracePolicy<VM>
+    for MatureTracePolicy<VM, P, KIND>
 {
     fn may_move_objects(&self) -> bool {
         P::may_move_objects::<KIND>()

@@ -2,7 +2,7 @@ use super::global::Compressor;
 use crate::plan::{MatureTracePolicy, UnsupportedTracePolicy};
 use crate::policy::compressor::{CompressorSpace, TRACE_KIND_FORWARD_ROOT, TRACE_KIND_MARK};
 use crate::policy::largeobjectspace::LargeObjectSpace;
-use crate::scheduler::gc_work::PlanProcessEdges;
+
 use crate::scheduler::gc_work::*;
 use crate::scheduler::{GCWork, GCWorker, WorkBucketStage};
 use crate::vm::{ActivePlan, Scanning, VMBinding};
@@ -88,11 +88,6 @@ impl<VM: VMBinding> AfterCompact<VM> {
         }
     }
 }
-
-/// Marking trace
-pub type MarkingProcessEdges<VM> = PlanProcessEdges<VM, Compressor<VM>, TRACE_KIND_MARK>;
-/// Forwarding trace
-pub type ForwardingProcessEdges<VM> = PlanProcessEdges<VM, Compressor<VM>, TRACE_KIND_FORWARD_ROOT>;
 
 /// Marking trace policy
 pub(crate) type MarkingTracePolicy<VM> = MatureTracePolicy<VM, Compressor<VM>, TRACE_KIND_MARK>;

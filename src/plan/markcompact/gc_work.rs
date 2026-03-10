@@ -2,7 +2,7 @@ use super::global::MarkCompact;
 use crate::plan::{MatureTracePolicy, UnsupportedTracePolicy};
 use crate::policy::markcompactspace::MarkCompactSpace;
 use crate::policy::markcompactspace::{TRACE_KIND_FORWARD, TRACE_KIND_MARK};
-use crate::scheduler::gc_work::PlanProcessEdges;
+
 use crate::scheduler::gc_work::*;
 use crate::scheduler::GCWork;
 use crate::scheduler::GCWorker;
@@ -92,11 +92,6 @@ impl<VM: VMBinding> Compact<VM> {
         Self { mc_space }
     }
 }
-
-/// Marking trace
-pub type MarkingProcessEdges<VM> = PlanProcessEdges<VM, MarkCompact<VM>, TRACE_KIND_MARK>;
-/// Forwarding trace
-pub type ForwardingProcessEdges<VM> = PlanProcessEdges<VM, MarkCompact<VM>, TRACE_KIND_FORWARD>;
 
 /// Marking trace policy
 pub(crate) type MarkingTracePolicy<VM> = MatureTracePolicy<VM, MarkCompact<VM>, TRACE_KIND_MARK>;

@@ -1,8 +1,8 @@
 //! A general scheduler implementation. MMTk uses it to schedule GC-related work.
 
-/// Buffer size for [`ProcessEdgesWork`] work packets. This constant is exposed to binding
+/// Buffer size for edge-processing work packets. This constant is exposed to binding
 /// developers so that they can use this value for places in their binding that interface with the
-/// work packet system, specifically the transitive closure via `ProcessEdgesWork` work packets
+/// work packet system, specifically the transitive closure via slot-processing work packets
 /// such as roots gathering code or weak reference processing. In order to have better load
 /// balancing, it is recommended that binding developers use this constant to split work up into
 /// different work packets.
@@ -31,4 +31,3 @@ pub(crate) use worker::current_worker_ordinal;
 pub use worker::GCWorker;
 
 pub(crate) mod gc_work;
-pub use gc_work::ProcessEdgesWork;
