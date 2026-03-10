@@ -281,27 +281,25 @@ impl<E: ObjectTraceProvider> ProcessEdgesWorkTracer<E> {
     }
 }
 
-/// This type implements `ObjectTracerContext` by creating a temporary `ProcessEdgesWork` during
-/// the call to `with_tracer`, making use of its `trace_object` method.  It then creates work
-/// packets using the methods of the `ProcessEdgesWork` and add the work packet into the given
+/// This type implements `ObjectTracerContext` by creating a temporary `ObjectTraceProvider`
+/// during the call to `with_tracer`, making use of its `trace_object` method. It then creates
+/// work packets using the methods of the `ObjectTraceProvider` and adds them into the given
 /// `stage`.
 ///
-/// NOTE: Although this type is generic over `ObjectTraceProvider`, it still requires
-/// `E: ProcessEdgesWork` for construction (via `E::new`). The `ObjectTraceProvider`
-/// bound on `ProcessEdgesWorkTracer` is what allows future consumers to use this
-/// with any tracer, not just ProcessEdgesWork.
-pub(crate) struct ProcessEdgesWorkTracerContext<E: ProcessEdgesWork> {
+/// This type only requires `E: ObjectTraceProvider`, not the full `ProcessEdgesWork` trait.
+/// Construction uses `E::new_provider()` and `E::set_worker()` from `ObjectTraceProvider`.
+pub(crate) struct ProcessEdgesWorkTracerContext<E: ObjectTraceProvider> {
     stage: WorkBucketStage,
     phantom_data: PhantomData<E>,
 }
 
-impl<E: ProcessEdgesWork> Clone for ProcessEdgesWorkTracerContext<E> {
+impl<E: ObjectTraceProvider> Clone for ProcessEdgesWorkTracerContext<E> {
     fn clone(&self) -> Self {
         Self { ..*self }
     }
 }
 
-impl<E: ProcessEdgesWork> ObjectTracerContext<E::VM> for ProcessEdgesWorkTracerContext<E> {
+impl<E: ObjectTraceProvider> ObjectTracerContext<E::VM> for ProcessEdgesWorkTracerContext<E> {
     type TracerType = ProcessEdgesWorkTracer<E>;
 
     fn with_tracer<R, F>(&self, worker: &mut GCWorker<E::VM>, func: F) -> R
@@ -310,8 +308,8 @@ impl<E: ProcessEdgesWork> ObjectTracerContext<E::VM> for ProcessEdgesWorkTracerC
     {
         let mmtk = worker.mmtk;
 
-        // Prepare the underlying ProcessEdgesWork
-        let mut process_edges_work = E::new(vec![], false, mmtk, self.stage);
+        // Prepare the underlying ObjectTraceProvider
+        let mut process_edges_work = E::new_provider(mmtk, self.stage);
         // FIXME: This line allows us to omit the borrowing lifetime of worker.
         // We should refactor ProcessEdgesWork so that it uses `worker` locally, not as a member.
         process_edges_work.set_worker(worker);
