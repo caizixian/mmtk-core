@@ -384,7 +384,7 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
                 PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
             };
             scheduler.work_buckets[WorkBucketStage::SoftRefClosure]
-                .add(SoftRefProcessing::<RefProcessingEdges<VM>>::new());
+                .add(SoftRefProcessing::<VM, RefTracePolicy<VM>>::new());
             scheduler.work_buckets[WorkBucketStage::WeakRefClosure]
                 .add(WeakRefProcessing::<VM>::new());
             scheduler.work_buckets[WorkBucketStage::PhantomRefClosure]
@@ -399,7 +399,7 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
             use crate::util::finalizable_processor::Finalization;
             // finalization
             scheduler.work_buckets[WorkBucketStage::FinalRefClosure]
-                .add(Finalization::<RefProcessingEdges<VM>>::new());
+                .add(Finalization::<VM, RefTracePolicy<VM>>::new());
         }
 
         // VM-specific weak ref processing

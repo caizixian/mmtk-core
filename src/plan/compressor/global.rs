@@ -120,7 +120,7 @@ impl<VM: VMBinding> Plan for Compressor<VM> {
                 PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
             };
             scheduler.work_buckets[WorkBucketStage::SoftRefClosure]
-                .add(SoftRefProcessing::<MarkingProcessEdges<VM>>::new());
+                .add(SoftRefProcessing::<VM, MatureTracePolicy<VM, Compressor<VM>, {crate::policy::compressor::TRACE_KIND_MARK}>>::new());
             scheduler.work_buckets[WorkBucketStage::WeakRefClosure]
                 .add(WeakRefProcessing::<VM>::new());
             scheduler.work_buckets[WorkBucketStage::PhantomRefClosure]
@@ -128,7 +128,7 @@ impl<VM: VMBinding> Plan for Compressor<VM> {
 
             use crate::util::reference_processor::RefForwarding;
             scheduler.work_buckets[WorkBucketStage::RefForwarding]
-                .add(RefForwarding::<ForwardingProcessEdges<VM>>::new());
+                .add(RefForwarding::<VM, MatureTracePolicy<VM, Compressor<VM>, {crate::policy::compressor::TRACE_KIND_FORWARD_ROOT}>>::new());
 
             use crate::util::reference_processor::RefEnqueue;
             scheduler.work_buckets[WorkBucketStage::Release].add(RefEnqueue::<VM>::new());
@@ -141,11 +141,11 @@ impl<VM: VMBinding> Plan for Compressor<VM> {
             // treat finalizable objects as roots and perform a closure (marking)
             // must be done before calculating forwarding pointers
             scheduler.work_buckets[WorkBucketStage::FinalRefClosure]
-                .add(Finalization::<MarkingProcessEdges<VM>>::new());
+                .add(Finalization::<VM, MatureTracePolicy<VM, Compressor<VM>, {crate::policy::compressor::TRACE_KIND_MARK}>>::new());
             // update finalizable object references
             // must be done before compacting
             scheduler.work_buckets[WorkBucketStage::FinalizableForwarding]
-                .add(ForwardFinalization::<ForwardingProcessEdges<VM>>::new());
+                .add(ForwardFinalization::<VM, MatureTracePolicy<VM, Compressor<VM>, {crate::policy::compressor::TRACE_KIND_FORWARD_ROOT}>>::new());
         }
 
         // VM-specific weak ref processing

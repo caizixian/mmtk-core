@@ -168,7 +168,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
             };
             self.work_buckets[WorkBucketStage::SoftRefClosure]
-                .add(SoftRefProcessing::<C::DefaultProcessEdges>::new());
+                .add(SoftRefProcessing::<C::VM, C::DefaultTracePolicy>::new());
             self.work_buckets[WorkBucketStage::WeakRefClosure].add(WeakRefProcessing::<VM>::new());
             self.work_buckets[WorkBucketStage::PhantomRefClosure]
                 .add(PhantomRefProcessing::<VM>::new());
@@ -176,7 +176,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             use crate::util::reference_processor::RefForwarding;
             if plan.constraints().needs_forward_after_liveness {
                 self.work_buckets[WorkBucketStage::RefForwarding]
-                    .add(RefForwarding::<C::DefaultProcessEdges>::new());
+                    .add(RefForwarding::<C::VM, C::DefaultTracePolicy>::new());
             }
 
             use crate::util::reference_processor::RefEnqueue;
@@ -188,11 +188,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             use crate::util::finalizable_processor::{Finalization, ForwardFinalization};
             // finalization
             self.work_buckets[WorkBucketStage::FinalRefClosure]
-                .add(Finalization::<C::DefaultProcessEdges>::new());
+                .add(Finalization::<C::VM, C::DefaultTracePolicy>::new());
             // forward refs
             if plan.constraints().needs_forward_after_liveness {
                 self.work_buckets[WorkBucketStage::FinalizableForwarding]
-                    .add(ForwardFinalization::<C::DefaultProcessEdges>::new());
+                    .add(ForwardFinalization::<C::VM, C::DefaultTracePolicy>::new());
             }
         }
 

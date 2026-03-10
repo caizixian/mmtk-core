@@ -1,11 +1,11 @@
 use crate::plan::is_nursery_gc;
-use crate::scheduler::gc_work::ProcessEdgesWork;
+use crate::scheduler::gc_work::{GCTracerContext, TracePolicy};
 use crate::scheduler::{GCWork, GCWorker, WorkBucketStage};
 use crate::util::reference_processor::RescanReferences;
 use crate::util::ObjectReference;
 use crate::util::VMWorkerThread;
 use crate::vm::Finalizable;
-use crate::vm::{Collection, VMBinding};
+use crate::vm::{Collection, ObjectTracer, ObjectTracerContext, VMBinding};
 use crate::MMTK;
 use std::marker::PhantomData;
 
@@ -37,11 +37,11 @@ impl<F: Finalizable> FinalizableProcessor<F> {
         self.candidates.push(object);
     }
 
-    fn forward_finalizable_reference<E: ProcessEdgesWork>(e: &mut E, finalizable: &mut F) {
-        finalizable.keep_alive::<E>(e);
+    fn forward_finalizable_reference(e: &mut dyn ObjectTracer, finalizable: &mut F) {
+        finalizable.keep_alive(e);
     }
 
-    pub fn scan<E: ProcessEdgesWork>(&mut self, tls: VMWorkerThread, e: &mut E, nursery: bool) {
+    pub fn scan<VM: VMBinding>(&mut self, tls: VMWorkerThread, e: &mut dyn ObjectTracer, nursery: bool) {
         let start = if nursery { self.nursery_index } else { 0 };
 
         // We should go through ready_for_finalize objects and keep them alive.
@@ -76,21 +76,19 @@ impl<F: Finalizable> FinalizableProcessor<F> {
         // Set nursery_index to the end of the candidates (the candidates before the index are scanned)
         self.nursery_index = self.candidates.len();
 
-        <<E as ProcessEdgesWork>::VM as VMBinding>::VMCollection::schedule_finalization(tls);
+        <VM as VMBinding>::VMCollection::schedule_finalization(tls);
     }
 
-    pub fn forward_candidate<E: ProcessEdgesWork>(&mut self, e: &mut E, _nursery: bool) {
+    pub fn forward_candidate(&mut self, e: &mut dyn ObjectTracer, _nursery: bool) {
         self.candidates
             .iter_mut()
             .for_each(|f| FinalizableProcessor::<F>::forward_finalizable_reference(e, f));
-        e.flush();
     }
 
-    pub fn forward_finalizable<E: ProcessEdgesWork>(&mut self, e: &mut E, _nursery: bool) {
+    pub fn forward_finalizable(&mut self, e: &mut dyn ObjectTracer, _nursery: bool) {
         self.ready_for_finalize
             .iter_mut()
             .for_each(|f| FinalizableProcessor::<F>::forward_finalizable_reference(e, f));
-        e.flush();
     }
 
     pub fn get_ready_object(&mut self) -> Option<F> {
@@ -136,11 +134,10 @@ impl<F: Finalizable> FinalizableProcessor<F> {
     }
 }
 
-#[derive(Default)]
-pub struct Finalization<E: ProcessEdgesWork>(PhantomData<E>);
+pub struct Finalization<VM: VMBinding, T: TracePolicy<VM>>(PhantomData<(VM, T)>);
 
-impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
+impl<VM: VMBinding, T: TracePolicy<VM>> GCWork<VM> for Finalization<VM, T> {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         if !*mmtk.options.no_reference_types {
             // Rescan soft and weak references at the end of the transitive closure from resurrected
             // objects.  New soft and weak references may be discovered during this.
@@ -160,9 +157,14 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
             num_candidates_begin, num_ready_for_finalize_begin
         );
 
-        let mut w = E::new(vec![], false, mmtk, WorkBucketStage::FinalRefClosure);
-        w.set_worker(worker);
-        finalizable_processor.scan(worker.tls, &mut w, is_nursery_gc(mmtk.get_plan()));
+        let tls = worker.tls;
+        let tracer_ctx = GCTracerContext::<VM, T> {
+            stage: WorkBucketStage::FinalRefClosure,
+            _phantom: PhantomData,
+        };
+        tracer_ctx.with_tracer(worker, |tracer| {
+            finalizable_processor.scan::<VM>(tls, tracer, is_nursery_gc(mmtk.get_plan()));
+        });
 
         let num_candidates_end = finalizable_processor.candidates.len();
         let num_ready_for_finalize_end = finalizable_processor.ready_for_finalize.len();
@@ -181,28 +183,30 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
         );
     }
 }
-impl<E: ProcessEdgesWork> Finalization<E> {
+impl<VM: VMBinding, T: TracePolicy<VM>> Finalization<VM, T> {
     pub fn new() -> Self {
         Self(PhantomData)
     }
 }
 
-#[derive(Default)]
-pub struct ForwardFinalization<E: ProcessEdgesWork>(PhantomData<E>);
+pub struct ForwardFinalization<VM: VMBinding, T: TracePolicy<VM>>(PhantomData<(VM, T)>);
 
-impl<E: ProcessEdgesWork> GCWork<E::VM> for ForwardFinalization<E> {
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
+impl<VM: VMBinding, T: TracePolicy<VM>> GCWork<VM> for ForwardFinalization<VM, T> {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         trace!("Forward finalization");
-        let mut finalizable_processor = mmtk.finalizable_processor.lock().unwrap();
-        let mut w = E::new(vec![], false, mmtk, WorkBucketStage::FinalizableForwarding);
-        w.set_worker(worker);
-        finalizable_processor.forward_candidate(&mut w, is_nursery_gc(mmtk.get_plan()));
-
-        finalizable_processor.forward_finalizable(&mut w, is_nursery_gc(mmtk.get_plan()));
+        let tracer_ctx = GCTracerContext::<VM, T> {
+            stage: WorkBucketStage::FinalizableForwarding,
+            _phantom: PhantomData,
+        };
+        tracer_ctx.with_tracer(worker, |tracer| {
+            let mut finalizable_processor = mmtk.finalizable_processor.lock().unwrap();
+            finalizable_processor.forward_candidate(tracer, is_nursery_gc(mmtk.get_plan()));
+            finalizable_processor.forward_finalizable(tracer, is_nursery_gc(mmtk.get_plan()));
+        });
         trace!("Finished forwarding finlizable");
     }
 }
-impl<E: ProcessEdgesWork> ForwardFinalization<E> {
+impl<VM: VMBinding, T: TracePolicy<VM>> ForwardFinalization<VM, T> {
     pub fn new() -> Self {
         Self(PhantomData)
     }
