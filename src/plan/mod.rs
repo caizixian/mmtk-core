@@ -38,6 +38,7 @@ pub(crate) use plan_constraints::DEFAULT_PLAN_CONSTRAINTS;
 
 mod tracing;
 pub use tracing::{ObjectQueue, ObjectsClosure, VectorObjectQueue, VectorQueue};
+pub(crate) use tracing::SlotWorkFactory;
 
 /// Generational plans (with a copying nursery)
 mod generational;

@@ -3,7 +3,7 @@
 
 use std::marker::PhantomData;
 
-use crate::scheduler::gc_work::{ProcessEdgesWork, SlotOf};
+use crate::scheduler::gc_work::ProcessEdgesWork;
 use crate::scheduler::{GCWorker, WorkBucketStage, EDGES_WORK_BUFFER_SIZE};
 use crate::util::{ObjectReference, VMThread, VMWorkerThread};
 use crate::vm::{Scanning, SlotVisitor, VMBinding};
@@ -89,42 +89,66 @@ impl ObjectQueue for VectorQueue<ObjectReference> {
     }
 }
 
+/// A trait for creating edge-processing work packets from slot buffers.
+/// This abstracts over both the old `ProcessEdgesWork` and new `TracePolicy`-based systems.
+pub(crate) trait SlotWorkFactory<VM: VMBinding>: Send + 'static {
+    /// Create and schedule a work packet to process the given slots.
+    fn add_slot_processing_work(
+        worker: &mut GCWorker<VM>,
+        slots: Vec<VM::VMSlot>,
+        mmtk: &'static crate::MMTK<VM>,
+        bucket: WorkBucketStage,
+    );
+}
+
+/// Blanket implementation: every `ProcessEdgesWork` is a `SlotWorkFactory`.
+impl<E: ProcessEdgesWork> SlotWorkFactory<E::VM> for E {
+    fn add_slot_processing_work(
+        worker: &mut GCWorker<E::VM>,
+        slots: Vec<<E::VM as VMBinding>::VMSlot>,
+        mmtk: &'static crate::MMTK<E::VM>,
+        bucket: WorkBucketStage,
+    ) {
+        worker.add_work(bucket, E::new(slots, false, mmtk, bucket));
+    }
+}
+
 /// A transitive closure visitor to collect the slots from objects.
 /// It maintains a buffer for the slots, and flushes slots to a new work packet
 /// if the buffer is full or if the type gets dropped.
-pub struct ObjectsClosure<'a, E: ProcessEdgesWork> {
-    buffer: VectorQueue<SlotOf<E>>,
-    pub(crate) worker: &'a mut GCWorker<E::VM>,
+pub struct ObjectsClosure<'a, VM: VMBinding, F: SlotWorkFactory<VM> = DummySlotWorkFactory<VM>> {
+    buffer: VectorQueue<VM::VMSlot>,
+    pub(crate) worker: &'a mut GCWorker<VM>,
     bucket: WorkBucketStage,
+    _phantom: PhantomData<F>,
 }
 
-impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
+impl<'a, VM: VMBinding, F: SlotWorkFactory<VM>> ObjectsClosure<'a, VM, F> {
     /// Create an [`ObjectsClosure`].
     ///
     /// Arguments:
     /// * `worker`: the current worker. The objects closure should not leave the context of this worker.
     /// * `bucket`: new work generated will be push ed to the bucket.
-    pub fn new(worker: &'a mut GCWorker<E::VM>, bucket: WorkBucketStage) -> Self {
+    pub fn new(worker: &'a mut GCWorker<VM>, bucket: WorkBucketStage) -> Self {
         Self {
             buffer: VectorQueue::new(),
             worker,
             bucket,
+            _phantom: PhantomData,
         }
     }
 
     fn flush(&mut self) {
         let buf = self.buffer.take();
         if !buf.is_empty() {
-            self.worker.add_work(
-                self.bucket,
-                E::new(buf, false, self.worker.mmtk, self.bucket),
-            );
+            let mmtk = self.worker.mmtk;
+            F::add_slot_processing_work(self.worker, buf, mmtk, self.bucket);
         }
     }
 }
 
-impl<E: ProcessEdgesWork> SlotVisitor<SlotOf<E>> for ObjectsClosure<'_, E> {
-    fn visit_slot(&mut self, slot: SlotOf<E>) {
+impl<VM: VMBinding, F: SlotWorkFactory<VM>> SlotVisitor<VM::VMSlot> for ObjectsClosure<'_, VM, F> {
+    fn visit_slot(&mut self, slot: VM::VMSlot) {
         #[cfg(debug_assertions)]
         {
             use crate::vm::slot::Slot;
@@ -141,9 +165,25 @@ impl<E: ProcessEdgesWork> SlotVisitor<SlotOf<E>> for ObjectsClosure<'_, E> {
     }
 }
 
-impl<E: ProcessEdgesWork> Drop for ObjectsClosure<'_, E> {
+impl<VM: VMBinding, F: SlotWorkFactory<VM>> Drop for ObjectsClosure<'_, VM, F> {
     fn drop(&mut self) {
         self.flush();
+    }
+}
+
+/// A dummy `SlotWorkFactory` used as the default type parameter for `ObjectsClosure`.
+/// This should never be instantiated - it only exists to satisfy the type system.
+pub(crate) enum DummySlotWorkFactory<VM: VMBinding> {
+    _Phantom(PhantomData<VM>),
+}
+impl<VM: VMBinding> SlotWorkFactory<VM> for DummySlotWorkFactory<VM> {
+    fn add_slot_processing_work(
+        _worker: &mut GCWorker<VM>,
+        _slots: Vec<VM::VMSlot>,
+        _mmtk: &'static crate::MMTK<VM>,
+        _bucket: WorkBucketStage,
+    ) {
+        unreachable!("DummySlotWorkFactory should never be used");
     }
 }
 
