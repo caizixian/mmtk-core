@@ -91,12 +91,12 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>, const KIND
 /// The modbuf contains a list of objects in mature space(s) that
 /// may contain pointers to the nursery space.
 /// This work packet scans the recorded objects and forwards pointers if necessary.
-pub struct ProcessModBuf<E: ProcessEdgesWork> {
+pub struct ProcessModBuf<VM: VMBinding, T: TracePolicy<VM>> {
     modbuf: Vec<ObjectReference>,
-    phantom: PhantomData<E>,
+    phantom: PhantomData<(VM, T)>,
 }
 
-impl<E: ProcessEdgesWork> ProcessModBuf<E> {
+impl<VM: VMBinding, T: TracePolicy<VM>> ProcessModBuf<VM, T> {
     pub fn new(modbuf: Vec<ObjectReference>) -> Self {
         debug_assert!(!modbuf.is_empty());
         Self {
@@ -106,8 +106,8 @@ impl<E: ProcessEdgesWork> ProcessModBuf<E> {
     }
 }
 
-impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBuf<E> {
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
+impl<VM: VMBinding, T: TracePolicy<VM>> GCWork<VM> for ProcessModBuf<VM, T> {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         // Process and scan modbuf only if the current GC is a nursery GC
         let gen = mmtk.get_plan().generational().unwrap();
         if gen.is_current_gc_nursery() {
@@ -119,7 +119,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBuf<E> {
                     *obj,
                     crate::util::memory::get_process_memory_maps(),
                 );
-                <E::VM as VMBinding>::VMObjectModel::GLOBAL_LOG_BIT_SPEC.store_atomic::<E::VM, u8>(
+                <VM as VMBinding>::VMObjectModel::GLOBAL_LOG_BIT_SPEC.store_atomic::<VM, u8>(
                     *obj,
                     1,
                     None,
@@ -128,8 +128,9 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBuf<E> {
             }
             // Scan objects in the modbuf and forward pointers
             let modbuf = std::mem::take(&mut self.modbuf);
+            let policy = T::from_mmtk(mmtk);
             GCWork::do_work(
-                &mut ScanObjects::<E>::new(modbuf, false, WorkBucketStage::Closure),
+                &mut GCScanObjects::<VM, T>::new(policy, modbuf, false, WorkBucketStage::Closure),
                 worker,
                 mmtk,
             )
@@ -140,14 +141,14 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBuf<E> {
 /// The array-copy modbuf contains a list of array slices in mature space(s) that
 /// may contain pointers to the nursery space.
 /// This work packet forwards and updates each entry in the recorded slices.
-pub struct ProcessRegionModBuf<E: ProcessEdgesWork> {
+pub struct ProcessRegionModBuf<VM: VMBinding, T: TracePolicy<VM>> {
     /// A list of `(start_address, bytes)` tuple.
-    modbuf: Vec<<E::VM as VMBinding>::VMMemorySlice>,
-    phantom: PhantomData<E>,
+    modbuf: Vec<VM::VMMemorySlice>,
+    phantom: PhantomData<T>,
 }
 
-impl<E: ProcessEdgesWork> ProcessRegionModBuf<E> {
-    pub fn new(modbuf: Vec<<E::VM as VMBinding>::VMMemorySlice>) -> Self {
+impl<VM: VMBinding, T: TracePolicy<VM>> ProcessRegionModBuf<VM, T> {
+    pub fn new(modbuf: Vec<VM::VMMemorySlice>) -> Self {
         Self {
             modbuf,
             phantom: PhantomData,
@@ -155,8 +156,8 @@ impl<E: ProcessEdgesWork> ProcessRegionModBuf<E> {
     }
 }
 
-impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessRegionModBuf<E> {
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
+impl<VM: VMBinding, T: TracePolicy<VM>> GCWork<VM> for ProcessRegionModBuf<VM, T> {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         // Scan modbuf only if the current GC is a nursery GC
         if mmtk
             .get_plan()
@@ -173,7 +174,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessRegionModBuf<E> {
             }
             // Forward entries
             GCWork::do_work(
-                &mut E::new(slots, false, mmtk, WorkBucketStage::Closure),
+                &mut GCProcessEdges::<VM, T>::new(slots, false, mmtk, WorkBucketStage::Closure),
                 worker,
                 mmtk,
             )
