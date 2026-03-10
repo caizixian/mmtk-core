@@ -243,15 +243,15 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
 }
 
 /// This implements `ObjectTracer` by forwarding the `trace_object` calls to the wrapped
-/// `ProcessEdgesWork` instance.
-pub(crate) struct ProcessEdgesWorkTracer<E: ProcessEdgesWork> {
+/// `ObjectTraceProvider` instance.
+pub(crate) struct ProcessEdgesWorkTracer<E: ObjectTraceProvider> {
     process_edges_work: E,
     stage: WorkBucketStage,
 }
 
-impl<E: ProcessEdgesWork> ObjectTracer for ProcessEdgesWorkTracer<E> {
-    /// Forward the `trace_object` call to the underlying `ProcessEdgesWork`,
-    /// and flush as soon as the underlying buffer of `process_edges_work` is full.
+impl<E: ObjectTraceProvider> ObjectTracer for ProcessEdgesWorkTracer<E> {
+    /// Forward the `trace_object` call to the underlying `ObjectTraceProvider`,
+    /// and flush as soon as the underlying buffer is full.
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         let result = self.process_edges_work.trace_object(object);
         self.flush_if_full();
@@ -259,15 +259,15 @@ impl<E: ProcessEdgesWork> ObjectTracer for ProcessEdgesWorkTracer<E> {
     }
 }
 
-impl<E: ProcessEdgesWork> ProcessEdgesWorkTracer<E> {
+impl<E: ObjectTraceProvider> ProcessEdgesWorkTracer<E> {
     fn flush_if_full(&mut self) {
-        if self.process_edges_work.nodes.is_full() {
+        if self.process_edges_work.nodes_is_full() {
             self.flush();
         }
     }
 
     pub fn flush_if_not_empty(&mut self) {
-        if !self.process_edges_work.nodes.is_empty() {
+        if !self.process_edges_work.nodes_is_empty() {
             self.flush();
         }
     }
@@ -277,7 +277,7 @@ impl<E: ProcessEdgesWork> ProcessEdgesWorkTracer<E> {
         assert!(!next_nodes.is_empty());
         let work_packet = self.process_edges_work.create_scan_work(next_nodes);
         let worker = self.process_edges_work.worker();
-        worker.scheduler().work_buckets[self.stage].add(work_packet);
+        worker.scheduler().work_buckets[self.stage].add_boxed(work_packet);
     }
 }
 
@@ -285,6 +285,11 @@ impl<E: ProcessEdgesWork> ProcessEdgesWorkTracer<E> {
 /// the call to `with_tracer`, making use of its `trace_object` method.  It then creates work
 /// packets using the methods of the `ProcessEdgesWork` and add the work packet into the given
 /// `stage`.
+///
+/// NOTE: Although this type is generic over `ObjectTraceProvider`, it still requires
+/// `E: ProcessEdgesWork` for construction (via `E::new`). The `ObjectTraceProvider`
+/// bound on `ProcessEdgesWorkTracer` is what allows future consumers to use this
+/// with any tracer, not just ProcessEdgesWork.
 pub(crate) struct ProcessEdgesWorkTracerContext<E: ProcessEdgesWork> {
     stage: WorkBucketStage,
     phantom_data: PhantomData<E>,
@@ -311,7 +316,7 @@ impl<E: ProcessEdgesWork> ObjectTracerContext<E::VM> for ProcessEdgesWorkTracerC
         // We should refactor ProcessEdgesWork so that it uses `worker` locally, not as a member.
         process_edges_work.set_worker(worker);
 
-        // Cretae the tracer.
+        // Create the tracer.
         let mut tracer = ProcessEdgesWorkTracer {
             process_edges_work,
             stage: self.stage,
