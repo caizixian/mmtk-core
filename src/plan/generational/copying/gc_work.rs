@@ -1,5 +1,5 @@
 use super::global::GenCopy;
-use crate::plan::generational::gc_work::GenNurseryProcessEdges;
+use crate::plan::generational::gc_work::GenNurseryTracePolicy;
 use crate::vm::*;
 
 use crate::policy::gc_work::DEFAULT_TRACE;
@@ -9,7 +9,8 @@ pub struct GenCopyNurseryGCWorkContext<VM: VMBinding>(std::marker::PhantomData<V
 impl<VM: VMBinding> crate::scheduler::GCWorkContext for GenCopyNurseryGCWorkContext<VM> {
     type VM = VM;
     type PlanType = GenCopy<VM>;
-    type DefaultProcessEdges = GenNurseryProcessEdges<Self::VM, Self::PlanType, DEFAULT_TRACE>;
+    type DefaultProcessEdges =
+        PolicyDrivenProcessEdges<Self::VM, GenNurseryTracePolicy<Self::VM, Self::PlanType, DEFAULT_TRACE>>;
     type PinningProcessEdges = UnsupportedProcessEdges<VM>;
 }
 

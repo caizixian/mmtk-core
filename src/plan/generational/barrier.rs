@@ -4,6 +4,7 @@ use crate::plan::barriers::BarrierSemantics;
 use crate::plan::PlanTraceObject;
 use crate::plan::VectorQueue;
 use crate::policy::gc_work::DEFAULT_TRACE;
+use crate::scheduler::gc_work::PolicyDrivenProcessEdges;
 use crate::scheduler::WorkBucketStage;
 use crate::util::constants::BYTES_IN_INT;
 use crate::util::*;
@@ -11,10 +12,14 @@ use crate::vm::slot::MemorySlice;
 use crate::vm::VMBinding;
 use crate::MMTK;
 
-use super::gc_work::GenNurseryProcessEdges;
+use super::gc_work::GenNurseryTracePolicy;
 use super::gc_work::ProcessModBuf;
 use super::gc_work::ProcessRegionModBuf;
 use super::global::GenerationalPlanExt;
+
+/// The ProcessEdgesWork type used for nursery collection in barriers.
+type NurseryProcessEdges<VM, P> =
+    PolicyDrivenProcessEdges<VM, GenNurseryTracePolicy<VM, P, DEFAULT_TRACE>>;
 
 pub struct GenObjectBarrierSemantics<
     VM: VMBinding,
@@ -46,7 +51,7 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>>
         let buf = self.modbuf.take();
         if !buf.is_empty() {
             self.mmtk.scheduler.work_buckets[WorkBucketStage::Closure]
-                .add(ProcessModBuf::<GenNurseryProcessEdges<VM, P, DEFAULT_TRACE>>::new(buf));
+                .add(ProcessModBuf::<NurseryProcessEdges<VM, P>>::new(buf));
         }
     }
 
@@ -55,7 +60,7 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>>
         if !buf.is_empty() {
             debug_assert!(!buf.is_empty());
             self.mmtk.scheduler.work_buckets[WorkBucketStage::Closure].add(ProcessRegionModBuf::<
-                GenNurseryProcessEdges<VM, P, DEFAULT_TRACE>,
+                NurseryProcessEdges<VM, P>,
             >::new(buf));
         }
     }

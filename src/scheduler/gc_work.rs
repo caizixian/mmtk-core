@@ -959,57 +959,6 @@ use crate::plan::Plan;
 use crate::plan::PlanTraceObject;
 use crate::policy::gc_work::TraceKind;
 
-/// This is an alternative to `ScanObjects` that calls the `post_scan_object` of the policy
-/// selected by the plan.  It is applicable to plans that derive `PlanTraceObject`.
-pub struct PlanScanObjects<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceObject<E::VM>> {
-    plan: &'static P,
-    buffer: Vec<ObjectReference>,
-    #[allow(dead_code)]
-    concurrent: bool,
-    phantom: PhantomData<E>,
-    bucket: WorkBucketStage,
-}
-
-impl<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceObject<E::VM>> PlanScanObjects<E, P> {
-    pub fn new(
-        plan: &'static P,
-        buffer: Vec<ObjectReference>,
-        concurrent: bool,
-        bucket: WorkBucketStage,
-    ) -> Self {
-        Self {
-            plan,
-            buffer,
-            concurrent,
-            phantom: PhantomData,
-            bucket,
-        }
-    }
-}
-
-impl<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceObject<E::VM>> ScanObjectsWork<E::VM>
-    for PlanScanObjects<E, P>
-{
-    type E = E;
-
-    fn get_bucket(&self) -> WorkBucketStage {
-        self.bucket
-    }
-
-    fn post_scan_object(&self, object: ObjectReference) {
-        self.plan.post_scan_object(object);
-    }
-}
-
-impl<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceObject<E::VM>> GCWork<E::VM>
-    for PlanScanObjects<E, P>
-{
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        trace!("PlanScanObjects");
-        self.do_work_common(&self.buffer, worker, mmtk);
-        trace!("PlanScanObjects End");
-    }
-}
 
 /// This work packet processes pinning roots.
 ///

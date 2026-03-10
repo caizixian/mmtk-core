@@ -1,5 +1,5 @@
 use super::global::GenImmix;
-use crate::plan::generational::gc_work::GenNurseryProcessEdges;
+use crate::plan::generational::gc_work::GenNurseryTracePolicy;
 use crate::policy::gc_work::TraceKind;
 use crate::policy::gc_work::DEFAULT_TRACE;
 use crate::scheduler::gc_work::PlanObjectTracePolicy;
@@ -11,7 +11,8 @@ pub struct GenImmixNurseryGCWorkContext<VM: VMBinding>(std::marker::PhantomData<
 impl<VM: VMBinding> crate::scheduler::GCWorkContext for GenImmixNurseryGCWorkContext<VM> {
     type VM = VM;
     type PlanType = GenImmix<VM>;
-    type DefaultProcessEdges = GenNurseryProcessEdges<VM, Self::PlanType, DEFAULT_TRACE>;
+    type DefaultProcessEdges =
+        PolicyDrivenProcessEdges<VM, GenNurseryTracePolicy<VM, Self::PlanType, DEFAULT_TRACE>>;
     type PinningProcessEdges = UnsupportedProcessEdges<VM>;
 }
 
@@ -23,8 +24,6 @@ impl<VM: VMBinding, const KIND: TraceKind> crate::scheduler::GCWorkContext
 {
     type VM = VM;
     type PlanType = GenImmix<VM>;
-    // Use the new PolicyDrivenProcessEdges with PlanObjectTracePolicy,
-    // replacing the old PlanProcessEdges<VM, GenImmix<VM>, KIND>.
     type DefaultProcessEdges =
         PolicyDrivenProcessEdges<VM, PlanObjectTracePolicy<VM, GenImmix<VM>, KIND>>;
     type PinningProcessEdges = UnsupportedProcessEdges<VM>;
