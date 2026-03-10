@@ -780,7 +780,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
     /// Return the work bucket for this work packet and its derived work packets.
     fn get_bucket(&self) -> WorkBucketStage;
 
-    /// The common code for ScanObjects and PlanScanObjects.
+    /// The common code for ScanObjects and PolicyDrivenScanObjects.
     fn do_work_common(
         &self,
         buffer: &[ObjectReference],
@@ -1207,8 +1207,7 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKin
 /// A generic [`ProcessEdgesWork`] implementation that delegates tracing to an
 /// [`ObjectTracePolicy`].
 ///
-/// This type replaces per-plan `ProcessEdgesWork` implementations. Instead of each
-/// plan defining its own struct (e.g., `PlanProcessEdges<VM, P, KIND>`), plans can
+/// This type eliminates per-plan `ProcessEdgesWork` implementations. Plans can
 /// use `PolicyDrivenProcessEdges<VM, MyTracePolicy>` with a simple `ObjectTracePolicy`.
 ///
 /// The `PolicyDrivenProcessEdges` handles all the work packet plumbing (slot processing,

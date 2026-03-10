@@ -892,7 +892,7 @@ pub trait HasSpaces {
     fn for_each_space_mut(&mut self, func: &mut dyn FnMut(&mut dyn Space<Self::VM>));
 }
 
-/// A plan that uses `PlanProcessEdges` needs to provide an implementation for this trait.
+/// A plan that uses `PolicyDrivenProcessEdges` needs to provide an implementation for this trait.
 /// Generally a plan does not need to manually implement this trait. Instead, we provide
 /// a procedural macro that helps generate an implementation. Please check `macros/trace_object`.
 ///
