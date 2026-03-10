@@ -2,6 +2,7 @@ use super::work_bucket::WorkBucketStage;
 use super::*;
 use crate::global_state::GcStatus;
 use crate::plan::ObjectsClosure;
+use crate::plan::SlotProcessorFactory;
 use crate::plan::VectorObjectQueue;
 use crate::util::*;
 use crate::vm::slot::Slot;
@@ -959,9 +960,18 @@ impl<VM: VMBinding> DerefMut for SFTProcessEdges<VM> {
 
 /// Trait for a work packet that scans objects
 pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
-    /// The associated ProcessEdgesWork for processing the outgoing edges of the objects in this
-    /// packet.
-    type E: ProcessEdgesWork<VM = VM>;
+    /// The `ObjectTraceProvider` implementation for tracing objects discovered by scanning.
+    type E: ObjectTraceProvider<VM = VM>;
+
+    /// The factory for creating slot-processing work packets.
+    ///
+    /// This is separated from `E` so that tracing (via `ObjectTraceProvider`) is decoupled
+    /// from slot processing. Implementations that use a `ProcessEdgesWork` type as `E` can
+    /// simply provide `PhantomData<E>` here, utilizing the blanket impl.
+    type SlotFactory: SlotProcessorFactory<VM::VMSlot, VM = VM>;
+
+    /// Get the slot processor factory for this work packet.
+    fn slot_factory(&self) -> Self::SlotFactory;
 
     /// Called after each object is scanned.
     fn post_scan_object(&self, object: ObjectReference);
@@ -973,8 +983,8 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
     fn do_work_common(
         &self,
         buffer: &[ObjectReference],
-        worker: &mut GCWorker<<Self::E as ProcessEdgesWork>::VM>,
-        mmtk: &'static MMTK<<Self::E as ProcessEdgesWork>::VM>,
+        worker: &mut GCWorker<VM>,
+        mmtk: &'static MMTK<VM>,
     ) {
         let tls = worker.tls;
 
@@ -983,7 +993,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
         // Scan the objects in the list that supports slot-enququing.
         let mut scan_later = vec![];
         {
-            let mut closure = ObjectsClosure::new(worker, self.get_bucket(), PhantomData::<Self::E>);
+            let mut closure = ObjectsClosure::new(worker, self.get_bucket(), self.slot_factory());
 
             // For any object we need to scan, we count its live bytes.
             // Check the option outside the loop for better performance.
@@ -1071,6 +1081,11 @@ impl<Edges: ProcessEdgesWork> ScanObjects<Edges> {
 
 impl<VM: VMBinding, E: ProcessEdgesWork<VM = VM>> ScanObjectsWork<VM> for ScanObjects<E> {
     type E = E;
+    type SlotFactory = PhantomData<E>;
+
+    fn slot_factory(&self) -> Self::SlotFactory {
+        PhantomData
+    }
 
     fn get_bucket(&self) -> WorkBucketStage {
         self.bucket
@@ -1195,6 +1210,11 @@ impl<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceObject<E::VM>> ScanObje
     for PlanScanObjects<E, P>
 {
     type E = E;
+    type SlotFactory = PhantomData<E>;
+
+    fn slot_factory(&self) -> Self::SlotFactory {
+        PhantomData
+    }
 
     fn get_bucket(&self) -> WorkBucketStage {
         self.bucket
