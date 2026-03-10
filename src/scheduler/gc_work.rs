@@ -681,6 +681,89 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
     }
 }
 
+/// A provider of object tracing that enqueues newly-visited objects.
+///
+/// This is the "pure tracing" subset of [`ProcessEdgesWork`], without slot management.
+/// It captures only the capability to trace objects and manage the resulting node queue.
+///
+/// The primary purpose of this trait is to decouple consumers that only need object tracing
+/// (such as [`ProcessEdgesWorkTracer`], [`VMProcessWeakRefs`], and [`ScanObjectsWork`])
+/// from the full [`ProcessEdgesWork`] trait which also handles slot loading/storing.
+///
+/// A blanket implementation is provided for all types implementing [`ProcessEdgesWork`],
+/// so existing code continues to work unchanged.
+pub trait ObjectTraceProvider: Send + 'static {
+    /// The associated VM binding type.
+    type VM: VMBinding;
+
+    /// Trace an object. If newly visited, enqueue it internally.
+    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference;
+
+    /// Create a work packet that scans the given list of objects.
+    fn create_scan_work(&self, nodes: Vec<ObjectReference>) -> Box<dyn GCWork<Self::VM>>;
+
+    /// Pop all queued nodes, returning them and clearing the internal queue.
+    fn pop_nodes(&mut self) -> Vec<ObjectReference>;
+
+    /// Check if the node queue is full and should be flushed.
+    fn nodes_is_full(&self) -> bool;
+
+    /// Check if the node queue is empty.
+    fn nodes_is_empty(&self) -> bool;
+
+    /// Get the work bucket stage this provider operates in.
+    fn bucket(&self) -> WorkBucketStage;
+
+    /// Get the worker reference.
+    fn worker(&self) -> &'static mut GCWorker<Self::VM>;
+
+    /// Get the MMTK reference.
+    fn mmtk(&self) -> &'static MMTK<Self::VM>;
+}
+
+/// Blanket implementation of [`ObjectTraceProvider`] for all [`ProcessEdgesWork`] types.
+///
+/// This allows all existing `ProcessEdgesWork` implementations (e.g. `PlanProcessEdges`,
+/// `GenNurseryProcessEdges`) to be used wherever `ObjectTraceProvider` is required,
+/// without any changes to their code.
+impl<E: ProcessEdgesWork> ObjectTraceProvider for E {
+    type VM = E::VM;
+
+    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+        // Delegate to the ProcessEdgesWork::trace_object method.
+        // Use fully-qualified syntax to avoid ambiguity.
+        ProcessEdgesWork::trace_object(self, object)
+    }
+
+    fn create_scan_work(&self, nodes: Vec<ObjectReference>) -> Box<dyn GCWork<Self::VM>> {
+        Box::new(ProcessEdgesWork::create_scan_work(self, nodes))
+    }
+
+    fn pop_nodes(&mut self) -> Vec<ObjectReference> {
+        self.deref_mut().nodes.take()
+    }
+
+    fn nodes_is_full(&self) -> bool {
+        self.deref().nodes.is_full()
+    }
+
+    fn nodes_is_empty(&self) -> bool {
+        self.deref().nodes.is_empty()
+    }
+
+    fn bucket(&self) -> WorkBucketStage {
+        self.deref().bucket
+    }
+
+    fn worker(&self) -> &'static mut GCWorker<Self::VM> {
+        ProcessEdgesBase::worker(self.deref())
+    }
+
+    fn mmtk(&self) -> &'static MMTK<Self::VM> {
+        ProcessEdgesBase::mmtk(self.deref())
+    }
+}
+
 /// A general implementation of [`ProcessEdgesWork`] using SFT. A plan can always implement their
 /// own [`ProcessEdgesWork`] instances. However, most plans can use this work packet for tracing amd
 /// they do not need to provide a plan-specific trace object work packet. If they choose to use this
@@ -1003,7 +1086,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             // Skip slots that are not holding an object reference.
             return;
         };
-        let new_object = self.trace_object(object);
+        let new_object = ProcessEdgesWork::trace_object(self, object);
         if P::may_move_objects::<KIND>() && new_object != object {
             slot.store(new_object);
         }

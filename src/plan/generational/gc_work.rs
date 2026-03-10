@@ -57,7 +57,7 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>, const KIND
             // Skip slots that are not holding an object reference.
             return;
         };
-        let new_object = self.trace_object(object);
+        let new_object = ProcessEdgesWork::trace_object(self, object);
         debug_assert!(!self.plan.is_object_in_nursery(new_object));
         // Note: If `object` is a mature object, `trace_object` will not call `space.trace_object`,
         // but will still return `object`.  In that case, we don't need to write it back.
