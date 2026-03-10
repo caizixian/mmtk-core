@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use std::vec::Vec;
 
 use crate::plan::is_nursery_gc;
+use crate::scheduler::gc_work::ObjectTraceProvider;
 use crate::scheduler::ProcessEdgesWork;
 use crate::scheduler::WorkBucketStage;
 use crate::util::ObjectReference;
@@ -66,7 +67,7 @@ impl ReferenceProcessors {
     /// However, for some plans like mark compact, at the point we do ref scanning, we do not know
     /// the forwarding addresses yet, thus we cannot do forwarding during scan refs. And for those
     /// plans, this separate step is required.
-    pub fn forward_refs<E: ProcessEdgesWork>(&self, trace: &mut E, mmtk: &'static MMTK<E::VM>) {
+    pub fn forward_refs<E: ObjectTraceProvider>(&self, trace: &mut E, mmtk: &'static MMTK<E::VM>) {
         debug_assert!(
             mmtk.get_plan().constraints().needs_forward_after_liveness,
             "A plan with needs_forward_after_liveness=false does not need a separate forward step"
@@ -81,7 +82,7 @@ impl ReferenceProcessors {
 
     // Methods for scanning weak references. It needs to be called in a decreasing order of reference strengths, i.e. soft > weak > phantom
 
-    pub fn retain_soft_refs<E: ProcessEdgesWork>(&self, trace: &mut E, mmtk: &'static MMTK<E::VM>) {
+    pub fn retain_soft_refs<E: ObjectTraceProvider>(&self, trace: &mut E, mmtk: &'static MMTK<E::VM>) {
         self.soft.retain::<E>(trace, is_nursery_gc(mmtk.get_plan()));
     }
 
@@ -232,7 +233,7 @@ impl ReferenceProcessor {
     /// -   adds the referent to the tracing queue if not yet reached, so that its children will be
     ///     kept alive, too, and
     /// -   gets the new object reference of the referent if it is moved.
-    fn keep_referent_alive<E: ProcessEdgesWork>(
+    fn keep_referent_alive<E: ObjectTraceProvider>(
         e: &mut E,
         referent: ObjectReference,
     ) -> ObjectReference {
@@ -243,7 +244,7 @@ impl ReferenceProcessor {
     /// -   adds the reference or the referent to the tracing queue if not yet reached, so that
     ///     the children of the reference or referent will be visited and forwarded, too, and
     /// -   gets the forwarded object reference of the object.
-    fn trace_forward_object<E: ProcessEdgesWork>(
+    fn trace_forward_object<E: ObjectTraceProvider>(
         e: &mut E,
         referent: ObjectReference,
     ) -> ObjectReference {
@@ -294,12 +295,12 @@ impl ReferenceProcessor {
     /// Forward the reference tables in the reference processor. This is only needed if a plan does not forward
     /// objects in their first transitive closure.
     /// nursery is not used for this.
-    pub fn forward<E: ProcessEdgesWork>(&self, trace: &mut E, _nursery: bool) {
+    pub fn forward<E: ObjectTraceProvider>(&self, trace: &mut E, _nursery: bool) {
         let mut sync = self.sync.lock().unwrap();
         debug!("Starting ReferenceProcessor.forward({:?})", self.semantics);
 
         // Forward a single reference
-        fn forward_reference<E: ProcessEdgesWork>(
+        fn forward_reference<E: ObjectTraceProvider>(
             trace: &mut E,
             reference: ObjectReference,
         ) -> ObjectReference {
@@ -406,7 +407,7 @@ impl ReferenceProcessor {
     /// It retains the referent if the reference is definitely reachable. This method does
     /// not update reference or referent. So after this method, scan() should be used to update
     /// the references/referents.
-    fn retain<E: ProcessEdgesWork>(&self, trace: &mut E, _nursery: bool) {
+    fn retain<E: ObjectTraceProvider>(&self, trace: &mut E, _nursery: bool) {
         debug_assert!(self.semantics == Semantics::SOFT);
 
         let sync = self.sync.lock().unwrap();
