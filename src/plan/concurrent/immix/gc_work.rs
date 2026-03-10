@@ -17,6 +17,10 @@ impl<VM: VMBinding, const KIND: TraceKind> crate::scheduler::GCWorkContext
     type DefaultTracePolicy = MatureTracePolicy<VM, ConcurrentImmix<VM>, KIND>;
     type PinningTracePolicy = MatureTracePolicy<VM, ConcurrentImmix<VM>, TRACE_KIND_TRANSITIVE_PIN>;
 }
+
+/// GCWorkContext for concurrent marking pauses.
+/// During concurrent marking, root scanning is STW so MatureTracePolicy works correctly.
+/// The concurrent marking phase itself uses its own ConcurrentTraceObjects directly.
 pub(super) struct ConcurrentImmixGCWorkContext<E: ProcessEdgesWork>(std::marker::PhantomData<E>);
 
 impl<E: ProcessEdgesWork> crate::scheduler::GCWorkContext for ConcurrentImmixGCWorkContext<E> {
@@ -24,7 +28,8 @@ impl<E: ProcessEdgesWork> crate::scheduler::GCWorkContext for ConcurrentImmixGCW
     type PlanType = ConcurrentImmix<E::VM>;
     type DefaultProcessEdges = E;
     type PinningProcessEdges = UnsupportedProcessEdges<Self::VM>;
-    // Concurrent marking uses its own ProcessEdgesWork; TracePolicy is not used here.
-    type DefaultTracePolicy = UnsupportedTracePolicy<Self::VM>;
+    // Use the fast marking policy for root scanning during concurrent marking pauses.
+    // Root scanning is STW, so normal TracePolicy works correctly.
+    type DefaultTracePolicy = MatureTracePolicy<E::VM, ConcurrentImmix<E::VM>, {crate::policy::gc_work::DEFAULT_TRACE}>;
     type PinningTracePolicy = UnsupportedTracePolicy<Self::VM>;
 }
