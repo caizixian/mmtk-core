@@ -5,10 +5,12 @@ use std::sync::Mutex;
 use std::vec::Vec;
 
 use crate::plan::is_nursery_gc;
+use crate::scheduler::gc_work::ProcessEdgesWorkAsTracer;
 use crate::scheduler::ProcessEdgesWork;
 use crate::scheduler::WorkBucketStage;
 use crate::util::ObjectReference;
 use crate::util::VMWorkerThread;
+use crate::vm::ObjectTracer;
 use crate::vm::ReferenceGlue;
 use crate::vm::VMBinding;
 
@@ -232,22 +234,22 @@ impl ReferenceProcessor {
     /// -   adds the referent to the tracing queue if not yet reached, so that its children will be
     ///     kept alive, too, and
     /// -   gets the new object reference of the referent if it is moved.
-    fn keep_referent_alive<E: ProcessEdgesWork>(
-        e: &mut E,
+    fn keep_referent_alive<T: ObjectTracer>(
+        tracer: &mut T,
         referent: ObjectReference,
     ) -> ObjectReference {
-        e.trace_object(referent)
+        tracer.trace_object(referent)
     }
 
     /// This function is called when forwarding the references and referents (for MarkCompact). It
     /// -   adds the reference or the referent to the tracing queue if not yet reached, so that
     ///     the children of the reference or referent will be visited and forwarded, too, and
     /// -   gets the forwarded object reference of the object.
-    fn trace_forward_object<E: ProcessEdgesWork>(
-        e: &mut E,
-        referent: ObjectReference,
+    fn trace_forward_object<T: ObjectTracer>(
+        tracer: &mut T,
+        object: ObjectReference,
     ) -> ObjectReference {
-        e.trace_object(referent)
+        tracer.trace_object(object)
     }
 
     /// Inform the binding to enqueue the weak references whose referents were cleared in this GC.
@@ -298,9 +300,9 @@ impl ReferenceProcessor {
         let mut sync = self.sync.lock().unwrap();
         debug!("Starting ReferenceProcessor.forward({:?})", self.semantics);
 
-        // Forward a single reference
-        fn forward_reference<E: ProcessEdgesWork>(
-            trace: &mut E,
+        // Forward a single reference using an ObjectTracer
+        fn forward_reference<VM: VMBinding, T: ObjectTracer>(
+            tracer: &mut T,
             reference: ObjectReference,
         ) -> ObjectReference {
             {
@@ -308,15 +310,15 @@ impl ReferenceProcessor {
                 trace!(
                     "Forwarding reference: {} (size: {})",
                     reference,
-                    <E::VM as VMBinding>::VMObjectModel::get_current_size(reference)
+                    VM::VMObjectModel::get_current_size(reference)
                 );
             }
 
             if let Some(old_referent) =
-                <E::VM as VMBinding>::VMReferenceGlue::get_referent(reference)
+                VM::VMReferenceGlue::get_referent(reference)
             {
-                let new_referent = ReferenceProcessor::trace_forward_object(trace, old_referent);
-                <E::VM as VMBinding>::VMReferenceGlue::set_referent(reference, new_referent);
+                let new_referent = ReferenceProcessor::trace_forward_object(tracer, old_referent);
+                VM::VMReferenceGlue::set_referent(reference, new_referent);
 
                 trace!(
                     " referent: {} (forwarded to {})",
@@ -325,22 +327,23 @@ impl ReferenceProcessor {
                 );
             }
 
-            let new_reference = ReferenceProcessor::trace_forward_object(trace, reference);
+            let new_reference = ReferenceProcessor::trace_forward_object(tracer, reference);
             trace!(" reference: forwarded to {}", new_reference);
 
             new_reference
         }
 
+        let mut tracer = ProcessEdgesWorkAsTracer::new(trace);
         sync.references = sync
             .references
             .iter()
-            .map(|reff| forward_reference::<E>(trace, *reff))
+            .map(|reff| forward_reference::<E::VM, _>(&mut tracer, *reff))
             .collect();
 
         sync.enqueued_references = sync
             .enqueued_references
             .iter()
-            .map(|reff| forward_reference::<E>(trace, *reff))
+            .map(|reff| forward_reference::<E::VM, _>(&mut tracer, *reff))
             .collect();
 
         debug!("Ending ReferenceProcessor.forward({:?})", self.semantics);
@@ -422,6 +425,7 @@ impl ReferenceProcessor {
         let mut num_live = 0usize;
         let mut num_retained = 0usize;
 
+        let mut tracer = ProcessEdgesWorkAsTracer::new(trace);
         for reference in sync.references.iter() {
             trace!("Processing reference: {:?}", reference);
 
@@ -434,7 +438,7 @@ impl ReferenceProcessor {
             // Reference is definitely reachable.  Retain the referent.
             if let Some(referent) = <E::VM as VMBinding>::VMReferenceGlue::get_referent(*reference)
             {
-                Self::keep_referent_alive(trace, referent);
+                Self::keep_referent_alive(&mut tracer, referent);
                 num_retained += 1;
                 trace!(" ~> {:?} (retained)", referent);
             }

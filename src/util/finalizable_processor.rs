@@ -1,5 +1,5 @@
 use crate::plan::is_nursery_gc;
-use crate::scheduler::gc_work::ProcessEdgesWork;
+use crate::scheduler::gc_work::{ProcessEdgesWork, ProcessEdgesWorkAsTracer};
 use crate::scheduler::{GCWork, GCWorker, WorkBucketStage};
 use crate::util::reference_processor::RescanReferences;
 use crate::util::ObjectReference;
@@ -38,7 +38,8 @@ impl<F: Finalizable> FinalizableProcessor<F> {
     }
 
     fn forward_finalizable_reference<E: ProcessEdgesWork>(e: &mut E, finalizable: &mut F) {
-        finalizable.keep_alive::<E>(e);
+        let mut tracer = ProcessEdgesWorkAsTracer::new(e);
+        finalizable.keep_alive(&mut tracer);
     }
 
     pub fn scan<E: ProcessEdgesWork>(&mut self, tls: VMWorkerThread, e: &mut E, nursery: bool) {

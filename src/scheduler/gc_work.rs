@@ -1059,6 +1059,38 @@ impl<VM: VMBinding> ProcessEdgesWork for UnsupportedProcessEdges<VM> {
 
 use crate::plan::ObjectQueue;
 
+/// A lightweight adapter that wraps a mutable reference to a [`ProcessEdgesWork`]
+/// and implements [`ObjectTracer`] by forwarding `trace_object` calls.
+///
+/// This enables infrastructure code that only needs `trace_object()` (such as
+/// [`Finalizable::keep_alive`](crate::vm::Finalizable::keep_alive),
+/// reference processing, and finalization) to use the simpler `ObjectTracer`
+/// abstraction instead of requiring the full `ProcessEdgesWork` interface.
+///
+/// # Example
+///
+/// ```ignore
+/// fn process<E: ProcessEdgesWork>(e: &mut E, obj: ObjectReference) {
+///     let mut tracer = ProcessEdgesWorkAsTracer::new(e);
+///     // Now use tracer where ObjectTracer is needed
+///     let new_obj = tracer.trace_object(obj);
+/// }
+/// ```
+pub struct ProcessEdgesWorkAsTracer<'a, E: ProcessEdgesWork>(pub &'a mut E);
+
+impl<'a, E: ProcessEdgesWork> ProcessEdgesWorkAsTracer<'a, E> {
+    pub fn new(edges: &'a mut E) -> Self {
+        Self(edges)
+    }
+}
+
+impl<E: ProcessEdgesWork> ObjectTracer for ProcessEdgesWorkAsTracer<'_, E> {
+    #[inline(always)]
+    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+        self.0.trace_object(object)
+    }
+}
+
 /// A policy that defines how a GC algorithm traces objects during heap traversal.
 ///
 /// This trait captures only the plan/algorithm-specific aspect of tracing: given an object,
