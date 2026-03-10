@@ -58,7 +58,7 @@ pub trait GCWork<VM: VMBinding>: 'static + Send {
     }
 }
 
-use super::gc_work::ProcessEdgesWork;
+use super::gc_work::ObjectTraceProvider;
 use crate::plan::Plan;
 
 /// This trait provides a group of associated types that are needed to
@@ -83,7 +83,7 @@ pub trait GCWorkContext: Send + 'static {
     /// The `ProcessEdgesWork` implementation to use for tracing edges that do not have special
     /// pinning requirements.  Concrete plans and spaces may choose to move or not to move the
     /// objects the traced edges point to.
-    type DefaultProcessEdges: ProcessEdgesWork<VM = Self::VM>;
+    type DefaultProcessEdges: ObjectTraceProvider<VM = Self::VM>;
 
     /// The `ProcessEdgesWork` implementation to use for tracing edges that must not be updated
     /// (i.e. the objects the traced edges pointed to must not be moved).  This is used for
@@ -97,5 +97,5 @@ pub trait GCWorkContext: Send + 'static {
     ///
     /// If a plan does not support object pinning, it should use `UnsupportedProcessEdges` for this
     /// type member.
-    type PinningProcessEdges: ProcessEdgesWork<VM = Self::VM>;
+    type PinningProcessEdges: ObjectTraceProvider<VM = Self::VM>;
 }

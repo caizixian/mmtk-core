@@ -219,7 +219,11 @@ impl<C: GCWorkContext> StopMutators<C> {
     }
 }
 
-impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
+impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C>
+where
+    C::DefaultProcessEdges: ProcessEdgesWork<VM = C::VM>,
+    C::PinningProcessEdges: ProcessEdgesWork<VM = C::VM>,
+{
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
         trace!("stop_all_mutators start");
         mmtk.state.prepare_for_stack_scanning();
@@ -427,7 +431,11 @@ impl<VM: VMBinding> GCWork<VM> for VMPostForwarding<VM> {
 
 pub struct ScanMutatorRoots<C: GCWorkContext>(pub &'static mut Mutator<C::VM>);
 
-impl<C: GCWorkContext> GCWork<C::VM> for ScanMutatorRoots<C> {
+impl<C: GCWorkContext> GCWork<C::VM> for ScanMutatorRoots<C>
+where
+    C::DefaultProcessEdges: ProcessEdgesWork<VM = C::VM>,
+    C::PinningProcessEdges: ProcessEdgesWork<VM = C::VM>,
+{
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
         trace!("ScanMutatorRoots for mutator {:?}", self.0.get_tls());
         let mutators = <C::VM as VMBinding>::VMActivePlan::number_of_mutators();
@@ -461,7 +469,11 @@ impl<C: GCWorkContext> ScanVMSpecificRoots<C> {
     }
 }
 
-impl<C: GCWorkContext> GCWork<C::VM> for ScanVMSpecificRoots<C> {
+impl<C: GCWorkContext> GCWork<C::VM> for ScanVMSpecificRoots<C>
+where
+    C::DefaultProcessEdges: ProcessEdgesWork<VM = C::VM>,
+    C::PinningProcessEdges: ProcessEdgesWork<VM = C::VM>,
+{
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
         trace!("ScanStaticRoots");
         let factory = ProcessEdgesWorkRootsWorkFactory::<

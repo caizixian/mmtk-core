@@ -181,7 +181,13 @@ impl<VM: VMBinding> Immix<VM> {
         plan: &'static DefragContext::PlanType,
         immix_space: &ImmixSpace<VM>,
         scheduler: &GCWorkScheduler<VM>,
-    ) {
+    )
+    where
+        FastContext::DefaultProcessEdges: ProcessEdgesWork<VM = VM>,
+        FastContext::PinningProcessEdges: ProcessEdgesWork<VM = VM>,
+        DefragContext::DefaultProcessEdges: ProcessEdgesWork<VM = VM>,
+        DefragContext::PinningProcessEdges: ProcessEdgesWork<VM = VM>,
+    {
         let in_defrag = immix_space.decide_whether_to_defrag(
             plan.base().global_state.is_emergency_collection(),
             true,
