@@ -150,11 +150,11 @@ impl<VM: VMBinding> Plan for Compressor<VM> {
 
         // VM-specific weak ref processing
         scheduler.work_buckets[WorkBucketStage::VMRefClosure]
-            .set_sentinel(Box::new(VMProcessWeakRefs::<MarkingProcessEdges<VM>>::new()));
+            .set_sentinel(Box::new(VMProcessWeakRefs::<VM, MatureTracePolicy<VM, Compressor<VM>, {crate::policy::compressor::TRACE_KIND_MARK}>>::new()));
 
         // VM-specific weak ref forwarding
         scheduler.work_buckets[WorkBucketStage::VMRefForwarding]
-            .add(VMForwardWeakRefs::<ForwardingProcessEdges<VM>>::new());
+            .add(VMForwardWeakRefs::<VM, MatureTracePolicy<VM, Compressor<VM>, {crate::policy::compressor::TRACE_KIND_FORWARD_ROOT}>>::new());
 
         // VM-specific work after forwarding, possible to implement ref enququing.
         scheduler.work_buckets[WorkBucketStage::Release].add(VMPostForwarding::<VM>::default());

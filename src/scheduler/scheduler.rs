@@ -218,12 +218,12 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         // because there are no other packets in the bucket.  We set it as sentinel for
         // consistency.
         self.work_buckets[WorkBucketStage::VMRefClosure]
-            .set_sentinel(Box::new(VMProcessWeakRefs::<C::DefaultProcessEdges>::new()));
+            .set_sentinel(Box::new(VMProcessWeakRefs::<C::VM, C::DefaultTracePolicy>::new()));
 
         if plan.constraints().needs_forward_after_liveness {
             // VM-specific weak ref forwarding
             self.work_buckets[WorkBucketStage::VMRefForwarding]
-                .add(VMForwardWeakRefs::<C::DefaultProcessEdges>::new());
+                .add(VMForwardWeakRefs::<C::VM, C::DefaultTracePolicy>::new());
         }
 
         self.work_buckets[WorkBucketStage::Release].add(VMPostForwarding::<VM>::default());

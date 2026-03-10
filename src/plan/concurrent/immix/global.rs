@@ -405,8 +405,10 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
         // VM-specific weak ref processing
         // Note that ConcurrentImmix does not have a separate forwarding stage,
         // so we don't schedule the `VMForwardWeakRefs` work packet.
+        type RefTracePolicy<VM> =
+            crate::scheduler::gc_work::MatureTracePolicy<VM, ConcurrentImmix<VM>, TRACE_KIND_FAST>;
         scheduler.work_buckets[WorkBucketStage::VMRefClosure]
-            .set_sentinel(Box::new(VMProcessWeakRefs::<RefProcessingEdges<VM>>::new()));
+            .set_sentinel(Box::new(VMProcessWeakRefs::<VM, RefTracePolicy<VM>>::new()));
     }
 
     pub fn concurrent_marking_in_progress(&self) -> bool {
