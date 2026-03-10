@@ -9,4 +9,6 @@ impl<VM: VMBinding> crate::scheduler::GCWorkContext for MSGCWorkContext<VM> {
     type PlanType = MarkSweep<VM>;
     type DefaultProcessEdges = PlanProcessEdges<Self::VM, MarkSweep<VM>, DEFAULT_TRACE>;
     type PinningProcessEdges = PlanProcessEdges<Self::VM, MarkSweep<VM>, DEFAULT_TRACE>;
+    type DefaultTracePolicy = MatureTracePolicy<VM, MarkSweep<VM>, DEFAULT_TRACE>;
+    type PinningTracePolicy = MatureTracePolicy<VM, MarkSweep<VM>, DEFAULT_TRACE>;
 }

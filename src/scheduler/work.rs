@@ -1,5 +1,6 @@
 use super::worker::*;
 use crate::mmtk::MMTK;
+use crate::scheduler::gc_work::TracePolicy;
 use crate::vm::VMBinding;
 #[cfg(feature = "work_packet_stats")]
 use std::any::{type_name, TypeId};
@@ -98,4 +99,12 @@ pub trait GCWorkContext: Send + 'static {
     /// If a plan does not support object pinning, it should use `UnsupportedProcessEdges` for this
     /// type member.
     type PinningProcessEdges: ProcessEdgesWork<VM = Self::VM>;
+
+    /// The `TracePolicy` implementation for default tracing.
+    /// This is the new replacement for `DefaultProcessEdges`.
+    type DefaultTracePolicy: TracePolicy<Self::VM>;
+
+    /// The `TracePolicy` implementation for pinning tracing.
+    /// This is the new replacement for `PinningProcessEdges`.
+    type PinningTracePolicy: TracePolicy<Self::VM>;
 }

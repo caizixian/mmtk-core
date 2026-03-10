@@ -1,6 +1,6 @@
 use crate::plan::concurrent::immix::global::ConcurrentImmix;
 use crate::policy::gc_work::{TraceKind, TRACE_KIND_TRANSITIVE_PIN};
-use crate::scheduler::gc_work::{PlanProcessEdges, UnsupportedProcessEdges};
+use crate::scheduler::gc_work::{MatureTracePolicy, PlanProcessEdges, UnsupportedProcessEdges, UnsupportedTracePolicy};
 use crate::scheduler::ProcessEdgesWork;
 use crate::vm::VMBinding;
 
@@ -14,6 +14,8 @@ impl<VM: VMBinding, const KIND: TraceKind> crate::scheduler::GCWorkContext
     type PlanType = ConcurrentImmix<VM>;
     type DefaultProcessEdges = PlanProcessEdges<VM, ConcurrentImmix<VM>, KIND>;
     type PinningProcessEdges = PlanProcessEdges<VM, ConcurrentImmix<VM>, TRACE_KIND_TRANSITIVE_PIN>;
+    type DefaultTracePolicy = MatureTracePolicy<VM, ConcurrentImmix<VM>, KIND>;
+    type PinningTracePolicy = MatureTracePolicy<VM, ConcurrentImmix<VM>, TRACE_KIND_TRANSITIVE_PIN>;
 }
 pub(super) struct ConcurrentImmixGCWorkContext<E: ProcessEdgesWork>(std::marker::PhantomData<E>);
 
@@ -22,4 +24,7 @@ impl<E: ProcessEdgesWork> crate::scheduler::GCWorkContext for ConcurrentImmixGCW
     type PlanType = ConcurrentImmix<E::VM>;
     type DefaultProcessEdges = E;
     type PinningProcessEdges = UnsupportedProcessEdges<Self::VM>;
+    // Concurrent marking uses its own ProcessEdgesWork; TracePolicy is not used here.
+    type DefaultTracePolicy = UnsupportedTracePolicy<Self::VM>;
+    type PinningTracePolicy = UnsupportedTracePolicy<Self::VM>;
 }

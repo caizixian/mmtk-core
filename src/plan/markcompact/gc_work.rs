@@ -103,6 +103,8 @@ impl<VM: VMBinding> crate::scheduler::GCWorkContext for MarkCompactGCWorkContext
     type PlanType = MarkCompact<VM>;
     type DefaultProcessEdges = MarkingProcessEdges<VM>;
     type PinningProcessEdges = UnsupportedProcessEdges<VM>;
+    type DefaultTracePolicy = MatureTracePolicy<VM, MarkCompact<VM>, TRACE_KIND_MARK>;
+    type PinningTracePolicy = UnsupportedTracePolicy<VM>;
 }
 
 pub struct MarkCompactForwardingGCWorkContext<VM: VMBinding>(std::marker::PhantomData<VM>);
@@ -111,4 +113,6 @@ impl<VM: VMBinding> crate::scheduler::GCWorkContext for MarkCompactForwardingGCW
     type PlanType = MarkCompact<VM>;
     type DefaultProcessEdges = ForwardingProcessEdges<VM>;
     type PinningProcessEdges = UnsupportedProcessEdges<VM>;
+    type DefaultTracePolicy = MatureTracePolicy<VM, MarkCompact<VM>, TRACE_KIND_FORWARD>;
+    type PinningTracePolicy = UnsupportedTracePolicy<VM>;
 }
