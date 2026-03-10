@@ -80,14 +80,13 @@ pub trait GCWorkContext: Send + 'static {
     // `associated_type_defaults` which has not yet been stablized.
     // See: https://github.com/rust-lang/rust/issues/29661
 
-    /// The `ProcessEdgesWork` implementation to use for tracing edges that do not have special
+    /// The `ObjectTraceProvider` implementation to use for tracing objects that do not have special
     /// pinning requirements.  Concrete plans and spaces may choose to move or not to move the
     /// objects the traced edges point to.
     type DefaultProcessEdges: ObjectTraceProvider<VM = Self::VM>;
 
-    /// The `ProcessEdgesWork` implementation to use for tracing edges that must not be updated
-    /// (i.e. the objects the traced edges pointed to must not be moved).  This is used for
-    /// implementing pinning roots and transitive pinning roots.
+    /// The `ObjectTraceProvider` implementation to use for tracing objects that must not be moved.
+    /// This is used for implementing pinning roots and transitive pinning roots.
     ///
     /// -   For non-transitive pinning roots, `PinningProcessEdges` will be used to trace the edges
     ///     from roots to objects, but their descendents will be traced using `DefaultProcessEdges`.

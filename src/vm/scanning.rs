@@ -52,7 +52,7 @@ impl<F: FnMut(ObjectReference) -> ObjectReference> ObjectTracer for F {
 pub trait ObjectTracerContext<VM: VMBinding>: Clone + Send + 'static {
     /// The concrete `ObjectTracer` type.
     ///
-    /// FIXME: The current code works because of the unsafe method `ProcessEdgesWork::set_worker`.
+    /// FIXME: The current code works because of the unsafe method `ObjectTraceProvider::set_worker`.
     /// The tracer should borrow the worker passed to `with_queuing_tracer` during its lifetime.
     /// For this reason, `TracerType` should have a `<'w>` lifetime parameter.
     /// Generic Associated Types (GAT) is already stablized in Rust 1.65.
