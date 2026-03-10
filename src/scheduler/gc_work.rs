@@ -936,7 +936,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
         // Scan the objects in the list that supports slot-enququing.
         let mut scan_later = vec![];
         {
-            let mut closure = ObjectsClosure::<Self::E>::new(worker, self.get_bucket());
+            let mut closure = ObjectsClosure::new(worker, self.get_bucket(), PhantomData::<Self::E>);
 
             // For any object we need to scan, we count its live bytes.
             // Check the option outside the loop for better performance.

@@ -3,9 +3,10 @@
 
 use std::marker::PhantomData;
 
-use crate::scheduler::gc_work::{ProcessEdgesWork, SlotOf};
+use crate::scheduler::gc_work::ProcessEdgesWork;
 use crate::scheduler::{GCWorker, WorkBucketStage, EDGES_WORK_BUFFER_SIZE};
 use crate::util::{ObjectReference, VMThread, VMWorkerThread};
+use crate::vm::slot::Slot;
 use crate::vm::{Scanning, SlotVisitor, VMBinding};
 
 /// This trait represents an object queue to enqueue objects during tracing.
@@ -89,42 +90,89 @@ impl ObjectQueue for VectorQueue<ObjectReference> {
     }
 }
 
+/// Factory for creating slot-processing work packets.
+///
+/// This trait decouples the creation of slot-processing work packets from
+/// [`ProcessEdgesWork::new`]. Any type implementing this trait can create work packets
+/// that process slots (load references, trace objects, store back updated references).
+///
+/// A blanket implementation is provided for `PhantomData<E>` where `E: ProcessEdgesWork`,
+/// so existing `ProcessEdgesWork` types can be used as factories without any changes.
+pub trait SlotProcessorFactory<SL: Slot>: Send + 'static {
+    type VM: VMBinding;
+
+    /// Create a slot-processing work packet and add it to the given worker's queue.
+    ///
+    /// This method takes ownership of the slots and dispatches a work packet to process them.
+    /// The implementation may use the worker's local work buffer for performance.
+    fn add_slot_processing_work(
+        &self,
+        worker: &mut GCWorker<Self::VM>,
+        slots: Vec<SL>,
+        bucket: WorkBucketStage,
+    );
+}
+
+/// Blanket impl: use `PhantomData<E>` as a factory for any `ProcessEdgesWork` type.
+///
+/// This creates work packets by calling `E::new(slots, false, mmtk, bucket)`.
+impl<E: ProcessEdgesWork> SlotProcessorFactory<<E::VM as VMBinding>::VMSlot> for PhantomData<E> {
+    type VM = E::VM;
+
+    fn add_slot_processing_work(
+        &self,
+        worker: &mut GCWorker<Self::VM>,
+        slots: Vec<<E::VM as VMBinding>::VMSlot>,
+        bucket: WorkBucketStage,
+    ) {
+        worker.add_work(bucket, E::new(slots, false, worker.mmtk, bucket));
+    }
+}
+
 /// A transitive closure visitor to collect the slots from objects.
 /// It maintains a buffer for the slots, and flushes slots to a new work packet
 /// if the buffer is full or if the type gets dropped.
-pub struct ObjectsClosure<'a, E: ProcessEdgesWork> {
-    buffer: VectorQueue<SlotOf<E>>,
-    pub(crate) worker: &'a mut GCWorker<E::VM>,
+///
+/// This type is generic over a [`SlotProcessorFactory`] which determines how
+/// the collected slots are packaged into work packets.
+pub struct ObjectsClosure<'a, VM: VMBinding, F: SlotProcessorFactory<VM::VMSlot, VM = VM>> {
+    buffer: VectorQueue<VM::VMSlot>,
+    pub(crate) worker: &'a mut GCWorker<VM>,
     bucket: WorkBucketStage,
+    factory: F,
 }
 
-impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
+impl<'a, VM: VMBinding, F: SlotProcessorFactory<VM::VMSlot, VM = VM>>
+    ObjectsClosure<'a, VM, F>
+{
     /// Create an [`ObjectsClosure`].
     ///
     /// Arguments:
     /// * `worker`: the current worker. The objects closure should not leave the context of this worker.
-    /// * `bucket`: new work generated will be push ed to the bucket.
-    pub fn new(worker: &'a mut GCWorker<E::VM>, bucket: WorkBucketStage) -> Self {
+    /// * `bucket`: new work generated will be pushed to the bucket.
+    /// * `factory`: the factory used to create slot-processing work packets.
+    pub fn new(worker: &'a mut GCWorker<VM>, bucket: WorkBucketStage, factory: F) -> Self {
         Self {
             buffer: VectorQueue::new(),
             worker,
             bucket,
+            factory,
         }
     }
 
     fn flush(&mut self) {
         let buf = self.buffer.take();
         if !buf.is_empty() {
-            self.worker.add_work(
-                self.bucket,
-                E::new(buf, false, self.worker.mmtk, self.bucket),
-            );
+            self.factory
+                .add_slot_processing_work(self.worker, buf, self.bucket);
         }
     }
 }
 
-impl<E: ProcessEdgesWork> SlotVisitor<SlotOf<E>> for ObjectsClosure<'_, E> {
-    fn visit_slot(&mut self, slot: SlotOf<E>) {
+impl<VM: VMBinding, F: SlotProcessorFactory<VM::VMSlot, VM = VM>>
+    SlotVisitor<VM::VMSlot> for ObjectsClosure<'_, VM, F>
+{
+    fn visit_slot(&mut self, slot: VM::VMSlot) {
         #[cfg(debug_assertions)]
         {
             use crate::vm::slot::Slot;
@@ -141,11 +189,20 @@ impl<E: ProcessEdgesWork> SlotVisitor<SlotOf<E>> for ObjectsClosure<'_, E> {
     }
 }
 
-impl<E: ProcessEdgesWork> Drop for ObjectsClosure<'_, E> {
+impl<VM: VMBinding, F: SlotProcessorFactory<VM::VMSlot, VM = VM>>
+    Drop for ObjectsClosure<'_, VM, F>
+{
     fn drop(&mut self) {
         self.flush();
     }
 }
+
+/// Type alias for backward compatibility: an `ObjectsClosure` using a `ProcessEdgesWork` type.
+pub type ProcessEdgesObjectsClosure<'a, E> = ObjectsClosure<
+    'a,
+    <E as ProcessEdgesWork>::VM,
+    PhantomData<E>,
+>;
 
 /// For iterating over the slots of an object.
 // FIXME: This type iterates slots, but all of its current use cases only care about the values in the slots.
