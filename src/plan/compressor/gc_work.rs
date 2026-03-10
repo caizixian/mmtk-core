@@ -97,8 +97,6 @@ pub struct CompressorWorkContext<VM: VMBinding>(std::marker::PhantomData<VM>);
 impl<VM: VMBinding> crate::scheduler::GCWorkContext for CompressorWorkContext<VM> {
     type VM = VM;
     type PlanType = Compressor<VM>;
-    type DefaultProcessEdges = MarkingProcessEdges<VM>;
-    type PinningProcessEdges = UnsupportedProcessEdges<VM>;
     type DefaultTracePolicy = MatureTracePolicy<VM, Compressor<VM>, TRACE_KIND_MARK>;
     type PinningTracePolicy = UnsupportedTracePolicy<VM>;
 }
@@ -107,8 +105,6 @@ pub struct CompressorForwardingWorkContext<VM: VMBinding>(std::marker::PhantomDa
 impl<VM: VMBinding> crate::scheduler::GCWorkContext for CompressorForwardingWorkContext<VM> {
     type VM = VM;
     type PlanType = Compressor<VM>;
-    type DefaultProcessEdges = ForwardingProcessEdges<VM>;
-    type PinningProcessEdges = UnsupportedProcessEdges<VM>;
     type DefaultTracePolicy = MatureTracePolicy<VM, Compressor<VM>, TRACE_KIND_FORWARD_ROOT>;
     type PinningTracePolicy = UnsupportedTracePolicy<VM>;
 }

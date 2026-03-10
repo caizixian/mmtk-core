@@ -1,6 +1,6 @@
 use super::gc_work::CompressorWorkContext;
 use super::gc_work::{
-    AfterCompact, ForwardingProcessEdges, GenerateWork, MarkingProcessEdges, UpdateReferences,
+    AfterCompact, GenerateWork, UpdateReferences,
 };
 use crate::plan::compressor::mutator::ALLOCATOR_MAPPING;
 use crate::plan::global::CreateGeneralPlanArgs;
