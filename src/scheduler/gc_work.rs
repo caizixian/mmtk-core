@@ -337,11 +337,11 @@ impl<E: ObjectTraceProvider> ObjectTracerContext<E::VM> for ProcessEdgesWorkTrac
 /// VM binding to process weak references.
 ///
 /// NOTE: This will replace `{Soft,Weak,Phantom}RefProcessing` and `Finalization` in the future.
-pub struct VMProcessWeakRefs<E: ProcessEdgesWork> {
+pub struct VMProcessWeakRefs<E: ObjectTraceProvider> {
     phantom_data: PhantomData<E>,
 }
 
-impl<E: ProcessEdgesWork> VMProcessWeakRefs<E> {
+impl<E: ObjectTraceProvider> VMProcessWeakRefs<E> {
     pub fn new() -> Self {
         Self {
             phantom_data: PhantomData,
@@ -349,7 +349,7 @@ impl<E: ProcessEdgesWork> VMProcessWeakRefs<E> {
     }
 }
 
-impl<E: ProcessEdgesWork> GCWork<E::VM> for VMProcessWeakRefs<E> {
+impl<E: ObjectTraceProvider> GCWork<E::VM> for VMProcessWeakRefs<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
         trace!("VMProcessWeakRefs");
 
@@ -380,11 +380,11 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for VMProcessWeakRefs<E> {
 /// VM binding to process weak references.
 ///
 /// NOTE: This will replace `RefForwarding` and `ForwardFinalization` in the future.
-pub struct VMForwardWeakRefs<E: ProcessEdgesWork> {
+pub struct VMForwardWeakRefs<E: ObjectTraceProvider> {
     phantom_data: PhantomData<E>,
 }
 
-impl<E: ProcessEdgesWork> VMForwardWeakRefs<E> {
+impl<E: ObjectTraceProvider> VMForwardWeakRefs<E> {
     pub fn new() -> Self {
         Self {
             phantom_data: PhantomData,
@@ -392,7 +392,7 @@ impl<E: ProcessEdgesWork> VMForwardWeakRefs<E> {
     }
 }
 
-impl<E: ProcessEdgesWork> GCWork<E::VM> for VMForwardWeakRefs<E> {
+impl<E: ObjectTraceProvider> GCWork<E::VM> for VMForwardWeakRefs<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
         trace!("VMForwardWeakRefs");
 
