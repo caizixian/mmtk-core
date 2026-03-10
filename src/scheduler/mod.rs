@@ -33,3 +33,4 @@ pub use worker::GCWorker;
 pub(crate) mod gc_work;
 pub use gc_work::ProcessEdgesWork;
 pub use gc_work::ObjectTracePolicy;
+pub use gc_work::PlanObjectTracePolicy;

@@ -1292,3 +1292,71 @@ pub trait ObjectTracePolicy: Send + 'static {
         // No-op by default.
     }
 }
+
+/// A reusable implementation of [`ObjectTracePolicy`] for plans that implement
+/// [`PlanTraceObject`] (typically via the `#[derive(PlanTraceObject)]` macro).
+///
+/// This type eliminates the need for plans to manually implement `ProcessEdgesWork`
+/// when their tracing logic is fully captured by `PlanTraceObject::trace_object`.
+///
+/// # Type Parameters
+///
+/// - `VM`: The VM binding type.
+/// - `P`: The concrete plan type (e.g., `GenImmix<VM>`).
+/// - `KIND`: A compile-time constant that selects the trace variant
+///   (e.g., `TRACE_KIND_FAST` vs `TRACE_KIND_DEFRAG` for Immix).
+///
+/// # Example
+///
+/// ```ignore
+/// // Instead of defining a full ProcessEdgesWork type:
+/// type MyTracePolicy = PlanObjectTracePolicy<VM, MyPlan<VM>, DEFAULT_TRACE>;
+/// ```
+pub struct PlanObjectTracePolicy<
+    VM: VMBinding,
+    P: Plan<VM = VM> + PlanTraceObject<VM>,
+    const KIND: TraceKind,
+> {
+    plan: &'static P,
+    _phantom: PhantomData<VM>,
+}
+
+impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
+    PlanObjectTracePolicy<VM, P, KIND>
+{
+    /// Create a new `PlanObjectTracePolicy` from a static plan reference.
+    pub fn new(plan: &'static P) -> Self {
+        Self {
+            plan,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
+    ObjectTracePolicy for PlanObjectTracePolicy<VM, P, KIND>
+{
+    type VM = VM;
+
+    const MAY_MOVE_OBJECTS: bool = {
+        // NOTE: We cannot call P::may_move_objects::<KIND>() in a const context because
+        // it's a trait method not a const fn. We use OVERWRITE_REFERENCE = true as the
+        // conservative default and override process_slot in plan-specific cases.
+        true
+    };
+
+    #[inline(always)]
+    fn trace_object<Q: ObjectQueue>(
+        &mut self,
+        queue: &mut Q,
+        object: ObjectReference,
+        worker: &mut GCWorker<VM>,
+    ) -> ObjectReference {
+        self.plan.trace_object::<Q, KIND>(queue, object, worker)
+    }
+
+    #[inline(always)]
+    fn post_scan_object(&self, object: ObjectReference) {
+        self.plan.post_scan_object(object);
+    }
+}
