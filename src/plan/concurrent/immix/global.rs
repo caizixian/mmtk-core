@@ -12,8 +12,7 @@ use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::defrag::StatsForDefrag;
 use crate::policy::immix::ImmixSpaceArgs;
-use crate::policy::immix::TRACE_KIND_DEFRAG;
-use crate::policy::immix::TRACE_KIND_FAST;
+use crate::policy::gc_work::{DefaultTrace, DefragTrace};
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::Release;
 use crate::scheduler::gc_work::StopMutators;
@@ -144,8 +143,8 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
                 self.set_ref_closure_buckets_enabled(true);
                 crate::plan::immix::global::Immix::schedule_immix_full_heap_collection::<
                     ConcurrentImmix<VM>,
-                    ConcurrentImmixSTWGCWorkContext<VM, TRACE_KIND_FAST>,
-                    ConcurrentImmixSTWGCWorkContext<VM, TRACE_KIND_DEFRAG>,
+                    ConcurrentImmixSTWGCWorkContext<VM, DefaultTrace>,
+                    ConcurrentImmixSTWGCWorkContext<VM, DefragTrace>,
                 >(self, &self.immix_space, scheduler);
             }
             Pause::InitialMark => self.schedule_concurrent_marking_initial_pause(scheduler),
@@ -376,7 +375,7 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
         // Deal with weak ref and finalizers
         // TODO: Check against schedule_common_work and see if we are still missing any work packet
         type RefProcessingTracePolicy<VM> =
-            crate::plan::MatureTracePolicy<VM, ConcurrentImmix<VM>, TRACE_KIND_FAST>;
+            crate::plan::MatureTracePolicy<VM, ConcurrentImmix<VM>, DefaultTrace>;
         // Reference processing
         if !*self.base().options.no_reference_types {
             use crate::util::reference_processor::{

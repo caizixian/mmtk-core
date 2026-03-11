@@ -15,7 +15,7 @@ use crate::{
 pub struct ConcurrentTraceObjects<
     VM: VMBinding,
     P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>,
-    const KIND: TraceKind,
+    K: TraceKind,
 > {
     plan: &'static P,
     // objects to mark and scan
@@ -23,10 +23,11 @@ pub struct ConcurrentTraceObjects<
     // recursively generated objects
     next_objects: VectorQueue<ObjectReference>,
     worker: *mut GCWorker<VM>,
+    _phantom: std::marker::PhantomData<K>,
 }
 
-impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
-    ConcurrentTraceObjects<VM, P, KIND>
+impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, K: TraceKind>
+    ConcurrentTraceObjects<VM, P, K>
 {
     const SATB_BUFFER_SIZE: usize = 8192;
 
@@ -38,6 +39,7 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
             objects: Some(objects),
             next_objects: VectorQueue::default(),
             worker: std::ptr::null_mut(),
+            _phantom: std::marker::PhantomData,
         }
     }
 
@@ -59,7 +61,7 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         let new_object = self
             .plan
-            .trace_object::<Self, KIND>(self, object, self.worker());
+            .trace_object::<Self, K>(self, object, self.worker());
         // No copying should happen.
         debug_assert_eq!(object, new_object);
         object
@@ -90,8 +92,8 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
     }
 }
 
-impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
-    ObjectQueue for ConcurrentTraceObjects<VM, P, KIND>
+impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, K: TraceKind>
+    ObjectQueue for ConcurrentTraceObjects<VM, P, K>
 {
     fn enqueue(&mut self, object: ObjectReference) {
         debug_assert!(
@@ -103,13 +105,13 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
     }
 }
 
-unsafe impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
-    Send for ConcurrentTraceObjects<VM, P, KIND>
+unsafe impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, K: TraceKind>
+    Send for ConcurrentTraceObjects<VM, P, K>
 {
 }
 
-impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
-    GCWork<VM> for ConcurrentTraceObjects<VM, P, KIND>
+impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, K: TraceKind>
+    GCWork<VM> for ConcurrentTraceObjects<VM, P, K>
 {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         self.worker = worker;
@@ -148,19 +150,19 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
 pub struct ProcessModBufSATB<
     VM: VMBinding,
     P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>,
-    const KIND: TraceKind,
+    K: TraceKind,
 > {
     nodes: Option<Vec<ObjectReference>>,
-    _p: std::marker::PhantomData<(VM, P)>,
+    _p: std::marker::PhantomData<(VM, P, K)>,
 }
 
-unsafe impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
-    Send for ProcessModBufSATB<VM, P, KIND>
+unsafe impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, K: TraceKind>
+    Send for ProcessModBufSATB<VM, P, K>
 {
 }
 
-impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
-    ProcessModBufSATB<VM, P, KIND>
+impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, K: TraceKind>
+    ProcessModBufSATB<VM, P, K>
 {
     pub fn new(nodes: Vec<ObjectReference>) -> Self {
         Self {
@@ -170,8 +172,8 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
     }
 }
 
-impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
-    GCWork<VM> for ProcessModBufSATB<VM, P, KIND>
+impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, K: TraceKind>
+    GCWork<VM> for ProcessModBufSATB<VM, P, K>
 {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let mut w = if let Some(nodes) = self.nodes.take() {
@@ -179,7 +181,7 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
                 return;
             }
 
-            ConcurrentTraceObjects::<VM, P, KIND>::new(nodes, mmtk)
+            ConcurrentTraceObjects::<VM, P, K>::new(nodes, mmtk)
         } else {
             return;
         };

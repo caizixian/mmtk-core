@@ -122,9 +122,9 @@ impl ObjectQueue for VectorQueue<ObjectReference> {
 // and object scanning dispatch.
 //
 // Concrete policies:
-//   - MatureTracePolicy<VM, P, KIND>  — standard trace via PlanTraceObject
-//   - NurseryTracePolicy<VM, P, KIND> — nursery trace for generational plans
-//   - UnsupportedTracePolicy<VM>      — runtime panic placeholder
+//   - MatureTracePolicy<VM, P, K>       - standard trace via PlanTraceObject
+//   - NurseryTracePolicy<VM, P, K>      - nursery trace for generational plans
+//   - UnsupportedTracePolicy<VM>        - runtime panic placeholder
 
 use crate::plan::generational::global::GenerationalPlanExt;
 use crate::plan::global::PlanTraceObject;
@@ -167,14 +167,14 @@ pub trait TracePolicy<VM: VMBinding>: Send + Clone + 'static {
 pub struct MatureTracePolicy<
     VM: VMBinding,
     P: Plan<VM = VM> + PlanTraceObject<VM>,
-    const KIND: TraceKind,
+    K: TraceKind,
 > {
     plan: &'static P,
-    _phantom: PhantomData<VM>,
+    _phantom: PhantomData<(VM, K)>,
 }
 
-impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind> Clone
-    for MatureTracePolicy<VM, P, KIND>
+impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>, K: TraceKind> Clone
+    for MatureTracePolicy<VM, P, K>
 {
     fn clone(&self) -> Self {
         Self {
@@ -184,11 +184,11 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKin
     }
 }
 
-impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind> TracePolicy<VM>
-    for MatureTracePolicy<VM, P, KIND>
+impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>, K: TraceKind> TracePolicy<VM>
+    for MatureTracePolicy<VM, P, K>
 {
     fn may_move_objects(&self) -> bool {
-        P::may_move_objects::<KIND>()
+        self.plan.may_move_objects::<K>()
     }
 
     fn trace_object(
@@ -198,7 +198,7 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKin
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
         self.plan
-            .trace_object::<VectorObjectQueue, KIND>(queue, object, worker)
+            .trace_object::<VectorObjectQueue, K>(queue, object, worker)
     }
 
     fn post_scan_object(&self, object: ObjectReference) {
@@ -219,14 +219,14 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKin
 pub struct NurseryTracePolicy<
     VM: VMBinding,
     P: GenerationalPlanExt<VM> + PlanTraceObject<VM>,
-    const KIND: TraceKind,
+    K: TraceKind,
 > {
     plan: &'static P,
-    _phantom: PhantomData<VM>,
+    _phantom: PhantomData<(VM, K)>,
 }
 
-impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>, const KIND: TraceKind> Clone
-    for NurseryTracePolicy<VM, P, KIND>
+impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>, K: TraceKind> Clone
+    for NurseryTracePolicy<VM, P, K>
 {
     fn clone(&self) -> Self {
         Self {
@@ -236,11 +236,10 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>, const KIND
     }
 }
 
-impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>, const KIND: TraceKind>
-    TracePolicy<VM> for NurseryTracePolicy<VM, P, KIND>
+impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>, K: TraceKind>
+    TracePolicy<VM> for NurseryTracePolicy<VM, P, K>
 {
     fn may_move_objects(&self) -> bool {
-        // Nursery always copies objects from nursery to mature space.
         true
     }
 
@@ -251,7 +250,7 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>, const KIND
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
         self.plan
-            .trace_object_nursery::<VectorObjectQueue, KIND>(queue, object, worker)
+            .trace_object_nursery::<VectorObjectQueue, K>(queue, object, worker)
     }
 
     fn post_scan_object(&self, object: ObjectReference) {

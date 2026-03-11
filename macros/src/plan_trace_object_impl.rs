@@ -72,7 +72,7 @@ pub(crate) fn generate_trace_object<'a>(
 
         quote! {
             if self.#f_ident.in_space(__mmtk_objref) {
-                return <#f_ty as PolicyTraceObject #ty_generics>::trace_object::<Q, KIND>(&self.#f_ident, __mmtk_queue, __mmtk_objref, #copy, __mmtk_worker);
+                return <#f_ty as PolicyTraceObject #ty_generics>::trace_object::<Q, K>(&self.#f_ident, __mmtk_queue, __mmtk_objref, #copy, __mmtk_worker);
             }
         }
     });
@@ -82,7 +82,7 @@ pub(crate) fn generate_trace_object<'a>(
         let f_ident = f.ident.as_ref().unwrap();
         let f_ty = &f.ty;
         quote! {
-            <#f_ty as PlanTraceObject #ty_generics>::trace_object::<Q, KIND>(&self.#f_ident, __mmtk_queue, __mmtk_objref, __mmtk_worker)
+            <#f_ty as PlanTraceObject #ty_generics>::trace_object::<Q, K>(&self.#f_ident, __mmtk_queue, __mmtk_objref, __mmtk_worker)
         }
     } else {
         quote! {
@@ -91,7 +91,7 @@ pub(crate) fn generate_trace_object<'a>(
     };
 
     quote! {
-        fn trace_object<Q: crate::plan::ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(&self, __mmtk_queue: &mut Q, __mmtk_objref: crate::util::ObjectReference, __mmtk_worker: &mut crate::scheduler::GCWorker<VM>) -> crate::util::ObjectReference {
+        fn trace_object<Q: crate::plan::ObjectQueue, K: crate::policy::gc_work::TraceKind>(&self, __mmtk_queue: &mut Q, __mmtk_objref: crate::util::ObjectReference, __mmtk_worker: &mut crate::scheduler::GCWorker<VM>) -> crate::util::ObjectReference {
             use crate::policy::space::Space;
             use crate::policy::gc_work::PolicyTraceObject;
             use crate::plan::PlanTraceObject;
@@ -148,25 +148,27 @@ pub(crate) fn generate_may_move_objects<'a>(
 ) -> TokenStream2 {
     // If any space or the parent may move objects, the plan may move objects
     let space_handlers = space_fields.iter().map(|f| {
+        let f_ident = f.ident.as_ref().unwrap();
         let f_ty = &f.ty;
 
         quote! {
-            || <#f_ty as PolicyTraceObject #ty_generics>::may_move_objects::<KIND>()
+            || <#f_ty as PolicyTraceObject #ty_generics>::may_move_objects::<K>(&self.#f_ident)
         }
     });
 
     let parent_handler = if let Some(p) = parent_field {
+        let p_ident = p.ident.as_ref().unwrap();
         let p_ty = &p.ty;
 
         quote! {
-            || <#p_ty as PlanTraceObject #ty_generics>::may_move_objects::<KIND>()
+            || <#p_ty as PlanTraceObject #ty_generics>::may_move_objects::<K>(&self.#p_ident)
         }
     } else {
         TokenStream2::new()
     };
 
     quote! {
-        fn may_move_objects<const KIND: crate::policy::gc_work::TraceKind>() -> bool {
+        fn may_move_objects<K: crate::policy::gc_work::TraceKind>(&self) -> bool {
             use crate::policy::gc_work::PolicyTraceObject;
             use crate::plan::PlanTraceObject;
 

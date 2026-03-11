@@ -8,7 +8,7 @@ use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::ImmixSpaceArgs;
-use crate::policy::immix::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST};
+use crate::policy::gc_work::{DefaultTrace, DefragTrace};
 use crate::policy::space::Space;
 use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
@@ -75,8 +75,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
         Self::schedule_immix_full_heap_collection::<
             Immix<VM>,
-            ImmixGCWorkContext<VM, TRACE_KIND_FAST>,
-            ImmixGCWorkContext<VM, TRACE_KIND_DEFRAG>,
+            ImmixGCWorkContext<VM, DefaultTrace>,
+            ImmixGCWorkContext<VM, DefragTrace>,
         >(self, &self.immix_space, scheduler)
     }
 

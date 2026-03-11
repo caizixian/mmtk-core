@@ -1,6 +1,6 @@
 use crate::plan::VectorObjectQueue;
 use crate::policy::compressor::forwarding;
-use crate::policy::gc_work::{TraceKind, TRACE_KIND_TRANSITIVE_PIN};
+
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::sft::{GCWorkerMutRef, SFT};
 use crate::policy::space::{CommonSpace, Space};
@@ -21,8 +21,7 @@ use crate::{vm::*, ObjectQueue};
 use atomic::Ordering;
 use std::sync::Arc;
 
-pub(crate) const TRACE_KIND_MARK: TraceKind = 0;
-pub(crate) const TRACE_KIND_FORWARD_ROOT: TraceKind = 1;
+
 
 /// [`CompressorSpace`] is a stop-the-world implementation of
 /// the Compressor, as described in Kermany and Petrank,
@@ -174,7 +173,7 @@ impl<VM: VMBinding> Space<VM> for CompressorSpace<VM> {
 }
 
 impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for CompressorSpace<VM> {
-    fn trace_object<Q: ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(
+    fn trace_object<Q: ObjectQueue, K: crate::policy::gc_work::TraceKind>(
         &self,
         queue: &mut Q,
         object: ObjectReference,
@@ -182,25 +181,17 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for Compressor
         _worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
         debug_assert!(
-            KIND != TRACE_KIND_TRANSITIVE_PIN,
+            !K::IS_TRANSITIVE_PIN,
             "Compressor does not support transitive pin trace."
         );
-        if KIND == TRACE_KIND_MARK {
-            self.trace_mark_object(queue, object)
-        } else if KIND == TRACE_KIND_FORWARD_ROOT {
+        if K::IS_FORWARD {
             self.trace_forward_root(queue, object)
         } else {
-            unreachable!()
+            self.trace_mark_object(queue, object)
         }
     }
-    fn may_move_objects<const KIND: crate::policy::gc_work::TraceKind>() -> bool {
-        if KIND == TRACE_KIND_MARK {
-            false
-        } else if KIND == TRACE_KIND_FORWARD_ROOT {
-            true
-        } else {
-            unreachable!()
-        }
+    fn may_move_objects<K: crate::policy::gc_work::TraceKind>(&self) -> bool {
+        K::IS_FORWARD
     }
 }
 

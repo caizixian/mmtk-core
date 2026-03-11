@@ -18,17 +18,18 @@ use crate::{
 pub struct SATBBarrierSemantics<
     VM: VMBinding,
     P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>,
-    const KIND: TraceKind,
+    K: TraceKind,
 > {
     mmtk: &'static MMTK<VM>,
     tls: VMMutatorThread,
     satb: VectorQueue<ObjectReference>,
     refs: VectorQueue<ObjectReference>,
     plan: &'static P,
+    _phantom: std::marker::PhantomData<K>,
 }
 
-impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
-    SATBBarrierSemantics<VM, P, KIND>
+impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, K: TraceKind>
+    SATBBarrierSemantics<VM, P, K>
 {
     pub fn new(mmtk: &'static MMTK<VM>, tls: VMMutatorThread) -> Self {
         Self {
@@ -37,6 +38,7 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
             satb: VectorQueue::default(),
             refs: VectorQueue::default(),
             plan: mmtk.get_plan().downcast_ref::<P>().unwrap(),
+            _phantom: std::marker::PhantomData,
         }
     }
 
@@ -77,7 +79,7 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
                     WorkBucketStage::Closure
                 };
                 self.mmtk.scheduler.work_buckets[bucket]
-                    .add(ProcessModBufSATB::<VM, P, KIND>::new(satb));
+                    .add(ProcessModBufSATB::<VM, P, K>::new(satb));
             } else {
                 let _ = self.satb.take();
             };
@@ -95,7 +97,7 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
                 WorkBucketStage::Closure
             };
             self.mmtk.scheduler.work_buckets[bucket]
-                .add(ProcessModBufSATB::<VM, P, KIND>::new(nodes));
+                .add(ProcessModBufSATB::<VM, P, K>::new(nodes));
         }
     }
 
@@ -105,8 +107,8 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
     }
 }
 
-impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
-    BarrierSemantics for SATBBarrierSemantics<VM, P, KIND>
+impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, K: TraceKind>
+    BarrierSemantics for SATBBarrierSemantics<VM, P, K>
 {
     type VM = VM;
 

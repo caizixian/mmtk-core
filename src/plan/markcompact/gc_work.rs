@@ -1,7 +1,7 @@
 use super::global::MarkCompact;
 use crate::plan::{MatureTracePolicy, UnsupportedTracePolicy};
+use crate::policy::gc_work::{DefaultTrace, ForwardTrace};
 use crate::policy::markcompactspace::MarkCompactSpace;
-use crate::policy::markcompactspace::{TRACE_KIND_FORWARD, TRACE_KIND_MARK};
 
 use crate::scheduler::gc_work::*;
 use crate::scheduler::GCWork;
@@ -94,16 +94,16 @@ impl<VM: VMBinding> Compact<VM> {
 }
 
 /// Marking trace policy
-pub(crate) type MarkingTracePolicy<VM> = MatureTracePolicy<VM, MarkCompact<VM>, TRACE_KIND_MARK>;
+pub(crate) type MarkingTracePolicy<VM> = MatureTracePolicy<VM, MarkCompact<VM>, DefaultTrace>;
 /// Forwarding trace policy
 pub(crate) type ForwardingTracePolicy<VM> =
-    MatureTracePolicy<VM, MarkCompact<VM>, TRACE_KIND_FORWARD>;
+    MatureTracePolicy<VM, MarkCompact<VM>, ForwardTrace>;
 
 pub struct MarkCompactGCWorkContext<VM: VMBinding>(std::marker::PhantomData<VM>);
 impl<VM: VMBinding> crate::scheduler::GCWorkContext for MarkCompactGCWorkContext<VM> {
     type VM = VM;
     type PlanType = MarkCompact<VM>;
-    type DefaultTracePolicy = MatureTracePolicy<VM, MarkCompact<VM>, TRACE_KIND_MARK>;
+    type DefaultTracePolicy = MatureTracePolicy<VM, MarkCompact<VM>, DefaultTrace>;
     type PinningTracePolicy = UnsupportedTracePolicy<VM>;
 }
 
@@ -111,6 +111,6 @@ pub struct MarkCompactForwardingGCWorkContext<VM: VMBinding>(std::marker::Phanto
 impl<VM: VMBinding> crate::scheduler::GCWorkContext for MarkCompactForwardingGCWorkContext<VM> {
     type VM = VM;
     type PlanType = MarkCompact<VM>;
-    type DefaultTracePolicy = MatureTracePolicy<VM, MarkCompact<VM>, TRACE_KIND_FORWARD>;
+    type DefaultTracePolicy = MatureTracePolicy<VM, MarkCompact<VM>, ForwardTrace>;
     type PinningTracePolicy = UnsupportedTracePolicy<VM>;
 }

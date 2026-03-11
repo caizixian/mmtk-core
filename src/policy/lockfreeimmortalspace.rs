@@ -196,7 +196,7 @@ use crate::scheduler::GCWorker;
 use crate::util::copy::CopySemantics;
 
 impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LockFreeImmortalSpace<VM> {
-    fn trace_object<Q: ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(
+    fn trace_object<Q: ObjectQueue, K: crate::policy::gc_work::TraceKind>(
         &self,
         _queue: &mut Q,
         _object: ObjectReference,
@@ -205,7 +205,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LockFreeIm
     ) -> ObjectReference {
         unreachable!()
     }
-    fn may_move_objects<const KIND: crate::policy::gc_work::TraceKind>() -> bool {
+    fn may_move_objects<K: crate::policy::gc_work::TraceKind>(&self) -> bool {
         unreachable!()
     }
 }

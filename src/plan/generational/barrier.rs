@@ -4,7 +4,7 @@ use crate::plan::barriers::BarrierSemantics;
 use crate::plan::NurseryTracePolicy;
 use crate::plan::PlanTraceObject;
 use crate::plan::VectorQueue;
-use crate::policy::gc_work::DEFAULT_TRACE;
+use crate::policy::gc_work::DefaultTrace;
 use crate::scheduler::WorkBucketStage;
 use crate::util::constants::BYTES_IN_INT;
 use crate::util::*;
@@ -46,7 +46,7 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>>
         let buf = self.modbuf.take();
         if !buf.is_empty() {
             self.mmtk.scheduler.work_buckets[WorkBucketStage::Closure]
-                .add(ProcessModBuf::<VM, NurseryTracePolicy<VM, P, DEFAULT_TRACE>>::new(buf));
+                .add(ProcessModBuf::<VM, NurseryTracePolicy<VM, P, DefaultTrace>>::new(buf));
         }
     }
 
@@ -56,7 +56,7 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>>
             debug_assert!(!buf.is_empty());
             self.mmtk.scheduler.work_buckets[WorkBucketStage::Closure].add(ProcessRegionModBuf::<
                 VM,
-                NurseryTracePolicy<VM, P, DEFAULT_TRACE>,
+                NurseryTracePolicy<VM, P, DefaultTrace>,
             >::new(buf));
         }
     }

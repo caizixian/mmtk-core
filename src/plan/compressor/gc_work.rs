@@ -1,6 +1,7 @@
 use super::global::Compressor;
 use crate::plan::{MatureTracePolicy, UnsupportedTracePolicy};
-use crate::policy::compressor::{CompressorSpace, TRACE_KIND_FORWARD_ROOT, TRACE_KIND_MARK};
+use crate::policy::compressor::CompressorSpace;
+use crate::policy::gc_work::{DefaultTrace, ForwardTrace};
 use crate::policy::largeobjectspace::LargeObjectSpace;
 
 use crate::scheduler::gc_work::*;
@@ -90,16 +91,16 @@ impl<VM: VMBinding> AfterCompact<VM> {
 }
 
 /// Marking trace policy
-pub(crate) type MarkingTracePolicy<VM> = MatureTracePolicy<VM, Compressor<VM>, TRACE_KIND_MARK>;
+pub(crate) type MarkingTracePolicy<VM> = MatureTracePolicy<VM, Compressor<VM>, DefaultTrace>;
 /// Forwarding trace policy
 pub(crate) type ForwardingTracePolicy<VM> =
-    MatureTracePolicy<VM, Compressor<VM>, TRACE_KIND_FORWARD_ROOT>;
+    MatureTracePolicy<VM, Compressor<VM>, ForwardTrace>;
 
 pub struct CompressorWorkContext<VM: VMBinding>(std::marker::PhantomData<VM>);
 impl<VM: VMBinding> crate::scheduler::GCWorkContext for CompressorWorkContext<VM> {
     type VM = VM;
     type PlanType = Compressor<VM>;
-    type DefaultTracePolicy = MatureTracePolicy<VM, Compressor<VM>, TRACE_KIND_MARK>;
+    type DefaultTracePolicy = MatureTracePolicy<VM, Compressor<VM>, DefaultTrace>;
     type PinningTracePolicy = UnsupportedTracePolicy<VM>;
 }
 
@@ -107,6 +108,6 @@ pub struct CompressorForwardingWorkContext<VM: VMBinding>(std::marker::PhantomDa
 impl<VM: VMBinding> crate::scheduler::GCWorkContext for CompressorForwardingWorkContext<VM> {
     type VM = VM;
     type PlanType = Compressor<VM>;
-    type DefaultTracePolicy = MatureTracePolicy<VM, Compressor<VM>, TRACE_KIND_FORWARD_ROOT>;
+    type DefaultTracePolicy = MatureTracePolicy<VM, Compressor<VM>, ForwardTrace>;
     type PinningTracePolicy = UnsupportedTracePolicy<VM>;
 }

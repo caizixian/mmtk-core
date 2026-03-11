@@ -1,7 +1,5 @@
 use crate::plan::{MatureTracePolicy, NurseryTracePolicy};
-use crate::policy::gc_work::TraceKind;
-use crate::policy::gc_work::DEFAULT_TRACE;
-use crate::policy::gc_work::TRACE_KIND_TRANSITIVE_PIN;
+use crate::policy::gc_work::{DefaultTrace, TraceKind, TransitivePinTrace};
 use crate::vm::VMBinding;
 
 use super::global::StickyImmix;
@@ -11,18 +9,18 @@ pub struct StickyImmixNurseryGCWorkContext<VM: VMBinding>(std::marker::PhantomDa
 impl<VM: VMBinding> crate::scheduler::GCWorkContext for StickyImmixNurseryGCWorkContext<VM> {
     type VM = VM;
     type PlanType = StickyImmix<VM>;
-    type DefaultTracePolicy = NurseryTracePolicy<VM, StickyImmix<VM>, DEFAULT_TRACE>;
-    type PinningTracePolicy = NurseryTracePolicy<VM, StickyImmix<VM>, TRACE_KIND_TRANSITIVE_PIN>;
+    type DefaultTracePolicy = NurseryTracePolicy<VM, StickyImmix<VM>, DefaultTrace>;
+    type PinningTracePolicy = NurseryTracePolicy<VM, StickyImmix<VM>, TransitivePinTrace>;
 }
 
-pub struct StickyImmixMatureGCWorkContext<VM: VMBinding, const KIND: TraceKind>(
-    std::marker::PhantomData<VM>,
+pub struct StickyImmixMatureGCWorkContext<VM: VMBinding, K: TraceKind>(
+    std::marker::PhantomData<(VM, K)>,
 );
-impl<VM: VMBinding, const KIND: TraceKind> crate::scheduler::GCWorkContext
-    for StickyImmixMatureGCWorkContext<VM, KIND>
+impl<VM: VMBinding, K: TraceKind> crate::scheduler::GCWorkContext
+    for StickyImmixMatureGCWorkContext<VM, K>
 {
     type VM = VM;
     type PlanType = StickyImmix<VM>;
-    type DefaultTracePolicy = MatureTracePolicy<VM, StickyImmix<VM>, KIND>;
-    type PinningTracePolicy = MatureTracePolicy<VM, StickyImmix<VM>, TRACE_KIND_TRANSITIVE_PIN>;
+    type DefaultTracePolicy = MatureTracePolicy<VM, StickyImmix<VM>, K>;
+    type PinningTracePolicy = MatureTracePolicy<VM, StickyImmix<VM>, TransitivePinTrace>;
 }

@@ -1,19 +1,19 @@
 use crate::plan::concurrent::immix::global::ConcurrentImmix;
 use crate::plan::{MatureTracePolicy, UnsupportedTracePolicy};
-use crate::policy::gc_work::{TraceKind, TRACE_KIND_TRANSITIVE_PIN};
+use crate::policy::gc_work::{DefaultTrace, TraceKind, TransitivePinTrace};
 
 use crate::vm::VMBinding;
 
-pub(super) struct ConcurrentImmixSTWGCWorkContext<VM: VMBinding, const KIND: TraceKind>(
-    std::marker::PhantomData<VM>,
+pub(super) struct ConcurrentImmixSTWGCWorkContext<VM: VMBinding, K: TraceKind>(
+    std::marker::PhantomData<(VM, K)>,
 );
-impl<VM: VMBinding, const KIND: TraceKind> crate::scheduler::GCWorkContext
-    for ConcurrentImmixSTWGCWorkContext<VM, KIND>
+impl<VM: VMBinding, K: TraceKind> crate::scheduler::GCWorkContext
+    for ConcurrentImmixSTWGCWorkContext<VM, K>
 {
     type VM = VM;
     type PlanType = ConcurrentImmix<VM>;
-    type DefaultTracePolicy = MatureTracePolicy<VM, ConcurrentImmix<VM>, KIND>;
-    type PinningTracePolicy = MatureTracePolicy<VM, ConcurrentImmix<VM>, TRACE_KIND_TRANSITIVE_PIN>;
+    type DefaultTracePolicy = MatureTracePolicy<VM, ConcurrentImmix<VM>, K>;
+    type PinningTracePolicy = MatureTracePolicy<VM, ConcurrentImmix<VM>, TransitivePinTrace>;
 }
 
 /// GCWorkContext for concurrent marking pauses.
@@ -30,6 +30,6 @@ impl<VM: VMBinding> crate::scheduler::GCWorkContext for ConcurrentImmixConcurren
     type PlanType = ConcurrentImmix<VM>;
     // Use the fast marking policy for root scanning during concurrent marking pauses.
     type DefaultTracePolicy =
-        MatureTracePolicy<VM, ConcurrentImmix<VM>, { crate::policy::gc_work::DEFAULT_TRACE }>;
+        MatureTracePolicy<VM, ConcurrentImmix<VM>, DefaultTrace>;
     type PinningTracePolicy = UnsupportedTracePolicy<VM>;
 }

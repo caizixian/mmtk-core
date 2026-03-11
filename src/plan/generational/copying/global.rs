@@ -191,14 +191,14 @@ impl<VM: VMBinding> GenerationalPlan for GenCopy<VM> {
 }
 
 impl<VM: VMBinding> GenerationalPlanExt<VM> for GenCopy<VM> {
-    fn trace_object_nursery<Q: ObjectQueue, const KIND: TraceKind>(
+    fn trace_object_nursery<Q: ObjectQueue, K: TraceKind>(
         &self,
         queue: &mut Q,
         object: ObjectReference,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
         self.gen
-            .trace_object_nursery::<Q, KIND>(queue, object, worker)
+            .trace_object_nursery::<Q, K>(queue, object, worker)
     }
 }
 

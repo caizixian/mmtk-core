@@ -4,11 +4,9 @@ use crate::plan::global::CreateGeneralPlanArgs;
 use crate::plan::global::CreateSpecificPlanArgs;
 use crate::plan::immix;
 use crate::plan::PlanConstraints;
-use crate::policy::gc_work::TraceKind;
-use crate::policy::gc_work::TRACE_KIND_TRANSITIVE_PIN;
+use crate::policy::gc_work::{DefaultTrace, DefragTrace, TraceKind};
 use crate::policy::immix::defrag::StatsForDefrag;
 use crate::policy::immix::ImmixSpace;
-use crate::policy::immix::TRACE_KIND_FAST;
 use crate::policy::sft::SFT;
 use crate::policy::space::Space;
 use crate::util::copy::CopyConfig;
@@ -99,11 +97,10 @@ impl<VM: VMBinding> Plan for StickyImmix<VM> {
         } else {
             info!("Full heap GC");
             use crate::plan::immix::Immix;
-            use crate::policy::immix::TRACE_KIND_DEFRAG;
             Immix::schedule_immix_full_heap_collection::<
                 StickyImmix<VM>,
-                StickyImmixMatureGCWorkContext<VM, TRACE_KIND_FAST>,
-                StickyImmixMatureGCWorkContext<VM, TRACE_KIND_DEFRAG>,
+                StickyImmixMatureGCWorkContext<VM, DefaultTrace>,
+                StickyImmixMatureGCWorkContext<VM, DefragTrace>,
             >(self, &self.immix.immix_space, scheduler);
         }
     }
@@ -263,7 +260,7 @@ impl<VM: VMBinding> GenerationalPlan for StickyImmix<VM> {
 }
 
 impl<VM: VMBinding> crate::plan::generational::global::GenerationalPlanExt<VM> for StickyImmix<VM> {
-    fn trace_object_nursery<Q: crate::ObjectQueue, const KIND: TraceKind>(
+    fn trace_object_nursery<Q: crate::ObjectQueue, K: TraceKind>(
         &self,
         queue: &mut Q,
         object: crate::util::ObjectReference,
@@ -276,7 +273,7 @@ impl<VM: VMBinding> crate::plan::generational::global::GenerationalPlanExt<VM> f
                 return object;
             } else {
                 // Nursery object
-                let object = if KIND == TRACE_KIND_TRANSITIVE_PIN || KIND == TRACE_KIND_FAST {
+                let object = if K::IS_TRANSITIVE_PIN || !K::IS_DEFRAG {
                     trace!(
                         "Immix nursery object {} is being traced without moving",
                         object

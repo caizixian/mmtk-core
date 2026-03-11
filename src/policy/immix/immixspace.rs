@@ -2,7 +2,7 @@ use super::defrag::StatsForDefrag;
 use super::line::*;
 use super::{block::*, defrag::Defrag};
 use crate::plan::VectorObjectQueue;
-use crate::policy::gc_work::{TraceKind, DEFAULT_TRACE, TRACE_KIND_TRANSITIVE_PIN};
+use crate::policy::gc_work::TraceKind;
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
 use crate::policy::sft_map::SFTMap;
@@ -33,8 +33,7 @@ use crate::{
 use atomic::Ordering;
 use std::sync::{atomic::AtomicU8, atomic::AtomicUsize, Arc};
 
-pub(crate) const TRACE_KIND_FAST: TraceKind = 0;
-pub(crate) const TRACE_KIND_DEFRAG: TraceKind = 1;
+
 
 pub struct ImmixSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
@@ -219,16 +218,16 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
 }
 
 impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace<VM> {
-    fn trace_object<Q: ObjectQueue, const KIND: TraceKind>(
+    fn trace_object<Q: ObjectQueue, K: TraceKind>(
         &self,
         queue: &mut Q,
         object: ObjectReference,
         copy: Option<CopySemantics>,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
-        if KIND == TRACE_KIND_TRANSITIVE_PIN {
+        if K::IS_TRANSITIVE_PIN {
             self.trace_object_without_moving(queue, object)
-        } else if KIND == TRACE_KIND_DEFRAG {
+        } else if K::IS_DEFRAG {
             if Block::containing(object).is_defrag_source() {
                 debug_assert!(self.in_defrag());
                 debug_assert!(
@@ -246,10 +245,8 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
             } else {
                 self.trace_object_without_moving(queue, object)
             }
-        } else if KIND == TRACE_KIND_FAST {
-            self.trace_object_without_moving(queue, object)
         } else {
-            unreachable!()
+            self.trace_object_without_moving(queue, object)
         }
     }
 
@@ -260,22 +257,8 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
         }
     }
 
-    #[allow(clippy::if_same_then_else)] // DEFAULT_TRACE needs a workaround which is documented below.
-    fn may_move_objects<const KIND: TraceKind>() -> bool {
-        if KIND == TRACE_KIND_DEFRAG {
-            true
-        } else if KIND == TRACE_KIND_FAST || KIND == TRACE_KIND_TRANSITIVE_PIN {
-            false
-        } else if KIND == DEFAULT_TRACE {
-            // FIXME: This is hacky. When we do a default trace, this should be a nonmoving space.
-            // The only exception is the nursery GC for sticky immix, for which, we use default trace.
-            // This function is only used for MatureTracePolicy, and for sticky immix nursery GC, we use
-            // NurseryTracePolicy. So it still works. But this is quite hacky anyway.
-            // See https://github.com/mmtk/mmtk-core/issues/1314 for details.
-            false
-        } else {
-            unreachable!()
-        }
+    fn may_move_objects<K: TraceKind>(&self) -> bool {
+        K::IS_DEFRAG && !self.space_args.never_move_objects
     }
 }
 

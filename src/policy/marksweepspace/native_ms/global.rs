@@ -271,7 +271,7 @@ impl<VM: VMBinding> Space<VM> for MarkSweepSpace<VM> {
 }
 
 impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for MarkSweepSpace<VM> {
-    fn trace_object<Q: ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(
+    fn trace_object<Q: ObjectQueue, K: crate::policy::gc_work::TraceKind>(
         &self,
         queue: &mut Q,
         object: ObjectReference,
@@ -281,7 +281,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for MarkSweepS
         self.trace_object(queue, object)
     }
 
-    fn may_move_objects<const KIND: crate::policy::gc_work::TraceKind>() -> bool {
+    fn may_move_objects<K: crate::policy::gc_work::TraceKind>(&self) -> bool {
         false
     }
 }

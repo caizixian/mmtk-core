@@ -18,7 +18,7 @@ use crate::MMTK;
 use enum_map::EnumMap;
 
 type BarrierSemanticsType<VM> =
-    SATBBarrierSemantics<VM, ConcurrentImmix<VM>, { crate::policy::immix::TRACE_KIND_FAST }>;
+    SATBBarrierSemantics<VM, ConcurrentImmix<VM>, crate::policy::gc_work::DefaultTrace>;
 
 type BarrierType<VM> = SATBBarrier<BarrierSemanticsType<VM>>;
 

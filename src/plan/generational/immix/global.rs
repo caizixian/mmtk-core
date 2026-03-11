@@ -9,11 +9,10 @@ use crate::plan::global::CreateSpecificPlanArgs;
 use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
-use crate::policy::gc_work::TraceKind;
+use crate::policy::gc_work::{DefaultTrace, DefragTrace, TraceKind};
 use crate::policy::immix::defrag::StatsForDefrag;
 use crate::policy::immix::ImmixSpace;
 use crate::policy::immix::ImmixSpaceArgs;
-use crate::policy::immix::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST};
 use crate::policy::space::Space;
 use crate::scheduler::GCWorkScheduler;
 use crate::scheduler::GCWorker;
@@ -117,8 +116,8 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
             info!("Full heap GC");
             crate::plan::immix::Immix::schedule_immix_full_heap_collection::<
                 GenImmix<VM>,
-                GenImmixMatureGCWorkContext<VM, TRACE_KIND_FAST>,
-                GenImmixMatureGCWorkContext<VM, TRACE_KIND_DEFRAG>,
+                GenImmixMatureGCWorkContext<VM, DefaultTrace>,
+                GenImmixMatureGCWorkContext<VM, DefragTrace>,
             >(self, &self.immix_space, scheduler);
         }
     }
@@ -242,14 +241,14 @@ impl<VM: VMBinding> GenerationalPlan for GenImmix<VM> {
 }
 
 impl<VM: VMBinding> crate::plan::generational::global::GenerationalPlanExt<VM> for GenImmix<VM> {
-    fn trace_object_nursery<Q: ObjectQueue, const KIND: TraceKind>(
+    fn trace_object_nursery<Q: ObjectQueue, K: TraceKind>(
         &self,
         queue: &mut Q,
         object: ObjectReference,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
         self.gen
-            .trace_object_nursery::<Q, KIND>(queue, object, worker)
+            .trace_object_nursery::<Q, K>(queue, object, worker)
     }
 }
 

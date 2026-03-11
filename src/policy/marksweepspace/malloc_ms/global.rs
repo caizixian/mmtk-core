@@ -255,7 +255,7 @@ use crate::scheduler::GCWorker;
 use crate::util::copy::CopySemantics;
 
 impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for MallocSpace<VM> {
-    fn trace_object<Q: ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(
+    fn trace_object<Q: ObjectQueue, K: crate::policy::gc_work::TraceKind>(
         &self,
         queue: &mut Q,
         object: ObjectReference,
@@ -265,7 +265,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for MallocSpac
         self.trace_object(queue, object)
     }
 
-    fn may_move_objects<const KIND: crate::policy::gc_work::TraceKind>() -> bool {
+    fn may_move_objects<K: crate::policy::gc_work::TraceKind>(&self) -> bool {
         false
     }
 }

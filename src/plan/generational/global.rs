@@ -3,7 +3,7 @@ use crate::plan::global::CreateSpecificPlanArgs;
 use crate::plan::ObjectQueue;
 use crate::plan::Plan;
 use crate::policy::copyspace::CopySpace;
-use crate::policy::gc_work::{TraceKind, TRACE_KIND_TRANSITIVE_PIN};
+use crate::policy::gc_work::TraceKind;
 use crate::policy::space::Space;
 use crate::scheduler::*;
 use crate::util::copy::CopySemantics;
@@ -208,14 +208,14 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
     }
 
     /// Trace objects for spaces in generational and common plans for a nursery GC.
-    pub fn trace_object_nursery<Q: ObjectQueue, const KIND: TraceKind>(
+    pub fn trace_object_nursery<Q: ObjectQueue, K: TraceKind>(
         &self,
         queue: &mut Q,
         object: ObjectReference,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
         assert!(
-            KIND != TRACE_KIND_TRANSITIVE_PIN,
+            !K::IS_TRANSITIVE_PIN,
             "A copying nursery cannot pin objects"
         );
 
@@ -315,7 +315,7 @@ pub trait GenerationalPlan: Plan {
 pub trait GenerationalPlanExt<VM: VMBinding>: GenerationalPlan<VM = VM> {
     /// Trace an object in nursery collection. If the object is in nursery, we should call `trace_object`
     /// on the space. Otherwise, we can just return the object.
-    fn trace_object_nursery<Q: ObjectQueue, const KIND: TraceKind>(
+    fn trace_object_nursery<Q: ObjectQueue, K: TraceKind>(
         &self,
         queue: &mut Q,
         object: ObjectReference,

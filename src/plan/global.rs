@@ -907,7 +907,7 @@ pub trait PlanTraceObject<VM: VMBinding> {
     /// * `trace`: the current transitive closure
     /// * `object`: the object to trace.
     /// * `worker`: the GC worker that is tracing this object.
-    fn trace_object<Q: ObjectQueue, const KIND: TraceKind>(
+    fn trace_object<Q: ObjectQueue, K: TraceKind>(
         &self,
         queue: &mut Q,
         object: ObjectReference,
@@ -921,9 +921,9 @@ pub trait PlanTraceObject<VM: VMBinding> {
     /// this method should also invoke those policy specific methods for objects in that space.
     fn post_scan_object(&self, object: ObjectReference);
 
-    /// Whether objects in this plan may move. If any of the spaces used by the plan may move objects, this should
-    /// return true.
-    fn may_move_objects<const KIND: TraceKind>() -> bool;
+    /// Whether objects in this plan may move for the given trace kind. If any of the spaces
+    /// used by the plan may move objects, this should return true.
+    fn may_move_objects<K: TraceKind>(&self) -> bool;
 }
 
 use enum_map::Enum;

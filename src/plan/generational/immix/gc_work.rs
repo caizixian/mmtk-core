@@ -1,25 +1,24 @@
 use super::global::GenImmix;
 use crate::plan::{MatureTracePolicy, NurseryTracePolicy, UnsupportedTracePolicy};
-use crate::policy::gc_work::TraceKind;
-use crate::policy::gc_work::DEFAULT_TRACE;
+use crate::policy::gc_work::{DefaultTrace, TraceKind};
 use crate::vm::VMBinding;
 
 pub struct GenImmixNurseryGCWorkContext<VM: VMBinding>(std::marker::PhantomData<VM>);
 impl<VM: VMBinding> crate::scheduler::GCWorkContext for GenImmixNurseryGCWorkContext<VM> {
     type VM = VM;
     type PlanType = GenImmix<VM>;
-    type DefaultTracePolicy = NurseryTracePolicy<VM, GenImmix<VM>, DEFAULT_TRACE>;
+    type DefaultTracePolicy = NurseryTracePolicy<VM, GenImmix<VM>, DefaultTrace>;
     type PinningTracePolicy = UnsupportedTracePolicy<VM>;
 }
 
-pub(super) struct GenImmixMatureGCWorkContext<VM: VMBinding, const KIND: TraceKind>(
-    std::marker::PhantomData<VM>,
+pub(super) struct GenImmixMatureGCWorkContext<VM: VMBinding, K: TraceKind>(
+    std::marker::PhantomData<(VM, K)>,
 );
-impl<VM: VMBinding, const KIND: TraceKind> crate::scheduler::GCWorkContext
-    for GenImmixMatureGCWorkContext<VM, KIND>
+impl<VM: VMBinding, K: TraceKind> crate::scheduler::GCWorkContext
+    for GenImmixMatureGCWorkContext<VM, K>
 {
     type VM = VM;
     type PlanType = GenImmix<VM>;
-    type DefaultTracePolicy = MatureTracePolicy<VM, GenImmix<VM>, KIND>;
+    type DefaultTracePolicy = MatureTracePolicy<VM, GenImmix<VM>, K>;
     type PinningTracePolicy = UnsupportedTracePolicy<VM>;
 }

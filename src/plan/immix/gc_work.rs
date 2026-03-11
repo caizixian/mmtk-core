@@ -1,17 +1,16 @@
 use super::global::Immix;
 use crate::plan::MatureTracePolicy;
-use crate::policy::gc_work::TraceKind;
-use crate::policy::gc_work::TRACE_KIND_TRANSITIVE_PIN;
+use crate::policy::gc_work::{TraceKind, TransitivePinTrace};
 use crate::vm::VMBinding;
 
-pub(super) struct ImmixGCWorkContext<VM: VMBinding, const KIND: TraceKind>(
-    std::marker::PhantomData<VM>,
+pub(super) struct ImmixGCWorkContext<VM: VMBinding, K: TraceKind>(
+    std::marker::PhantomData<(VM, K)>,
 );
-impl<VM: VMBinding, const KIND: TraceKind> crate::scheduler::GCWorkContext
-    for ImmixGCWorkContext<VM, KIND>
+impl<VM: VMBinding, K: TraceKind> crate::scheduler::GCWorkContext
+    for ImmixGCWorkContext<VM, K>
 {
     type VM = VM;
     type PlanType = Immix<VM>;
-    type DefaultTracePolicy = MatureTracePolicy<VM, Immix<VM>, KIND>;
-    type PinningTracePolicy = MatureTracePolicy<VM, Immix<VM>, TRACE_KIND_TRANSITIVE_PIN>;
+    type DefaultTracePolicy = MatureTracePolicy<VM, Immix<VM>, K>;
+    type PinningTracePolicy = MatureTracePolicy<VM, Immix<VM>, TransitivePinTrace>;
 }
