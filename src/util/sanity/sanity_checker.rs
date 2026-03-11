@@ -52,9 +52,14 @@ impl<SL: Slot> SanityChecker<SL> {
 /// A [`TracePolicy`] for sanity checking. Instead of tracing into plan spaces,
 /// it verifies object integrity (sane reference, plan sanity check, VM sanity check)
 /// and "marks" visited objects via a HashSet to detect graph issues.
-#[derive(Clone)]
 pub struct SanityTracePolicy<VM: VMBinding> {
     mmtk: &'static MMTK<VM>,
+}
+
+impl<VM: VMBinding> Clone for SanityTracePolicy<VM> {
+    fn clone(&self) -> Self {
+        Self { mmtk: self.mmtk }
+    }
 }
 
 impl<VM: VMBinding> TracePolicy<VM> for SanityTracePolicy<VM> {
@@ -64,7 +69,7 @@ impl<VM: VMBinding> TracePolicy<VM> for SanityTracePolicy<VM> {
 
     fn trace_object(
         &self,
-        queue: &mut crate::util::VectorObjectQueue,
+        queue: &mut crate::plan::VectorObjectQueue,
         object: ObjectReference,
         _worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
@@ -150,10 +155,10 @@ impl<P: Plan> GCWork<P::VM> for ScheduleSanityGC<P> {
                 scheduler.work_buckets[WorkBucketStage::Closure].add(GCProcessRootNodes::<
                     P::VM,
                     SanityTracePolicy<P::VM>,
+                    SanityTracePolicy<P::VM>,
                 >::new(
                     roots.clone(),
                     WorkBucketStage::Closure,
-                    mmtk,
                 ));
             }
         }

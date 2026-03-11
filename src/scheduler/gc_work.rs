@@ -378,42 +378,6 @@ impl<C: GCWorkContext> GCWork<C::VM> for ScanVMSpecificRoots<C> {
     }
 }
 
-/// A short-hand for `<E::VM as VMBinding>::VMSlot`.
-
-/// An abstract trait for work packets that process object graph edges.  Its method
-/// [`ProcessEdgesWork::trace_object`] traces an object and, upon first visit, enqueues it into an
-/// internal queue inside the `ProcessEdgesWork` instance.  Each implementation of this trait
-/// implement `trace_object` differently.  During [`Plan::schedule_collection`], plans select
-/// (usually via `GCWorkContext`) specialized implementations of this trait to be used during each
-/// trace according the nature of each trace, such as whether it is a nursery collection, whether it
-/// is a defrag collection, whether it pins objects, etc.
-///
-/// This trait was originally designed for work packets that process object graph edges represented
-/// as slots.  The constructor [`ProcessEdgesWork::new`] takes a vector of slots, and the created
-/// work packet will trace the objects pointed by the object reference in each slot using the
-/// `trace_object` method, and update the slot if the GC moves the target object when tracing.
-///
-/// This trait can also be used merely as a provider of the `trace_object` method by giving it an
-/// empty vector of slots.  This is useful for node-enqueuing tracing
-/// ([`Scanning::scan_object_and_trace_edges`]) as well as weak reference processing
-/// ([`Scanning::process_weak_refs`] as well as `ReferenceProcessor` and `FinalizableProcessor`).
-/// In those cases, the caller passes the reference to the target object to `trace_object`, an the
-/// caller is responsible for updating the slots according the return value of `trace_object`.
-///
-/// TODO: We should refactor this trait to decouple it from slots. See:
-/// <https://github.com/mmtk/mmtk-core/issues/599>
-
-/// A general implementation of [`ProcessEdgesWork`] using SFT. A plan can always implement their
-/// own [`ProcessEdgesWork`] instances. However, most plans can use this work packet for tracing amd
-/// they do not need to provide a plan-specific trace object work packet. If they choose to use this
-/// type, they need to provide a correct implementation for some related methods (such as
-/// `Space.set_copy_for_sft_trace()`, `SFT.sft_trace_object()`). Some plans are not using this type,
-/// mostly due to more complex tracing. Either it is impossible to use this type, or there is
-/// performance overheads for using this general trace type. In such cases, they implement their
-/// specific [`ProcessEdgesWork`] instances.
-// TODO: This is not used any more. Should we remove it?
-#[allow(dead_code)]
-
 /// For USDT tracepoints for roots.
 /// Keep in sync with `tools/tracing/timeline/visualize.py`.
 #[repr(usize)]
@@ -422,8 +386,6 @@ enum RootsKind {
     PINNING = 1,
     TPINNING = 2,
 }
-
-/// Trait for a work packet that scans objects
 
 /// Generic slot-processing work packet parameterized by [`TracePolicy`].
 ///
@@ -539,8 +501,6 @@ pub(crate) struct GCScanObjects<VM: VMBinding, T: TracePolicy<VM>> {
     policy: T,
     /// Objects to scan.
     buffer: Vec<ObjectReference>,
-    /// Whether these are root objects.
-    roots: bool,
     /// Which work bucket this packet belongs to.
     bucket: WorkBucketStage,
     _phantom: PhantomData<VM>,
@@ -550,13 +510,12 @@ impl<VM: VMBinding, T: TracePolicy<VM>> GCScanObjects<VM, T> {
     pub fn new(
         policy: T,
         buffer: Vec<ObjectReference>,
-        roots: bool,
+        _roots: bool,
         bucket: WorkBucketStage,
     ) -> Self {
         Self {
             policy,
             buffer,
-            roots,
             bucket,
             _phantom: PhantomData,
         }
