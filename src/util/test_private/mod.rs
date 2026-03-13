@@ -9,6 +9,7 @@
 //! used often, and we don't compile the benchmarks using feedback-directed optimizations.
 
 pub use crate::util::metadata::side_metadata::helpers::scan_non_zero_bits_in_metadata_bytes;
+use crate::util::linear_scan::Region;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 
 use super::Address;
@@ -34,6 +35,19 @@ pub fn set_meta_bits(
 ) {
     SideMetadataSpec::set_meta_bits(meta_start_addr, meta_start_bit, meta_end_addr, meta_end_bit)
 }
+
+// --- Immix constants for benchmarking ---
+/// Number of lines in an Immix block (128 with default settings).
+pub const BLOCK_LINES: usize = crate::policy::immix::block::Block::LINES;
+/// Log2 of the bytes in an Immix line (8, i.e. 256 bytes).
+pub const LINE_LOG_BYTES: usize = crate::policy::immix::line::Line::LOG_BYTES;
+/// The initial line mark state.
+pub const LINE_RESET_MARK_STATE: u8 = crate::policy::immix::line::Line::RESET_MARK_STATE;
+/// The maximum line mark state before wrapping.
+pub const LINE_MAX_MARK_STATE: u8 = crate::policy::immix::line::Line::MAX_MARK_STATE;
+
+/// The work buffer capacity used by ProcessEdgesWork / VectorQueue.
+pub const WORK_BUFFER_CAPACITY: usize = crate::scheduler::EDGES_WORK_BUFFER_SIZE;
 
 #[cfg(feature = "mock_test")]
 pub use crate::mmtk::MMAPPER;
