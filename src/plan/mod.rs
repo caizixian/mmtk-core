@@ -46,7 +46,10 @@ mod sticky;
 
 mod compressor;
 mod concurrent;
+#[cfg(not(feature = "mock_test"))]
 mod immix;
+#[cfg(feature = "mock_test")]
+pub mod immix;
 mod markcompact;
 mod marksweep;
 mod nogc;

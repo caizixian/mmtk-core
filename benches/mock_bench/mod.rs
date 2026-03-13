@@ -1,6 +1,8 @@
 use criterion::Criterion;
 
 pub mod alloc;
+pub mod forwarding;
+pub mod immix;
 pub mod internal_pointer;
 pub mod mmapper;
 pub mod sft;
@@ -12,6 +14,8 @@ pub mod sft;
 // The benchmark can be executed with the following command. The feature `mock_test` is required, as the tests use MockVM.
 // MMTK_BENCH=alloc cargo bench --features mock_test
 // MMTK_BENCH=sft   cargo bench --features mock_test
+// MMTK_BENCH=immix cargo bench --features mock_test
+// MMTK_BENCH=forwarding cargo bench --features mock_test
 
 // [Yi] I am not sure if these benchmarks are helpful any more after the MockVM refactoring. MockVM is really slow, as it
 // is accessed with a lock, and it dispatches every call to function pointers in a struct. These tests may use MockVM,
@@ -26,6 +30,8 @@ pub fn bench(c: &mut Criterion) {
     match std::env::var("MMTK_BENCH") {
         Ok(bench) => match bench.as_str() {
             "alloc" => alloc::bench(c),
+            "forwarding" => forwarding::bench(c),
+            "immix" => immix::bench(c),
             "internal_pointer" => internal_pointer::bench(c),
             "mmapper" => mmapper::bench(c),
             "sft" => sft::bench(c),

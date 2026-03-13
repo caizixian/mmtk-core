@@ -51,3 +51,60 @@ pub const WORK_BUFFER_CAPACITY: usize = crate::scheduler::EDGES_WORK_BUFFER_SIZE
 
 #[cfg(feature = "mock_test")]
 pub use crate::mmtk::MMAPPER;
+
+// --- Re-exports for mock benchmarks (need real MMTk infrastructure) ---
+#[cfg(feature = "mock_test")]
+pub use crate::policy::immix::block::{Block, BlockState};
+#[cfg(feature = "mock_test")]
+pub use crate::policy::immix::defrag::Histogram;
+
+/// Create a new zeroed histogram for use in sweep benchmarks.
+#[cfg(feature = "mock_test")]
+pub fn new_histogram() -> Histogram {
+    [0; (crate::policy::immix::block::Block::LINES >> 1) + 1]
+}
+#[cfg(feature = "mock_test")]
+pub use crate::policy::immix::line::Line;
+#[cfg(feature = "mock_test")]
+pub use crate::policy::immix::ImmixSpace;
+#[cfg(feature = "mock_test")]
+pub use crate::util::linear_scan::Region as RegionTrait;
+
+// --- Object forwarding wrappers for mock benchmarks ---
+// object_forwarding module is pub(crate), so we wrap individual functions.
+#[cfg(feature = "mock_test")]
+#[inline(always)]
+pub fn attempt_to_forward<VM: crate::vm::VMBinding>(
+    object: crate::util::ObjectReference,
+) -> u8 {
+    crate::util::object_forwarding::attempt_to_forward::<VM>(object)
+}
+
+#[cfg(feature = "mock_test")]
+#[inline(always)]
+pub fn get_forwarding_status<VM: crate::vm::VMBinding>(
+    object: crate::util::ObjectReference,
+) -> u8 {
+    crate::util::object_forwarding::get_forwarding_status::<VM>(object)
+}
+
+#[cfg(feature = "mock_test")]
+#[inline(always)]
+pub fn clear_forwarding_bits<VM: crate::vm::VMBinding>(
+    object: crate::util::ObjectReference,
+) {
+    crate::util::object_forwarding::clear_forwarding_bits::<VM>(object);
+}
+
+// --- Plan access helper ---
+/// Get the ImmixSpace from an MMTK instance running the Immix plan.
+#[cfg(feature = "mock_test")]
+pub fn get_immix_space<VM: crate::vm::VMBinding>(
+    mmtk: &crate::MMTK<VM>,
+) -> &ImmixSpace<VM> {
+    let plan = mmtk.get_plan();
+    let immix = plan
+        .downcast_ref::<crate::plan::immix::Immix<VM>>()
+        .expect("Plan is not Immix");
+    &immix.immix_space
+}
