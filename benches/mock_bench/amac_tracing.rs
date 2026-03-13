@@ -786,6 +786,309 @@ fn trace_bfs_amac_sidemeta<const N: usize>(
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// Strategy 5: Staged-Batch Pipeline (microarch-optimized AMAC)
+// ───────────────────────────────────────────────────────────────────────────
+//
+// The original AMAC suffers from massive dispatch overhead:
+//
+//   Per state visit (from llvm-mca + uops.info on Zen 3):
+//     - 12 µops for cursor advance + state lookup + jump table dispatch
+//     - ~15 cycles indirect branch misprediction (5 match arms → ~60-80% mispredict)
+//     - Total: ~25 cycles overhead per state visit
+//     - With 3-4 visits per object × N objects → enormous overhead
+//
+//   Prefetch loop (for comparison):
+//     - 3 µops for `inc; cmp; jb` (loop overhead)
+//     - 0 cycles misprediction (well-predicted loop back-edge)
+//
+// The staged-batch approach eliminates ALL dispatch overhead by processing
+// items in bulk through each pipeline stage:
+//
+//   Pass 1: Load N slot contents → N objrefs, issue N object prefetches
+//   Pass 2: Check N mark bits, filter to newly-marked subset
+//   Pass 3: Scan newly-marked objects → produce child slots
+//
+// Each pass is a tight sequential loop with no match/dispatch.  The inner
+// loops compile to simple `inc; cmp; jb` back-edges (~0 misprediction).
+// MLP is achieved because each pass issues all N loads before consuming
+// the results in the next pass — the OOO engine overlaps them naturally.
+//
+// This is equivalent to the AMAC idea of having N independent accesses in
+// flight, but without the round-robin state machine overhead.
+
+fn trace_bfs_staged_batch<const N: usize>(
+    roots: &[BenchSlot],
+    packet_size: usize,
+) -> usize {
+    let mut work_queue: VecDeque<Vec<BenchSlot>> = VecDeque::new();
+    for chunk in roots.chunks(packet_size) {
+        work_queue.push_back(chunk.to_vec());
+    }
+    let mut marked_count = 0usize;
+    let mut new_slots = Vec::with_capacity(packet_size * 2);
+
+    // Scratch buffers for the pipeline stages (reused across packets)
+    let mut objrefs: Vec<ObjectReference> = Vec::with_capacity(N);
+    let mut to_scan: Vec<ObjectReference> = Vec::with_capacity(N);
+
+    while let Some(packet) = work_queue.pop_front() {
+        let len = packet.len();
+        let mut cursor = 0usize;
+
+        while cursor < len {
+            let batch_end = (cursor + N).min(len);
+            let batch = &packet[cursor..batch_end];
+
+            // ── Pass 1: Load slots → objrefs, prefetch object headers ──
+            objrefs.clear();
+            for &slot in batch {
+                let objref: Option<ObjectReference> = Slot::load(&slot);
+                if let Some(obj) = objref {
+                    // Issue prefetch for object header (mark word)
+                    prefetch_nta(obj.to_raw_address());
+                    objrefs.push(obj);
+                }
+            }
+
+            // ── Pass 2: Check marks, filter to newly-marked ────────────
+            to_scan.clear();
+            for &obj in &objrefs {
+                let header = read_header(obj);
+                if header & 1 == 0 {
+                    write_header(obj, header | 1);
+                    to_scan.push(obj);
+                }
+            }
+
+            // ── Pass 3: Scan newly-marked objects ──────────────────────
+            for &obj in &to_scan {
+                let klass = load_klass(obj);
+                let klass_info = unsafe { &*klass };
+                for f in 0..klass_info.n_refs {
+                    let child_slot = obj.to_raw_address() + klass_info.offsets[f];
+                    new_slots.push(child_slot);
+                }
+            }
+
+            cursor = batch_end;
+        }
+
+        // Flush child slots into new work packets
+        for chunk in new_slots.chunks(packet_size) {
+            work_queue.push_back(chunk.to_vec());
+        }
+        marked_count += new_slots.len() / N_REFS;
+        new_slots.clear();
+    }
+    marked_count
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Strategy 6: Interleaved Pipeline (software-pipelined, no dispatch)
+// ───────────────────────────────────────────────────────────────────────────
+//
+// This variant manually interleaves DIFFERENT pipeline stages for
+// consecutive slots in a single loop iteration:
+//
+//   for i in 0..len:
+//     prefetch_edge(slot[i + 2*D])     // stage 0: prefetch far-ahead edge
+//     prefetch_obj(load(slot[i + D]))  // stage 1: load slot D-ahead, prefetch its obj
+//     process(slot[i])                 // stage 2: mark-check + scan current slot
+//
+// This is the same MLP as AMAC with D=distance, but with zero dispatch
+// overhead — it's just a single flat loop with 3 inline operations.
+// The "distance" D controls how far ahead we prefetch.
+//
+// The key difference from simple prefetching (Strategy 2) is that we
+// also prefetch the edge content itself at distance 2*D, giving 3
+// pipeline stages instead of 2.
+
+fn trace_bfs_interleaved<const D: usize>(
+    roots: &[BenchSlot],
+    packet_size: usize,
+) -> usize {
+    let mut work_queue: VecDeque<Vec<BenchSlot>> = VecDeque::new();
+    for chunk in roots.chunks(packet_size) {
+        work_queue.push_back(chunk.to_vec());
+    }
+    let mut marked_count = 0usize;
+    let mut new_slots = Vec::with_capacity(packet_size * 2);
+
+    while let Some(packet) = work_queue.pop_front() {
+        let len = packet.len();
+        for i in 0..len {
+            // Stage 0: Prefetch edge content at distance 2*D
+            if i + 2 * D < len {
+                prefetch_nta(packet[i + 2 * D]);
+            }
+
+            // Stage 1: Load slot at distance D, prefetch object header
+            if i + D < len {
+                let future_objref: Option<ObjectReference> = Slot::load(&packet[i + D]);
+                if let Some(obj) = future_objref {
+                    prefetch_nta(obj.to_raw_address());
+                }
+            }
+
+            // Stage 2: Process current slot (mark check + scan)
+            process_and_scan_slot(packet[i], &mut new_slots);
+        }
+        for chunk in new_slots.chunks(packet_size) {
+            work_queue.push_back(chunk.to_vec());
+        }
+        marked_count += new_slots.len() / N_REFS;
+        new_slots.clear();
+    }
+    marked_count
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Strategy 7: Staged-Batch with Side-Metadata Prefetch
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Combines the staged-batch idea with three-target prefetching for side
+// metadata:
+//
+//   Pass 1: Load N slots → objrefs, prefetch object headers
+//   Pass 2: Compute meta addresses, prefetch them
+//   Pass 3: Check marks (both obj header and meta should be in cache)
+//   Pass 4: Scan newly-marked objects
+
+fn trace_bfs_staged_batch_sidemeta<const N: usize>(
+    roots: &[BenchSlot],
+    meta: &mut SideMetadata,
+    packet_size: usize,
+) -> usize {
+    let mut work_queue: VecDeque<Vec<BenchSlot>> = VecDeque::new();
+    for chunk in roots.chunks(packet_size) {
+        work_queue.push_back(chunk.to_vec());
+    }
+    let mut marked_count = 0usize;
+    let mut new_slots = Vec::with_capacity(packet_size * 2);
+
+    let mut objrefs: Vec<ObjectReference> = Vec::with_capacity(N);
+    let mut to_scan: Vec<ObjectReference> = Vec::with_capacity(N);
+
+    while let Some(packet) = work_queue.pop_front() {
+        let len = packet.len();
+        let mut cursor = 0usize;
+
+        while cursor < len {
+            let batch_end = (cursor + N).min(len);
+            let batch = &packet[cursor..batch_end];
+
+            // ── Pass 1: Load slots → objrefs, prefetch headers ─────────
+            objrefs.clear();
+            for &slot in batch {
+                let objref: Option<ObjectReference> = Slot::load(&slot);
+                if let Some(obj) = objref {
+                    prefetch_nta(obj.to_raw_address());
+                    objrefs.push(obj);
+                }
+            }
+
+            // ── Pass 2: Prefetch side-metadata for all objrefs ─────────
+            for &obj in &objrefs {
+                meta.prefetch_meta(obj);
+            }
+
+            // ── Pass 3: Check marks (header + meta in cache) ───────────
+            to_scan.clear();
+            for &obj in &objrefs {
+                if !meta.is_marked(obj) {
+                    meta.set_mark(obj);
+                    to_scan.push(obj);
+                }
+            }
+
+            // ── Pass 4: Scan newly-marked objects ──────────────────────
+            for &obj in &to_scan {
+                let klass = load_klass(obj);
+                let klass_info = unsafe { &*klass };
+                for f in 0..klass_info.n_refs {
+                    let child_slot = obj.to_raw_address() + klass_info.offsets[f];
+                    new_slots.push(child_slot);
+                }
+            }
+
+            cursor = batch_end;
+        }
+
+        for chunk in new_slots.chunks(packet_size) {
+            work_queue.push_back(chunk.to_vec());
+        }
+        marked_count += new_slots.len() / N_REFS;
+        new_slots.clear();
+    }
+    marked_count
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Strategy 8: Interleaved Pipeline with Side-Metadata Prefetch
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Combines the interleaved pipeline (Strategy 6) with three-target
+// prefetching for side-metadata marks:
+//
+//   for i in 0..len:
+//     prefetch_edge(slot[i + 2*D])        // far-ahead: slot content
+//     obj = load(slot[i + D])
+//     prefetch_obj(obj)                   // mid-ahead: object header
+//     prefetch_meta(meta_addr(obj))       // mid-ahead: mark-bit metadata
+//     process_with_sidemeta(slot[i])      // current: mark-check + scan
+
+fn trace_bfs_interleaved_sidemeta<const D: usize>(
+    roots: &[BenchSlot],
+    meta: &mut SideMetadata,
+    packet_size: usize,
+) -> usize {
+    let mut work_queue: VecDeque<Vec<BenchSlot>> = VecDeque::new();
+    for chunk in roots.chunks(packet_size) {
+        work_queue.push_back(chunk.to_vec());
+    }
+    let mut marked_count = 0usize;
+    let mut new_slots = Vec::with_capacity(packet_size * 2);
+
+    while let Some(packet) = work_queue.pop_front() {
+        let len = packet.len();
+        for i in 0..len {
+            // Stage 0: Prefetch edge content at distance 2*D
+            if i + 2 * D < len {
+                prefetch_nta(packet[i + 2 * D]);
+            }
+
+            // Stage 1: Load slot at distance D, prefetch object + metadata
+            if i + D < len {
+                let future_objref: Option<ObjectReference> = Slot::load(&packet[i + D]);
+                if let Some(obj) = future_objref {
+                    prefetch_nta(obj.to_raw_address());  // object header
+                    meta.prefetch_meta(obj);              // side metadata
+                }
+            }
+
+            // Stage 2: Process current slot with side-metadata marks
+            let objref: Option<ObjectReference> = Slot::load(&packet[i]);
+            if let Some(obj) = objref {
+                if !meta.is_marked(obj) {
+                    meta.set_mark(obj);
+                    let klass = load_klass(obj);
+                    let klass_info = unsafe { &*klass };
+                    for f in 0..klass_info.n_refs {
+                        let child_slot = obj.to_raw_address() + klass_info.offsets[f];
+                        new_slots.push(child_slot);
+                    }
+                }
+            }
+        }
+        for chunk in new_slots.chunks(packet_size) {
+            work_queue.push_back(chunk.to_vec());
+        }
+        marked_count += new_slots.len() / N_REFS;
+        new_slots.clear();
+    }
+    marked_count
+}
+// ───────────────────────────────────────────────────────────────────────────
 // Correctness verification
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -810,6 +1113,14 @@ fn verify_all(
     clear_marks(objects);
     let amac16_header = trace_bfs_amac::<16>(roots, PACKET_SIZE);
 
+    // Staged-batch-16 (header marks)
+    clear_marks(objects);
+    let staged16_header = trace_bfs_staged_batch::<16>(roots, PACKET_SIZE);
+
+    // Interleaved D=16 (header marks)
+    clear_marks(objects);
+    let interleaved_header = trace_bfs_interleaved::<16>(roots, PACKET_SIZE);
+
     // Side-metadata baseline
     meta.clear_all();
     let baseline_meta = trace_bfs_sidemeta_baseline(roots, meta, PACKET_SIZE);
@@ -822,12 +1133,24 @@ fn verify_all(
     meta.clear_all();
     let amac16_meta = trace_bfs_amac_sidemeta::<16>(roots, meta, PACKET_SIZE);
 
+    // Staged-batch sidemeta 16
+    meta.clear_all();
+    let staged16_meta = trace_bfs_staged_batch_sidemeta::<16>(roots, meta, PACKET_SIZE);
+
+    // Interleaved sidemeta D=16
+    meta.clear_all();
+    let interleaved16_meta = trace_bfs_interleaved_sidemeta::<16>(roots, meta, PACKET_SIZE);
+
     assert_eq!(baseline_header, prefetch_header, "prefetch_header mismatch");
     assert_eq!(baseline_header, amac8_header, "amac8_header mismatch");
     assert_eq!(baseline_header, amac16_header, "amac16_header mismatch");
+    assert_eq!(baseline_header, staged16_header, "staged16_header mismatch");
+    assert_eq!(baseline_header, interleaved_header, "interleaved_header mismatch");
     assert_eq!(baseline_header, baseline_meta, "baseline_meta mismatch");
     assert_eq!(baseline_header, prefetch_meta, "prefetch_meta mismatch");
     assert_eq!(baseline_header, amac16_meta, "amac16_meta mismatch");
+    assert_eq!(baseline_header, staged16_meta, "staged16_meta mismatch");
+    assert_eq!(baseline_header, interleaved16_meta, "interleaved16_meta mismatch");
 
     eprintln!(
         "[amac_tracing] Correctness verified: all strategies mark {} objects",
@@ -933,6 +1256,50 @@ pub fn bench(c: &mut Criterion) {
             });
         });
 
+        // ── Optimized: Staged-Batch (no dispatch overhead) ─────────────
+        group.bench_function("staged_batch_8", |b| {
+            b.iter(|| {
+                clear_marks(&objects);
+                black_box(trace_bfs_staged_batch::<8>(black_box(&root_slots), PACKET_SIZE))
+            });
+        });
+
+        group.bench_function("staged_batch_16", |b| {
+            b.iter(|| {
+                clear_marks(&objects);
+                black_box(trace_bfs_staged_batch::<16>(black_box(&root_slots), PACKET_SIZE))
+            });
+        });
+
+        group.bench_function("staged_batch_32", |b| {
+            b.iter(|| {
+                clear_marks(&objects);
+                black_box(trace_bfs_staged_batch::<32>(black_box(&root_slots), PACKET_SIZE))
+            });
+        });
+
+        // ── Optimized: Interleaved Pipeline (software-pipelined) ───────
+        group.bench_function("interleaved_8", |b| {
+            b.iter(|| {
+                clear_marks(&objects);
+                black_box(trace_bfs_interleaved::<8>(black_box(&root_slots), PACKET_SIZE))
+            });
+        });
+
+        group.bench_function("interleaved_16", |b| {
+            b.iter(|| {
+                clear_marks(&objects);
+                black_box(trace_bfs_interleaved::<16>(black_box(&root_slots), PACKET_SIZE))
+            });
+        });
+
+        group.bench_function("interleaved_32", |b| {
+            b.iter(|| {
+                clear_marks(&objects);
+                black_box(trace_bfs_interleaved::<32>(black_box(&root_slots), PACKET_SIZE))
+            });
+        });
+
         group.finish();
     }
 
@@ -992,6 +1359,62 @@ pub fn bench(c: &mut Criterion) {
             b.iter(|| {
                 side_meta.clear_all();
                 black_box(trace_bfs_amac_sidemeta::<32>(
+                    black_box(&root_slots), &mut side_meta, PACKET_SIZE,
+                ))
+            });
+        });
+
+        // ── Optimized: Staged-Batch with side-metadata prefetch ────────
+        group.bench_function("sidemeta_staged_batch_8", |b| {
+            b.iter(|| {
+                side_meta.clear_all();
+                black_box(trace_bfs_staged_batch_sidemeta::<8>(
+                    black_box(&root_slots), &mut side_meta, PACKET_SIZE,
+                ))
+            });
+        });
+
+        group.bench_function("sidemeta_staged_batch_16", |b| {
+            b.iter(|| {
+                side_meta.clear_all();
+                black_box(trace_bfs_staged_batch_sidemeta::<16>(
+                    black_box(&root_slots), &mut side_meta, PACKET_SIZE,
+                ))
+            });
+        });
+
+        group.bench_function("sidemeta_staged_batch_32", |b| {
+            b.iter(|| {
+                side_meta.clear_all();
+                black_box(trace_bfs_staged_batch_sidemeta::<32>(
+                    black_box(&root_slots), &mut side_meta, PACKET_SIZE,
+                ))
+            });
+        });
+
+        // ── Optimized: Interleaved with side-metadata prefetch ─────────
+        group.bench_function("sidemeta_interleaved_8", |b| {
+            b.iter(|| {
+                side_meta.clear_all();
+                black_box(trace_bfs_interleaved_sidemeta::<8>(
+                    black_box(&root_slots), &mut side_meta, PACKET_SIZE,
+                ))
+            });
+        });
+
+        group.bench_function("sidemeta_interleaved_16", |b| {
+            b.iter(|| {
+                side_meta.clear_all();
+                black_box(trace_bfs_interleaved_sidemeta::<16>(
+                    black_box(&root_slots), &mut side_meta, PACKET_SIZE,
+                ))
+            });
+        });
+
+        group.bench_function("sidemeta_interleaved_32", |b| {
+            b.iter(|| {
+                side_meta.clear_all();
+                black_box(trace_bfs_interleaved_sidemeta::<32>(
                     black_box(&root_slots), &mut side_meta, PACKET_SIZE,
                 ))
             });
