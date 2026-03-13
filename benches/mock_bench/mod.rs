@@ -4,6 +4,7 @@ pub mod alloc;
 pub mod forwarding;
 pub mod immix;
 pub mod internal_pointer;
+pub mod line_mark_scan;
 pub mod mmapper;
 pub mod sft;
 pub mod simd_tracing;
@@ -37,6 +38,7 @@ pub fn bench(c: &mut Criterion) {
             "forwarding" => forwarding::bench(c),
             "immix" => immix::bench(c),
             "internal_pointer" => internal_pointer::bench(c),
+            "line_mark_scan" => line_mark_scan::bench(c),
             "mmapper" => mmapper::bench(c),
             "sft" => sft::bench(c),
             "simd_tracing" => simd_tracing::bench(c),
