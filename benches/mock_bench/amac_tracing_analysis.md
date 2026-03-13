@@ -309,16 +309,22 @@ MLP comes from batching N accesses before consuming results.
 | **Interleaved D=16** | **358** | **-30.1%** | **-0.8%** | ~100% |
 | Interleaved D=32 | 370 | -27.7% | +2.5% | ~100% |
 
-### 5.2. Side-Metadata Marks (Focused Run)
+### 5.2. Side-Metadata Marks (Full Run)
 
 | Strategy | Time (ms) | vs SM Baseline | vs 3-Target PF | Notes |
 |----------|-----------|----------------|-----------------|-------|
 | SM Baseline | 850 | — | — | Extra cache miss for meta |
-| **3-Target Prefetch** | **523** | **-38.5%** | — | edge+obj+meta |
-| **SM Staged-Batch 16** | **491** | **-42.2%** | **-6.1%** | Dedicated meta pass |
-| **SM Staged-Batch 32** | **490** | **-42.4%** | **-6.3%** | |
-| SM Interleaved D=16 | 560 | -34.1% | +7.1% | Less meta PF time |
-| SM Interleaved D=32 | 578 | -32.0% | +10.5% | |
+| **3-Target Prefetch** | **524** | **-38.4%** | — | edge+obj+meta |
+| SM AMAC-4 | 1045 | +23.0% | +99.4% | |
+| SM AMAC-8 | 876 | +3.1% | +67.2% | |
+| SM AMAC-16 | 775 | -8.8% | +47.9% | |
+| SM AMAC-32 | 775 | -8.8% | +47.9% | |
+| SM Staged-Batch 8 | 570 | -32.9% | +8.8% | |
+| **SM Staged-Batch 16** | **485** | **-42.9%** | **-7.4%** | Dedicated meta pass |
+| **SM Staged-Batch 32** | **482** | **-43.3%** | **-8.0%** | |
+| SM Interleaved D=8 | 513 | -39.7% | -2.1% | Beats 3-target PF! |
+| SM Interleaved D=16 | 552 | -35.1% | +5.3% | |
+| SM Interleaved D=32 | 567 | -33.3% | +8.2% | |
 
 ---
 
