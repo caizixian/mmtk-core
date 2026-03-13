@@ -1,6 +1,7 @@
 use criterion::Criterion;
 
 pub mod alloc;
+pub mod amac_tracing;
 pub mod forwarding;
 pub mod immix;
 pub mod internal_pointer;
@@ -37,6 +38,7 @@ pub fn bench(c: &mut Criterion) {
     match std::env::var("MMTK_BENCH") {
         Ok(bench) => match bench.as_str() {
             "alloc" => alloc::bench(c),
+            "amac_tracing" => amac_tracing::bench(c),
             "forwarding" => forwarding::bench(c),
             "immix" => immix::bench(c),
             "internal_pointer" => internal_pointer::bench(c),
