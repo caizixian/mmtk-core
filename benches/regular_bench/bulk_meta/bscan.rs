@@ -22,6 +22,8 @@ const BLOCK_META_BYTES: usize = BLOCK_BYTES >> LOG_BITS_IN_WORD;
 /// Set this many distinct bits in the bitmap.
 const NUM_OBJECTS: usize = 200;
 
+// TODO: zixian, we don't need a CryptoRng. Something like Xoshiro256PlusPlus
+// is faster and sufficient
 /// Get a deterministic seeded Rng.
 fn get_rng() -> ChaCha8Rng {
     // Create an Rng from a seed and an explicit Rng type.

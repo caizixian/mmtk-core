@@ -111,14 +111,15 @@ fn allocate_objects(fixture: &mut MutatorFixture, count: usize) -> Vec<ObjectRef
 
 /// Build a random DAG: each object has N_REFS references to random other objects.
 fn build_random_dag(objects: &[ObjectReference]) {
+    use rand::rngs::SmallRng; // SmallRng = Xoshiro256PlusPlus on 64-bit
+    use rand::RngExt;
+    use rand::SeedableRng;
+
     let n = objects.len();
-    let mut rng: u64 = 0xdeadbeef12345678;
+    let mut rng = SmallRng::seed_from_u64(0xdeadbeef12345678);
     for i in 0..n {
         for r in 0..N_REFS {
-            rng ^= rng << 13;
-            rng ^= rng >> 7;
-            rng ^= rng << 17;
-            let target = (rng as usize) % n;
+            let target = rng.random_range(0..n);
             store_ref_field(objects[i], r, objects[target]);
         }
     }
