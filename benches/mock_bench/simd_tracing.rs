@@ -92,15 +92,10 @@
 //! ## Benchmark results (AMD EPYC 7B13, Zen 3)
 //!
 //! ```text
-//! 16K objects (768 KB, fits in L2):
-//!   scalar:           70 µs,  936 Melem/s  (baseline)
-//!   batch_branchless: 100 µs, 657 Melem/s  (43% slower)
-//!   simd_avx2:        151 µs, 434 Melem/s  (2.2× slower)
-//!
-//! 1M objects (48 MB, exceeds L3 cache):
-//!   scalar:           24.7 ms, 170 Melem/s (baseline)
-//!   batch_branchless: 31.9 ms, 131 Melem/s (29% slower)
-//!   simd_avx2:        39.9 ms, 105 Melem/s (62% slower)
+//! 1M objects (512 MB, exceeds total 256 MB L3):
+//!   scalar:           31.2 ms, 135 Melem/s  (baseline)
+//!   batch_branchless: 38.4 ms, 109 Melem/s  (23% slower)
+//!   simd_avx2:        45.8 ms,  91 Melem/s  (47% slower)
 //! ```
 //!
 //! ## Sources
@@ -143,8 +138,15 @@ use mmtk::util::OpaquePointer;
 const BYTES_PER_REF: usize = std::mem::size_of::<usize>();
 /// Number of reference fields per object.
 const N_REFS: usize = 4;
-/// Object size: 8 (pre-header) + 8 (header word for mark bits) + N_REFS * 8 (ref fields)
-const OBJ_SIZE: usize = 8 + 8 + N_REFS * BYTES_PER_REF;
+/// Padding bytes per object to ensure the heap well exceeds the local CCD's L3.
+/// AMD EPYC 7B13 (dual-socket): 32 MB L3 per CCD × 4 CCDs/socket × 2 sockets
+/// = 256 MB total L3, but each CCD's L3 is separate (not unified).
+/// A single-threaded benchmark sees only the local CCD's 32 MB L3.
+/// With 1M objects × 512 bytes = 512 MB heap → 2× total L3, ~16× per-CCD L3.
+const OBJ_PADDING: usize = 464;
+
+/// Object size: 8 (pre-header) + 8 (header word for mark bits) + N_REFS * 8 (ref fields) + padding
+const OBJ_SIZE: usize = 8 + 8 + N_REFS * BYTES_PER_REF + OBJ_PADDING;
 
 /// The ProcessEdgesWork type used by MarkSweep's MSGCWorkContext.
 type MSEdges = PlanProcessEdges<MockVM, MarkSweep<MockVM>, DEFAULT_TRACE>;
@@ -607,10 +609,12 @@ pub fn bench(c: &mut Criterion) {
     });
 
     // --- Setup: allocate graph ---
-    // 1M objects × 48 bytes = 48 MB of object data — exceeds L3 cache.
+    // 1M objects × 512 bytes = 512 MB of object data → exceeds 256 MB total L3.
+    // AMD EPYC 7B13: 32 MB L3 per CCD (separate, not unified across CCDs).
+    // Single-threaded benchmark sees only 32 MB local L3, so 512 MB >> 32 MB.
     // Random pointer targets will cause DRAM misses, testing MLP.
     let n_objects: usize = 1 << 20; // 1,048,576 objects
-    let heap_size = n_objects * OBJ_SIZE * 4; // ~192 MB heap
+    let heap_size = n_objects * OBJ_SIZE * 2; // ~1 GB heap
 
     let mut fixture = MutatorFixture::create_with_heapsize(heap_size);
 

@@ -1,6 +1,7 @@
 # SIMD Gather vs Scalar Mark-Check: Microarchitectural Analysis
 
-> **Target CPU**: AMD EPYC 7B13 (Zen 3 / znver3)
+> **Target CPU**: AMD EPYC 7B13 (Zen 3 / znver3), dual-socket
+> **Cache**: 32 MB L3 per CCD × 4 CCDs/socket × 2 sockets = 256 MB total L3 (per-CCD, not unified)
 > **Tools**: llvm-mca 19.1.7, objdump, criterion benchmarks
 > **Date**: 2026-03-13
 
@@ -18,8 +19,8 @@ for each object_ref in traversal_buffer:
 ```
 
 The performance-critical operation is the **pointer-chasing load**: each
-`object_ref` points to a random location in the heap. With 1M objects (48 MB),
-these loads miss L3 cache and go to DRAM (~100ns).
+`object_ref` points to a random location in the heap. With 1M objects (512 MB),
+these loads miss L3 cache (32 MB per CCD) and go to DRAM (~100ns).
 
 We tested three strategies for this loop:
 
@@ -297,29 +298,29 @@ well within Zen 3's 3 loads/cycle capacity.
 ## 5. Benchmark Results
 
 ```text
-1M objects, 4M edges (48 MB object data, exceeds L3):
+1M objects, 4M edges (512 MB object data, exceeds 256 MB total L3):
 
 mark_check_strategies/scalar
-                        time:   [24.3 ms  24.7 ms  25.0 ms]
-                        thrpt:  [168 Melem/s  170 Melem/s  172 Melem/s]
+                        time:   [31.0 ms  31.2 ms  31.3 ms]
+                        thrpt:  [134 Melem/s  135 Melem/s  135 Melem/s]
 
 mark_check_strategies/batch_branchless
-                        time:   [30.5 ms  31.9 ms  32.9 ms]
-                        thrpt:  [127 Melem/s  131 Melem/s  137 Melem/s]
+                        time:   [38.2 ms  38.4 ms  38.5 ms]
+                        thrpt:  [109 Melem/s  109 Melem/s  110 Melem/s]
 
 mark_check_strategies/simd_avx2
-                        time:   [39.8 ms  39.9 ms  40.1 ms]
-                        thrpt:  [105 Melem/s  105 Melem/s  105 Melem/s]
+                        time:   [45.7 ms  45.8 ms  46.0 ms]
+                        thrpt:  [91 Melem/s   91 Melem/s   92 Melem/s]
 
 trace_gc_random_dag_1048576 (full MMTk GC cycle)
-                        time:   [8.6 ms   8.8 ms   9.0 ms]
+                        time:   [8.7 ms   9.0 ms   9.3 ms]
 ```
 
 | Strategy | Time | Throughput | vs Scalar |
 |----------|------|-----------|-----------|
-| **scalar** | **24.7 ms** | **170 Melem/s** | baseline |
-| batch_branchless | 31.9 ms | 131 Melem/s | 1.29× slower |
-| simd_avx2 | 39.9 ms | 105 Melem/s | **1.62× slower** |
+| **scalar** | **31.2 ms** | **135 Melem/s** | baseline |
+| batch_branchless | 38.4 ms | 109 Melem/s | 1.23× slower |
+| simd_avx2 | 45.8 ms | 91 Melem/s | **1.47× slower** |
 
 ---
 

@@ -6,6 +6,7 @@ pub mod immix;
 pub mod internal_pointer;
 pub mod line_mark_scan;
 pub mod mmapper;
+pub mod prefetch_tracing;
 pub mod sft;
 pub mod simd_tracing;
 pub mod tracing;
@@ -21,6 +22,7 @@ pub mod tracing;
 // MMTK_BENCH=forwarding cargo bench --features mock_test
 // MMTK_BENCH=tracing MMTK_PLAN=MarkSweep cargo bench --features 'mock_test immortal_as_nonmoving'
 // MMTK_BENCH=simd_tracing MMTK_PLAN=MarkSweep cargo bench --features 'mock_test immortal_as_nonmoving'
+// MMTK_BENCH=prefetch_tracing MMTK_PLAN=MarkSweep cargo bench --features 'mock_test immortal_as_nonmoving'
 
 // [Yi] I am not sure if these benchmarks are helpful any more after the MockVM refactoring. MockVM is really slow, as it
 // is accessed with a lock, and it dispatches every call to function pointers in a struct. These tests may use MockVM,
@@ -40,6 +42,7 @@ pub fn bench(c: &mut Criterion) {
             "internal_pointer" => internal_pointer::bench(c),
             "line_mark_scan" => line_mark_scan::bench(c),
             "mmapper" => mmapper::bench(c),
+            "prefetch_tracing" => prefetch_tracing::bench(c),
             "sft" => sft::bench(c),
             "simd_tracing" => simd_tracing::bench(c),
             "tracing" => tracing::bench(c),
