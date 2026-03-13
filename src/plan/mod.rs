@@ -51,7 +51,10 @@ mod immix;
 #[cfg(feature = "mock_test")]
 pub mod immix;
 mod markcompact;
+#[cfg(not(feature = "mock_test"))]
 mod marksweep;
+#[cfg(feature = "mock_test")]
+pub mod marksweep;
 mod nogc;
 mod pageprotect;
 mod semispace;

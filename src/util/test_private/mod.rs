@@ -49,6 +49,9 @@ pub const LINE_MAX_MARK_STATE: u8 = crate::policy::immix::line::Line::MAX_MARK_S
 /// The work buffer capacity used by ProcessEdgesWork / VectorQueue.
 pub const WORK_BUFFER_CAPACITY: usize = crate::scheduler::EDGES_WORK_BUFFER_SIZE;
 
+// --- Mark bit / tracing helpers for benchmarking ---
+pub use crate::util::metadata::mark_bit::MarkState;
+
 #[cfg(feature = "mock_test")]
 pub use crate::mmtk::MMAPPER;
 
@@ -107,4 +110,36 @@ pub fn get_immix_space<VM: crate::vm::VMBinding>(
         .downcast_ref::<crate::plan::immix::Immix<VM>>()
         .expect("Plan is not Immix");
     &immix.immix_space
+}
+
+// --- Tracing benchmark types (scheduler-based) ---
+#[cfg(feature = "mock_test")]
+pub use crate::scheduler::gc_work::SFTProcessEdges;
+#[cfg(feature = "mock_test")]
+pub use crate::scheduler::gc_work::ProcessEdgesWorkRootsWorkFactory;
+#[cfg(feature = "mock_test")]
+pub use crate::scheduler::gc_work::PlanProcessEdges;
+#[cfg(feature = "mock_test")]
+pub use crate::scheduler::gc_work::ProcessEdgesWorkTracerContext;
+#[cfg(feature = "mock_test")]
+pub use crate::scheduler::GCWorker;
+#[cfg(feature = "mock_test")]
+pub use crate::plan::marksweep::MarkSweep;
+#[cfg(feature = "mock_test")]
+pub use crate::policy::gc_work::DEFAULT_TRACE;
+
+/// Trigger a GC request (force=true) WITHOUT calling block_for_gc.
+/// This avoids a deadlock in MockVM: the mock! macro holds the MOCK_VM_INSTANCE mutex
+/// for the duration of each mock call. If block_for_gc waits on a condvar while holding
+/// this mutex, then stop_all_mutators (on the worker thread) cannot acquire the same mutex,
+/// causing a deadlock. By splitting the trigger from the wait, the test can synchronize
+/// outside the mock mutex.
+///
+/// Returns true if the GC was requested.
+#[cfg(feature = "mock_test")]
+#[inline(always)]
+pub fn trigger_gc_no_block<VM: crate::vm::VMBinding>(
+    mmtk: &crate::MMTK<VM>,
+) -> bool {
+    mmtk.gc_trigger.handle_user_collection_request(true, false)
 }

@@ -244,7 +244,7 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
 
 /// This implements `ObjectTracer` by forwarding the `trace_object` calls to the wrapped
 /// `ProcessEdgesWork` instance.
-pub(crate) struct ProcessEdgesWorkTracer<E: ProcessEdgesWork> {
+pub struct ProcessEdgesWorkTracer<E: ProcessEdgesWork> {
     process_edges_work: E,
     stage: WorkBucketStage,
 }
@@ -285,7 +285,14 @@ impl<E: ProcessEdgesWork> ProcessEdgesWorkTracer<E> {
 /// the call to `with_tracer`, making use of its `trace_object` method.  It then creates work
 /// packets using the methods of the `ProcessEdgesWork` and add the work packet into the given
 /// `stage`.
+#[cfg(not(feature = "mock_test"))]
 pub(crate) struct ProcessEdgesWorkTracerContext<E: ProcessEdgesWork> {
+    stage: WorkBucketStage,
+    phantom_data: PhantomData<E>,
+}
+
+#[cfg(feature = "mock_test")]
+pub struct ProcessEdgesWorkTracerContext<E: ProcessEdgesWork> {
     stage: WorkBucketStage,
     phantom_data: PhantomData<E>,
 }
@@ -728,7 +735,7 @@ impl<VM: VMBinding> ProcessEdgesWork for SFTProcessEdges<VM> {
 /// An implementation of `RootsWorkFactory` that creates work packets based on `ProcessEdgesWork`
 /// for handling roots.  The `DPE` and the `PPE` type parameters correspond to the
 /// `DefaultProcessEdge` and the `PinningProcessEdges` type members of the [`GCWorkContext`] trait.
-pub(crate) struct ProcessEdgesWorkRootsWorkFactory<
+pub struct ProcessEdgesWorkRootsWorkFactory<
     VM: VMBinding,
     DPE: ProcessEdgesWork<VM = VM>,
     PPE: ProcessEdgesWork<VM = VM>,

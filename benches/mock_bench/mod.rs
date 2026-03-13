@@ -6,6 +6,7 @@ pub mod immix;
 pub mod internal_pointer;
 pub mod mmapper;
 pub mod sft;
+pub mod tracing;
 
 // As we can only initialize one MMTk instance, we have to run each benchmark in a separate process.
 // So we only register one benchmark to criterion ('bench_main'), and based on the env var MMTK_BENCH,
@@ -16,6 +17,7 @@ pub mod sft;
 // MMTK_BENCH=sft   cargo bench --features mock_test
 // MMTK_BENCH=immix cargo bench --features mock_test
 // MMTK_BENCH=forwarding cargo bench --features mock_test
+// MMTK_BENCH=tracing cargo bench --features mock_test
 
 // [Yi] I am not sure if these benchmarks are helpful any more after the MockVM refactoring. MockVM is really slow, as it
 // is accessed with a lock, and it dispatches every call to function pointers in a struct. These tests may use MockVM,
@@ -35,6 +37,7 @@ pub fn bench(c: &mut Criterion) {
             "internal_pointer" => internal_pointer::bench(c),
             "mmapper" => mmapper::bench(c),
             "sft" => sft::bench(c),
+            "tracing" => tracing::bench(c),
             _ => panic!("Unknown benchmark {:?}", bench),
         },
         Err(_) => panic!("Need to name a benchmark by the env var MMTK_BENCH"),
