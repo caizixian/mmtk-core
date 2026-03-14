@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { fetchJSON, formatTime, type Build, type Run, type BenchmarkResult, type Stats } from '../api';
 
 function TH({ children }: { children: React.ReactNode }): React.ReactElement {
@@ -180,7 +180,7 @@ export default function RunsView({ initialDetailRunId }: { initialDetailRunId?: 
                                     <TD>{run.id}</TD>
                                     <TD>{commit}</TD>
                                     <TD>{plan}</TD>
-                                    <TD className="text-text-secondary">{run.testbed_id || '-'}</TD>
+                                    <TD className="text-text-secondary"><Link to="/testbeds" className="text-indigo-400 hover:text-indigo-300 transition-colors">{run.testbed_id || '-'}</Link></TD>
                                     <TD>{run.invocations || '-'}</TD>
                                     <TD className="text-text-secondary">{run.heap_multiplier ? `${run.heap_multiplier}x` : '-'}</TD>
                                     <TD>
