@@ -7,6 +7,8 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from ..db import queries
 from ..db.schema import init_db
@@ -196,3 +198,17 @@ def list_testbeds():
 @app.get("/api/health")
 def health():
     return {"status": "ok", "version": "0.1.0"}
+
+
+# ── Static Files & Dashboard ─────────────────────────────────────────────────
+
+_WEB_DIR = Path(__file__).parent.parent / "web"
+
+app.mount("/static", StaticFiles(directory=str(_WEB_DIR / "static")), name="static")
+
+
+@app.get("/", response_class=HTMLResponse)
+def dashboard():
+    """Serve the web dashboard."""
+    index_html = _WEB_DIR / "index.html"
+    return index_html.read_text()
