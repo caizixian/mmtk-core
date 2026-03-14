@@ -114,6 +114,9 @@ cd openjdk
 make CONF=linux-x86_64-server-release THIRD_PARTY_HEAP=$PWD/../mmtk-openjdk/openjdk images
 ```
 
+> [!IMPORTANT]
+> **Commit your changes before running benchmarks.** `mmtk-dev` captures the git commit hashes of `mmtk-core` and `mmtk-openjdk` for each run. If you run benchmarks with uncommitted changes, the recorded commit hash won't reflect the actual code that was benchmarked, making results harder to trace back. Always `git commit` before proceeding to Step 5.
+
 ### Step 5: Compare
 
 Run the same benchmarks and compare against the baseline:
