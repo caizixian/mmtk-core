@@ -127,4 +127,4 @@ def _find_config(start: Path) -> Path | None:
         parent = current.parent
         if parent == current:
             return None
-
+        current = parent
