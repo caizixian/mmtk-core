@@ -13,6 +13,14 @@ function fmt(v: number): string {
     return v % 1 === 0 ? v.toFixed(0) : v.toFixed(2);
 }
 
+function CommitLink({ repo, commit }: { repo?: string; commit?: string }): React.ReactElement {
+    const short = commit?.slice(0, 8) || '?';
+    if (repo && commit && repo !== 'unknown') {
+        return <a href={`https://github.com/${repo}/commit/${commit}`} target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:text-indigo-300 transition-colors" title={commit}>{short}</a>;
+    }
+    return <span title={commit}>{short}</span>;
+}
+
 function MetricsTable({ results }: { results: Record<string, unknown>[] }): React.ReactElement {
     // Collect metrics across invocations
     const metricsMap: Record<string, number[]> = {};
@@ -143,25 +151,24 @@ export default function RunsView({ initialDetailRunId }: { initialDetailRunId?: 
                 <table className="w-full text-[13px]">
                     <thead className="bg-surface">
                         <tr>
-                            <TH>Run ID</TH><TH>Build</TH><TH>Plan</TH><TH>Testbed</TH>
+                            <TH>Run ID</TH><TH>Core</TH><TH>Binding</TH><TH>Plan</TH><TH>Testbed</TH>
                             <TH>Invocations</TH><TH>Heap</TH><TH>Status</TH><TH>Started</TH><TH>Actions</TH>
                         </tr>
                     </thead>
                     <tbody>
                         {loading && (
-                            <tr><td colSpan={9} className="px-4 py-12 text-center text-text-muted italic">Loading...</td></tr>
+                            <tr><td colSpan={10} className="px-4 py-12 text-center text-text-muted italic">Loading...</td></tr>
                         )}
                         {error && (
-                            <tr><td colSpan={9} className="px-4 py-12 text-center text-red-400 italic">Error: {error}</td></tr>
+                            <tr><td colSpan={10} className="px-4 py-12 text-center text-red-400 italic">Error: {error}</td></tr>
                         )}
                         {!loading && !error && runs.length === 0 && (
-                            <tr><td colSpan={9} className="px-4 py-12 text-center text-text-muted italic">
+                            <tr><td colSpan={10} className="px-4 py-12 text-center text-text-muted italic">
                                 No runs yet. Use <span className="font-mono text-indigo-400">mmtk-dev run</span> to create one.
                             </td></tr>
                         )}
                         {runs.map(run => {
                             const build = builds[run.build_id];
-                            const commit = build?.core_commit?.slice(0, 8) || '?';
                             const plan = build?.gc_plan || '?';
                             const statusCls = run.status === 'completed'
                                 ? 'bg-emerald-400/10 text-emerald-400'
@@ -171,7 +178,8 @@ export default function RunsView({ initialDetailRunId }: { initialDetailRunId?: 
                             return (
                                 <tr key={run.id} className="hover:bg-surface-hover transition-colors">
                                     <TD>{run.id}</TD>
-                                    <TD>{commit}</TD>
+                                    <TD><CommitLink repo={build?.core_repo} commit={build?.core_commit} /></TD>
+                                    <TD><CommitLink repo={build?.binding_repo} commit={build?.binding_commit} /></TD>
                                     <TD>{plan}</TD>
                                     <TD className="text-text-secondary"><Link to="/testbeds" className="text-indigo-400 hover:text-indigo-300 transition-colors">{run.testbed_id || '-'}</Link></TD>
                                     <TD>{run.invocations || '-'}</TD>
