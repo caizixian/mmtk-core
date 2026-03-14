@@ -144,6 +144,7 @@ def ci_cmd(
             iterations=iterations,
             suite=ws.dacapo_suite,
             dacapo_jar=ws.dacapo_jar,
+            probes_path=ws.probes_path,
         )
 
         result = runner.run_benchmarks(run_config)

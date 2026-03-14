@@ -32,6 +32,7 @@ class RunConfig:
     suite: str = "dacapo2006"
     dacapo_jar: Path | None = None
     log_dir: Path | None = None  # If None, uses temp dir
+    probes_path: Path | None = None  # Path to probes repo for MMTk stats
 
 
 @dataclass
@@ -50,6 +51,19 @@ class Runner(Protocol):
     def run_benchmarks(self, config: RunConfig) -> RunResult: ...
 
 
+# DaCapo Chopin suite names (all variants)
+_CHOPIN_SUITES = {"dacapochopin", "dacapochopin-29a657f"}
+
+# DaCapo callback class for each suite family
+_SUITE_CALLBACKS = {
+    "dacapochopin": "probe.DacapoChopinCallback",
+    "dacapochopin-29a657f": "probe.DacapoChopinCallback",
+    "dacapobach": "probe.DacapoBachCallback",
+    "dacapobach-mr1": "probe.DacapoBachCallback",
+    "dacapo2006": "probe.Dacapo2006Callback",
+}
+
+
 class LocalRunner:
     """Runs benchmarks on the local machine via running-ng subprocess."""
 
@@ -63,6 +77,13 @@ class LocalRunner:
 
         # Filter minheap to only requested benchmarks
         minheap_values = {bm: all_minheap.get(bm, 64) for bm in config.benchmarks}
+
+        # Build the config string parts
+        config_parts = ["jdk", "common_mmtk"]
+
+        # Add DaCapo Chopin JDK21 compatibility modifiers
+        if config.suite in _CHOPIN_SUITES:
+            config_parts.append("dacapochopin_jdk21")
 
         running_config: dict = {
             "includes": ["$RUNNING_NG_PACKAGE_DATA/base/runbms.yml"],
@@ -100,12 +121,35 @@ class LocalRunner:
                     "val": "tph|ms|plan",
                 },
             },
-            "configs": ["jdk|common_mmtk"],
+            "configs": ["|".join(config_parts)],
         }
 
         # Add dacapo jar path override if specified
         if config.dacapo_jar:
             running_config["overrides"][f"suites.{config.suite}.path"] = str(config.dacapo_jar)
+
+        # Add probes integration for MMTk statistics collection
+        if config.probes_path:
+            probes_out = config.probes_path / "out"
+            probes_jar = probes_out / "probes.jar"
+
+            running_config["modifiers"]["probes_cp"] = {
+                "type": "JVMClasspath",
+                "val": f"{probes_out} {probes_jar}",
+            }
+            running_config["modifiers"]["probes"] = {
+                "type": "JVMArg",
+                "val": f"-Djava.library.path={probes_out} -Dprobes=RustMMTk",
+            }
+
+            # Add probes to the config string
+            config_parts.extend(["probes_cp", "probes"])
+            running_config["configs"] = ["|".join(config_parts)]
+
+            # Set the DaCapo callback for probes
+            callback = _SUITE_CALLBACKS.get(config.suite)
+            if callback:
+                running_config["overrides"][f"suites.{config.suite}.callback"] = callback
 
         return running_config
 

@@ -93,6 +93,7 @@ def init_db(db_path: Path | None = None) -> None:
     """Initialize the database with the schema."""
     if db_path is None:
         db_path = get_db_path()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     conn.executescript(SCHEMA)
     conn.close()

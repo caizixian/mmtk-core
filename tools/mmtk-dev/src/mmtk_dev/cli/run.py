@@ -36,7 +36,8 @@ console = Console()
     "--log-dir", default=None, type=click.Path(), help="Directory to store logs (default: temp dir)"
 )
 @click.option("--db", default=None, type=click.Path(), help="Path to SQLite database")
-def run_cmd(benchmarks, plan, invocations, heap_multiplier, iterations, profile, log_dir, db):
+@click.option("--debug", is_flag=True, help="Print the generated running-ng config and commands")
+def run_cmd(benchmarks, plan, invocations, heap_multiplier, iterations, profile, log_dir, db, debug):
     """Run benchmarks and record results."""
     ws = WorkspaceConfig.load()
     db_path = Path(db) if db else ws.db_path
@@ -128,9 +129,20 @@ def run_cmd(benchmarks, plan, invocations, heap_multiplier, iterations, profile,
         suite=ws.dacapo_suite,
         dacapo_jar=ws.dacapo_jar,
         log_dir=Path(log_dir) if log_dir else None,
+        probes_path=ws.probes_path,
     )
 
     console.print("[bold]Running benchmarks...[/bold]")
+
+    # Debug: show generated config
+    if debug:
+        import yaml
+
+        running_config = runner.generate_config(run_config)
+        console.print("\n[bold yellow]── Generated running-ng config ──[/bold yellow]")
+        console.print(yaml.dump(running_config, default_flow_style=False))
+        console.print("[bold yellow]── End config ──[/bold yellow]\n")
+
     result = runner.run_benchmarks(run_config)
 
     if not result.success and not result.results:

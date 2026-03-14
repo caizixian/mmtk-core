@@ -78,6 +78,7 @@ class WorkspaceConfig:
     default_iterations: int = 6
     dacapo_jar: Path | None = None
     dacapo_suite: str = "dacapo2006"
+    probes_path: Path | None = None
 
     @classmethod
     def load(cls, search_dir: Path | None = None) -> "WorkspaceConfig":
@@ -106,6 +107,8 @@ class WorkspaceConfig:
             config.dacapo_jar = (config_dir / ws["dacapo_jar"]).resolve()
         if "dacapo_suite" in ws:
             config.dacapo_suite = ws["dacapo_suite"]
+        if "probes_path" in ws:
+            config.probes_path = (config_dir / ws["probes_path"]).resolve()
         if "db_path" in ws:
             config.db_path = Path(ws["db_path"]).expanduser()
 
