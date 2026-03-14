@@ -87,10 +87,15 @@ def get_run_results(run_id: str):
         raise HTTPException(404, "Run not found")
 
     grouped = queries.get_results_by_benchmark(run_id, _db())
+    metrics_by_result = queries.get_metrics_by_result_id(run_id, _db())
+
     summary = {}
     for bm, results in grouped.items():
         times = [r["execution_time_ms"] for r in results if r["execution_time_ms"] is not None]
         stats = compute_statistics(times)
+        # Attach metrics to each result
+        for r in results:
+            r["metrics"] = metrics_by_result.get(r["id"], [])
         summary[bm] = {
             "stats": stats,
             "results": results,

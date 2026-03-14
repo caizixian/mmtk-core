@@ -245,6 +245,33 @@ def get_results_by_benchmark(run_id: str, db_path: Path | None = None) -> dict[s
 # ── Metric ───────────────────────────────────────────────────────────────────
 
 
+def get_metrics_by_result_id(
+    run_id: str, db_path: Path | None = None
+) -> dict[int, list[dict]]:
+    """Get all metrics for a run's results, grouped by result_id."""
+    import math
+
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            """SELECT m.result_id, m.name, m.value
+               FROM metric m
+               JOIN result r ON m.result_id = r.id
+               WHERE r.run_id = ?
+               ORDER BY m.result_id, m.name""",
+            (run_id,),
+        ).fetchall()
+    grouped: dict[int, list[dict]] = {}
+    for row in rows:
+        val = row["value"]
+        if not math.isfinite(val):
+            continue  # Skip Inf, -Inf, NaN (not JSON serializable)
+        rid = row["result_id"]
+        if rid not in grouped:
+            grouped[rid] = []
+        grouped[rid].append({"name": row["name"], "value": val})
+    return grouped
+
+
 def insert_metrics(result_id: int, metrics: dict[str, float], db_path: Path | None = None) -> None:
     """Insert metrics for a result."""
     with get_connection(db_path) as conn:

@@ -15,6 +15,11 @@ interface MetricRow {
     values: number[];
 }
 
+function fmt(v: number): string {
+    if (!isFinite(v)) return '-';
+    return v % 1 === 0 ? v.toFixed(0) : v.toFixed(2);
+}
+
 function MetricsTable({ results }: { results: Record<string, unknown>[] }): React.ReactElement {
     // Collect metrics across invocations
     const metricsMap: Record<string, number[]> = {};
@@ -47,28 +52,44 @@ function MetricsTable({ results }: { results: Record<string, unknown>[] }): Reac
 
     if (rows.length === 0) return <div className="px-5 py-4 text-text-muted italic text-sm">No MMTk metrics captured for this benchmark.</div>;
 
+    const multipleInvocations = rows.some(r => r.values.length > 1);
+
     return (
         <div className="mt-3 border-t border-border pt-3">
             <div className="px-5 mb-2 text-[11px] font-semibold text-text-muted uppercase tracking-wider">MMTk Statistics</div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 px-5 pb-3">
-                {rows.map(m => {
-                    const avg = m.values.reduce((a, b) => a + b, 0) / m.values.length;
-                    const displayVal = avg === Infinity || avg === -Infinity
-                        ? '-'
-                        : avg % 1 === 0
-                        ? avg.toFixed(0)
-                        : avg.toFixed(2);
-                    return (
-                        <div key={m.name} className="bg-surface border border-border rounded px-3 py-2">
-                            <div className="text-[10px] text-text-muted font-mono truncate" title={m.name}>{m.name}</div>
-                            <div className="text-sm font-semibold font-mono text-text-primary">{displayVal}</div>
-                            {m.values.length > 1 && (
-                                <div className="text-[10px] text-text-muted">({m.values.length} inv)</div>
-                            )}
-                        </div>
-                    );
-                })}
-            </div>
+            <table className="w-full text-[13px]">
+                <thead className="bg-surface">
+                    <tr>
+                        <TH>Metric</TH>
+                        <TH>Mean</TH>
+                        {multipleInvocations && <><TH>Min</TH><TH>Max</TH><TH>Std Dev</TH><TH>N</TH></>}
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows.map(m => {
+                        const mean = m.values.reduce((a, b) => a + b, 0) / m.values.length;
+                        const min = Math.min(...m.values);
+                        const max = Math.max(...m.values);
+                        const stdev = m.values.length > 1
+                            ? Math.sqrt(m.values.reduce((s, v) => s + (v - mean) ** 2, 0) / (m.values.length - 1))
+                            : 0;
+                        return (
+                            <tr key={m.name} className="border-t border-border">
+                                <TD><span className="font-mono text-text-secondary">{m.name}</span></TD>
+                                <TD><span className="font-mono">{fmt(mean)}</span></TD>
+                                {multipleInvocations && (
+                                    <>
+                                        <TD><span className="font-mono text-text-secondary">{fmt(min)}</span></TD>
+                                        <TD><span className="font-mono text-text-secondary">{fmt(max)}</span></TD>
+                                        <TD><span className="font-mono text-text-secondary">{fmt(stdev)}</span></TD>
+                                        <TD><span className="font-mono text-text-secondary">{m.values.length}</span></TD>
+                                    </>
+                                )}
+                            </tr>
+                        );
+                    })}
+                </tbody>
+            </table>
         </div>
     );
 }
@@ -129,19 +150,19 @@ export default function RunsView({ initialDetailRunId }: { initialDetailRunId?: 
                 <table className="w-full text-[13px]">
                     <thead className="bg-surface">
                         <tr>
-                            <TH>Run ID</TH><TH>Build</TH><TH>Plan</TH>
+                            <TH>Run ID</TH><TH>Build</TH><TH>Plan</TH><TH>Testbed</TH>
                             <TH>Invocations</TH><TH>Heap</TH><TH>Status</TH><TH>Started</TH><TH>Actions</TH>
                         </tr>
                     </thead>
                     <tbody>
                         {loading && (
-                            <tr><td colSpan={8} className="px-4 py-12 text-center text-text-muted italic">Loading...</td></tr>
+                            <tr><td colSpan={9} className="px-4 py-12 text-center text-text-muted italic">Loading...</td></tr>
                         )}
                         {error && (
-                            <tr><td colSpan={8} className="px-4 py-12 text-center text-red-400 italic">Error: {error}</td></tr>
+                            <tr><td colSpan={9} className="px-4 py-12 text-center text-red-400 italic">Error: {error}</td></tr>
                         )}
                         {!loading && !error && runs.length === 0 && (
-                            <tr><td colSpan={8} className="px-4 py-12 text-center text-text-muted italic">
+                            <tr><td colSpan={9} className="px-4 py-12 text-center text-text-muted italic">
                                 No runs yet. Use <span className="font-mono text-indigo-400">mmtk-dev run</span> to create one.
                             </td></tr>
                         )}
@@ -159,6 +180,7 @@ export default function RunsView({ initialDetailRunId }: { initialDetailRunId?: 
                                     <TD>{run.id}</TD>
                                     <TD>{commit}</TD>
                                     <TD>{plan}</TD>
+                                    <TD className="text-text-secondary">{run.testbed_id || '-'}</TD>
                                     <TD>{run.invocations || '-'}</TD>
                                     <TD className="text-text-secondary">{run.heap_multiplier ? `${run.heap_multiplier}x` : '-'}</TD>
                                     <TD>
