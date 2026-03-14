@@ -1590,6 +1590,12 @@ impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
         ENTRIES
     }
 
+    /// Get a reference to the underlying byte array.
+    /// This is useful for batch operations like prefetching.
+    pub fn as_slice(&self) -> &[u8; ENTRIES] {
+        self.data
+    }
+
     /// Get a byte from the metadata byte array at the given index.
     #[allow(clippy::let_and_return)]
     pub fn get(&self, index: usize) -> u8 {

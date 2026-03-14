@@ -235,9 +235,20 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
     /// Search for recyclable lines.
     fn acquire_recyclable_lines(&mut self, size: usize, align: usize, offset: usize) -> bool {
+        // Snapshot the line mark states once up-front. These values are stable
+        // within a mutator phase and don't change between GCs. Loading them
+        // here instead of inside get_next_available_lines() avoids redundant
+        // atomic loads per hole.
+        let (unavail_state, mark_state) = self.immix_space().snapshot_line_mark_states();
+
         while self.line.is_some() || self.acquire_recyclable_block() {
             let line = self.line.unwrap();
-            if let Some((start_line, end_line)) = self.immix_space().get_next_available_lines(line)
+            if let Some((start_line, end_line)) =
+                ImmixSpace::<VM>::get_next_available_lines_with_states(
+                    line,
+                    unavail_state,
+                    mark_state,
+                )
             {
                 // Find recyclable lines. Update the bump allocation cursor and limit.
                 self.bump_pointer.cursor = start_line.start();
@@ -268,8 +279,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 };
                 // mark objects if concurrent marking is active
                 if self.immix_space().should_allocate_as_live() {
-                    let state = self.space.line_mark_state.load(Ordering::Acquire);
-                    Line::eager_mark_lines::<VM>(state, start_line..end_line);
+                    Line::eager_mark_lines::<VM>(mark_state, start_line..end_line);
                 }
                 return true;
             } else {
@@ -285,6 +295,37 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         match self.immix_space().get_reusable_block(self.copy) {
             Some(block) => {
                 trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
+
+                // Prefetch the line mark table (128 bytes = 2 cache lines on x86).
+                // This brings the side metadata into L1 before the first hole search.
+                let mark_data = block.line_mark_table();
+                let slice = mark_data.as_slice();
+                let ptr = slice.as_ptr();
+                unsafe {
+                    #[cfg(target_arch = "x86_64")]
+                    {
+                        std::arch::x86_64::_mm_prefetch(
+                            ptr as *const i8,
+                            std::arch::x86_64::_MM_HINT_T0,
+                        );
+                        std::arch::x86_64::_mm_prefetch(
+                            ptr.add(64) as *const i8,
+                            std::arch::x86_64::_MM_HINT_T0,
+                        );
+                    }
+                    #[cfg(target_arch = "aarch64")]
+                    {
+                        use std::arch::aarch64::_prefetch;
+                        use std::arch::aarch64::{_PREFETCH_LOCALITY3, _PREFETCH_READ};
+                        _prefetch(ptr as *const i8, _PREFETCH_READ, _PREFETCH_LOCALITY3);
+                        _prefetch(
+                            ptr.add(64) as *const i8,
+                            _PREFETCH_READ,
+                            _PREFETCH_LOCALITY3,
+                        );
+                    }
+                }
+
                 // Set the hole-searching cursor to the start of this block.
                 self.line = Some(block.start_line());
                 true

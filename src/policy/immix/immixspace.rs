@@ -841,6 +841,29 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         debug_assert!(!super::BLOCK_ONLY);
         let unavail_state = self.line_unavail_state.load(Ordering::Acquire);
         let current_state = self.line_mark_state.load(Ordering::Acquire);
+        Self::get_next_available_lines_with_states(search_start, unavail_state, current_state)
+    }
+
+    /// Snapshot the current line mark states for caching in the allocator.
+    /// These values are stable within a mutator phase (between GC cycles).
+    #[allow(clippy::assertions_on_constants)]
+    pub fn snapshot_line_mark_states(&self) -> (u8, u8) {
+        debug_assert!(!super::BLOCK_ONLY);
+        let unavail_state = self.line_unavail_state.load(Ordering::Acquire);
+        let current_state = self.line_mark_state.load(Ordering::Acquire);
+        (unavail_state, current_state)
+    }
+
+    /// Same as `get_next_available_lines`, but uses pre-loaded mark states
+    /// to avoid redundant atomic loads when scanning multiple holes in the
+    /// same block.
+    #[allow(clippy::assertions_on_constants)]
+    pub fn get_next_available_lines_with_states(
+        search_start: Line,
+        unavail_state: u8,
+        current_state: u8,
+    ) -> Option<(Line, Line)> {
+        debug_assert!(!super::BLOCK_ONLY);
         let block = search_start.block();
         let mark_data = block.line_mark_table();
         let start_cursor = search_start.get_index_within_block();
