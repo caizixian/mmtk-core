@@ -1,0 +1,8 @@
+[book]
+title = "mmtk-dev User Guide"
+description = "Guide for using the mmtk-dev performance tracking and regression detection tool."
+authors = []
+language = "en"
+
+[output.html]
+git-repository-url = "https://github.com/mmtk/mmtk-core/tree/master/tools/mmtk-dev/docs"

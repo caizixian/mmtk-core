@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>mmtk-dev — Performance Dashboard</title>
+    <meta name="description" content="MMTk performance tracking and regression detection dashboard">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./index.css">
+    <script>
+        // Apply dark mode based on system preference before render to avoid flash
+        if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            document.documentElement.classList.add('dark');
+        }
+    </script>
+</head>
+<body class="h-full bg-[var(--color-bg)] text-[var(--color-text-primary)] font-sans antialiased transition-colors">
+    <div id="root" class="h-full"></div>
+    <script type="module" src="./index.tsx"></script>
+</body>
+</html>
