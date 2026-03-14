@@ -116,7 +116,9 @@ make CONF=linux-x86_64-server-release THIRD_PARTY_HEAP=$PWD/../mmtk-openjdk/open
 ```
 
 > [!IMPORTANT]
-> **Commit your changes before running benchmarks.** `mmtk-dev` captures the git commit hashes of `mmtk-core` and `mmtk-openjdk` for each run. If you run benchmarks with uncommitted changes, the recorded commit hash won't reflect the actual code that was benchmarked, making results harder to trace back. Always `git commit` before proceeding to Step 5.
+> **Commit your changes before running benchmarks.** `mmtk-dev` captures the git commit hashes of `mmtk-core` and `mmtk-openjdk` for each run. If you run benchmarks with uncommitted changes, the recorded commit hash won't reflect the actual code being benchmarked. Always `git commit` (or `jj commit`) before proceeding to Step 5.
+>
+> **Do NOT revert files for baselines — checkout the commit.** When doing A/B comparisons, always `git checkout <commit>` to switch to the baseline code. Simply reverting files leaves the commit hash unchanged, so mmtk-dev records the wrong commit for the baseline run.
 
 ### Step 5: Compare
 
@@ -139,10 +141,20 @@ uv run --project mmtk-core/tools/mmtk-dev mmtk-dev compare --run-id <run-id>
 **Key options:**
 | Option | Description | Default |
 |--------|-------------|---------|
-| `-b, --baseline` | Baseline name | Default baseline |
-| `--benchmarks` | Override benchmarks | Same as baseline |
+| `-b, --baseline` | Baseline name (**not** benchmark names!) | Default baseline |
+| `--benchmarks` | Override benchmarks to run | Same as baseline |
 | `--run-id` | Compare existing run (skip running) | |
+| `--metric` | Metric(s) to compare: name, comma-separated, or `all` | |
 | `--threshold` | Significance threshold | `0.02` (2%) |
+
+> [!WARNING]
+> **`-b` in `compare` means `--baseline`, not benchmarks.** Use `--benchmarks` to specify which benchmarks to run. For example:
+> ```fish
+> # CORRECT: compare against baseline "before-opt", running h2
+> mmtk-dev compare -b before-opt --benchmarks h2
+> # WRONG: this tries to find a baseline named "h2"
+> mmtk-dev compare -b h2
+> ```
 
 ### Step 6: Interpret Results
 
@@ -290,24 +302,43 @@ uv run --project mmtk-core/tools/mmtk-dev mmtk-dev ci --plans GenImmix,Immix -b 
 4. **Same testbed**: Compare results from the same machine only
 5. **Same plan and profile**: Don't compare GenImmix release against Immix fastdebug
 
+### Choosing Heap Multiplier
+
+The heap multiplier determines how much GC pressure is applied. Choose based on what you're measuring:
+
+| Multiplier | GC Pressure | Best for |
+|:----------:|:-----------:|----------|
+| 1.5–2× | Very high | Testing GC-intensive optimizations (sweep, tracing, allocation under pressure) |
+| 2–3× | High | Default for most GC optimizations |
+| 5× | Low | Testing allocation fast-path and mutator-side changes; GC happens rarely |
+| 10×+ | Minimal | Isolating mutator overhead from GC overhead |
+
+> [!TIP]
+> If you're optimizing sweep, tracing, or other GC-internal paths, use **2–3×** heap. At 5× heap, GC is so infrequent that sweep/trace time becomes unmeasurable noise. Conversely, if you're optimizing allocation or mutator overhead, use **5×+** to minimize GC interference.
+
 ### Iterative Optimization Pattern
 
 ```fish
-# 1. Establish baseline on the unmodified code
-uv run --project mmtk-core/tools/mmtk-dev mmtk-dev run -b fop,lusearch,xalan -i 10
+# 1. Checkout the unmodified commit and build
+git checkout <baseline-commit>  # or: jj edit <change-id>
+cd openjdk && make CONF=linux-x86_64-server-release THIRD_PARTY_HEAP=$PWD/../mmtk-openjdk/openjdk images
+
+# 2. Run baseline from workspace root
+cd ..
+uv run --project mmtk-core/tools/mmtk-dev mmtk-dev run -b fop,lusearch,xalan -i 10 -n "baseline" # be more descriptive than just baseline
 uv run --project mmtk-core/tools/mmtk-dev mmtk-dev set-baseline before-opt
 
-# 2. Make your optimization changes in mmtk-core, then rebuild
-cd openjdk
-make CONF=linux-x86_64-server-release THIRD_PARTY_HEAP=$PWD/../mmtk-openjdk/openjdk images
+# 3. Switch to optimization commit and rebuild
+cd mmtk-core && git checkout <opt-branch>  # or: jj edit <opt-change>
+cd ../openjdk && make CONF=linux-x86_64-server-release THIRD_PARTY_HEAP=$PWD/../mmtk-openjdk/openjdk images
 
-# 3. Compare
-cd ..  # back to workspace root
-uv run --project mmtk-core/tools/mmtk-dev mmtk-dev compare
+# 4. Compare (this runs benchmarks + shows diff)
+cd ..
+uv run --project mmtk-core/tools/mmtk-dev mmtk-dev compare -n "with optimization" # be more descriptive of what you changed
 
-# 4. If results look promising, do a thorough run
-uv run --project mmtk-core/tools/mmtk-dev mmtk-dev run -b fop,lusearch,xalan,h2,sunflow -i 20
-uv run --project mmtk-core/tools/mmtk-dev mmtk-dev compare --run-id <new-run-id>
+# 5. Compare additional metrics like STW time
+uv run --project mmtk-core/tools/mmtk-dev mmtk-dev compare --run-id <run-id> --metric time.stw
+uv run --project mmtk-core/tools/mmtk-dev mmtk-dev compare --run-id <run-id> --metric all
 ```
 
 ### Quick A/B Comparison (No Baseline Setup)
@@ -336,11 +367,21 @@ The dashboard provides:
 
 When `probes_path` is configured, each benchmark invocation also collects MMTk GC statistics:
 - `GC`: Total GC count
-- `majorGC`: Major GC count
-- `time.stw`: Stop-the-world pause time
-- `time.other`: Non-pause GC time
+- `time.stw`: Stop-the-world pause time (ms)
+- `time.other`: Non-pause GC time (ms)
+- `total-work.count`, `total-work.time.total`, etc.: Work packet statistics
 
-These metrics help diagnose **why** performance changed — e.g., fewer GCs, shorter pauses, or less time in GC overall.
+These metrics help diagnose **why** performance changed. Use `--metric` with `compare` to see them:
+
+```fish
+# Compare a specific metric
+uv run --project mmtk-core/tools/mmtk-dev mmtk-dev compare --metric time.stw
+
+# Compare all available metrics
+uv run --project mmtk-core/tools/mmtk-dev mmtk-dev compare --metric all
+```
+
+The web dashboard also has a metric selector dropdown on the Compare page.
 
 ## Running Benchmarks Outside mmtk-dev
 
@@ -404,3 +445,6 @@ Build IDs are deterministic (hash of commit + plan), so the same code + plan alw
 | `running-ng` errors | Use `--debug` flag to see generated config; check running-ng is installed |
 | "No results found" | Check benchmark name spelling; check DaCapo jar path in config |
 | Different results across machines | Only compare results from the same testbed |
+| Wrong commit hash in baseline | Use `git checkout`/`jj edit` to switch commits, don't revert files |
+| GC optimization shows no improvement | Try tighter heap (2–3×); at 5× GC paths may be unmeasurable |
+| `compare -b X` says "baseline not found" | `-b` means `--baseline` name, use `--benchmarks` for benchmarks |
