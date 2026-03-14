@@ -10,7 +10,7 @@ mmtk_core = "./mmtk-core"
 mmtk_openjdk = "./mmtk-openjdk"
 openjdk = "./openjdk"
 dacapo_jar = "./dacapo-23.11-MR2-chopin.jar"
-dacapo_suite = "dacapo2006"  # or "dacapo_chopin"
+dacapo_suite = "dacapochopin"
 db_path = "~/.mmtk-dev/mmtk-dev.db"
 
 [testbed]

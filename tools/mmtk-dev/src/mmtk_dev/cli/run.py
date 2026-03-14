@@ -9,7 +9,7 @@ from rich.table import Table
 from ..config import ALL_DACAPO_2006, WorkspaceConfig, detect_testbed, get_git_info
 from ..db import queries
 from ..db.schema import init_db
-from ..runner.parser import results_to_db_format
+from ..runner.parser import results_to_db_format, results_to_metrics_format
 from ..runner.runner import LocalRunner, RunConfig
 from ..stats.analysis import compute_statistics
 
@@ -141,14 +141,17 @@ def run_cmd(benchmarks, plan, invocations, heap_multiplier, iterations, profile,
     # Store results
     db_results = results_to_db_format(result.results)
     queries.insert_results(run_id, db_results, db_path)
+
+    # Store MMTk metrics (if any were parsed from logs)
+    metrics_data = results_to_metrics_format(result.results)
+    if metrics_data:
+        queries.insert_metrics_for_run(run_id, metrics_data, db_path)
+
     queries.complete_run(run_id, "completed", db_path)
 
     # Update running-ng run ID
     if result.run_id:
-        from ..db.schema import get_connection
-
-        with get_connection(db_path) as conn:
-            conn.execute("UPDATE run SET running_ng_id = ? WHERE id = ?", (result.run_id, run_id))
+        queries.update_running_ng_id(run_id, result.run_id, db_path)
 
     # Print summary table
     _print_run_summary(run_id, db_path)

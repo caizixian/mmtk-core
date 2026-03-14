@@ -11,12 +11,7 @@ from ..db import queries
 from ..db.schema import init_db
 from ..runner.parser import results_to_db_format
 from ..runner.runner import LocalRunner, RunConfig
-from ..stats.analysis import (
-    classify_change,
-    compute_diff,
-    compute_geomean_ratio,
-    compute_statistics,
-)
+from ..stats.comparison import compare_benchmark_results
 
 console = Console()
 
@@ -168,12 +163,13 @@ def ci_cmd(
         target_results = queries.get_results_by_benchmark(run_id, db_path)
 
         # Generate report
+        comparison = compare_benchmark_results(
+            baseline_results, target_results, alert_threshold
+        )
         regression_found = _generate_ci_report(
             plan,
             baseline_label,
-            baseline_results,
-            target_results,
-            alert_threshold,
+            comparison,
             output_format,
             all_reports,
         )
@@ -192,39 +188,21 @@ def ci_cmd(
 def _generate_ci_report(
     plan: str,
     baseline_label: str,
-    baseline_results: dict,
-    target_results: dict,
-    threshold: float,
+    result: dict,
     output_format: str,
     reports: list[str],
 ) -> bool:
     """Generate a CI comparison report. Returns True if regressions detected."""
-    all_diffs = []
     regression_found = False
     rows = []
 
-    all_bms = sorted(set(list(baseline_results.keys()) + list(target_results.keys())))
-
-    for bm in all_bms:
-        bl_times = [
-            r["execution_time_ms"]
-            for r in baseline_results.get(bm, [])
-            if r["execution_time_ms"] is not None
-        ]
-        tgt_times = [
-            r["execution_time_ms"]
-            for r in target_results.get(bm, [])
-            if r["execution_time_ms"] is not None
-        ]
-
-        bl_stats = compute_statistics(bl_times)
-        tgt_stats = compute_statistics(tgt_times)
+    for c in result["comparisons"]:
+        bl_stats = c["baseline"]
+        tgt_stats = c["target"]
+        diff = c["diff"]
+        change = c["change"]
 
         if bl_stats["mean"] is not None and tgt_stats["mean"] is not None:
-            diff = compute_diff(bl_stats["mean"], tgt_stats["mean"])
-            all_diffs.append(diff)
-            change = classify_change(diff, threshold)
-
             if change == "slower":
                 regression_found = True
                 status = "❌ regression"
@@ -235,7 +213,7 @@ def _generate_ci_report(
 
             rows.append(
                 {
-                    "bm": bm,
+                    "bm": c["benchmark"],
                     "bl_mean": f"{bl_stats['mean']:.1f} ±{bl_stats['ci']:.1f}",
                     "tgt_mean": f"{tgt_stats['mean']:.1f} ±{tgt_stats['ci']:.1f}",
                     "diff": f"{diff:+.2%}",
@@ -255,8 +233,8 @@ def _generate_ci_report(
                 f"| {r['bm']} | {r['bl_mean']} | {r['tgt_mean']} | {r['diff']} {emoji} | {r['status']} |"
             )
 
-        if all_diffs:
-            geomean = compute_geomean_ratio(all_diffs)
+        geomean = result["geomean_diff"]
+        if geomean != 0.0:
             reports.append(f"\n**Geometric mean**: {geomean:+.2%}")
         reports.append("")
     else:
@@ -273,8 +251,8 @@ def _generate_ci_report(
             table.add_row(r["bm"], r["bl_mean"], r["tgt_mean"], r["diff"], r["status"])
         console.print(table)
 
-        if all_diffs:
-            geomean = compute_geomean_ratio(all_diffs)
+        geomean = result["geomean_diff"]
+        if geomean != 0.0:
             console.print(f"Geometric mean: {geomean:+.2%}")
 
     return regression_found

@@ -176,3 +176,20 @@ def results_to_db_format(results: list[BenchmarkResult]) -> list[dict]:
         # But we don't know the exact count here, so just record what passed
 
     return db_results
+
+
+def results_to_metrics_format(
+    results: list[BenchmarkResult],
+) -> dict[str, list[dict[str, float]]]:
+    """Convert parsed results into the metrics format expected by
+    ``queries.insert_metrics_for_run``.
+
+    Returns a dict mapping benchmark name → list of per-invocation metric dicts.
+    Only benchmarks that actually have MMTk stats are included.
+    """
+    metrics: dict[str, list[dict[str, float]]] = {}
+    for r in results:
+        if r.mmtk_stats:
+            metrics[r.benchmark] = r.mmtk_stats
+    return metrics
+

@@ -12,12 +12,8 @@ from fastapi.staticfiles import StaticFiles
 
 from ..db import queries
 from ..db.schema import init_db
-from ..stats.analysis import (
-    classify_change,
-    compute_diff,
-    compute_geomean_ratio,
-    compute_statistics,
-)
+from ..stats.analysis import compute_statistics
+from ..stats.comparison import compare_benchmark_results
 
 
 def _db() -> Path | None:
@@ -27,8 +23,13 @@ def _db() -> Path | None:
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     init_db(_db())
+    # Mount static files at startup so it works even if web/dist/ is
+    # created after the module is first imported (e.g. by `server --skip-build`
+    # followed by a manual `npm run build`).
+    if _DIST_DIR.exists():
+        application.mount("/static", StaticFiles(directory=str(_DIST_DIR)), name="static")
     yield
 
 
@@ -139,49 +140,11 @@ def compare_runs(
 
     target_results = queries.get_results_by_benchmark(run_id, _db())
 
-    comparisons = []
-    all_diffs = []
-
-    all_bms = sorted(set(list(baseline_results.keys()) + list(target_results.keys())))
-
-    for bm in all_bms:
-        bl_times = [
-            r["execution_time_ms"]
-            for r in baseline_results.get(bm, [])
-            if r["execution_time_ms"] is not None
-        ]
-        tgt_times = [
-            r["execution_time_ms"]
-            for r in target_results.get(bm, [])
-            if r["execution_time_ms"] is not None
-        ]
-
-        bl_stats = compute_statistics(bl_times)
-        tgt_stats = compute_statistics(tgt_times)
-
-        entry: dict = {"benchmark": bm, "baseline": bl_stats, "target": tgt_stats}
-
-        if bl_stats["mean"] is not None and tgt_stats["mean"] is not None:
-            diff = compute_diff(bl_stats["mean"], tgt_stats["mean"])
-            all_diffs.append(diff)
-            entry["diff"] = diff
-            entry["change"] = classify_change(diff, threshold)
-        else:
-            entry["diff"] = None
-            entry["change"] = "no_data"
-
-        comparisons.append(entry)
-
-    geomean = compute_geomean_ratio(all_diffs) if all_diffs else 0.0
-
-    return {
-        "baseline_name": bl["id"],
-        "baseline_run_id": bl["run_id"],
-        "target_run_id": run_id,
-        "comparisons": comparisons,
-        "geomean_diff": geomean,
-        "geomean_change": classify_change(geomean, threshold),
-    }
+    result = compare_benchmark_results(baseline_results, target_results, threshold)
+    result["baseline_name"] = bl["id"]
+    result["baseline_run_id"] = bl["run_id"]
+    result["target_run_id"] = run_id
+    return result
 
 
 # ── Testbeds ─────────────────────────────────────────────────────────────────
@@ -214,6 +177,5 @@ def dashboard() -> str:
     return index_html.read_text()
 
 
-# Mount static after the root route so it doesn't shadow it
-if _DIST_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(_DIST_DIR)), name="static")
+# Static files are mounted during the lifespan startup event above
+# so that it works even if web/dist/ didn't exist at import time.

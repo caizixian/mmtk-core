@@ -4,7 +4,7 @@ export interface Stats {
     n: number;
     mean: number | null;
     median: number | null;
-    std: number | null;
+    stdev: number | null;
     ci: number | null;
     min: number | null;
     max: number | null;
@@ -29,7 +29,7 @@ export interface Run {
     invocations: number;
     status: string;
     started_at?: string;
-    completed_at?: string;
+    finished_at?: string;
 }
 
 export interface Baseline {

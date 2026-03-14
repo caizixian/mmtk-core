@@ -11,12 +11,7 @@ from ..db import queries
 from ..db.schema import init_db
 from ..runner.parser import results_to_db_format
 from ..runner.runner import LocalRunner, RunConfig
-from ..stats.analysis import (
-    classify_change,
-    compute_diff,
-    compute_geomean_ratio,
-    compute_statistics,
-)
+from ..stats.comparison import compare_benchmark_results
 
 console = Console()
 
@@ -81,7 +76,10 @@ def compare_cmd(
         raise click.Abort()
 
     baseline_run = queries.get_run(bl["run_id"], db_path)
-    baseline_build = queries.get_build(baseline_run["build_id"], db_path) if baseline_run else None
+    if baseline_run is None:
+        console.print(f"[red]Baseline '{bl['id']}' references a missing run.[/red]")
+        raise click.Abort()
+    baseline_build = queries.get_build(baseline_run["build_id"], db_path)
     baseline_results = queries.get_results_by_benchmark(bl["run_id"], db_path)
 
     if not baseline_results:
@@ -209,6 +207,8 @@ def _print_comparison(
     )
     console.print()
 
+    result = compare_benchmark_results(baseline_results, target_results, threshold)
+
     table = Table()
     table.add_column("Benchmark", style="bold")
     table.add_column("Baseline (ms)", justify="right")
@@ -216,31 +216,13 @@ def _print_comparison(
     table.add_column("Diff", justify="right")
     table.add_column("Status", justify="center")
 
-    all_diffs = []
-
-    # Compare all benchmarks that exist in both
-    all_benchmarks = sorted(set(list(baseline_results.keys()) + list(target_results.keys())))
-
-    for bm in all_benchmarks:
-        bl_times = [
-            r["execution_time_ms"]
-            for r in baseline_results.get(bm, [])
-            if r["execution_time_ms"] is not None
-        ]
-        tgt_times = [
-            r["execution_time_ms"]
-            for r in target_results.get(bm, [])
-            if r["execution_time_ms"] is not None
-        ]
-
-        bl_stats = compute_statistics(bl_times)
-        tgt_stats = compute_statistics(tgt_times)
+    for c in result["comparisons"]:
+        bl_stats = c["baseline"]
+        tgt_stats = c["target"]
+        diff = c["diff"]
+        change = c["change"]
 
         if bl_stats["mean"] is not None and tgt_stats["mean"] is not None:
-            diff = compute_diff(bl_stats["mean"], tgt_stats["mean"])
-            all_diffs.append(diff)
-            change = classify_change(diff, threshold)
-
             bl_str = f"{bl_stats['mean']:.1f} ±{bl_stats['ci']:.1f}"
             tgt_str = f"{tgt_stats['mean']:.1f} ±{tgt_stats['ci']:.1f}"
             diff_str = f"{diff:+.2%}"
@@ -264,18 +246,18 @@ def _print_comparison(
             diff_str = "-"
             status = "[yellow]⚠ no result[/yellow]"
 
-        table.add_row(bm, bl_str, tgt_str, diff_str, status)
+        table.add_row(c["benchmark"], bl_str, tgt_str, diff_str, status)
 
     console.print(table)
 
     # Geometric mean
-    if all_diffs:
-        geomean = compute_geomean_ratio(all_diffs)
-        change = classify_change(geomean, threshold)
+    geomean = result["geomean_diff"]
+    geomean_change = result["geomean_change"]
+    if geomean != 0.0:
         geomean_str = f"{geomean:+.2%}"
-        if change == "faster":
+        if geomean_change == "faster":
             console.print(f"\nGeometric mean: [green]{geomean_str} (improvement)[/green]")
-        elif change == "slower":
+        elif geomean_change == "slower":
             console.print(f"\nGeometric mean: [red]{geomean_str} (regression)[/red]")
         else:
             console.print(f"\nGeometric mean: {geomean_str} (neutral)")

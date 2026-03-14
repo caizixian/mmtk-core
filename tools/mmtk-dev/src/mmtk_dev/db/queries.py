@@ -145,6 +145,17 @@ def complete_run(run_id: str, status: str = "completed", db_path: Path | None = 
         )
 
 
+def update_running_ng_id(
+    run_id: str, running_ng_id: str, db_path: Path | None = None
+) -> None:
+    """Set the running-ng run identifier for a run."""
+    with get_connection(db_path) as conn:
+        conn.execute(
+            "UPDATE run SET running_ng_id = ? WHERE id = ?",
+            (running_ng_id, run_id),
+        )
+
+
 def get_run(run_id: str, db_path: Path | None = None) -> dict | None:
     with get_connection(db_path) as conn:
         row = conn.execute("SELECT * FROM run WHERE id = ?", (run_id,)).fetchone()
@@ -242,6 +253,37 @@ def insert_metrics(result_id: int, metrics: dict[str, float], db_path: Path | No
                VALUES (?, ?, ?)""",
             [(result_id, name, value) for name, value in metrics.items()],
         )
+
+
+def insert_metrics_for_run(
+    run_id: str,
+    metrics_by_benchmark: dict[str, list[dict[str, float]]],
+    db_path: Path | None = None,
+) -> None:
+    """Insert MMTk metrics for a run, matching them to stored result rows.
+
+    Args:
+        run_id: the run these metrics belong to.
+        metrics_by_benchmark: mapping of benchmark name → list of per-invocation
+            metric dicts (one dict per invocation, in order).
+    """
+    with get_connection(db_path) as conn:
+        for benchmark, inv_metrics_list in metrics_by_benchmark.items():
+            # Get result rows for this benchmark, ordered by invocation
+            rows = conn.execute(
+                """SELECT id, invocation FROM result
+                   WHERE run_id = ? AND benchmark = ?
+                   ORDER BY invocation""",
+                (run_id, benchmark),
+            ).fetchall()
+
+            for row, metrics in zip(rows, inv_metrics_list, strict=False):
+                if metrics:
+                    conn.executemany(
+                        """INSERT OR REPLACE INTO metric (result_id, name, value)
+                           VALUES (?, ?, ?)""",
+                        [(row["id"], name, value) for name, value in metrics.items()],
+                    )
 
 
 # ── Baseline ─────────────────────────────────────────────────────────────────

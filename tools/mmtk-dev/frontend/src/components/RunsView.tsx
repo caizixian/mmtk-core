@@ -132,7 +132,7 @@ export default function RunsView(): React.ReactElement {
                                         <TD>{s.mean?.toFixed(1) ?? '-'}</TD>
                                         <TD className="text-gray-400">{s.ci?.toFixed(1) ?? '-'}</TD>
                                         <TD>{s.median?.toFixed(1) ?? '-'}</TD>
-                                        <TD className="text-gray-400">{s.std?.toFixed(2) ?? '-'}</TD>
+                                        <TD className="text-gray-400">{s.stdev?.toFixed(2) ?? '-'}</TD>
                                         <TD>{s.n ?? 0}</TD>
                                     </tr>
                                 );

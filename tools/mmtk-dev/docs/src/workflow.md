@@ -5,10 +5,10 @@ mmtk-dev supports two primary workflows: **individual researcher** use and **CI 
 ## Individual Researcher Workflow
 
 ```
-┌─────────────┐    ┌──────────┐    ┌─────────────┐    ┌───────────┐
-│ Build MMTk  │───▶│ Run      │───▶│ Set         │───▶│ Iterate   │
+┌─────────────┐    ┌───────────┐    ┌─────────────┐    ┌───────────┐
+│ Build MMTk  │───▶│ Run       │───▶│ Set         │───▶│ Iterate   │
 │ (baseline)  │    │ Benchmarks│    │ Baseline    │    │ & Compare │
-└─────────────┘    └──────────┘    └─────────────┘    └───────────┘
+└─────────────┘    └───────────┘    └─────────────┘    └───────────┘
 ```
 
 1. **Build** your baseline version of mmtk-core + mmtk-openjdk
