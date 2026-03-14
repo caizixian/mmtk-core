@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { fetchJSON, formatDiff, diffClass, statusBadge, type Baseline, type Run, type CompareResult } from '../api';
 
 function TH({ children }: { children: React.ReactNode }): React.ReactElement {
@@ -6,11 +7,12 @@ function TH({ children }: { children: React.ReactNode }): React.ReactElement {
 }
 
 export default function CompareView(): React.ReactElement {
+    const [searchParams, setSearchParams] = useSearchParams();
     const [baselines, setBaselines] = useState<Baseline[]>([]);
     const [runs, setRuns] = useState<Run[]>([]);
-    const [selectedBaseline, setSelectedBaseline] = useState('');
-    const [selectedRun, setSelectedRun] = useState('');
-    const [threshold, setThreshold] = useState(0.02);
+    const [selectedBaseline, setSelectedBaseline] = useState(searchParams.get('baseline') || '');
+    const [selectedRun, setSelectedRun] = useState(searchParams.get('run_id') || '');
+    const [threshold, setThreshold] = useState(parseFloat(searchParams.get('threshold') || '0.02'));
     const [result, setResult] = useState<CompareResult | null>(null);
     const [error, setError] = useState<string | null>(null);
 
@@ -24,10 +26,27 @@ export default function CompareView(): React.ReactElement {
             ]);
             setBaselines(bl);
             setRuns(r);
-            const defaultBl = bl.find(b => b.is_default);
-            if (defaultBl) setSelectedBaseline(defaultBl.id);
-            else if (bl.length > 0) setSelectedBaseline(bl[0].id);
-            if (r.length > 0) setSelectedRun(r[0].id);
+            // Use URL params if provided, otherwise defaults
+            const urlBl = searchParams.get('baseline');
+            const urlRun = searchParams.get('run_id');
+            if (urlBl) {
+                setSelectedBaseline(urlBl);
+            } else {
+                const defaultBl = bl.find(b => b.is_default);
+                if (defaultBl) setSelectedBaseline(defaultBl.id);
+                else if (bl.length > 0) setSelectedBaseline(bl[0].id);
+            }
+            if (urlRun) {
+                setSelectedRun(urlRun);
+            } else if (r.length > 0) {
+                setSelectedRun(r[0].id);
+            }
+            // Auto-compare if URL params are set
+            if (urlBl && urlRun) {
+                const t = parseFloat(searchParams.get('threshold') || '0.02');
+                const data = await fetchJSON<CompareResult>(`/compare?baseline=${urlBl}&run_id=${urlRun}&threshold=${t}`);
+                setResult(data);
+            }
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Unknown error');
         }
@@ -36,6 +55,7 @@ export default function CompareView(): React.ReactElement {
     async function doCompare(): Promise<void> {
         if (!selectedBaseline || !selectedRun) return;
         setError(null);
+        setSearchParams({ baseline: selectedBaseline, run_id: selectedRun, threshold: String(threshold) });
         try {
             const data = await fetchJSON<CompareResult>(`/compare?baseline=${selectedBaseline}&run_id=${selectedRun}&threshold=${threshold}`);
             setResult(data);

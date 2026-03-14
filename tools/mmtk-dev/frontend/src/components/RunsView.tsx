@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { fetchJSON, formatTime, type Build, type Run, type BenchmarkResult, type Stats } from '../api';
 
 function TH({ children }: { children: React.ReactNode }): React.ReactElement {
@@ -72,12 +73,13 @@ function MetricsTable({ results }: { results: Record<string, unknown>[] }): Reac
     );
 }
 
-export default function RunsView(): React.ReactElement {
+export default function RunsView({ initialDetailRunId }: { initialDetailRunId?: string }): React.ReactElement {
+    const navigate = useNavigate();
     const [runs, setRuns] = useState<Run[]>([]);
     const [builds, setBuilds] = useState<Record<string, Build>>({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [detailRun, setDetailRun] = useState<string | null>(null);
+    const [detailRun, setDetailRun] = useState<string | null>(initialDetailRunId ?? null);
     const [detailData, setDetailData] = useState<Record<string, BenchmarkResult> | null>(null);
 
     useEffect(() => { loadData(); }, []);
@@ -93,6 +95,10 @@ export default function RunsView(): React.ReactElement {
             buildsData.forEach(b => { buildsMap[b.id] = b; });
             setRuns(runsData);
             setBuilds(buildsMap);
+            // Auto-load detail if initialDetailRunId is set
+            if (initialDetailRunId) {
+                showDetail(initialDetailRunId);
+            }
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Unknown error');
         } finally {
@@ -100,8 +106,9 @@ export default function RunsView(): React.ReactElement {
         }
     }
 
-    async function showDetail(runId: string): Promise<void> {
+    async function showDetail(runId: string, updateUrl = true): Promise<void> {
         setDetailRun(runId);
+        if (updateUrl) navigate(`/runs/${runId}`);
         try {
             const data = await fetchJSON<Record<string, BenchmarkResult>>(`/runs/${runId}/results`);
             setDetailData(data);
@@ -177,7 +184,7 @@ export default function RunsView(): React.ReactElement {
                 <div className="bg-surface-card border border-border rounded-lg overflow-hidden mt-6">
                     <div className="flex justify-between items-center px-5 py-4 border-b border-border">
                         <h3 className="text-[15px] font-semibold">Run {detailRun}</h3>
-                        <button onClick={() => { setDetailRun(null); setDetailData(null); }}
+                        <button onClick={() => { setDetailRun(null); setDetailData(null); navigate('/runs'); }}
                             className="text-text-muted hover:text-text-primary px-2 py-1 rounded hover:bg-surface-hover transition-colors">✕</button>
                     </div>
                     <table className="w-full text-[13px]">

@@ -168,14 +168,23 @@ def health():
 _DIST_DIR = Path(__file__).parent.parent / "web" / "dist"
 
 
-@app.get("/", response_class=HTMLResponse)
-def dashboard() -> str:
-    """Serve the web dashboard."""
+@app.get("/{path:path}", response_class=HTMLResponse)
+def spa_fallback(path: str):
+    """Serve static files or fall back to index.html for react-router."""
+    # Serve actual static files if they exist (JS, CSS, etc.)
+    if path.startswith("static/"):
+        file_path = _DIST_DIR / path.removeprefix("static/")
+        if file_path.exists() and file_path.is_file():
+            from fastapi.responses import FileResponse
+
+            return FileResponse(file_path)
+
     index_html = _DIST_DIR / "index.html"
     if not index_html.exists():
-        return "<h1>Frontend not built</h1><p>Run <code>mmtk-dev server</code> or <code>cd frontend && npm run build</code></p>"
+        return "<h1>Frontend not built</h1><p>Run <code>mmtk-dev server</code> or <code>cd frontend &amp;&amp; npm run build</code></p>"
     return index_html.read_text()
 
 
 # Static files are mounted during the lifespan startup event above
 # so that it works even if web/dist/ didn't exist at import time.
+
