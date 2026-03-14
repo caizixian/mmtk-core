@@ -10,10 +10,13 @@ dependencies = [
     "pyyaml>=6.0",
     "rich>=13.0",
     "httpx>=0.25",
-    "running-ng>=0.5.13",
+    "running-ng>=0.4.7",
     "numpy>=1.24",
     "scipy>=1.10",
 ]
+
+[dependency-groups]
+dev = ["pytest>=7.0"]
 
 [project.scripts]
 mmtk-dev = "mmtk_dev.cli.cli:main"
@@ -21,3 +24,7 @@ mmtk-dev = "mmtk_dev.cli.cli:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[[tool.uv.index]]
+url = "https://pypi.org/simple"
+default = true
