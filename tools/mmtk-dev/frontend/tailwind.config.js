@@ -10,14 +10,17 @@ module.exports = {
       },
       colors: {
         surface: {
-          DEFAULT: '#161822',
-          card: '#1c1f2e',
-          hover: '#252840',
+          DEFAULT: 'var(--color-surface)',
+          card: 'var(--color-surface-card)',
+          hover: 'var(--color-surface-hover)',
         },
         border: {
-          DEFAULT: '#2a2d42',
-          focus: '#5b6ef5',
+          DEFAULT: 'var(--color-border)',
+          focus: 'var(--color-border-focus)',
         },
+        'text-primary': 'var(--color-text-primary)',
+        'text-secondary': 'var(--color-text-secondary)',
+        'text-muted': 'var(--color-text-muted)',
       },
     },
   },

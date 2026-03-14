@@ -27,6 +27,7 @@ export interface Run {
     build_id: string;
     testbed_id: string;
     invocations: number;
+    heap_multiplier: number | null;
     status: string;
     started_at?: string;
     finished_at?: string;
@@ -89,12 +90,12 @@ export function formatDiff(diff: number | null): string {
 export function diffClass(change: string): string {
     if (change === 'faster') return 'text-emerald-400';
     if (change === 'slower') return 'text-red-400';
-    return 'text-gray-500';
+    return 'text-text-muted';
 }
 
 export function statusBadge(change: string): { text: string; cls: string } {
     if (change === 'faster') return { text: '✅ faster', cls: 'bg-emerald-400/10 text-emerald-400' };
     if (change === 'slower') return { text: '❌ slower', cls: 'bg-red-400/10 text-red-400' };
     if (change === 'no_data') return { text: '⚠ no data', cls: 'bg-yellow-400/10 text-yellow-400' };
-    return { text: '➡️ neutral', cls: 'bg-indigo-500/10 text-gray-400' };
+    return { text: '➡️ neutral', cls: 'bg-indigo-500/10 text-text-secondary' };
 }

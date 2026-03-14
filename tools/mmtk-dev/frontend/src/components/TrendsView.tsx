@@ -57,10 +57,11 @@ export default function TrendsView(): React.ReactElement {
 
         ctx.clearRect(0, 0, w, h);
 
+        // Read colors from CSS variables for theme-awareness
+        const style = getComputedStyle(document.documentElement);
         const INDIGO = '#818cf8';
-        const GRID = '#2a2d42';
-        const TEXT = '#8b8fa8';
-        const BG = '#1c1f2e';
+        const GRID = style.getPropertyValue('--chart-grid').trim() || '#2a2d42';
+        const TEXT = style.getPropertyValue('--chart-text').trim() || '#8b8fa8';
 
         const data = [...trendsData[bm]].reverse().filter(p => p.mean != null);
         if (data.length === 0) return;
@@ -114,6 +115,7 @@ export default function TrendsView(): React.ReactElement {
         ctx.stroke();
 
         // Points
+        const BG = style.getPropertyValue('--chart-bg').trim() || '#1c1f2e';
         data.forEach((d, i) => {
             const x = xScale(i), y = yScale(d.mean!);
             ctx.fillStyle = BG;
@@ -154,14 +156,14 @@ export default function TrendsView(): React.ReactElement {
         <div>
             <div className="mb-6">
                 <h2 className="text-2xl font-bold tracking-tight">Performance Trends</h2>
-                <p className="text-sm text-gray-400 mt-1">Execution time trends across recent runs</p>
+                <p className="text-sm text-text-secondary mt-1">Execution time trends across recent runs</p>
             </div>
 
             <div className="flex items-end gap-4 mb-6">
                 <div className="flex flex-col gap-1.5">
-                    <label className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Benchmark</label>
+                    <label className="text-[11px] font-semibold text-text-muted uppercase tracking-wider">Benchmark</label>
                     <select value={selected} onChange={e => setSelected(e.target.value)}
-                        className="bg-surface-card border border-border rounded px-3 py-2 text-[13px] font-mono text-gray-200 min-w-[180px] focus:outline-none focus:border-border-focus transition-colors">
+                        className="bg-surface-card border border-border rounded px-3 py-2 text-[13px] font-mono text-text-primary min-w-[180px] focus:outline-none focus:border-border-focus transition-colors">
                         <option value="">Select a benchmark...</option>
                         {benchmarks.map(bm => <option key={bm} value={bm}>{bm}</option>)}
                     </select>
@@ -171,7 +173,7 @@ export default function TrendsView(): React.ReactElement {
             <div className="bg-surface-card border border-border rounded-lg p-5 relative">
                 <canvas ref={canvasRef} className="w-full" height={350} />
                 {!selected && (
-                    <div className="absolute inset-0 flex items-center justify-center text-gray-500 italic">
+                    <div className="absolute inset-0 flex items-center justify-center text-text-muted italic">
                         Select a benchmark to view its performance trend
                     </div>
                 )}

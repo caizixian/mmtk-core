@@ -20,15 +20,23 @@ Options:
 - `--skip-build` — Skip the frontend build step (useful if already built)
 - `--db <path>` — Use a custom database path
 
+## Light / Dark Mode
+
+The dashboard auto-detects your system's color scheme (light or dark) on first load. Use the sun/moon toggle button at the bottom of the sidebar to switch manually.
+
+| Light Mode | Dark Mode |
+|:---:|:---:|
+| ![Runs — light mode](./images/dashboard-runs-light.png) | ![Runs — dark mode](./images/dashboard-runs-dark.png) |
+
 ## Dashboard Views
 
 ### Runs
 
-The main view lists all benchmark runs with their run ID, build commit, GC plan, invocation count, status, and start time. Click **Details** to expand per-benchmark statistics.
+The main view lists all benchmark runs with their run ID, build commit, GC plan, heap multiplier, invocation count, status, and start time. Click **Details** to expand per-benchmark statistics.
 
 ![Runs view showing a completed benchmark run](./images/dashboard-runs.png)
 
-The detail modal shows per-benchmark statistics including mean execution time, confidence interval, median, standard deviation, and invocation count.
+The detail modal shows per-benchmark statistics including mean execution time, confidence interval, median, standard deviation, and invocation count. When probes are enabled, MMTk statistics (GC count, STW time, etc.) are displayed below the timing table.
 
 ![Run details showing per-benchmark statistics](./images/dashboard-run-details.png)
 
@@ -42,13 +50,21 @@ The results table shows per-benchmark baseline vs. current times, percentage dif
 
 ### Trends
 
-Track performance over time for a specific benchmark. Select a benchmark from the dropdown to see how execution times evolve across runs.
+Track performance over time for a specific benchmark. Select a benchmark from the dropdown to see how execution times evolve across runs. The chart renders with a CI (confidence interval) band around the trend line.
 
 ### Baselines
 
 View and manage named baselines. Each baseline is associated with a run ID and can be marked as the default for comparisons.
 
 ![Baselines view](./images/dashboard-baselines.png)
+
+### Testbeds
+
+View information about the machines used for benchmarking. Each testbed shows:
+- **CPU Model** — e.g., AMD EPYC 7B13
+- **CPU Cores** — number of CPU cores
+- **Memory** — total RAM in GB
+
 
 ## API Endpoints
 

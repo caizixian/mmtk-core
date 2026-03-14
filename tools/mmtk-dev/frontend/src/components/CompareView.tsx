@@ -1,6 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { fetchJSON, formatDiff, diffClass, statusBadge, type Baseline, type Run, type CompareResult } from '../api';
 
+function TH({ children }: { children: React.ReactNode }): React.ReactElement {
+    return <th className="px-4 py-3 text-left text-[11px] font-semibold text-text-muted uppercase tracking-wider border-b border-border">{children}</th>;
+}
+
 export default function CompareView(): React.ReactElement {
     const [baselines, setBaselines] = useState<Baseline[]>([]);
     const [runs, setRuns] = useState<Run[]>([]);
@@ -44,14 +48,14 @@ export default function CompareView(): React.ReactElement {
         <div>
             <div className="mb-6">
                 <h2 className="text-2xl font-bold tracking-tight">Compare</h2>
-                <p className="text-sm text-gray-400 mt-1">Compare a run against a baseline</p>
+                <p className="text-sm text-text-secondary mt-1">Compare a run against a baseline</p>
             </div>
 
             <div className="flex items-end gap-4 mb-6 flex-wrap">
                 <div className="flex flex-col gap-1.5">
-                    <label className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Baseline</label>
+                    <label className="text-[11px] font-semibold text-text-muted uppercase tracking-wider">Baseline</label>
                     <select value={selectedBaseline} onChange={e => setSelectedBaseline(e.target.value)}
-                        className="bg-surface-card border border-border rounded px-3 py-2 text-[13px] font-mono text-gray-200 min-w-[180px] focus:outline-none focus:border-border-focus transition-colors">
+                        className="bg-surface-card border border-border rounded px-3 py-2 text-[13px] font-mono text-text-primary min-w-[180px] focus:outline-none focus:border-border-focus transition-colors">
                         {baselines.length === 0 && <option value="">No baselines</option>}
                         {baselines.map(bl => (
                             <option key={bl.id} value={bl.id}>{bl.id}{bl.is_default ? ' ★' : ''}</option>
@@ -59,9 +63,9 @@ export default function CompareView(): React.ReactElement {
                     </select>
                 </div>
                 <div className="flex flex-col gap-1.5">
-                    <label className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Target Run</label>
+                    <label className="text-[11px] font-semibold text-text-muted uppercase tracking-wider">Target Run</label>
                     <select value={selectedRun} onChange={e => setSelectedRun(e.target.value)}
-                        className="bg-surface-card border border-border rounded px-3 py-2 text-[13px] font-mono text-gray-200 min-w-[180px] focus:outline-none focus:border-border-focus transition-colors">
+                        className="bg-surface-card border border-border rounded px-3 py-2 text-[13px] font-mono text-text-primary min-w-[180px] focus:outline-none focus:border-border-focus transition-colors">
                         {runs.length === 0 && <option value="">No runs</option>}
                         {runs.map(r => (
                             <option key={r.id} value={r.id}>{r.id}</option>
@@ -69,9 +73,9 @@ export default function CompareView(): React.ReactElement {
                     </select>
                 </div>
                 <div className="flex flex-col gap-1.5">
-                    <label className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Threshold</label>
+                    <label className="text-[11px] font-semibold text-text-muted uppercase tracking-wider">Threshold</label>
                     <input type="number" value={threshold} onChange={e => setThreshold(parseFloat(e.target.value) || 0.02)}
-                        className="bg-surface-card border border-border rounded px-3 py-2 text-[13px] font-mono text-gray-200 w-20 focus:outline-none focus:border-border-focus transition-colors"
+                        className="bg-surface-card border border-border rounded px-3 py-2 text-[13px] font-mono text-text-primary w-20 focus:outline-none focus:border-border-focus transition-colors"
                         step="0.01" min="0" max="1" />
                 </div>
                 <button onClick={doCompare}
@@ -91,7 +95,7 @@ export default function CompareView(): React.ReactElement {
                             ? 'bg-emerald-400/10 text-emerald-400'
                             : result.geomean_change === 'slower'
                             ? 'bg-red-400/10 text-red-400'
-                            : 'bg-indigo-500/10 text-gray-400';
+                            : 'bg-indigo-500/10 text-text-secondary';
                         const label = result.geomean_change === 'faster' ? 'improvement'
                             : result.geomean_change === 'slower' ? 'regression' : 'neutral';
                         const icon = result.geomean_change === 'faster' ? '✅'
@@ -105,11 +109,7 @@ export default function CompareView(): React.ReactElement {
                     <table className="w-full text-[13px]">
                         <thead className="bg-surface">
                             <tr>
-                                <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider border-b border-border">Benchmark</th>
-                                <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider border-b border-border">Baseline (ms)</th>
-                                <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider border-b border-border">Target (ms)</th>
-                                <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider border-b border-border">Diff</th>
-                                <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider border-b border-border">Status</th>
+                                <TH>Benchmark</TH><TH>Baseline (ms)</TH><TH>Target (ms)</TH><TH>Diff</TH><TH>Status</TH>
                             </tr>
                         </thead>
                         <tbody>
