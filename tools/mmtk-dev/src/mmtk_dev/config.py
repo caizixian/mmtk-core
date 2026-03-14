@@ -7,30 +7,29 @@ from pathlib import Path
 CONFIG_FILENAME = ".mmtk-dev.toml"
 
 # DaCapo Chopin (23.11) minheap values (MB)
-# TODO: These are inaccurate rough estimates. Extract real values from DaCapo's
-# nominal stats mode: java -jar dacapo.jar -p <benchmark>
 DACAPO_MINHEAP: dict[str, int] = {
-    "avrora": 32,
-    "batik": 64,
-    "biojava": 128,
-    "cassandra": 256,
-    "eclipse": 256,
-    "fop": 32,
-    "graphchi": 256,
-    "h2": 512,
-    "h2o": 256,
-    "jython": 64,
-    "kafka": 128,
-    "luindex": 32,
-    "lusearch": 64,
-    "pmd": 128,
-    "spring": 128,
-    "sunflow": 64,
-    "tomcat": 64,
-    "tradebeans": 256,
-    "tradesoap": 256,
-    "xalan": 64,
-    "zxing": 32,
+    "avrora": 5,
+    "batik": 175,
+    "biojava": 93,
+    "cassandra": 174,
+    "eclipse": 135,
+    "fop": 13,
+    "graphchi": 175,
+    "h2": 681,
+    "h2o": 72,
+    "jme": 29
+    "jython": 31,
+    "kafka": 208,
+    "luindex": 31,
+    "lusearch": 21,
+    "pmd": 269,
+    "spring": 70,
+    "sunflow": 31,
+    "tomcat": 24,
+    "tradebeans": 141,
+    "tradesoap": 115,
+    "xalan": 17,
+    "zxing": 127,
 }
 
 # All supported DaCapo Chopin benchmarks
