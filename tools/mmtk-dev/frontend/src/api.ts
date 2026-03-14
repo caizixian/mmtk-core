@@ -64,7 +64,7 @@ export interface BenchmarkResult {
 }
 
 export interface TrendPoint {
-    runId: string;
+    run_id: string;
     mean: number | null;
     ci: number | null;
     date: string | null;

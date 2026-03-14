@@ -160,6 +160,15 @@ def list_testbeds():
     return queries.list_testbeds(_db())
 
 
+# ── Trends ───────────────────────────────────────────────────────────────────
+
+
+@app.get("/api/trends")
+def get_trends(limit: int = Query(20, ge=1, le=100)):
+    """Batch endpoint: per-benchmark execution time trends across recent runs."""
+    return queries.get_trends(_db(), limit=limit)
+
+
 # ── Health ───────────────────────────────────────────────────────────────────
 
 
@@ -170,7 +179,7 @@ def health():
 
 # ── Static Files & Dashboard ─────────────────────────────────────────────────
 
-_DIST_DIR = Path(__file__).parent.parent / "web" / "dist"
+_DIST_DIR = Path(__file__).resolve().parent.parent.parent.parent / "frontend" / "dist"
 
 
 @app.get("/{path:path}", response_class=HTMLResponse)

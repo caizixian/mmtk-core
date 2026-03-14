@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { fetchJSON, type Run, type BenchmarkResult, type TrendPoint } from '../api';
+import { fetchJSON, type TrendPoint } from '../api';
 
 export default function TrendsView(): React.ReactElement {
     const [benchmarks, setBenchmarks] = useState<string[]>([]);
@@ -11,27 +11,8 @@ export default function TrendsView(): React.ReactElement {
 
     async function loadData(): Promise<void> {
         try {
-            const runs = await fetchJSON<Run[]>('/runs');
-            const bmSet = new Set<string>();
-            const data: Record<string, TrendPoint[]> = {};
-
-            for (const run of runs.slice(0, 20)) {
-                try {
-                    const results = await fetchJSON<Record<string, BenchmarkResult>>(`/runs/${run.id}/results`);
-                    for (const [bm, info] of Object.entries(results)) {
-                        bmSet.add(bm);
-                        if (!data[bm]) data[bm] = [];
-                        data[bm].push({
-                            runId: run.id,
-                            mean: info.stats.mean,
-                            ci: info.stats.ci,
-                            date: run.started_at ?? null,
-                        });
-                    }
-                } catch { /* skip */ }
-            }
-
-            setBenchmarks([...bmSet].sort());
+            const data = await fetchJSON<Record<string, TrendPoint[]>>('/trends');
+            setBenchmarks(Object.keys(data).sort());
             setTrendsData(data);
         } catch { /* silently fail */ }
     }
@@ -137,7 +118,7 @@ export default function TrendsView(): React.ReactElement {
             ctx.save();
             ctx.translate(xScale(i), h - pad.bottom + 16);
             ctx.rotate(-Math.PI / 6);
-            ctx.fillText(d.runId.slice(0, 8), 0, 0);
+            ctx.fillText(d.run_id.slice(0, 8), 0, 0);
             ctx.restore();
         });
 

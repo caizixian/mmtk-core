@@ -8,7 +8,6 @@ interface Testbed {
     cpu_cores: number;
     memory_gb: number;
     created_at: string;
-    updated_at: string;
 }
 
 function InfoCard({ label, value, sub }: { label: string; value: string; sub?: string }): React.ReactElement {
@@ -76,8 +75,8 @@ export default function TestbedsView(): React.ReactElement {
                             value={tb.memory_gb ? `${tb.memory_gb.toFixed(1)} GB` : 'N/A'}
                         />
                         <InfoCard
-                            label="Last Updated"
-                            value={formatTime(tb.updated_at)}
+                            label="Registered"
+                            value={formatTime(tb.created_at)}
                         />
                     </div>
                 </div>

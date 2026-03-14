@@ -346,3 +346,57 @@ def list_baselines(db_path: Path | None = None) -> list[dict]:
     with get_connection(db_path) as conn:
         rows = conn.execute("SELECT * FROM baseline ORDER BY created_at DESC").fetchall()
         return [dict(r) for r in rows]
+
+
+def get_trends(
+    db_path: Path | None = None,
+    limit: int = 20,
+) -> dict[str, list[dict]]:
+    """Get per-benchmark execution time trends across recent runs.
+
+    Returns a dict keyed by benchmark name, each containing a list of
+    trend points (run_id, mean, ci, date) ordered from oldest to newest.
+    """
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            """SELECT r.run_id, r.benchmark,
+                      r.execution_time_ms, run.started_at
+               FROM result r
+               JOIN run ON r.run_id = run.id
+               WHERE run.status = 'completed'
+                 AND r.execution_time_ms IS NOT NULL
+                 AND run.id IN (
+                     SELECT id FROM run
+                     WHERE status = 'completed'
+                     ORDER BY started_at DESC
+                     LIMIT ?
+                 )
+               ORDER BY run.started_at ASC, r.benchmark""",
+            (limit,),
+        ).fetchall()
+
+    # Group by (run_id, benchmark) then compute stats per group
+    from collections import defaultdict
+
+    groups: dict[tuple[str, str], list[float]] = defaultdict(list)
+    dates: dict[str, str | None] = {}
+    for row in rows:
+        r = dict(row)
+        key = (r["run_id"], r["benchmark"])
+        groups[key].append(r["execution_time_ms"])
+        dates[r["run_id"]] = r["started_at"]
+
+    # Build trend points per benchmark
+    from ..stats.analysis import compute_statistics
+
+    trends: dict[str, list[dict]] = defaultdict(list)
+    for (run_id, bm), times in groups.items():
+        stats = compute_statistics(times)
+        trends[bm].append({
+            "run_id": run_id,
+            "mean": stats["mean"],
+            "ci": stats["ci"],
+            "date": dates.get(run_id),
+        })
+
+    return dict(trends)
