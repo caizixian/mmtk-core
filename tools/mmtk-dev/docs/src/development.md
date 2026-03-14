@@ -113,7 +113,7 @@ npm install
 # 'uv run mmtk-dev server --skip-build' on port 8080 separately
 npm run dev
 
-# Production build (outputs to src/mmtk_dev/web/dist/)
+# Production build (outputs to frontend/dist/)
 npm run build
 ```
 
