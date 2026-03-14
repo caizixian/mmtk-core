@@ -7,6 +7,7 @@
 - [Getting Started](./getting-started.md)
 - [Configuration](./configuration.md)
 - [CLI Reference](./cli-reference.md)
+- [Web Dashboard](./web-dashboard.md)
 - [API Reference](./api-reference.md)
 
 # Concepts
