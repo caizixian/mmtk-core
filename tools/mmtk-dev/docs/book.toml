@@ -6,4 +6,3 @@ language = "en"
 
 [output.html]
 git-repository-url = "https://github.com/mmtk/mmtk-core/tree/master/tools/mmtk-dev/docs"
-git-repository-icon = "fa-github"

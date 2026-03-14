@@ -1,6 +1,8 @@
 """FastAPI REST API for mmtk-dev."""
 
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -15,7 +17,20 @@ from ..stats.analysis import (
     compute_statistics,
 )
 
-app = FastAPI(title="MMTk Dev API", version="0.1.0")
+
+def _db() -> Path | None:
+    """Get the database path from environment or default."""
+    env = os.environ.get("MMTK_DEV_DB_PATH")
+    return Path(env) if env else None
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    init_db(_db())
+    yield
+
+
+app = FastAPI(title="MMTk Dev API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,12 +39,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-def _db() -> Path | None:
-    """Get the database path from environment or default."""
-    env = os.environ.get("MMTK_DEV_DB_PATH")
-    return Path(env) if env else None
 
 
 # ── Builds ───────────────────────────────────────────────────────────────────
@@ -187,8 +196,3 @@ def list_testbeds():
 @app.get("/api/health")
 def health():
     return {"status": "ok", "version": "0.1.0"}
-
-
-@app.on_event("startup")
-def startup():
-    init_db(_db())
