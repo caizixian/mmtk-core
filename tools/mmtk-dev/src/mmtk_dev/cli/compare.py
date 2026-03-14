@@ -9,7 +9,7 @@ from rich.table import Table
 from ..config import WorkspaceConfig
 from ..db import queries
 from ..db.schema import init_db
-from ..stats.comparison import compare_benchmark_results
+from ..stats.comparison import compare_benchmark_results, compare_metric_values
 from ._orchestrate import execute_run, register_environment, resolve_defaults
 
 console = Console()
@@ -42,6 +42,10 @@ console = Console()
 @click.option(
     "--run-id", default=None, help="Compare an existing run instead of running new benchmarks"
 )
+@click.option(
+    "--metric", default=None,
+    help="Comma-separated metric names to compare (e.g. time.stw,time.other)",
+)
 @click.option("--db", default=None, type=click.Path(), help="Path to SQLite database")
 def compare_cmd(
     baseline,
@@ -53,6 +57,7 @@ def compare_cmd(
     profile,
     threshold,
     run_id,
+    metric,
     db,
 ):
     """Compare current build performance against a baseline.
@@ -154,6 +159,39 @@ def compare_cmd(
         threshold=threshold,
     )
 
+    # Print metric comparisons if requested
+    if metric:
+        if metric.strip().lower() == "all":
+            metric_names = queries.list_available_metrics(bl["run_id"], db_path)
+            if not metric_names:
+                console.print("\n[yellow]⚠ No metrics available for this run.[/yellow]")
+        else:
+            metric_names = [m.strip() for m in metric.split(",")]
+        for metric_name in metric_names:
+            bl_metric_vals = queries.get_metric_values_by_benchmark(
+                bl["run_id"], metric_name, db_path
+            )
+            tgt_metric_vals = queries.get_metric_values_by_benchmark(
+                run_id, metric_name, db_path
+            )
+            if not bl_metric_vals and not tgt_metric_vals:
+                console.print(
+                    f"\n[yellow]⚠ No data for metric '{metric_name}' in either run.[/yellow]"
+                )
+                # Show available metrics
+                available = queries.list_available_metrics(bl["run_id"], db_path)
+                if available:
+                    console.print(
+                        f"  Available metrics: {', '.join(available)}"
+                    )
+                continue
+            _print_metric_comparison(
+                metric_name=metric_name,
+                baseline_values=bl_metric_vals,
+                target_values=tgt_metric_vals,
+                threshold=threshold,
+            )
+
 
 def _print_comparison(
     baseline_name: str,
@@ -227,3 +265,72 @@ def _print_comparison(
             console.print(f"\nGeometric mean: [red]{geomean_str} (regression)[/red]")
         else:
             console.print(f"\nGeometric mean: {geomean_str} (neutral)")
+
+
+def _print_metric_comparison(
+    metric_name: str,
+    baseline_values: dict[str, list[float]],
+    target_values: dict[str, list[float]],
+    threshold: float,
+):
+    """Print a comparison table for a specific metric."""
+    result = compare_metric_values(baseline_values, target_values, metric_name, threshold)
+
+    console.print(f"\n[bold]Metric: {metric_name}[/bold]")
+
+    # Determine unit suffix based on metric name
+    unit = "ms" if metric_name.startswith("time.") else ""
+    unit_label = f" ({unit})" if unit else ""
+
+    table = Table()
+    table.add_column("Benchmark", style="bold")
+    table.add_column(f"Baseline{unit_label}", justify="right")
+    table.add_column(f"Current{unit_label}", justify="right")
+    table.add_column("Diff", justify="right")
+    table.add_column("Status", justify="center")
+
+    for c in result["comparisons"]:
+        bl_stats = c["baseline"]
+        tgt_stats = c["target"]
+        diff = c["diff"]
+        change = c["change"]
+
+        if bl_stats["mean"] is not None and tgt_stats["mean"] is not None:
+            bl_str = f"{bl_stats['mean']:.1f} ±{bl_stats['ci']:.1f}"
+            tgt_str = f"{tgt_stats['mean']:.1f} ±{tgt_stats['ci']:.1f}"
+            diff_str = f"{diff:+.2%}"
+
+            if change == "faster":
+                status = "[green]✅ faster[/green]"
+                diff_str = f"[green]{diff_str}[/green]"
+            elif change == "slower":
+                status = "[red]❌ slower[/red]"
+                diff_str = f"[red]{diff_str}[/red]"
+            else:
+                status = "➡️  neutral"
+        elif bl_stats["mean"] is None:
+            bl_str = "[dim]no data[/dim]"
+            tgt_str = f"{tgt_stats['mean']:.1f}" if tgt_stats["mean"] else "-"
+            diff_str = "-"
+            status = "[yellow]⚠ no baseline[/yellow]"
+        else:
+            bl_str = f"{bl_stats['mean']:.1f}"
+            tgt_str = "[dim]no data[/dim]"
+            diff_str = "-"
+            status = "[yellow]⚠ no result[/yellow]"
+
+        table.add_row(c["benchmark"], bl_str, tgt_str, diff_str, status)
+
+    console.print(table)
+
+    geomean = result["geomean_diff"]
+    geomean_change = result["geomean_change"]
+    if geomean != 0.0:
+        geomean_str = f"{geomean:+.2%}"
+        if geomean_change == "faster":
+            console.print(f"  Geometric mean: [green]{geomean_str} (improvement)[/green]")
+        elif geomean_change == "slower":
+            console.print(f"  Geometric mean: [red]{geomean_str} (regression)[/red]")
+        else:
+            console.print(f"  Geometric mean: {geomean_str} (neutral)")
+

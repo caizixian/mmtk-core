@@ -46,6 +46,12 @@ Compare a run against a named baseline. Select a baseline and target run from th
 
 The results table shows per-benchmark baseline vs. current times, percentage diff, and a status badge (✅ faster, ❌ slower, ➡️ neutral). A geometric mean summary is displayed at the top.
 
+#### Metric Comparison
+
+Use the **Metric** dropdown to compare additional metrics beyond execution time:
+- Select a specific metric (e.g. `time.stw`) to see a second comparison table for that metric.
+- Select **All** to see comparison tables for every available metric.
+
 ![Compare view showing baseline vs current](./images/dashboard-compare.png)
 
 ### Trends
@@ -80,7 +86,9 @@ The server exposes a REST API at `/api/`:
 | `/api/runs/{id}/results` | GET | Get per-benchmark results with statistics |
 | `/api/baselines` | GET | List baselines |
 | `/api/baselines/{name}` | GET | Get baseline details |
-| `/api/compare` | GET | Compare runs (`?baseline=&run_id=&threshold=`) |
+| `/api/compare` | GET | Compare runs (`?baseline=&run_id=&threshold=&metric=`) |
+| `/api/runs/{id}/metrics` | GET | List available metric names for a run |
+| `/api/trends` | GET | Per-benchmark time trends (`?limit=&metric=`) |
 | `/api/testbeds` | GET | List testbeds |
 
 ## Development

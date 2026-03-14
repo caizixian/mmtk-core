@@ -46,6 +46,7 @@ mmtk-dev compare [OPTIONS]
 | `-b, --baseline` | Baseline name to compare against | Default baseline |
 | `--benchmarks` | Benchmarks to run | Same as baseline |
 | `--run-id` | Compare existing run (skip running) | |
+| `--metric` | Metric(s) to compare: name, comma-separated names, or `all` | |
 | `--threshold` | Threshold for significant change | `0.02` (2%) |
 
 ## `mmtk-dev ci`

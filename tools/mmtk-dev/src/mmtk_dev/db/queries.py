@@ -307,6 +307,45 @@ def insert_metrics_for_run(
                     )
 
 
+def get_metric_values_by_benchmark(
+    run_id: str, metric_name: str, db_path: Path | None = None
+) -> dict[str, list[float]]:
+    """Get values for a specific metric grouped by benchmark.
+
+    Returns a dict mapping benchmark name → list of metric values (one per invocation).
+    This is the metric equivalent of get_results_by_benchmark for comparison.
+    """
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            """SELECT r.benchmark, m.value
+               FROM metric m
+               JOIN result r ON m.result_id = r.id
+               WHERE r.run_id = ? AND m.name = ?
+               ORDER BY r.benchmark, r.invocation""",
+            (run_id, metric_name),
+        ).fetchall()
+    grouped: dict[str, list[float]] = defaultdict(list)
+    for row in rows:
+        val = row["value"]
+        if math.isfinite(val):
+            grouped[row["benchmark"]].append(val)
+    return dict(grouped)
+
+
+def list_available_metrics(run_id: str, db_path: Path | None = None) -> list[str]:
+    """List distinct metric names stored for a run."""
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            """SELECT DISTINCT m.name
+               FROM metric m
+               JOIN result r ON m.result_id = r.id
+               WHERE r.run_id = ?
+               ORDER BY m.name""",
+            (run_id,),
+        ).fetchall()
+    return [row["name"] for row in rows]
+
+
 # ── Baseline ─────────────────────────────────────────────────────────────────
 
 
@@ -392,6 +431,60 @@ def get_trends(
     trends: dict[str, list[dict]] = defaultdict(list)
     for (run_id, bm), times in groups.items():
         stats = compute_statistics(times)
+        trends[bm].append({
+            "run_id": run_id,
+            "mean": stats["mean"],
+            "ci": stats["ci"],
+            "date": dates.get(run_id),
+        })
+
+    return dict(trends)
+
+
+def get_metric_trends(
+    db_path: Path | None = None,
+    metric_name: str = "time.stw",
+    limit: int = 20,
+) -> dict[str, list[dict]]:
+    """Get per-benchmark metric trends across recent runs.
+
+    Similar to get_trends but for a specific metric from the metric table.
+    Returns a dict keyed by benchmark name, each containing a list of
+    trend points (run_id, mean, ci, date) ordered from oldest to newest.
+    """
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            """SELECT r.run_id, r.benchmark, m.value, run.started_at
+               FROM metric m
+               JOIN result r ON m.result_id = r.id
+               JOIN run ON r.run_id = run.id
+               WHERE run.status = 'completed'
+                 AND m.name = ?
+                 AND run.id IN (
+                     SELECT id FROM run
+                     WHERE status = 'completed'
+                     ORDER BY started_at DESC
+                     LIMIT ?
+                 )
+               ORDER BY run.started_at ASC, r.benchmark""",
+            (metric_name, limit),
+        ).fetchall()
+
+    groups: dict[tuple[str, str], list[float]] = defaultdict(list)
+    dates: dict[str, str | None] = {}
+    for row in rows:
+        r = dict(row)
+        key = (r["run_id"], r["benchmark"])
+        val = r["value"]
+        if math.isfinite(val):
+            groups[key].append(val)
+        dates[r["run_id"]] = r["started_at"]
+
+    from ..stats.analysis import compute_statistics
+
+    trends: dict[str, list[dict]] = defaultdict(list)
+    for (run_id, bm), values in groups.items():
+        stats = compute_statistics(values)
         trends[bm].append({
             "run_id": run_id,
             "mean": stats["mean"],

@@ -31,6 +31,7 @@ GET /api/builds/{build_id}         # Get build details
 GET /api/runs                      # List runs (?limit=50&build_id=...&testbed_id=...)
 GET /api/runs/{run_id}             # Get run details
 GET /api/runs/{run_id}/results     # Get results with computed statistics
+GET /api/runs/{run_id}/metrics     # List available metric names
 ```
 
 ### Baselines
@@ -50,8 +51,19 @@ Query parameters:
 - `baseline` — baseline name (default: default baseline)
 - `run_id` — target run ID (default: latest run)
 - `threshold` — significance threshold (default: 0.02)
+- `metric` — metric name to compare (e.g. `time.stw`), or `all` for all metrics
 
-Returns per-benchmark comparisons with diffs and a geometric mean.
+Returns per-benchmark comparisons with diffs and a geometric mean. When `metric` is specified, includes a `metric_comparisons` list with the same structure for each requested metric.
+
+### Trends
+
+```
+GET /api/trends                    # Execution time trends (?limit=20&metric=time.stw)
+```
+
+Query parameters:
+- `limit` — number of recent runs (default: 20)
+- `metric` — optional metric name for metric-specific trends
 
 ### Testbeds
 

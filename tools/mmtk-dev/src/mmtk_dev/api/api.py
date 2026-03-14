@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from ..db import queries
 from ..db.schema import init_db
 from ..stats.analysis import compute_statistics
-from ..stats.comparison import compare_benchmark_results
+from ..stats.comparison import compare_benchmark_results, compare_metric_values
 
 
 def _db() -> Path | None:
@@ -103,6 +103,15 @@ def get_run_results(run_id: str):
     return summary
 
 
+@app.get("/api/runs/{run_id}/metrics")
+def get_run_metrics(run_id: str):
+    """List available metric names for a run."""
+    run = queries.get_run(run_id, _db())
+    if run is None:
+        raise HTTPException(404, "Run not found")
+    return queries.list_available_metrics(run_id, _db())
+
+
 # ── Baselines ────────────────────────────────────────────────────────────────
 
 
@@ -127,6 +136,7 @@ def compare_runs(
     baseline: str | None = None,
     run_id: str | None = None,
     threshold: float = 0.02,
+    metric: str | None = None,
 ):
     """Compare a run against a baseline."""
     # Get baseline
@@ -149,6 +159,30 @@ def compare_runs(
     result["baseline_name"] = bl["id"]
     result["baseline_run_id"] = bl["run_id"]
     result["target_run_id"] = run_id
+
+    # If a metric is specified, add metric comparison(s)
+    if metric:
+        if metric.lower() == "all":
+            # Compare all available metrics
+            all_metric_names = queries.list_available_metrics(bl["run_id"], _db())
+            metric_comparisons = []
+            for m_name in all_metric_names:
+                bl_vals = queries.get_metric_values_by_benchmark(bl["run_id"], m_name, _db())
+                tgt_vals = queries.get_metric_values_by_benchmark(run_id, m_name, _db())
+                if bl_vals or tgt_vals:
+                    mc = compare_metric_values(bl_vals, tgt_vals, m_name, threshold)
+                    metric_comparisons.append(mc)
+            result["metric_comparisons"] = metric_comparisons
+        else:
+            bl_metric_vals = queries.get_metric_values_by_benchmark(
+                bl["run_id"], metric, _db()
+            )
+            tgt_metric_vals = queries.get_metric_values_by_benchmark(run_id, metric, _db())
+            mc = compare_metric_values(
+                bl_metric_vals, tgt_metric_vals, metric, threshold
+            )
+            result["metric_comparisons"] = [mc]
+
     return result
 
 
@@ -164,8 +198,17 @@ def list_testbeds():
 
 
 @app.get("/api/trends")
-def get_trends(limit: int = Query(20, ge=1, le=100)):
-    """Batch endpoint: per-benchmark execution time trends across recent runs."""
+def get_trends(
+    limit: int = Query(20, ge=1, le=100),
+    metric: str | None = None,
+):
+    """Batch endpoint: per-benchmark trends across recent runs.
+
+    Without 'metric', returns execution time trends.
+    With 'metric=time.stw', returns trends for that specific metric.
+    """
+    if metric:
+        return queries.get_metric_trends(_db(), metric_name=metric, limit=limit)
     return queries.get_trends(_db(), limit=limit)
 
 

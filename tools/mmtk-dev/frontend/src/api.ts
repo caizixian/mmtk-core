@@ -56,6 +56,14 @@ export interface CompareResult {
     comparisons: ComparisonEntry[];
     geomean_diff: number;
     geomean_change: string;
+    metric_comparisons?: MetricComparison[];
+}
+
+export interface MetricComparison {
+    metric: string;
+    comparisons: ComparisonEntry[];
+    geomean_diff: number;
+    geomean_change: string;
 }
 
 export interface BenchmarkResult {
