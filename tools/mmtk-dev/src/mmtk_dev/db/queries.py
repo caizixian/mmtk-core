@@ -2,7 +2,9 @@
 
 import hashlib
 import json
+import math
 import uuid
+from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -233,13 +235,10 @@ def get_results(run_id: str, db_path: Path | None = None) -> list[dict]:
 def get_results_by_benchmark(run_id: str, db_path: Path | None = None) -> dict[str, list[dict]]:
     """Get results grouped by benchmark name."""
     results = get_results(run_id, db_path)
-    grouped: dict[str, list[dict]] = {}
+    grouped: dict[str, list[dict]] = defaultdict(list)
     for r in results:
-        bm = r["benchmark"]
-        if bm not in grouped:
-            grouped[bm] = []
-        grouped[bm].append(r)
-    return grouped
+        grouped[r["benchmark"]].append(r)
+    return dict(grouped)
 
 
 # ── Metric ───────────────────────────────────────────────────────────────────
@@ -249,8 +248,6 @@ def get_metrics_by_result_id(
     run_id: str, db_path: Path | None = None
 ) -> dict[int, list[dict]]:
     """Get all metrics for a run's results, grouped by result_id."""
-    import math
-
     with get_connection(db_path) as conn:
         rows = conn.execute(
             """SELECT m.result_id, m.name, m.value
@@ -260,16 +257,13 @@ def get_metrics_by_result_id(
                ORDER BY m.result_id, m.name""",
             (run_id,),
         ).fetchall()
-    grouped: dict[int, list[dict]] = {}
+    grouped: dict[int, list[dict]] = defaultdict(list)
     for row in rows:
         val = row["value"]
         if not math.isfinite(val):
             continue  # Skip Inf, -Inf, NaN (not JSON serializable)
-        rid = row["result_id"]
-        if rid not in grouped:
-            grouped[rid] = []
-        grouped[rid].append({"name": row["name"], "value": val})
-    return grouped
+        grouped[row["result_id"]].append({"name": row["name"], "value": val})
+    return dict(grouped)
 
 
 def insert_metrics(result_id: int, metrics: dict[str, float], db_path: Path | None = None) -> None:

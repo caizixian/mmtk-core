@@ -2,14 +2,9 @@
 
 import os
 import subprocess
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-
-try:
-    import tomllib
-except ImportError:
-    import tomli as tomllib  # type: ignore
-
 
 CONFIG_FILENAME = ".mmtk-dev.toml"
 

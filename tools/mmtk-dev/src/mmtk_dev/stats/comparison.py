@@ -2,7 +2,7 @@
 
 
 
-from ..stats.analysis import (
+from .analysis import (
     classify_change,
     compute_diff,
     compute_geomean_ratio,
