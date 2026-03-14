@@ -843,218 +843,32 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let current_state = self.line_mark_state.load(Ordering::Acquire);
         let block = search_start.block();
         let mark_data = block.line_mark_table();
-        let data = mark_data.as_slice();
         let start_cursor = search_start.get_index_within_block();
-
-        let (hole_start, hole_end) = {
-            #[cfg(target_arch = "x86_64")]
-            {
-                Self::find_hole_simd(data, start_cursor, unavail_state, current_state)
+        let mut cursor = start_cursor;
+        // Find start
+        while cursor < mark_data.len() {
+            let mark = mark_data.get(cursor);
+            if mark != unavail_state && mark != current_state {
+                break;
             }
-            #[cfg(not(target_arch = "x86_64"))]
-            {
-                Self::find_hole_scalar(data, start_cursor, unavail_state, current_state)
+            cursor += 1;
+        }
+        if cursor == mark_data.len() {
+            return None;
+        }
+        let start = search_start.next_nth(cursor - start_cursor);
+        // Find limit
+        while cursor < mark_data.len() {
+            let mark = mark_data.get(cursor);
+            if mark == unavail_state || mark == current_state {
+                break;
             }
-        }?;
-
-        let start = search_start.next_nth(hole_start - start_cursor);
-        let end = search_start.next_nth(hole_end - start_cursor);
+            cursor += 1;
+        }
+        let end = search_start.next_nth(cursor - start_cursor);
         debug_assert!(RegionIterator::<Line>::new(start, end)
             .all(|line| !line.is_marked(unavail_state) && !line.is_marked(current_state)));
         Some((start, end))
-    }
-
-    /// Scalar fallback for hole searching.
-    fn find_hole_scalar(
-        data: &[u8],
-        start_idx: usize,
-        unavail_state: u8,
-        current_state: u8,
-    ) -> Option<(usize, usize)> {
-        let len = data.len();
-        let mut cursor = start_idx;
-
-        // Phase 1: Skip marked lines (find hole start)
-        while cursor < len {
-            let mark = data[cursor];
-            if mark != unavail_state && mark != current_state {
-                break;
-            }
-            cursor += 1;
-        }
-        if cursor == len {
-            return None;
-        }
-        let start = cursor;
-
-        // Phase 2: Skip unmarked lines (find hole end)
-        while cursor < len {
-            let mark = data[cursor];
-            if mark == unavail_state || mark == current_state {
-                break;
-            }
-            cursor += 1;
-        }
-        Some((start, cursor))
-    }
-
-    /// SSE2-accelerated hole searching.
-    ///
-    /// Uses `pcmpeqb` + `por` + `pmovmskb` to scan 16 bytes at a time.
-    /// When all 16 bytes in a chunk are marked (match either state),
-    /// the entire chunk is skipped. Otherwise, `trailing_zeros` finds
-    /// the exact byte position.
-    #[cfg(target_arch = "x86_64")]
-    fn find_hole_simd(
-        data: &[u8],
-        start_idx: usize,
-        unavail_state: u8,
-        current_state: u8,
-    ) -> Option<(usize, usize)> {
-        // Safety: SSE2 is guaranteed available on all x86_64 processors.
-        unsafe { Self::find_hole_simd_inner(data, start_idx, unavail_state, current_state) }
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    #[inline]
-    unsafe fn find_hole_simd_inner(
-        data: &[u8],
-        start_idx: usize,
-        unavail_state: u8,
-        current_state: u8,
-    ) -> Option<(usize, usize)> {
-        use std::arch::x86_64::*;
-
-        let len = data.len();
-        let unavail_vec = _mm_set1_epi8(unavail_state as i8);
-        let current_vec = _mm_set1_epi8(current_state as i8);
-        let data_ptr = data.as_ptr();
-
-        let mut cursor = start_idx;
-
-        // ── Phase 1: Skip marked lines (find hole start) ──
-        // Handle unaligned prefix byte-by-byte until 16-byte aligned
-        while cursor < len && cursor % 16 != 0 {
-            let mark = *data_ptr.add(cursor);
-            if mark != unavail_state && mark != current_state {
-                // Found an available line
-                return Some(Self::find_hole_end_simd(
-                    data_ptr,
-                    cursor,
-                    len,
-                    unavail_vec,
-                    current_vec,
-                    unavail_state,
-                    current_state,
-                ));
-            }
-            cursor += 1;
-        }
-
-        // Process 16 bytes at a time with SSE2
-        while cursor + 16 <= len {
-            let vec = _mm_loadu_si128(data_ptr.add(cursor) as *const __m128i);
-            let eq_unavail = _mm_cmpeq_epi8(vec, unavail_vec);
-            let eq_current = _mm_cmpeq_epi8(vec, current_vec);
-            // A byte is "marked" if it matches either state
-            let marked = _mm_or_si128(eq_unavail, eq_current);
-            let mask = _mm_movemask_epi8(marked) as u16;
-
-            if mask == 0xFFFF {
-                // All 16 bytes are marked → skip entire chunk
-                cursor += 16;
-                continue;
-            }
-            // Some bytes are available — find the first one
-            let avail_mask = !mask & 0xFFFF;
-            let first_avail = avail_mask.trailing_zeros() as usize;
-            cursor += first_avail;
-            return Some(Self::find_hole_end_simd(
-                data_ptr,
-                cursor,
-                len,
-                unavail_vec,
-                current_vec,
-                unavail_state,
-                current_state,
-            ));
-        }
-
-        // Handle remaining bytes
-        while cursor < len {
-            let mark = *data_ptr.add(cursor);
-            if mark != unavail_state && mark != current_state {
-                return Some(Self::find_hole_end_simd(
-                    data_ptr,
-                    cursor,
-                    len,
-                    unavail_vec,
-                    current_vec,
-                    unavail_state,
-                    current_state,
-                ));
-            }
-            cursor += 1;
-        }
-
-        None
-    }
-
-    /// Phase 2 of SIMD hole searching: find the end of the hole.
-    /// Scans forward from `start` to find the first byte that matches
-    /// either marked state.
-    #[cfg(target_arch = "x86_64")]
-    #[inline]
-    unsafe fn find_hole_end_simd(
-        data_ptr: *const u8,
-        start: usize,
-        len: usize,
-        unavail_vec: std::arch::x86_64::__m128i,
-        current_vec: std::arch::x86_64::__m128i,
-        unavail_state: u8,
-        current_state: u8,
-    ) -> (usize, usize) {
-        use std::arch::x86_64::*;
-
-        let mut cursor = start;
-
-        // Byte-by-byte until 16-byte aligned
-        while cursor < len && cursor % 16 != 0 {
-            let mark = *data_ptr.add(cursor);
-            if mark == unavail_state || mark == current_state {
-                return (start, cursor);
-            }
-            cursor += 1;
-        }
-
-        // SIMD scan: find first marked byte
-        while cursor + 16 <= len {
-            let vec = _mm_loadu_si128(data_ptr.add(cursor) as *const __m128i);
-            let eq_unavail = _mm_cmpeq_epi8(vec, unavail_vec);
-            let eq_current = _mm_cmpeq_epi8(vec, current_vec);
-            let marked = _mm_or_si128(eq_unavail, eq_current);
-            let mask = _mm_movemask_epi8(marked) as u16;
-
-            if mask == 0 {
-                // No marked bytes → entire chunk is available
-                cursor += 16;
-                continue;
-            }
-            // Found a marked byte — hole ends here
-            let first_marked = mask.trailing_zeros() as usize;
-            return (start, cursor + first_marked);
-        }
-
-        // Handle remaining bytes
-        while cursor < len {
-            let mark = *data_ptr.add(cursor);
-            if mark == unavail_state || mark == current_state {
-                return (start, cursor);
-            }
-            cursor += 1;
-        }
-
-        (start, len)
     }
 
     pub fn is_last_gc_exhaustive(&self, did_defrag_for_last_gc: bool) -> bool {
