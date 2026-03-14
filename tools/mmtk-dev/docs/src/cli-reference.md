@@ -15,6 +15,7 @@ mmtk-dev run [OPTIONS]
 | `-i, --invocations` | Number of invocations | From config |
 | `-m, --heap-multiplier` | Heap size as multiplier of minheap | From config |
 | `--iterations` | DaCapo timing iterations per invocation | From config |
+| `-n, --note` | Optional note to attach to this run | |
 | `--profile` | Build profile (`release`, `fastdebug`, etc.) | `release` |
 | `--log-dir` | Directory for logs (default: temp) | Auto |
 | `--db` | Path to SQLite database | From config |

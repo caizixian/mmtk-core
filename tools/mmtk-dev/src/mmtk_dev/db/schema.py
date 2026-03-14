@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS run (
     started_at      TIMESTAMP NOT NULL,
     finished_at     TIMESTAMP,
     status          TEXT NOT NULL DEFAULT 'running',
-    metadata        TEXT
+    metadata        TEXT,
+    note            TEXT
 );
 
 CREATE TABLE IF NOT EXISTS result (
@@ -96,7 +97,18 @@ def init_db(db_path: Path | None = None) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     conn.executescript(SCHEMA)
+    # Migrations for existing databases
+    _migrate(conn)
     conn.close()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Apply schema migrations for existing databases."""
+    # Check if 'note' column exists in run table
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(run)").fetchall()}
+    if "note" not in cols:
+        conn.execute("ALTER TABLE run ADD COLUMN note TEXT")
+        conn.commit()
 
 
 @contextmanager

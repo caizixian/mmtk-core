@@ -77,6 +77,7 @@ uv run --project mmtk-core/tools/mmtk-dev mmtk-dev run -b fop,lusearch,xalan -i 
 | `-i, --invocations` | Number of JVM invocations | `-i 10` |
 | `-m, --heap-multiplier` | Heap size = N × minheap | `-m 3.0` |
 | `--iterations` | DaCapo timing iterations per invocation | `--iterations 6` |
+| `-n, --note` | Optional note to attach to the run | `-n "baseline before change"` |
 | `--profile` | Build profile (`release`, `fastdebug`) | `--profile release` |
 | `--debug` | Print the generated running-ng YAML config | `--debug` |
 

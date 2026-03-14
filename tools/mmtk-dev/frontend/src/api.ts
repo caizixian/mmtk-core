@@ -31,6 +31,7 @@ export interface Run {
     status: string;
     started_at?: string;
     finished_at?: string;
+    note?: string;
 }
 
 export interface Baseline {

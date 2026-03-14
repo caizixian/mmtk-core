@@ -35,8 +35,9 @@ console = Console()
     "--log-dir", default=None, type=click.Path(), help="Directory to store logs (default: temp dir)"
 )
 @click.option("--db", default=None, type=click.Path(), help="Path to SQLite database")
+@click.option("--note", "-n", default=None, help="Optional note to attach to this run")
 @click.option("--debug", is_flag=True, help="Print the generated running-ng config and commands")
-def run_cmd(benchmarks, plan, invocations, heap_multiplier, iterations, profile, log_dir, db, debug):
+def run_cmd(benchmarks, plan, invocations, heap_multiplier, iterations, profile, log_dir, db, note, debug):
     """Run benchmarks and record results."""
     ws = WorkspaceConfig.load()
     db_path = Path(db) if db else ws.db_path
@@ -62,6 +63,8 @@ def run_cmd(benchmarks, plan, invocations, heap_multiplier, iterations, profile,
     console.print(
         f"  Invocations: {invocations}, Heap: {heap_multiplier}x, Iterations: {iterations}"
     )
+    if note:
+        console.print(f"  Note: [italic]{note}[/italic]")
 
     # Check JDK exists
     jdk_path = ws.get_jdk_path(profile)
@@ -94,6 +97,7 @@ def run_cmd(benchmarks, plan, invocations, heap_multiplier, iterations, profile,
         benchmarks=bm_list, plan=plan, profile=profile,
         invocations=invocations, heap_multiplier=heap_multiplier,
         iterations=iterations, log_dir=Path(log_dir) if log_dir else None,
+        note=note,
     )
 
     if not orch.success:

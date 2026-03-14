@@ -32,7 +32,7 @@ The dashboard auto-detects your system's color scheme (light or dark) on first l
 
 ### Runs
 
-The main view lists all benchmark runs with their run ID, build commit, GC plan, heap multiplier, invocation count, status, and start time. Click **Details** to expand per-benchmark statistics.
+The main view lists all benchmark runs with their run ID, build commit, GC plan, heap multiplier, invocation count, status, and start time. If a run has a note attached (via `mmtk-dev run --note`), it appears below the run ID. Click **Details** to expand per-benchmark statistics.
 
 ![Runs view showing a completed benchmark run](./images/dashboard-runs.png)
 

@@ -113,6 +113,7 @@ def execute_run(
     iterations: int,
     log_dir: Path | None = None,
     metadata: dict | None = None,
+    note: str | None = None,
     store_metrics: bool = True,
 ) -> OrchestrateResult:
     """Create a run, execute benchmarks, store results. Returns the orchestration result."""
@@ -122,6 +123,7 @@ def execute_run(
         invocations=invocations,
         heap_multiplier=heap_multiplier,
         metadata=metadata,
+        note=note,
         db_path=db_path,
     )
 

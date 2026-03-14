@@ -177,7 +177,10 @@ export default function RunsView({ initialDetailRunId }: { initialDetailRunId?: 
                                 : 'bg-yellow-400/10 text-yellow-400';
                             return (
                                 <tr key={run.id} className="hover:bg-surface-hover transition-colors">
-                                    <TD>{run.id}</TD>
+                                    <TD>
+                                        <div>{run.id}</div>
+                                        {run.note && <div className="text-[11px] text-text-muted italic mt-0.5">{run.note}</div>}
+                                    </TD>
                                     <TD><CommitLink repo={build?.core_repo} commit={build?.core_commit} /></TD>
                                     <TD><CommitLink repo={build?.binding_repo} commit={build?.binding_commit} /></TD>
                                     <TD>{plan}</TD>

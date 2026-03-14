@@ -114,6 +114,7 @@ def create_run(
     heap_multiplier: float | None = None,
     running_ng_id: str | None = None,
     metadata: dict | None = None,
+    note: str | None = None,
     db_path: Path | None = None,
 ) -> str:
     """Create a new run. Returns the run ID."""
@@ -122,8 +123,8 @@ def create_run(
     with get_connection(db_path) as conn:
         conn.execute(
             """INSERT INTO run (id, build_id, testbed_id, running_ng_id,
-                 invocations, heap_multiplier, started_at, status, metadata)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?)""",
+                 invocations, heap_multiplier, started_at, status, metadata, note)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)""",
             (
                 run_id,
                 build_id,
@@ -133,6 +134,7 @@ def create_run(
                 heap_multiplier,
                 now,
                 json.dumps(metadata) if metadata else None,
+                note,
             ),
         )
     return run_id
