@@ -3,7 +3,6 @@
 Uses a Runner protocol so execution can be extended to remote (SSH) later.
 """
 
-import os
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -13,16 +12,17 @@ from typing import Protocol
 import yaml
 
 from ..config import (
-    WorkspaceConfig,
     DACAPO_2006_MINHEAP,
     DACAPO_CHOPIN_MINHEAP,
+    WorkspaceConfig,
 )
-from .parser import parse_run_directory, BenchmarkResult
+from .parser import BenchmarkResult, parse_run_directory
 
 
 @dataclass
 class RunConfig:
     """Configuration for a benchmark run."""
+
     benchmarks: list[str]
     plan: str
     jdk_path: Path
@@ -37,6 +37,7 @@ class RunConfig:
 @dataclass
 class RunResult:
     """Result of a benchmark execution."""
+
     run_id: str  # running-ng run ID
     log_dir: Path
     results: list[BenchmarkResult]
@@ -58,16 +59,10 @@ class LocalRunner:
     def generate_config(self, config: RunConfig) -> dict:
         """Generate a running-ng YAML config dict."""
         # Pick minheap values based on suite
-        if config.suite == "dacapo2006":
-            all_minheap = DACAPO_2006_MINHEAP
-        else:
-            all_minheap = DACAPO_CHOPIN_MINHEAP
+        all_minheap = DACAPO_2006_MINHEAP if config.suite == "dacapo2006" else DACAPO_CHOPIN_MINHEAP
 
         # Filter minheap to only requested benchmarks
-        minheap_values = {
-            bm: all_minheap.get(bm, 64)
-            for bm in config.benchmarks
-        }
+        minheap_values = {bm: all_minheap.get(bm, 64) for bm in config.benchmarks}
 
         running_config: dict = {
             "includes": ["$RUNNING_NG_PACKAGE_DATA/base/runbms.yml"],
@@ -120,10 +115,7 @@ class LocalRunner:
         running_config = self.generate_config(config)
 
         # Determine log directory
-        if config.log_dir:
-            log_dir = config.log_dir
-        else:
-            log_dir = Path(tempfile.mkdtemp(prefix="mmtk-dev-"))
+        log_dir = config.log_dir or Path(tempfile.mkdtemp(prefix="mmtk-dev-"))
 
         log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -134,10 +126,12 @@ class LocalRunner:
 
         # Build the running runbms command
         cmd = [
-            "running", "runbms",
+            "running",
+            "runbms",
             str(log_dir),
             str(config_file),
-            "-i", str(config.invocations),
+            "-i",
+            str(config.invocations),
         ]
         if config.heap_multiplier > 0:
             cmd.extend(["-s", str(config.heap_multiplier)])

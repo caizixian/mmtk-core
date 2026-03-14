@@ -1,19 +1,24 @@
 """Database query functions."""
 
-import json
 import hashlib
+import json
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .schema import get_connection
 
-
 # ── Testbed ──────────────────────────────────────────────────────────────────
 
-def ensure_testbed(testbed_id: str, name: str, cpu_model: str | None = None,
-                   cpu_cores: int | None = None, memory_gb: float | None = None,
-                   db_path: Path | None = None) -> str:
+
+def ensure_testbed(
+    testbed_id: str,
+    name: str,
+    cpu_model: str | None = None,
+    cpu_cores: int | None = None,
+    memory_gb: float | None = None,
+    db_path: Path | None = None,
+) -> str:
     """Create or update a testbed. Returns the testbed ID."""
     with get_connection(db_path) as conn:
         conn.execute(
@@ -35,19 +40,27 @@ def list_testbeds(db_path: Path | None = None) -> list[dict]:
 
 # ── Build ────────────────────────────────────────────────────────────────────
 
-def make_build_id(core_commit: str, binding_commit: str, gc_plan: str,
-                  features: str = "") -> str:
+
+def make_build_id(core_commit: str, binding_commit: str, gc_plan: str, features: str = "") -> str:
     """Deterministic build ID from build parameters."""
     key = f"{core_commit}:{binding_commit}:{gc_plan}:{features}"
     return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
-def register_build(core_repo: str, core_commit: str, binding_repo: str,
-                   binding_commit: str, gc_plan: str, build_profile: str,
-                   core_branch: str | None = None, binding_branch: str | None = None,
-                   rust_toolchain: str | None = None, features: str | None = None,
-                   jdk_path: str | None = None,
-                   db_path: Path | None = None) -> str:
+def register_build(
+    core_repo: str,
+    core_commit: str,
+    binding_repo: str,
+    binding_commit: str,
+    gc_plan: str,
+    build_profile: str,
+    core_branch: str | None = None,
+    binding_branch: str | None = None,
+    rust_toolchain: str | None = None,
+    features: str | None = None,
+    jdk_path: str | None = None,
+    db_path: Path | None = None,
+) -> str:
     """Register a build. Returns the build ID."""
     build_id = make_build_id(core_commit, binding_commit, gc_plan, features or "")
     with get_connection(db_path) as conn:
@@ -57,9 +70,20 @@ def register_build(core_repo: str, core_commit: str, binding_repo: str,
                  gc_plan, build_profile, rust_toolchain, features, jdk_path)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET jdk_path=excluded.jdk_path""",
-            (build_id, core_repo, core_commit, core_branch,
-             binding_repo, binding_commit, binding_branch,
-             gc_plan, build_profile, rust_toolchain, features, jdk_path),
+            (
+                build_id,
+                core_repo,
+                core_commit,
+                core_branch,
+                binding_repo,
+                binding_commit,
+                binding_branch,
+                gc_plan,
+                build_profile,
+                rust_toolchain,
+                features,
+                jdk_path,
+            ),
         )
     return build_id
 
@@ -80,29 +104,40 @@ def list_builds(db_path: Path | None = None, limit: int = 50) -> list[dict]:
 
 # ── Run ──────────────────────────────────────────────────────────────────────
 
-def create_run(build_id: str, testbed_id: str, invocations: int,
-               heap_multiplier: float | None = None,
-               running_ng_id: str | None = None,
-               metadata: dict | None = None,
-               db_path: Path | None = None) -> str:
+
+def create_run(
+    build_id: str,
+    testbed_id: str,
+    invocations: int,
+    heap_multiplier: float | None = None,
+    running_ng_id: str | None = None,
+    metadata: dict | None = None,
+    db_path: Path | None = None,
+) -> str:
     """Create a new run. Returns the run ID."""
     run_id = uuid.uuid4().hex[:12]
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     with get_connection(db_path) as conn:
         conn.execute(
             """INSERT INTO run (id, build_id, testbed_id, running_ng_id,
                  invocations, heap_multiplier, started_at, status, metadata)
                VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?)""",
-            (run_id, build_id, testbed_id, running_ng_id,
-             invocations, heap_multiplier, now,
-             json.dumps(metadata) if metadata else None),
+            (
+                run_id,
+                build_id,
+                testbed_id,
+                running_ng_id,
+                invocations,
+                heap_multiplier,
+                now,
+                json.dumps(metadata) if metadata else None,
+            ),
         )
     return run_id
 
 
-def complete_run(run_id: str, status: str = "completed",
-                 db_path: Path | None = None) -> None:
-    now = datetime.now(timezone.utc).isoformat()
+def complete_run(run_id: str, status: str = "completed", db_path: Path | None = None) -> None:
+    now = datetime.now(UTC).isoformat()
     with get_connection(db_path) as conn:
         conn.execute(
             "UPDATE run SET status = ?, finished_at = ? WHERE id = ?",
@@ -116,8 +151,12 @@ def get_run(run_id: str, db_path: Path | None = None) -> dict | None:
         return dict(row) if row else None
 
 
-def list_runs(db_path: Path | None = None, limit: int = 50,
-              build_id: str | None = None, testbed_id: str | None = None) -> list[dict]:
+def list_runs(
+    db_path: Path | None = None,
+    limit: int = 50,
+    build_id: str | None = None,
+    testbed_id: str | None = None,
+) -> list[dict]:
     with get_connection(db_path) as conn:
         query = "SELECT * FROM run WHERE 1=1"
         params: list = []
@@ -136,16 +175,14 @@ def list_runs(db_path: Path | None = None, limit: int = 50,
 def get_latest_run(db_path: Path | None = None) -> dict | None:
     """Get the most recently started run."""
     with get_connection(db_path) as conn:
-        row = conn.execute(
-            "SELECT * FROM run ORDER BY started_at DESC LIMIT 1"
-        ).fetchone()
+        row = conn.execute("SELECT * FROM run ORDER BY started_at DESC LIMIT 1").fetchone()
         return dict(row) if row else None
 
 
 # ── Result ───────────────────────────────────────────────────────────────────
 
-def insert_results(run_id: str, results: list[dict],
-                   db_path: Path | None = None) -> None:
+
+def insert_results(run_id: str, results: list[dict], db_path: Path | None = None) -> None:
     """Batch-insert results for a run.
 
     Each result dict should have: benchmark, suite, heap_size_mb, heap_factor,
@@ -157,10 +194,19 @@ def insert_results(run_id: str, results: list[dict],
                (run_id, benchmark, suite, heap_size_mb, heap_factor,
                 invocation, execution_time_ms, status)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            [(run_id, r["benchmark"], r["suite"], r.get("heap_size_mb"),
-              r.get("heap_factor"), r["invocation"], r.get("execution_time_ms"),
-              r["status"])
-             for r in results],
+            [
+                (
+                    run_id,
+                    r["benchmark"],
+                    r["suite"],
+                    r.get("heap_size_mb"),
+                    r.get("heap_factor"),
+                    r["invocation"],
+                    r.get("execution_time_ms"),
+                    r["status"],
+                )
+                for r in results
+            ],
         )
 
 
@@ -187,8 +233,8 @@ def get_results_by_benchmark(run_id: str, db_path: Path | None = None) -> dict[s
 
 # ── Metric ───────────────────────────────────────────────────────────────────
 
-def insert_metrics(result_id: int, metrics: dict[str, float],
-                   db_path: Path | None = None) -> None:
+
+def insert_metrics(result_id: int, metrics: dict[str, float], db_path: Path | None = None) -> None:
     """Insert metrics for a result."""
     with get_connection(db_path) as conn:
         conn.executemany(
@@ -200,9 +246,14 @@ def insert_metrics(result_id: int, metrics: dict[str, float],
 
 # ── Baseline ─────────────────────────────────────────────────────────────────
 
-def set_baseline(name: str, run_id: str, is_default: bool = True,
-                 description: str | None = None,
-                 db_path: Path | None = None) -> None:
+
+def set_baseline(
+    name: str,
+    run_id: str,
+    is_default: bool = True,
+    description: str | None = None,
+    db_path: Path | None = None,
+) -> None:
     """Create or update a named baseline."""
     with get_connection(db_path) as conn:
         if is_default:
@@ -218,24 +269,17 @@ def set_baseline(name: str, run_id: str, is_default: bool = True,
         )
 
 
-def get_baseline(name: str | None = None,
-                 db_path: Path | None = None) -> dict | None:
+def get_baseline(name: str | None = None, db_path: Path | None = None) -> dict | None:
     """Get a baseline by name. If name is None, get the default baseline."""
     with get_connection(db_path) as conn:
         if name:
-            row = conn.execute(
-                "SELECT * FROM baseline WHERE id = ?", (name,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM baseline WHERE id = ?", (name,)).fetchone()
         else:
-            row = conn.execute(
-                "SELECT * FROM baseline WHERE is_default = 1"
-            ).fetchone()
+            row = conn.execute("SELECT * FROM baseline WHERE is_default = 1").fetchone()
         return dict(row) if row else None
 
 
 def list_baselines(db_path: Path | None = None) -> list[dict]:
     with get_connection(db_path) as conn:
-        rows = conn.execute(
-            "SELECT * FROM baseline ORDER BY created_at DESC"
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM baseline ORDER BY created_at DESC").fetchall()
         return [dict(r) for r in rows]

@@ -12,9 +12,16 @@ def compute_statistics(values: list[float], confidence: float = 0.95) -> dict:
     """
     if not values:
         return {
-            "mean": None, "ci": None, "median": None, "stdev": None,
-            "min": None, "max": None, "n": 0, "n_outliers": 0,
-            "mean_no_outliers": None, "ci_no_outliers": None,
+            "mean": None,
+            "ci": None,
+            "median": None,
+            "stdev": None,
+            "min": None,
+            "max": None,
+            "n": 0,
+            "n_outliers": 0,
+            "mean_no_outliers": None,
+            "ci_no_outliers": None,
         }
 
     arr = np.array(values, dtype=float)

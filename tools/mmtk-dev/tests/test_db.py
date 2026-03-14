@@ -1,12 +1,9 @@
 """Tests for the database schema and queries."""
 
-import tempfile
-from pathlib import Path
-
 import pytest
 
-from mmtk_dev.db.schema import init_db, get_connection
 from mmtk_dev.db import queries
+from mmtk_dev.db.schema import init_db
 
 
 @pytest.fixture
@@ -20,8 +17,11 @@ def db_path(tmp_path):
 class TestTestbed:
     def test_ensure_testbed_creates(self, db_path):
         tid = queries.ensure_testbed(
-            "test-machine", "Test Machine",
-            cpu_model="AMD EPYC 7B13", cpu_cores=64, memory_gb=256.0,
+            "test-machine",
+            "Test Machine",
+            cpu_model="AMD EPYC 7B13",
+            cpu_cores=64,
+            memory_gb=256.0,
             db_path=db_path,
         )
         assert tid == "test-machine"
@@ -44,18 +44,24 @@ class TestTestbed:
 class TestBuild:
     def test_register_build(self, db_path):
         build_id = queries.register_build(
-            core_repo="mmtk/mmtk-core", core_commit="abc123",
-            binding_repo="mmtk/mmtk-openjdk", binding_commit="def456",
-            gc_plan="GenImmix", build_profile="release",
+            core_repo="mmtk/mmtk-core",
+            core_commit="abc123",
+            binding_repo="mmtk/mmtk-openjdk",
+            binding_commit="def456",
+            gc_plan="GenImmix",
+            build_profile="release",
             db_path=db_path,
         )
         assert len(build_id) == 16  # SHA256 truncated to 16 chars
 
     def test_build_id_deterministic(self, db_path):
         args = dict(
-            core_repo="mmtk/mmtk-core", core_commit="abc123",
-            binding_repo="mmtk/mmtk-openjdk", binding_commit="def456",
-            gc_plan="GenImmix", build_profile="release",
+            core_repo="mmtk/mmtk-core",
+            core_commit="abc123",
+            binding_repo="mmtk/mmtk-openjdk",
+            binding_commit="def456",
+            gc_plan="GenImmix",
+            build_profile="release",
             db_path=db_path,
         )
         id1 = queries.register_build(**args)
@@ -64,9 +70,12 @@ class TestBuild:
 
     def test_different_plans_different_ids(self, db_path):
         base = dict(
-            core_repo="r", core_commit="c1",
-            binding_repo="r", binding_commit="c2",
-            build_profile="release", db_path=db_path,
+            core_repo="r",
+            core_commit="c1",
+            binding_repo="r",
+            binding_commit="c2",
+            build_profile="release",
+            db_path=db_path,
         )
         id1 = queries.register_build(gc_plan="GenImmix", **base)
         id2 = queries.register_build(gc_plan="Immix", **base)
@@ -74,9 +83,12 @@ class TestBuild:
 
     def test_get_build(self, db_path):
         build_id = queries.register_build(
-            core_repo="mmtk/mmtk-core", core_commit="abc123",
-            binding_repo="mmtk/mmtk-openjdk", binding_commit="def456",
-            gc_plan="GenImmix", build_profile="release",
+            core_repo="mmtk/mmtk-core",
+            core_commit="abc123",
+            binding_repo="mmtk/mmtk-openjdk",
+            binding_commit="def456",
+            gc_plan="GenImmix",
+            build_profile="release",
             core_branch="master",
             db_path=db_path,
         )
@@ -89,9 +101,12 @@ class TestBuild:
     def test_list_builds(self, db_path):
         for i in range(3):
             queries.register_build(
-                core_repo="r", core_commit=f"c{i}",
-                binding_repo="r", binding_commit="b1",
-                gc_plan="GenImmix", build_profile="release",
+                core_repo="r",
+                core_commit=f"c{i}",
+                binding_repo="r",
+                binding_commit="b1",
+                gc_plan="GenImmix",
+                build_profile="release",
                 db_path=db_path,
             )
         builds = queries.list_builds(db_path)
@@ -102,9 +117,12 @@ class TestRunAndResults:
     def _setup_build_and_testbed(self, db_path):
         queries.ensure_testbed("t1", "Test", db_path=db_path)
         build_id = queries.register_build(
-            core_repo="r", core_commit="c1",
-            binding_repo="r", binding_commit="b1",
-            gc_plan="GenImmix", build_profile="release",
+            core_repo="r",
+            core_commit="c1",
+            binding_repo="r",
+            binding_commit="b1",
+            gc_plan="GenImmix",
+            build_profile="release",
             db_path=db_path,
         )
         return build_id
@@ -133,16 +151,41 @@ class TestRunAndResults:
         run_id = queries.create_run(build_id, "t1", invocations=3, db_path=db_path)
 
         results = [
-            {"benchmark": "fop", "suite": "dacapo", "invocation": 0,
-             "execution_time_ms": 234.5, "status": "pass"},
-            {"benchmark": "fop", "suite": "dacapo", "invocation": 1,
-             "execution_time_ms": 228.3, "status": "pass"},
-            {"benchmark": "fop", "suite": "dacapo", "invocation": 2,
-             "execution_time_ms": 231.1, "status": "pass"},
-            {"benchmark": "lusearch", "suite": "dacapo", "invocation": 0,
-             "execution_time_ms": 1823.1, "status": "pass"},
-            {"benchmark": "lusearch", "suite": "dacapo", "invocation": 1,
-             "execution_time_ms": None, "status": "oom"},
+            {
+                "benchmark": "fop",
+                "suite": "dacapo",
+                "invocation": 0,
+                "execution_time_ms": 234.5,
+                "status": "pass",
+            },
+            {
+                "benchmark": "fop",
+                "suite": "dacapo",
+                "invocation": 1,
+                "execution_time_ms": 228.3,
+                "status": "pass",
+            },
+            {
+                "benchmark": "fop",
+                "suite": "dacapo",
+                "invocation": 2,
+                "execution_time_ms": 231.1,
+                "status": "pass",
+            },
+            {
+                "benchmark": "lusearch",
+                "suite": "dacapo",
+                "invocation": 0,
+                "execution_time_ms": 1823.1,
+                "status": "pass",
+            },
+            {
+                "benchmark": "lusearch",
+                "suite": "dacapo",
+                "invocation": 1,
+                "execution_time_ms": None,
+                "status": "oom",
+            },
         ]
         queries.insert_results(run_id, results, db_path)
 
@@ -157,7 +200,7 @@ class TestRunAndResults:
 
     def test_get_latest_run(self, db_path):
         build_id = self._setup_build_and_testbed(db_path)
-        run1 = queries.create_run(build_id, "t1", invocations=5, db_path=db_path)
+        _run1 = queries.create_run(build_id, "t1", invocations=5, db_path=db_path)
         run2 = queries.create_run(build_id, "t1", invocations=10, db_path=db_path)
 
         latest = queries.get_latest_run(db_path)
@@ -181,9 +224,12 @@ class TestBaseline:
     def _setup(self, db_path):
         queries.ensure_testbed("t1", "Test", db_path=db_path)
         build_id = queries.register_build(
-            core_repo="r", core_commit="c1",
-            binding_repo="r", binding_commit="b1",
-            gc_plan="GenImmix", build_profile="release",
+            core_repo="r",
+            core_commit="c1",
+            binding_repo="r",
+            binding_commit="b1",
+            gc_plan="GenImmix",
+            build_profile="release",
             db_path=db_path,
         )
         return queries.create_run(build_id, "t1", invocations=10, db_path=db_path)

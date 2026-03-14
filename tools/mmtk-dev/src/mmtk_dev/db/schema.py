@@ -1,8 +1,8 @@
 """SQLite database schema and connection management."""
 
 import sqlite3
-from pathlib import Path
 from contextlib import contextmanager
+from pathlib import Path
 
 DEFAULT_DB_PATH = Path.home() / ".mmtk-dev" / "mmtk-dev.db"
 

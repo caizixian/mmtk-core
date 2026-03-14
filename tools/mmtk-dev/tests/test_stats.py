@@ -3,10 +3,10 @@
 import pytest
 
 from mmtk_dev.stats.analysis import (
-    compute_statistics,
+    classify_change,
     compute_diff,
     compute_geomean_ratio,
-    classify_change,
+    compute_statistics,
 )
 
 

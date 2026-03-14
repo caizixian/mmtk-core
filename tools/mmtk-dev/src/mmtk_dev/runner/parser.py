@@ -8,7 +8,6 @@ Log filename format: {benchmark}.{hfac_int}.{heap_mb}.{config}.{suite}.log.gz
 
 import gzip
 import re
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -16,6 +15,7 @@ from pathlib import Path
 @dataclass
 class BenchmarkResult:
     """A single benchmark's results from a log file."""
+
     benchmark: str
     suite: str
     config: str
@@ -85,19 +85,17 @@ def parse_log_content(content: str) -> tuple[list[float], list[dict[str, float]]
             execution_times.append(float(m.group(1)))
 
         # Check for MMTk statistics block
-        if _MMTK_STATS_HEADER in line:
-            # Next line = keys, line after = values
-            if i + 2 < len(lines):
-                keys_line = lines[i + 1].strip()
-                values_line = lines[i + 2].strip()
-                keys = keys_line.split()
-                values = values_line.split()
-                if len(keys) == len(values):
-                    try:
-                        stats = {k: float(v) for k, v in zip(keys, values)}
-                        mmtk_stats.append(stats)
-                    except ValueError:
-                        pass  # Skip malformed stats
+        if _MMTK_STATS_HEADER in line and i + 2 < len(lines):
+            keys_line = lines[i + 1].strip()
+            values_line = lines[i + 2].strip()
+            keys = keys_line.split()
+            values = values_line.split()
+            if len(keys) == len(values):
+                try:
+                    stats = {k: float(v) for k, v in zip(keys, values, strict=True)}
+                    mmtk_stats.append(stats)
+                except ValueError:
+                    pass  # Skip malformed stats
 
     return execution_times, mmtk_stats
 
@@ -118,7 +116,7 @@ def parse_log_file(path: Path) -> BenchmarkResult | None:
             with gzip.open(str(path), "rt", errors="replace") as f:
                 content = f.read()
         else:
-            with open(path, "r", errors="replace") as f:
+            with open(path, errors="replace") as f:
                 content = f.read()
     except (OSError, gzip.BadGzipFile):
         return None
@@ -162,15 +160,17 @@ def results_to_db_format(results: list[BenchmarkResult]) -> list[dict]:
 
     for r in results:
         for i, time_ms in enumerate(r.execution_times):
-            db_results.append({
-                "benchmark": r.benchmark,
-                "suite": r.suite,
-                "heap_size_mb": r.heap_size_mb,
-                "heap_factor": r.heap_factor,
-                "invocation": i,
-                "execution_time_ms": time_ms,
-                "status": "pass",
-            })
+            db_results.append(
+                {
+                    "benchmark": r.benchmark,
+                    "suite": r.suite,
+                    "heap_size_mb": r.heap_size_mb,
+                    "heap_factor": r.heap_factor,
+                    "invocation": i,
+                    "execution_time_ms": time_ms,
+                    "status": "pass",
+                }
+            )
 
         # If we expected more invocations than we got, some failed
         # But we don't know the exact count here, so just record what passed

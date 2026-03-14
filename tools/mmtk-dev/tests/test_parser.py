@@ -1,15 +1,14 @@
 """Tests for the log parser."""
 
 import gzip
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from mmtk_dev.runner.parser import (
-    parse_log_filename,
     parse_log_content,
     parse_log_file,
+    parse_log_filename,
     parse_run_directory,
     results_to_db_format,
 )
@@ -116,9 +115,7 @@ class TestParseLogFile:
 
     def test_parse_gz_file(self, tmp_path):
         content = "===== DaCapo fop PASSED in 234 msec =====\n"
-        path = self._create_log_gz(
-            tmp_path, "fop.3000.120.jdk.tph.dacapo2006.log.gz", content
-        )
+        path = self._create_log_gz(tmp_path, "fop.3000.120.jdk.tph.dacapo2006.log.gz", content)
         result = parse_log_file(path)
         assert result is not None
         assert result.benchmark == "fop"
