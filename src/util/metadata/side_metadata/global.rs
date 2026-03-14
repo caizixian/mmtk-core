@@ -1590,6 +1590,19 @@ impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
         ENTRIES
     }
 
+    /// Get a reference to the underlying byte array.
+    ///
+    /// This provides direct access to the raw side-metadata bytes,
+    /// enabling callers to use bulk operations (e.g., SIMD, word-level)
+    /// on the metadata.
+    ///
+    /// # Safety note
+    /// The returned slice is valid as long as the corresponding metadata
+    /// memory is mapped. The caller must not write through this reference.
+    pub fn as_slice(&self) -> &[u8; ENTRIES] {
+        self.data
+    }
+
     /// Get a byte from the metadata byte array at the given index.
     #[allow(clippy::let_and_return)]
     pub fn get(&self, index: usize) -> u8 {
