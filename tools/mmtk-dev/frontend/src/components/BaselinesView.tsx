@@ -1,24 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { fetchJSON, formatTime, type Baseline } from '../api';
+import React from 'react';
+import { Link } from 'react-router-dom';
+import { formatTime, type Baseline } from '../api';
+import { useFetch } from '../hooks';
+import { TH, TD } from './ui';
 
 export default function BaselinesView(): React.ReactElement {
-    const [baselines, setBaselines] = useState<Baseline[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
-
-    useEffect(() => { loadBaselines(); }, []);
-
-    async function loadBaselines(): Promise<void> {
-        try {
-            setLoading(true);
-            const data = await fetchJSON<Baseline[]>('/baselines');
-            setBaselines(data);
-        } catch (err) {
-            setError(err instanceof Error ? err.message : 'Unknown error');
-        } finally {
-            setLoading(false);
-        }
-    }
+    const { data: baselines, loading, error } = useFetch<Baseline[]>('/baselines');
 
     return (
         <div>
@@ -31,11 +18,7 @@ export default function BaselinesView(): React.ReactElement {
                 <table className="w-full text-[13px]">
                     <thead className="bg-surface">
                         <tr>
-                            <th className="px-4 py-3 text-left text-[11px] font-semibold text-text-muted uppercase tracking-wider border-b border-border">Name</th>
-                            <th className="px-4 py-3 text-left text-[11px] font-semibold text-text-muted uppercase tracking-wider border-b border-border">Run ID</th>
-                            <th className="px-4 py-3 text-left text-[11px] font-semibold text-text-muted uppercase tracking-wider border-b border-border">Default</th>
-                            <th className="px-4 py-3 text-left text-[11px] font-semibold text-text-muted uppercase tracking-wider border-b border-border">Description</th>
-                            <th className="px-4 py-3 text-left text-[11px] font-semibold text-text-muted uppercase tracking-wider border-b border-border">Created</th>
+                            <TH>Name</TH><TH>Run ID</TH><TH>Default</TH><TH>Description</TH><TH>Created</TH>
                         </tr>
                     </thead>
                     <tbody>
@@ -45,22 +28,22 @@ export default function BaselinesView(): React.ReactElement {
                         {error && (
                             <tr><td colSpan={5} className="px-4 py-12 text-center text-red-400 italic">Error: {error}</td></tr>
                         )}
-                        {!loading && !error && baselines.length === 0 && (
+                        {!loading && !error && baselines?.length === 0 && (
                             <tr><td colSpan={5} className="px-4 py-12 text-center text-text-muted italic">
                                 No baselines set. Use <span className="font-mono text-indigo-400">mmtk-dev set-baseline</span> to create one.
                             </td></tr>
                         )}
-                        {baselines.map(bl => (
+                        {baselines?.map(bl => (
                             <tr key={bl.id} className="hover:bg-surface-hover transition-colors">
-                                <td className="px-4 py-2.5 border-b border-border font-mono text-[12.5px] font-semibold">{bl.id}</td>
-                                <td className="px-4 py-2.5 border-b border-border font-mono text-[12.5px] text-text-secondary">{bl.run_id}</td>
-                                <td className="px-4 py-2.5 border-b border-border">
+                                <TD className="font-semibold">{bl.id}</TD>
+                                <TD className="text-text-secondary"><Link to={`/runs/${bl.run_id}`} className="text-indigo-400 hover:text-indigo-300 transition-colors">{bl.run_id}</Link></TD>
+                                <TD>
                                     {bl.is_default ? (
                                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-indigo-500/10 text-indigo-400">★ default</span>
                                     ) : null}
-                                </td>
-                                <td className="px-4 py-2.5 border-b border-border text-text-secondary text-[12.5px]">{bl.description || '-'}</td>
-                                <td className="px-4 py-2.5 border-b border-border font-mono text-[12.5px] text-text-secondary">{formatTime(bl.created_at)}</td>
+                                </TD>
+                                <TD className="text-text-secondary">{bl.description || '-'}</TD>
+                                <TD className="text-text-secondary">{formatTime(bl.created_at)}</TD>
                             </tr>
                         ))}
                     </tbody>

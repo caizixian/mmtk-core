@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { fetchJSON, formatTime } from '../api';
+import React from 'react';
+import { formatTime } from '../api';
+import { useFetch } from '../hooks';
 
 interface Testbed {
     id: string;
@@ -21,23 +22,7 @@ function InfoCard({ label, value, sub }: { label: string; value: string; sub?: s
 }
 
 export default function TestbedsView(): React.ReactElement {
-    const [testbeds, setTestbeds] = useState<Testbed[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
-
-    useEffect(() => { loadTestbeds(); }, []);
-
-    async function loadTestbeds(): Promise<void> {
-        try {
-            setLoading(true);
-            const data = await fetchJSON<Testbed[]>('/testbeds');
-            setTestbeds(data);
-        } catch (err) {
-            setError(err instanceof Error ? err.message : 'Unknown error');
-        } finally {
-            setLoading(false);
-        }
-    }
+    const { data: testbeds, loading, error } = useFetch<Testbed[]>('/testbeds');
 
     if (loading) return <div className="text-text-muted italic py-12 text-center">Loading...</div>;
     if (error) return <div className="text-red-400 italic py-12 text-center">Error: {error}</div>;
@@ -49,13 +34,13 @@ export default function TestbedsView(): React.ReactElement {
                 <p className="text-sm text-text-secondary mt-1">Machines used for benchmark execution</p>
             </div>
 
-            {testbeds.length === 0 && (
+            {testbeds?.length === 0 && (
                 <div className="bg-surface-card border border-border rounded-lg p-8 text-center text-text-muted italic">
                     No testbeds registered. Run a benchmark to auto-detect your machine.
                 </div>
             )}
 
-            {testbeds.map(tb => (
+            {testbeds?.map(tb => (
                 <div key={tb.id} className="mb-6">
                     <div className="flex items-center gap-3 mb-4">
                         <svg className="w-5 h-5 text-indigo-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

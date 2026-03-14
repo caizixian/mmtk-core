@@ -1,10 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { fetchJSON, formatDiff, diffClass, statusBadge, type Baseline, type Run, type CompareResult } from '../api';
-
-function TH({ children }: { children: React.ReactNode }): React.ReactElement {
-    return <th className="px-4 py-3 text-left text-[11px] font-semibold text-text-muted uppercase tracking-wider border-b border-border">{children}</th>;
-}
+import { TH } from './ui';
 
 export default function CompareView(): React.ReactElement {
     const [searchParams, setSearchParams] = useSearchParams();
