@@ -202,13 +202,18 @@ def health():
 
 # ── Static Files & Dashboard ─────────────────────────────────────────────────
 
-_WEB_DIR = Path(__file__).parent.parent / "web"
-
-app.mount("/static", StaticFiles(directory=str(_WEB_DIR / "static")), name="static")
+_DIST_DIR = Path(__file__).parent.parent / "web" / "dist"
 
 
 @app.get("/", response_class=HTMLResponse)
-def dashboard():
+def dashboard() -> str:
     """Serve the web dashboard."""
-    index_html = _WEB_DIR / "index.html"
+    index_html = _DIST_DIR / "index.html"
+    if not index_html.exists():
+        return "<h1>Frontend not built</h1><p>Run <code>mmtk-dev server</code> or <code>cd frontend && npm run build</code></p>"
     return index_html.read_text()
+
+
+# Mount static after the root route so it doesn't shadow it
+if _DIST_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(_DIST_DIR)), name="static")
