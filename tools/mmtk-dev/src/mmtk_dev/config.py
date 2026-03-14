@@ -17,7 +17,7 @@ DACAPO_MINHEAP: dict[str, int] = {
     "graphchi": 175,
     "h2": 681,
     "h2o": 72,
-    "jme": 29
+    "jme": 29,
     "jython": 31,
     "kafka": 208,
     "luindex": 31,
