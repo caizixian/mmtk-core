@@ -6,13 +6,11 @@ from pathlib import Path
 import click
 from rich.console import Console
 
-from ..config import ALL_DACAPO, WorkspaceConfig
+from ..config import WorkspaceConfig
 from ..db import queries
 from ..db.schema import init_db
-from ..environment import detect_testbed, get_git_info
-from ..runner.parser import results_to_db_format
-from ..runner.runner import LocalRunner, RunConfig
 from ..stats.comparison import compare_benchmark_results
+from ._orchestrate import execute_run, register_environment, resolve_benchmarks
 
 console = Console()
 
@@ -62,36 +60,7 @@ def ci_cmd(
     init_db(db_path)
 
     plan_list = [p.strip() for p in plans.split(",")]
-
-    if benchmarks is None:
-        bm_list = ws.default_benchmarks
-    elif benchmarks == "all":
-        bm_list = ALL_DACAPO
-    else:
-        bm_list = [b.strip() for b in benchmarks.split(",")]
-
-    # Get git info (use provided values or auto-detect)
-    core_info = get_git_info(ws.mmtk_core)
-    if core_commit:
-        core_info["commit"] = core_commit
-    if core_branch:
-        core_info["branch"] = core_branch
-
-    binding_info = get_git_info(ws.mmtk_openjdk)
-    if binding_commit:
-        binding_info["commit"] = binding_commit
-
-    # Detect testbed
-    tb = detect_testbed()
-    testbed_id = ws.testbed_id or str(tb.get("id", "local"))
-    queries.ensure_testbed(
-        testbed_id,
-        ws.testbed_name or str(tb.get("name", "local")),
-        cpu_model=str(tb.get("cpu_model", "")),
-        cpu_cores=int(tb.get("cpu_cores", 0)),
-        memory_gb=float(tb.get("memory_gb", 0)),
-        db_path=db_path,
-    )
+    bm_list = resolve_benchmarks(benchmarks, ws)
 
     has_regression = False
     all_reports: list[str] = []
@@ -102,30 +71,13 @@ def ci_cmd(
         else:
             console.print(f"\n[bold]═══ {plan} ═══[/bold]")
 
-        # Register build and create run
-        build_id = queries.register_build(
-            core_repo=core_info.get("repo", "unknown"),
-            core_commit=core_info.get("commit", "unknown"),
-            core_branch=core_info.get("branch"),
-            binding_repo=binding_info.get("repo", "unknown"),
-            binding_commit=binding_info.get("commit", "unknown"),
-            binding_branch=binding_info.get("branch"),
-            gc_plan=plan,
-            build_profile=profile,
-            jdk_path=str(ws.get_jdk_path(profile)),
-            db_path=db_path,
+        build_id, testbed_id, _core_info, _binding_info = register_environment(
+            ws, db_path, plan=plan, profile=profile,
+            core_commit=core_commit, core_branch=core_branch,
+            binding_commit=binding_commit,
         )
 
-        run_id = queries.create_run(
-            build_id=build_id,
-            testbed_id=testbed_id,
-            invocations=invocations,
-            heap_multiplier=heap_multiplier,
-            metadata={"ci": True},
-            db_path=db_path,
-        )
-
-        # Execute benchmarks
+        # Check JDK exists
         jdk_path = ws.get_jdk_path(profile)
         if not jdk_path.exists():
             msg = f"JDK not found at {jdk_path}"
@@ -135,23 +87,14 @@ def ci_cmd(
                 console.print(f"[red]{msg}[/red]")
             continue
 
-        runner = LocalRunner(ws)
-        run_config = RunConfig(
-            benchmarks=bm_list,
-            plan=plan,
-            jdk_path=jdk_path,
-            invocations=invocations,
-            heap_multiplier=heap_multiplier,
-            iterations=iterations,
-            suite="dacapochopin",
-            dacapo_jar=ws.dacapo_jar,
-            probes_path=ws.probes_path,
+        orch = execute_run(
+            ws, db_path,
+            build_id=build_id, testbed_id=testbed_id,
+            benchmarks=bm_list, plan=plan, profile=profile,
+            invocations=invocations, heap_multiplier=heap_multiplier,
+            iterations=iterations, metadata={"ci": True},
+            store_metrics=False,
         )
-
-        result = runner.run_benchmarks(run_config)
-        db_results = results_to_db_format(result.results)
-        queries.insert_results(run_id, db_results, db_path)
-        queries.complete_run(run_id, "completed", db_path)
 
         # Find baseline to compare against (default baseline or most recent run)
         bl = queries.get_baseline(db_path=db_path)
@@ -162,7 +105,7 @@ def ci_cmd(
             baseline_results = {}
             baseline_label = "no baseline"
 
-        target_results = queries.get_results_by_benchmark(run_id, db_path)
+        target_results = queries.get_results_by_benchmark(orch.run_id, db_path)
 
         # Generate report
         comparison = compare_benchmark_results(

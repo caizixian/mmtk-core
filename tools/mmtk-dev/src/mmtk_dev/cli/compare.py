@@ -9,10 +9,8 @@ from rich.table import Table
 from ..config import WorkspaceConfig
 from ..db import queries
 from ..db.schema import init_db
-from ..environment import detect_testbed, get_git_info
-from ..runner.parser import results_to_db_format
-from ..runner.runner import LocalRunner, RunConfig
 from ..stats.comparison import compare_benchmark_results
+from ._orchestrate import execute_run, register_environment, resolve_defaults
 
 console = Console()
 
@@ -94,10 +92,11 @@ def compare_cmd(
         # Same benchmarks as the baseline
         bm_list = sorted(baseline_results.keys())
 
-    plan = plan or (baseline_build["gc_plan"] if baseline_build else ws.default_plan)
-    invocations = invocations or ws.default_invocations
-    heap_multiplier = heap_multiplier if heap_multiplier is not None else ws.default_heap_multiplier
-    iterations = iterations or ws.default_iterations
+    plan_resolved = plan or (baseline_build["gc_plan"] if baseline_build else ws.default_plan)
+    plan_resolved, invocations, heap_multiplier, iterations = resolve_defaults(
+        ws, plan=plan_resolved, invocations=invocations,
+        heap_multiplier=heap_multiplier, iterations=iterations,
+    )
 
     # Either use existing run or run new benchmarks
     if run_id:
@@ -111,68 +110,33 @@ def compare_cmd(
         console.print(
             f"  Baseline: [cyan]{bl['id']}[/cyan] (commit {baseline_build['core_commit'][:8] if baseline_build else '?'})"
         )
-        console.print(f"  Plan: {plan}, Benchmarks: {', '.join(bm_list)}")
+        console.print(f"  Plan: {plan_resolved}, Benchmarks: {', '.join(bm_list)}")
         console.print(f"  Invocations: {invocations}")
         console.print()
 
-        # Get git info and register build
-        core_info = get_git_info(ws.mmtk_core)
-        binding_info = get_git_info(ws.mmtk_openjdk)
-
-        tb = detect_testbed()
-        testbed_id = ws.testbed_id or str(tb.get("id", "local"))
-        queries.ensure_testbed(
-            testbed_id,
-            ws.testbed_name or str(tb.get("name", "local")),
-            cpu_model=str(tb.get("cpu_model", "")),
-            cpu_cores=int(tb.get("cpu_cores", 0)),
-            memory_gb=float(tb.get("memory_gb", 0)),
-            db_path=db_path,
+        build_id, testbed_id, _core_info, _binding_info = register_environment(
+            ws, db_path, plan=plan_resolved, profile=profile,
         )
 
-        build_id = queries.register_build(
-            core_repo=core_info.get("repo", "unknown"),
-            core_commit=core_info.get("commit", "unknown"),
-            core_branch=core_info.get("branch"),
-            binding_repo=binding_info.get("repo", "unknown"),
-            binding_commit=binding_info.get("commit", "unknown"),
-            binding_branch=binding_info.get("branch"),
-            gc_plan=plan,
-            build_profile=profile,
-            jdk_path=str(ws.get_jdk_path(profile)),
-            db_path=db_path,
-        )
-
-        run_id = queries.create_run(
-            build_id=build_id,
-            testbed_id=testbed_id,
-            invocations=invocations,
-            heap_multiplier=heap_multiplier,
-            db_path=db_path,
-        )
-
+        # Check JDK exists
         jdk_path = ws.get_jdk_path(profile)
         if not jdk_path.exists():
             console.print(f"[red]Error: JDK not found at {jdk_path}[/red]")
             raise click.Abort()
 
-        runner = LocalRunner(ws)
-        run_config = RunConfig(
-            benchmarks=bm_list,
-            plan=plan,
-            jdk_path=jdk_path,
-            invocations=invocations,
-            heap_multiplier=heap_multiplier,
+        orch = execute_run(
+            ws, db_path,
+            build_id=build_id, testbed_id=testbed_id,
+            benchmarks=bm_list, plan=plan_resolved, profile=profile,
+            invocations=invocations, heap_multiplier=heap_multiplier,
             iterations=iterations,
-            suite="dacapochopin",
-            dacapo_jar=ws.dacapo_jar,
-            probes_path=ws.probes_path,
         )
 
-        result = runner.run_benchmarks(run_config)
-        db_results = results_to_db_format(result.results)
-        queries.insert_results(run_id, db_results, db_path)
-        queries.complete_run(run_id, "completed", db_path)
+        if not orch.success:
+            console.print("[red]Benchmark execution failed![/red]")
+            raise click.Abort()
+
+        run_id = orch.run_id
 
     # Now compare
     target_results = queries.get_results_by_benchmark(run_id, db_path)
