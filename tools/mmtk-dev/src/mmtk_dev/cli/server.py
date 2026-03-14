@@ -36,11 +36,9 @@ def _build_frontend() -> bool:
     result = subprocess.run(
         ["npm", "run", "build"],
         cwd=str(_FRONTEND_DIR),
-        capture_output=True,
-        text=True,
     )
     if result.returncode != 0:
-        console.print(f"[red]Frontend build failed:[/red]\n{result.stderr}")
+        console.print("[red]Frontend build failed[/red]")
         return False
 
     console.print("[green]✓ Frontend built successfully[/green]")

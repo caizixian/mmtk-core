@@ -5,7 +5,7 @@
   "source": "src/index.html",
   "scripts": {
     "dev": "parcel serve src/index.html --port 3000",
-    "build": "parcel build src/index.html --dist-dir ../src/mmtk_dev/web/dist --public-url /static/",
+    "build": "parcel build src/index.html --dist-dir dist --public-url /static/",
     "clean": "parcel cache clean"
   },
   "dependencies": {
