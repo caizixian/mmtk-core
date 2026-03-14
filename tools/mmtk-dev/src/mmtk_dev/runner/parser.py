@@ -40,7 +40,7 @@ _PASSED_MS_RE = re.compile(r"PASSED in (\d+) ms")
 _MMTK_STATS_HEADER = "MMTk Statistics Totals"
 
 # Regex for log filenames
-# e.g. "fop.3000.120.jdk.tph.ms.plan.dacapo2006.log.gz"
+# e.g. "fop.3000.120.jdk.tph.ms.plan.dacapochopin.log.gz"
 # benchmark.hfac_int.heap_mb.config_parts.suite.log.gz
 _LOG_FILENAME_RE = re.compile(
     r"^(?P<benchmark>[^.]+)"

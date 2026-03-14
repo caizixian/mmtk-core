@@ -6,7 +6,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from ..config import ALL_DACAPO_2006, WorkspaceConfig
+from ..config import ALL_DACAPO, WorkspaceConfig
 from ..db import queries
 from ..db.schema import init_db
 from ..environment import detect_testbed, get_git_info
@@ -22,7 +22,7 @@ console = Console()
     "--benchmarks",
     "-b",
     default=None,
-    help="Comma-separated benchmark names, or 'all' for all DaCapo 2006",
+    help="Comma-separated benchmark names, or 'all' for all DaCapo Chopin",
 )
 @click.option("--plan", "-p", default=None, help="GC plan (e.g. GenImmix)")
 @click.option("--invocations", "-i", default=None, type=int, help="Number of invocations")
@@ -48,7 +48,7 @@ def run_cmd(benchmarks, plan, invocations, heap_multiplier, iterations, profile,
     if benchmarks is None:
         bm_list = ws.default_benchmarks
     elif benchmarks == "all":
-        bm_list = ALL_DACAPO_2006
+        bm_list = ALL_DACAPO
     else:
         bm_list = [b.strip() for b in benchmarks.split(",")]
 
@@ -127,7 +127,7 @@ def run_cmd(benchmarks, plan, invocations, heap_multiplier, iterations, profile,
         invocations=invocations,
         heap_multiplier=heap_multiplier,
         iterations=iterations,
-        suite=ws.dacapo_suite,
+        suite="dacapochopin",
         dacapo_jar=ws.dacapo_jar,
         log_dir=Path(log_dir) if log_dir else None,
         probes_path=ws.probes_path,

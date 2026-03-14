@@ -42,7 +42,6 @@ mmtk_core = "./mmtk-core"
 mmtk_openjdk = "./mmtk-openjdk"
 openjdk = "./openjdk"
 dacapo_jar = "./dacapo-23.11-MR2-chopin.jar"
-dacapo_suite = "dacapochopin"
 probes_path = "./probes"
 db_path = "~/.mmtk-dev/mmtk-dev.db"
 
@@ -55,8 +54,7 @@ iterations = 1
 ```
 
 Key fields:
-- **`dacapo_suite`**: Must match a running-ng suite name (e.g. `dacapochopin`).
-- **`dacapo_jar`**: Path to the DaCapo jar. The suite's default path is overridden with this.
+- **`dacapo_jar`**: Path to the DaCapo Chopin jar.
 - **`probes_path`**: Path to the built probes repo. When set, mmtk-dev automatically adds probes classpath, JVM args (`-Dprobes=RustMMTk`), and the DaCapo callback.
 
 See [Configuration](./configuration.md) for the full reference.

@@ -164,7 +164,7 @@ def compare_cmd(
             invocations=invocations,
             heap_multiplier=heap_multiplier,
             iterations=iterations,
-            suite=ws.dacapo_suite,
+            suite="dacapochopin",
             dacapo_jar=ws.dacapo_jar,
             probes_path=ws.probes_path,
         )

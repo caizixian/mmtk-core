@@ -6,25 +6,10 @@ from pathlib import Path
 
 CONFIG_FILENAME = ".mmtk-dev.toml"
 
-# DaCapo 2006 minheap values (MB) — from ci-perf-kit running-openjdk-base.yml
-DACAPO_2006_MINHEAP: dict[str, int] = {
-    "antlr": 24,
-    "bloat": 33,
-    "eclipse": 84,
-    "fop": 40,
-    "xalan": 54,
-    "jython": 40,
-    "luindex": 22,
-    "lusearch": 34,
-    "pmd": 49,
-    "sunflow": 54,
-    "hsqldb": 127,
-}
-
-# DaCapo Chopin (23.11) minheap values — rough estimates
+# DaCapo Chopin (23.11) minheap values (MB)
 # TODO: These are inaccurate rough estimates. Extract real values from DaCapo's
 # nominal stats mode: java -jar dacapo.jar -p <benchmark>
-DACAPO_CHOPIN_MINHEAP: dict[str, int] = {
+DACAPO_MINHEAP: dict[str, int] = {
     "avrora": 32,
     "batik": 64,
     "biojava": 128,
@@ -48,8 +33,8 @@ DACAPO_CHOPIN_MINHEAP: dict[str, int] = {
     "zxing": 32,
 }
 
-# All supported DaCapo 2006 benchmarks
-ALL_DACAPO_2006 = list(DACAPO_2006_MINHEAP.keys())
+# All supported DaCapo Chopin benchmarks
+ALL_DACAPO = list(DACAPO_MINHEAP.keys())
 
 # Quick subset for development
 QUICK_BENCHMARKS = ["fop"]
@@ -72,7 +57,6 @@ class WorkspaceConfig:
     default_heap_multiplier: float = 3.0
     default_iterations: int = 6
     dacapo_jar: Path | None = None
-    dacapo_suite: str = "dacapo2006"
     probes_path: Path | None = None
 
     @classmethod
@@ -100,8 +84,6 @@ class WorkspaceConfig:
             config.openjdk = (config_dir / ws["openjdk"]).resolve()
         if "dacapo_jar" in ws:
             config.dacapo_jar = (config_dir / ws["dacapo_jar"]).resolve()
-        if "dacapo_suite" in ws:
-            config.dacapo_suite = ws["dacapo_suite"]
         if "probes_path" in ws:
             config.probes_path = (config_dir / ws["probes_path"]).resolve()
         if "db_path" in ws:

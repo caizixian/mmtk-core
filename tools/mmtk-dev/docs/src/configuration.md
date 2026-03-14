@@ -10,7 +10,6 @@ mmtk_core = "./mmtk-core"
 mmtk_openjdk = "./mmtk-openjdk"
 openjdk = "./openjdk"
 dacapo_jar = "./dacapo-23.11-MR2-chopin.jar"
-dacapo_suite = "dacapochopin"
 probes_path = "./probes"
 db_path = "~/.mmtk-dev/mmtk-dev.db"
 
@@ -38,8 +37,7 @@ url = "http://localhost:8080"
 | `mmtk_core` | Path to mmtk-core repo | `.` |
 | `mmtk_openjdk` | Path to mmtk-openjdk repo | `../mmtk-openjdk` |
 | `openjdk` | Path to openjdk repo | `../openjdk` |
-| `dacapo_jar` | Path to DaCapo benchmark jar | (detected from suite) |
-| `dacapo_suite` | Benchmark suite name (`dacapo2006`, `dacapochopin`, etc.) | `dacapo2006` |
+| `dacapo_jar` | Path to DaCapo Chopin benchmark jar | (none) |
 | `probes_path` | Path to [probes](https://github.com/anupli/probes) repo (enables MMTk stats) | (none) |
 | `db_path` | SQLite database path | `~/.mmtk-dev/mmtk-dev.db` |
 

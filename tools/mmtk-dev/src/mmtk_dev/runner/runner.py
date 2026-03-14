@@ -12,8 +12,7 @@ from typing import Protocol
 import yaml
 
 from ..config import (
-    DACAPO_2006_MINHEAP,
-    DACAPO_CHOPIN_MINHEAP,
+    DACAPO_MINHEAP,
     WorkspaceConfig,
 )
 from .parser import BenchmarkResult, parse_run_directory
@@ -29,7 +28,7 @@ class RunConfig:
     invocations: int = 10
     heap_multiplier: float = 3.0
     iterations: int = 6
-    suite: str = "dacapo2006"
+    suite: str = "dacapochopin"
     dacapo_jar: Path | None = None
     log_dir: Path | None = None  # If None, uses temp dir
     probes_path: Path | None = None  # Path to probes repo for MMTk stats
@@ -54,13 +53,10 @@ class Runner(Protocol):
 # DaCapo Chopin suite names (all variants)
 _CHOPIN_SUITES = {"dacapochopin", "dacapochopin-29a657f"}
 
-# DaCapo callback class for each suite family
+# DaCapo callback class for probes
 _SUITE_CALLBACKS = {
     "dacapochopin": "probe.DacapoChopinCallback",
     "dacapochopin-29a657f": "probe.DacapoChopinCallback",
-    "dacapobach": "probe.DacapoBachCallback",
-    "dacapobach-mr1": "probe.DacapoBachCallback",
-    "dacapo2006": "probe.Dacapo2006Callback",
 }
 
 
@@ -72,11 +68,8 @@ class LocalRunner:
 
     def generate_config(self, config: RunConfig) -> dict:
         """Generate a running-ng YAML config dict."""
-        # Pick minheap values based on suite
-        all_minheap = DACAPO_2006_MINHEAP if config.suite == "dacapo2006" else DACAPO_CHOPIN_MINHEAP
-
         # Filter minheap to only requested benchmarks
-        minheap_values = {bm: all_minheap.get(bm, 64) for bm in config.benchmarks}
+        minheap_values = {bm: DACAPO_MINHEAP.get(bm, 64) for bm in config.benchmarks}
 
         # Build the config string parts
         config_parts = ["jdk", "common_mmtk"]

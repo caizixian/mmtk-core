@@ -6,7 +6,7 @@ from pathlib import Path
 import click
 from rich.console import Console
 
-from ..config import ALL_DACAPO_2006, WorkspaceConfig
+from ..config import ALL_DACAPO, WorkspaceConfig
 from ..db import queries
 from ..db.schema import init_db
 from ..environment import detect_testbed, get_git_info
@@ -66,7 +66,7 @@ def ci_cmd(
     if benchmarks is None:
         bm_list = ws.default_benchmarks
     elif benchmarks == "all":
-        bm_list = ALL_DACAPO_2006
+        bm_list = ALL_DACAPO
     else:
         bm_list = [b.strip() for b in benchmarks.split(",")]
 
@@ -143,7 +143,7 @@ def ci_cmd(
             invocations=invocations,
             heap_multiplier=heap_multiplier,
             iterations=iterations,
-            suite=ws.dacapo_suite,
+            suite="dacapochopin",
             dacapo_jar=ws.dacapo_jar,
             probes_path=ws.probes_path,
         )
