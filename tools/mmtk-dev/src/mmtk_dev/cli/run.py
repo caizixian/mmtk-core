@@ -6,9 +6,10 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from ..config import ALL_DACAPO_2006, WorkspaceConfig, detect_testbed, get_git_info
+from ..config import ALL_DACAPO_2006, WorkspaceConfig
 from ..db import queries
 from ..db.schema import init_db
+from ..environment import detect_testbed, get_git_info
 from ..runner.parser import results_to_db_format, results_to_metrics_format
 from ..runner.runner import LocalRunner, RunConfig
 from ..stats.analysis import compute_statistics

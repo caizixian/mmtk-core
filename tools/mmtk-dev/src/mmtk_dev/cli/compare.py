@@ -6,9 +6,10 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from ..config import WorkspaceConfig, detect_testbed, get_git_info
+from ..config import WorkspaceConfig
 from ..db import queries
 from ..db.schema import init_db
+from ..environment import detect_testbed, get_git_info
 from ..runner.parser import results_to_db_format
 from ..runner.runner import LocalRunner, RunConfig
 from ..stats.comparison import compare_benchmark_results
