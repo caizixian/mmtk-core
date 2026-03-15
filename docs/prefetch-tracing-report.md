@@ -204,3 +204,43 @@ GC are small (< 64 bytes), so their reference fields are on the same cache line 
 header. The extra prefetches are mostly wasted for small objects and only help for
 objects with many reference fields spanning multiple cache lines. **Reverted** to
 isolate the forwarding cache experiment.
+
+## Experiment: Forwarding Pointer Cache in GenNurseryProcessEdges
+
+**Commit**: `f3a61d95bb` (reverted at `74413fd034`)
+**Experiment run**: `7b76cb777ef5` ("fwd-cache-only (no body prefetch)", 10 invocations)
+**Baseline run**: `8c92da1178b0` ("baseline: header-only prefetch (no cache, no body-pf)", 10 invocations)
+
+**Hypothesis**: During nursery GC, multiple slots within a work packet may reference
+the same nursery object. Each occurrence calls `trace_object` → `attempt_to_forward`
+which does a CAS on the in-header forwarding bits. A 256-entry direct-mapped cache
+mapping original addresses to forwarded addresses could skip redundant `trace_object`
+calls for already-forwarded objects.
+
+**Implementation**: Added a `fwd_cache: [(usize, usize); 256]` (4KB, L1-resident)
+field to `GenNurseryProcessEdges`. In `process_slot`, check the cache before calling
+`trace_object`; on hit, use the cached forwarded address directly. Only cache nursery
+objects (where `new_object != object`).
+
+**Results** (10 invocations, 3× minheap, 32 GC threads, same session):
+
+| Run ID | Description | fop (ms) | ±CI | h2 (ms) | ±CI |
+|--------|-------------|----------|-----|---------|-----|
+| `8c92da1178b0` | baseline (no cache) | 1026.1 | ±23.4 | 4189.9 | ±72.8 |
+| `7b76cb777ef5` | +forwarding cache | 1005.2 | ±27.8 | 4189.5 | ±87.5 |
+| | **Diff** | **−2.04%** | | **−0.01%** | |
+
+**Analysis**: h2 shows zero improvement (−0.01%). fop shows −2.04% but the CIs overlap
+(baseline 1026.1 ±23.4 = [1002.7, 1049.5] vs experiment 1005.2 ±27.8 = [977.4, 1033.0]).
+The result is not statistically significant.
+
+**Root cause analysis**: The hypothesis was wrong. Work packets are created by
+`ScanObjects`, which scans one object at a time. Each object's reference fields point
+to DIFFERENT nursery objects (it's rare for two fields within one object to point to the
+same target). So intra-packet target duplication is extremely low, making the cache hit
+rate near zero. The cache only adds overhead (4KB initialization + hash computation per
+slot) with almost no benefit.
+
+**Conclusion**: No measurable improvement. The forwarding pointer cache does not help
+because the fundamental assumption (duplicate targets within work packets) is wrong.
+**Reverted.**

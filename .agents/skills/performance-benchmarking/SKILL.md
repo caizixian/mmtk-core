@@ -682,6 +682,10 @@ These are documented outcomes that future agents should use to avoid repeating f
 
 11. **Always test one change at a time** with a proper A/B comparison against a known baseline. When stacking multiple commits (e.g. body prefetch + forwarding cache), you cannot attribute measured improvements to either change individually. Each experiment should have exactly one independent variable.
 
+12. **A forwarding pointer cache in `process_slot` has no effect** because intra-work-packet target duplication is rare. Work packets are created by `ScanObjects`, which scans one object at a time. Each object's reference fields point to DIFFERENT nursery objects. So the cache hit rate is near zero, and the 4KB initialization + hash overhead is wasted (h2 −0.01%, fop −2.04% with overlapping CIs). Reverted `f3a61d95bb` → `74413fd034`.
+
+13. **Always include run IDs in experiment reports** for traceability. Every experiment should document: experiment run ID, baseline run ID, number of invocations, and whether baseline/experiment were from the same session.
+
 ### Current Known Bottlenecks (from profiling)
 
 Refer to `docs/genimmix-profiling-report.md` and `docs/prefetch-tracing-report.md` for full analysis. Key targets, ordered by potential impact:
