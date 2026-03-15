@@ -666,8 +666,19 @@ pub trait ProcessEdgesWork:
 
     /// Process all the slots in the work packet.
     fn process_slots(&mut self) {
+        use crate::util::prefetch::{prefetch_nta, OBJECT_PREFETCH_DISTANCE};
+
         probe!(mmtk, process_slots, self.slots.len(), self.is_roots());
-        for i in 0..self.slots.len() {
+        let len = self.slots.len();
+        for i in 0..len {
+            // Prefetch object header D positions ahead to hide memory latency.
+            // This loads the future slot to get the object reference, then
+            // prefetches the object's header cache line (mark bits, forwarding word).
+            if i + OBJECT_PREFETCH_DISTANCE < len {
+                if let Some(obj) = self.slots[i + OBJECT_PREFETCH_DISTANCE].load() {
+                    prefetch_nta(obj.to_raw_address());
+                }
+            }
             self.process_slot(self.slots[i])
         }
     }
@@ -870,7 +881,14 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
                 }
             }
 
-            for object in objects_to_scan.iter().copied() {
+            for (idx, object) in objects_to_scan.iter().copied().enumerate() {
+                // Prefetch next object's header to hide klass decompression stall.
+                if idx + crate::util::prefetch::SCAN_PREFETCH_DISTANCE < objects_to_scan.len() {
+                    crate::util::prefetch::prefetch_nta(
+                        objects_to_scan[idx + crate::util::prefetch::SCAN_PREFETCH_DISTANCE]
+                            .to_raw_address(),
+                    );
+                }
                 if <VM as VMBinding>::VMScanning::support_slot_enqueuing(tls, object) {
                     trace!("Scan object (slot) {}", object);
                     // If an object supports slot-enqueuing, we enqueue its slots.

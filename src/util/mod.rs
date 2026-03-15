@@ -68,6 +68,8 @@ pub(crate) mod sanity;
 pub(crate) mod slot_logger;
 /// Utils for collecting statistics.
 pub(crate) mod statistics;
+/// Software prefetch utilities for GC tracing.
+pub(crate) mod prefetch;
 /// A treadmill implementation.
 pub(crate) mod treadmill;
 
