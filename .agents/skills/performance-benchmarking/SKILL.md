@@ -337,7 +337,7 @@ cd openjdk && make CONF=linux-x86_64-server-release THIRD_PARTY_HEAP=$PWD/../mmt
 
 # 2. Run baseline from workspace root
 cd ..
-uv run --project mmtk-core/tools/mmtk-dev mmtk-dev run -b fop,lusearch,xalan -i 10 -n "baseline" # be more descriptive than just baseline
+uv run --project mmtk-core/tools/mmtk-dev mmtk-dev run -b fop,lusearch,xalan -i 5 -n "baseline" # be more descriptive than just baseline
 uv run --project mmtk-core/tools/mmtk-dev mmtk-dev set-baseline before-opt
 
 # 3. Switch to optimization commit and rebuild
@@ -348,7 +348,9 @@ cd ../openjdk && make CONF=linux-x86_64-server-release THIRD_PARTY_HEAP=$PWD/../
 cd ..
 uv run --project mmtk-core/tools/mmtk-dev mmtk-dev compare -n "with optimization" # be more descriptive of what you changed
 
-# 5. Compare additional metrics like STW time
+# 5. Compare additional metrics like STW time on the SAME run (no re-run needed!)
+# IMPORTANT: use --run-id to compare an existing run with a different metric.
+# Do NOT call `compare` without --run-id when you only want a different metric view.
 uv run --project mmtk-core/tools/mmtk-dev mmtk-dev compare --run-id <run-id> --metric time.stw
 uv run --project mmtk-core/tools/mmtk-dev mmtk-dev compare --run-id <run-id> --metric all
 ```
@@ -386,12 +388,15 @@ When `probes_path` is configured, each benchmark invocation also collects MMTk G
 These metrics help diagnose **why** performance changed. Use `--metric` with `compare` to see them:
 
 ```fish
-# Compare a specific metric
-uv run --project mmtk-core/tools/mmtk-dev mmtk-dev compare --metric time.stw
+# Compare a specific metric on an EXISTING run (no re-run needed)
+uv run --project mmtk-core/tools/mmtk-dev mmtk-dev compare --run-id <run-id> --metric time.stw
 
-# Compare all available metrics
-uv run --project mmtk-core/tools/mmtk-dev mmtk-dev compare --metric all
+# Compare all available metrics on an existing run
+uv run --project mmtk-core/tools/mmtk-dev mmtk-dev compare --run-id <run-id> --metric all
 ```
+
+> [!IMPORTANT]
+> **Always use `--run-id` when comparing a different metric on an existing run.** Without `--run-id`, `compare` will re-run all benchmarks from scratch, wasting time. The `--run-id` is printed at the end of every `run` or `compare` output.
 
 The web dashboard also has a metric selector dropdown on the Compare page.
 
@@ -583,7 +588,7 @@ cd mmtk-core && git checkout <parent-commit>
 cd ../openjdk && make CONF=linux-x86_64-server-release THIRD_PARTY_HEAP=$PWD/../mmtk-openjdk/openjdk images
 # 3. Run baseline
 cd ..
-uv run --project mmtk-core/tools/mmtk-dev mmtk-dev run -b lusearch,h2,fop -i 10 -n "baseline: describe parent state"
+uv run --project mmtk-core/tools/mmtk-dev mmtk-dev run -b lusearch,h2,fop -i 5 -n "baseline: describe parent state"
 uv run --project mmtk-core/tools/mmtk-dev mmtk-dev set-baseline <descriptive-name>
 
 # Switch to optimization commit and rebuild
@@ -663,18 +668,21 @@ These are documented outcomes that future agents should use to avoid repeating f
 
 6. **Always validate with microbenchmarks before modifying production hot paths.** The `benches/mock_bench/` directory contains prefetching (`prefetch_tracing.rs`) and AMAC (`amac_tracing.rs`) benchmarks that model the tracing loop. Use these to validate prefetch distances, cache hints, and pipeline strategies before touching `gc_work.rs`.
 
+7. **Software prefetching in the tracing loop works** (-2.66% geomean, -3.83% on h2). Prefetching object headers 16 slots ahead in `process_slots()` and 4 objects ahead in `ScanObjectsWork::do_work_common()` with NTA hint effectively hides memory latency. Validated with microbenchmarks first. Lusearch is neutral because it's scheduler-dominated, not tracing-dominated.
+   See `docs/prefetch-tracing-report.md`.
+
 ### Current Known Bottlenecks (from profiling)
 
-Refer to `docs/genimmix-profiling-report.md` for full analysis. Key targets, ordered by potential impact:
+Refer to `docs/genimmix-profiling-report.md` and `docs/prefetch-tracing-report.md` for full analysis. Key targets, ordered by potential impact:
 
-| Bottleneck | % of GC time | Root cause | Promising fix | Existing code/references |
-|------------|-------------|------------|---------------|-------------------------|
-| ProcessEdgesWork pointer chasing | 29% (per-edge) | Memory latency on slot/oop loads | Prefetching edges N+k ahead in `process_slots()` | `benches/mock_bench/prefetch_tracing.rs` has validated E=32/O=16 NTA config |
-| PlanScanObjects header stall | 53% (self) | Cache miss loading compressed klass | Prefetching object headers during scan | `benches/mock_bench/prefetch_tracing.rs`, `Slot::prefetch_load()` exists but unused |
-| Side metadata access | 56% (self) | Cache miss on metadata byte load | Prefetching metadata alongside object headers | Could combine with object header prefetch |
-| CopySpace::trace_object CAS | 60% (H2) | Cache-line contention on forwarding bits | Work partitioning, reducing duplicate tracing | Requires scheduler-level changes |
-| Scheduler futex overhead | 52% (lusearch) | 32 GC threads competing for small work packets in 63MB heap | Larger work packets, adaptive thread count | Only matters with many GC threads + small heap |
-| Allocation fast path (JIT) | Not visible in Rust profiles | JIT-compiled in `mmtkBarrierSetAssembler_x86.cpp` | C2 IR optimization in binding | `mmtk-openjdk/openjdk/cpu/x86/mmtkBarrierSetAssembler_x86.cpp` |
+| Bottleneck | % of GC time | Root cause | Promising fix | Status |
+|------------|-------------|------------|---------------|--------|
+| ProcessEdgesWork pointer chasing | 29% (per-edge) | Memory latency on slot/oop loads | Prefetching edges 16 ahead in `process_slots()` | ✅ Addressed in `79463f7f72` (-3.83% h2) |
+| PlanScanObjects header stall | 53% (self) | Cache miss loading compressed klass | Prefetching object headers 4 ahead during scan | ✅ Addressed in `79463f7f72` |
+| Side metadata access | 56% (self) | Cache miss on metadata byte load | Prefetch metadata alongside object header | 🔲 Next target — may combine with existing prefetch |
+| CopySpace::trace_object CAS | 60% (H2) | Cache-line contention on forwarding bits | Work partitioning, reducing duplicate tracing | 🔲 Requires scheduler-level changes |
+| Scheduler futex overhead | 52% (lusearch) | 32 GC threads competing for small work packets in 63MB heap | Larger work packets, adaptive thread count | 🔲 Only matters with many GC threads + small heap |
+| Allocation fast path (JIT) | Not visible in Rust profiles | JIT-compiled in `mmtkBarrierSetAssembler_x86.cpp` | C2 IR optimization in binding | 🔲 Requires binding changes |
 
 ### Session-End Checklist
 
