@@ -254,6 +254,15 @@ impl VMMap for Map32 {
             .copied()
             .unwrap_or(SpaceDescriptor::UNINITIALIZED)
     }
+
+    fn prefetch_descriptor_for_address(&self, address: Address) {
+        let index = address.chunk_index();
+        if let Some(entry) = self.descriptor_map.get(index) {
+            crate::util::prefetch::prefetch_nta(
+                Address::from_ref(entry),
+            );
+        }
+    }
 }
 
 impl Map32 {

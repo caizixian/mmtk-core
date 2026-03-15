@@ -666,6 +666,7 @@ pub trait ProcessEdgesWork:
 
     /// Process all the slots in the work packet.
     fn process_slots(&mut self) {
+        use crate::mmtk::VM_MAP;
         use crate::util::prefetch::{prefetch_nta, OBJECT_PREFETCH_DISTANCE};
 
         probe!(mmtk, process_slots, self.slots.len(), self.is_roots());
@@ -674,9 +675,13 @@ pub trait ProcessEdgesWork:
             // Prefetch object header D positions ahead to hide memory latency.
             // This loads the future slot to get the object reference, then
             // prefetches the object's header cache line (mark bits, forwarding word).
+            // We also prefetch the descriptor_map entry for the object's chunk,
+            // which will be accessed during in_space() dispatch in trace_object().
             if i + OBJECT_PREFETCH_DISTANCE < len {
                 if let Some(obj) = self.slots[i + OBJECT_PREFETCH_DISTANCE].load() {
-                    prefetch_nta(obj.to_raw_address());
+                    let addr = obj.to_raw_address();
+                    prefetch_nta(addr);
+                    VM_MAP.prefetch_descriptor_for_address(addr);
                 }
             }
             self.process_slot(self.slots[i])
