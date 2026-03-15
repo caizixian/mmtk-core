@@ -139,3 +139,55 @@ and consistent with the profiling data.
      validated on real workloads. Testing wider range (O=8, O=32, S=2, S=8) could
      yield marginal gains, but the slot-processing loop timing is well-matched.
 
+## Experiment: Descriptor Map Prefetch
+
+**Commit**: `f489a27091` (reverted at `8111ea5663`)
+
+**Hypothesis**: Prefetching `descriptor_map[chunk_index]` alongside the object header
+in `process_slots()` would hide the latency of space descriptor lookup (6.5% of GC
+self-time in the post-prefetch profile).
+
+**Implementation**: Added `prefetch_descriptor_for_address()` to the `VMMap` trait,
+implemented in `Map32` to prefetch the descriptor_map entry for the given address's
+chunk index.
+
+**Results** (10 invocations, 3× minheap, 32 GC threads):
+
+| Benchmark | Header-only prefetch | +Descriptor prefetch | Diff |
+|-----------|---------------------:|---------------------:|-----:|
+| fop       | 1026.4 ms            | 1016.7 ms            | −0.94% (noise) |
+| h2        | 4208.2 ms            | 4243.6 ms            | +0.84% (noise) |
+
+**Conclusion**: No measurable impact. During nursery GC, only a few chunks contain
+nursery objects, so the `descriptor_map` entries for active chunks stay warm in L2/L3
+cache. The 6.5% profile self-time is computation/dispatch overhead, not cache misses.
+**Reverted.**
+
+## Experiment: Multi-Cache-Line Body Prefetch in ScanObjects
+
+**Commit**: `d3a987367c` (reverted at `08afa68e55`)
+
+**Hypothesis**: When `ScanObjects` prefetches an object header D=4 positions ahead,
+also prefetching the second (+64 bytes) and third (+128 bytes) cache lines would
+pre-warm reference fields that `scan_object()` iterates, reducing field-iteration
+cache misses for objects spanning multiple cache lines.
+
+**Implementation**: In `ScanObjectsWork::do_work_common`, added two additional
+`prefetch_nta` calls at `addr + 64` and `addr + 128` alongside the existing header
+prefetch.
+
+**Results** (10 invocations, 3× minheap, 32 GC threads):
+
+| Benchmark | Header-only prefetch | +Body prefetch (3 CL) | Diff |
+|-----------|---------------------:|----------------------:|-----:|
+| fop       | 1026.4 ms (5inv)     | 1012.5 ms             | −1.35% |
+| h2        | 4243.6 ms (5inv)     | 4216.9 ms             | −0.63% |
+
+**Note**: The baseline used 5 invocations while the experiment used 10, which
+introduces some measurement uncertainty. The improvement is within noise.
+
+**Conclusion**: Marginal improvement (≤1%). Most Java objects in nursery GC are small
+(< 64 bytes), so their reference fields are on the same cache line as the header.
+The extra prefetches are mostly wasted for small objects and only help for objects
+with many reference fields spanning multiple cache lines. **Reverted** to isolate
+the forwarding cache experiment.

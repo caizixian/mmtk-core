@@ -680,6 +680,8 @@ These are documented outcomes that future agents should use to avoid repeating f
 
 10. **Prefetching `descriptor_map` entries had no measurable impact** (h2 +0.84%, fop -0.94%, both in noise). During nursery GC, only a few chunks contain nursery objects, so the `descriptor_map[chunk_index]` entries stay warm in L2/L3 cache. The 6.5% profile self-time in `get_descriptor_for_address` is likely attributable to the computation/dispatch overhead rather than actual cache misses on the descriptor_map array. Reverted at `8111ea5663`.
 
+11. **Always test one change at a time** with a proper A/B comparison against a known baseline. When stacking multiple commits (e.g. body prefetch + forwarding cache), you cannot attribute measured improvements to either change individually. Each experiment should have exactly one independent variable.
+
 ### Current Known Bottlenecks (from profiling)
 
 Refer to `docs/genimmix-profiling-report.md` and `docs/prefetch-tracing-report.md` for full analysis. Key targets, ordered by potential impact:
