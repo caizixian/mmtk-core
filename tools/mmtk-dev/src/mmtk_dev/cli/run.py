@@ -36,17 +36,20 @@ console = Console()
 )
 @click.option("--db", default=None, type=click.Path(), help="Path to SQLite database")
 @click.option("--note", "-n", default=None, help="Optional note to attach to this run")
+@click.option("--gc-threads", default=None, type=int, help="Number of GC threads (-XX:ParallelGCThreads)")
+@click.option("--app-threads", default=None, type=int, help="Number of application threads (DaCapo -t)")
 @click.option("--debug", is_flag=True, help="Print the generated running-ng config and commands")
-def run_cmd(benchmarks, plan, invocations, heap_multiplier, iterations, profile, log_dir, db, note, debug):
+def run_cmd(benchmarks, plan, invocations, heap_multiplier, iterations, profile, log_dir, db, note, gc_threads, app_threads, debug):
     """Run benchmarks and record results."""
     ws = WorkspaceConfig.load()
     db_path = Path(db) if db else ws.db_path
     init_db(db_path)
 
     bm_list = resolve_benchmarks(benchmarks, ws)
-    plan, invocations, heap_multiplier, iterations = resolve_defaults(
+    plan, invocations, heap_multiplier, iterations, gc_threads, app_threads = resolve_defaults(
         ws, plan=plan, invocations=invocations,
         heap_multiplier=heap_multiplier, iterations=iterations,
+        gc_threads=gc_threads, app_threads=app_threads,
     )
 
     build_id, testbed_id, core_info, binding_info = register_environment(
@@ -63,6 +66,10 @@ def run_cmd(benchmarks, plan, invocations, heap_multiplier, iterations, profile,
     console.print(
         f"  Invocations: {invocations}, Heap: {heap_multiplier}x, Iterations: {iterations}"
     )
+    if gc_threads is not None:
+        console.print(f"  GC threads: {gc_threads}")
+    if app_threads is not None:
+        console.print(f"  App threads: {app_threads}")
     if note:
         console.print(f"  Note: [italic]{note}[/italic]")
 
@@ -97,7 +104,7 @@ def run_cmd(benchmarks, plan, invocations, heap_multiplier, iterations, profile,
         benchmarks=bm_list, plan=plan, profile=profile,
         invocations=invocations, heap_multiplier=heap_multiplier,
         iterations=iterations, log_dir=Path(log_dir) if log_dir else None,
-        note=note,
+        note=note, gc_threads=gc_threads, app_threads=app_threads,
     )
 
     if not orch.success:

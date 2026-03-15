@@ -48,6 +48,8 @@ console = Console()
 )
 @click.option("--db", default=None, type=click.Path(), help="Path to SQLite database")
 @click.option("--note", "-n", default=None, help="Optional note to attach to this run")
+@click.option("--gc-threads", default=None, type=int, help="Number of GC threads (-XX:ParallelGCThreads)")
+@click.option("--app-threads", default=None, type=int, help="Number of application threads (DaCapo -t)")
 def compare_cmd(
     baseline,
     benchmarks,
@@ -61,6 +63,8 @@ def compare_cmd(
     metric,
     db,
     note,
+    gc_threads,
+    app_threads,
 ):
     """Compare current build performance against a baseline.
 
@@ -100,9 +104,10 @@ def compare_cmd(
         bm_list = sorted(baseline_results.keys())
 
     plan_resolved = plan or (baseline_build["gc_plan"] if baseline_build else ws.default_plan)
-    plan_resolved, invocations, heap_multiplier, iterations = resolve_defaults(
+    plan_resolved, invocations, heap_multiplier, iterations, gc_threads, app_threads = resolve_defaults(
         ws, plan=plan_resolved, invocations=invocations,
         heap_multiplier=heap_multiplier, iterations=iterations,
+        gc_threads=gc_threads, app_threads=app_threads,
     )
 
     # Either use existing run or run new benchmarks
@@ -137,7 +142,7 @@ def compare_cmd(
             benchmarks=bm_list, plan=plan_resolved, profile=profile,
             invocations=invocations, heap_multiplier=heap_multiplier,
             iterations=iterations,
-            note=note,
+            note=note, gc_threads=gc_threads, app_threads=app_threads,
         )
 
         if not orch.success:

@@ -32,6 +32,8 @@ class RunConfig:
     dacapo_jar: Path | None = None
     log_dir: Path | None = None  # If None, uses temp dir
     probes_path: Path | None = None  # Path to probes repo for MMTk stats
+    gc_threads: int | None = None  # Number of GC threads (-XX:ParallelGCThreads)
+    app_threads: int | None = None  # Number of application threads (DaCapo -t)
 
 
 @dataclass
@@ -143,6 +145,19 @@ class LocalRunner:
             callback = _SUITE_CALLBACKS.get(config.suite)
             if callback:
                 running_config["overrides"][f"suites.{config.suite}.callback"] = callback
+
+        # Add GC thread count modifier if specified
+        if config.gc_threads is not None:
+            running_config["modifiers"]["gc_threads"] = {
+                "type": "JVMArg",
+                "val": f"-XX:ParallelGCThreads={config.gc_threads}",
+            }
+            config_parts.append("gc_threads")
+            running_config["configs"] = ["|".join(config_parts)]
+
+        # Add application thread count override if specified
+        if config.app_threads is not None:
+            running_config["overrides"][f"suites.{config.suite}.n"] = config.app_threads
 
         return running_config
 

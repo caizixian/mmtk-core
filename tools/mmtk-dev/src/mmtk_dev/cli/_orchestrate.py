@@ -40,13 +40,17 @@ def resolve_defaults(
     invocations: int | None = None,
     heap_multiplier: float | None = None,
     iterations: int | None = None,
-) -> tuple[str, int, float, int]:
-    """Resolve CLI args with config defaults. Returns (plan, invocations, heap_mul, iterations)."""
+    gc_threads: int | None = None,
+    app_threads: int | None = None,
+) -> tuple[str, int, float, int, int | None, int | None]:
+    """Resolve CLI args with config defaults. Returns (plan, invocations, heap_mul, iterations, gc_threads, app_threads)."""
     return (
         plan or ws.default_plan,
         invocations or ws.default_invocations,
         heap_multiplier if heap_multiplier is not None else ws.default_heap_multiplier,
         iterations or ws.default_iterations,
+        gc_threads if gc_threads is not None else ws.gc_threads,
+        app_threads if app_threads is not None else ws.app_threads,
     )
 
 
@@ -115,6 +119,8 @@ def execute_run(
     metadata: dict | None = None,
     note: str | None = None,
     store_metrics: bool = True,
+    gc_threads: int | None = None,
+    app_threads: int | None = None,
 ) -> OrchestrateResult:
     """Create a run, execute benchmarks, store results. Returns the orchestration result."""
     run_id = queries.create_run(
@@ -141,6 +147,8 @@ def execute_run(
         dacapo_jar=ws.dacapo_jar,
         log_dir=log_dir,
         probes_path=ws.probes_path,
+        gc_threads=gc_threads,
+        app_threads=app_threads,
     )
 
     result = runner.run_benchmarks(run_config)

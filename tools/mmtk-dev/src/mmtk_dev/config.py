@@ -55,6 +55,8 @@ class WorkspaceConfig:
     default_invocations: int = 10
     default_heap_multiplier: float = 3.0
     default_iterations: int = 6
+    gc_threads: int | None = None
+    app_threads: int | None = None
     dacapo_jar: Path | None = None
     probes_path: Path | None = None
 
@@ -105,6 +107,10 @@ class WorkspaceConfig:
             config.default_heap_multiplier = defaults["heap_multiplier"]
         if "iterations" in defaults:
             config.default_iterations = defaults["iterations"]
+        if "gc_threads" in defaults:
+            config.gc_threads = defaults["gc_threads"]
+        if "app_threads" in defaults:
+            config.app_threads = defaults["app_threads"]
 
         if "api" in data and "url" in data["api"]:
             config.api_url = data["api"]["url"]

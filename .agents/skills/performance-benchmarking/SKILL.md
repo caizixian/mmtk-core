@@ -35,12 +35,16 @@ benchmarks = ["fop"]
 invocations = 10
 heap_multiplier = 3.0
 iterations = 6
+gc_threads = 32        # optional: -XX:ParallelGCThreads
+app_threads = 32       # optional: DaCapo -t threads
 ```
 
 - **`probes_path`**: When set, mmtk-dev auto-adds probes classpath, JVM args (`-Dprobes=RustMMTk`), and the DaCapo callback for MMTk statistics.
 - **`heap_multiplier`**: Heap size = multiplier × minheap. Use 2–3× for stress-testing GC. The minheap values are defined in `mmtk-core/tools/mmtk-dev/src/mmtk_dev/config.py` (`DACAPO_MINHEAP` dict).
 - **`iterations`**: DaCapo timing iterations per invocation. More iterations = more warmup.
 - **`invocations`**: Number of JVM invocations. Use ≥10 for meaningful CI, ≥20 for CI mode.
+- **`gc_threads`**: Optional. Number of GC worker threads (`-XX:ParallelGCThreads`). If omitted, JVM auto-detects.
+- **`app_threads`**: Optional. Number of DaCapo application threads (`-t`). If omitted, DaCapo auto-detects.
 
 ## The Performance Optimization Workflow
 
@@ -78,6 +82,8 @@ uv run --project mmtk-core/tools/mmtk-dev mmtk-dev run -b fop,lusearch,xalan -i 
 | `-m, --heap-multiplier` | Heap size = N × minheap | `-m 3.0` |
 | `--iterations` | DaCapo timing iterations per invocation | `--iterations 6` |
 | `-n, --note` | Optional note to attach to the run | `-n "baseline before change"` |
+| `--gc-threads` | GC worker threads (`-XX:ParallelGCThreads`) | `--gc-threads 32` |
+| `--app-threads` | Application threads (DaCapo `-t`) | `--app-threads 32` |
 | `--profile` | Build profile (`release`, `fastdebug`) | `--profile release` |
 | `--debug` | Print the generated running-ng YAML config | `--debug` |
 
@@ -146,6 +152,9 @@ uv run --project mmtk-core/tools/mmtk-dev mmtk-dev compare --run-id <run-id>
 | `--run-id` | Compare existing run (skip running) | |
 | `--metric` | Metric(s) to compare: name, comma-separated, or `all` | |
 | `--threshold` | Significance threshold | `0.02` (2%) |
+| `-n, --note` | Optional note to attach to the comparison run | |
+| `--gc-threads` | GC worker threads (`-XX:ParallelGCThreads`) | |
+| `--app-threads` | Application threads (DaCapo `-t`) | |
 
 > [!WARNING]
 > **`-b` in `compare` means `--baseline`, not benchmarks.** Use `--benchmarks` to specify which benchmarks to run. For example:
@@ -448,3 +457,210 @@ Build IDs are deterministic (hash of commit + plan), so the same code + plan alw
 | Wrong commit hash in baseline | Use `git checkout`/`jj edit` to switch commits, don't revert files |
 | GC optimization shows no improvement | Try tighter heap (2–3×); at 5× GC paths may be unmeasurable |
 | `compare -b X` says "baseline not found" | `-b` means `--baseline` name, use `--benchmarks` for benchmarks |
+
+## Autonomous Profiling-Driven Optimization Workflow
+
+This section defines a structured, repeatable workflow for an agent to autonomously discover, implement, and validate performance optimizations. Follow this cycle for each optimization attempt.
+
+### The Optimization Cycle
+
+```
+ 1. Profile       →  2. Identify Bottleneck  →  3. Design Fix
+      ↑                                              ↓
+ 6. Report        ←  5. Benchmark            ←  4. Implement
+      ↓
+ 7. Next iteration (go to 1 or 3)
+```
+
+### Step 1: Profile
+
+Generate profiling data to find where time is actually spent. Use async-profiler with collapsed stacks, then analyze with the `flamegraph_query` skill.
+
+```fish
+# Profile a benchmark with async-profiler (CPU, DWARF cstack for native frames)
+./openjdk/build/linux-x86_64-server-release/images/jdk/bin/java \
+    -XX:+UseThirdPartyHeap -XX:ThirdPartyHeapOptions=plan=GenImmix \
+    -XX:MetaspaceSize=500M -Xms63m -Xmx63m \
+    -agentpath:/path/to/libasyncProfiler.so=start,event=cpu,cstack=dwarf,file=profile.jfr \
+    -jar dacapo-23.11-MR2-chopin.jar lusearch
+
+# Convert to collapsed stacks for analysis
+jfrconv --cpu -o collapsed profile.jfr > profile.collapsed
+
+# Query with flamegraph_query skill
+python3 .agents/skills/flamegraph_query/flamegraph_query.py profile.collapsed top -n 30
+python3 .agents/skills/flamegraph_query/flamegraph_query.py profile.collapsed children "ProcessEdgesWork::do_work"
+```
+
+For instruction-level analysis (when function-level is too flat due to inlining):
+```fish
+# Build with fastdebug for DWARF debug info
+DEBUG_LEVEL=fastdebug
+cd openjdk && sh configure --disable-warnings-as-errors --with-debug-level=$DEBUG_LEVEL
+make CONF=linux-x86_64-server-$DEBUG_LEVEL THIRD_PARTY_HEAP=$PWD/../mmtk-openjdk/openjdk images
+
+# Record with perf and annotate
+perf record -e cpu-clock --call-graph dwarf -o perf.data -- ./openjdk/build/.../jdk/bin/java ...
+perf annotate -i perf.data --symbol=<function>
+```
+
+### Step 2: Identify Bottleneck
+
+Classify the bottleneck type to choose the right optimization strategy:
+
+| Bottleneck Type | Profile Signature | Optimization Strategy |
+|----------------|-------------------|----------------------|
+| **Memory latency** | Stalls after `mov` loads, pointer chasing | Prefetching, batching, layout changes |
+| **Cache contention** | `lock cmpxchg` stalls, CAS retries | Work partitioning, lock-free paths, reducing sharing |
+| **Bandwidth** | `memset`/`memcpy` dominating | NT stores (on old CPUs), demand-zeroing, lazy init |
+| **Scheduler overhead** | `futex`, `poll_schedulable_work` | Larger work packets, reduced synchronization |
+| **Compute** | Arithmetic/logic instructions dominating | SIMD, algorithmic improvements |
+
+> [!IMPORTANT]
+> **Most GC hotspots are memory-latency-bound**, not compute-bound. If `perf annotate` shows stalls after loads (e.g., the instruction after a `mov` from memory has high sample count), the CPU is waiting for memory, not for computation. Computational optimizations (SIMD, caching loads, reducing arithmetic) will NOT help. Use prefetching or restructuring instead.
+
+### Step 3: Design the Fix
+
+Before implementing, **search for relevant academic papers and prior work**:
+
+- Search the web for papers on the specific optimization technique (e.g., "prefetching garbage collection tracing", "non-temporal stores memory zeroing", "work stealing GC scheduling")
+- Check if the technique has known limitations on modern hardware
+- Look for existing implementations in other GC frameworks (ZGC, Shenandoah, Go GC, etc.)
+- Read the paper fully and note their benchmarking methodology and hardware
+- **Avoid repeating known-failed approaches** — check the Lessons Learned section below
+
+Then assess the expected impact:
+
+1. **How much of total time does this bottleneck represent?**
+   - GC workers are only 15-20% of total time in typical benchmarks
+   - A 50% improvement within GC tracing saves only ~10% of total runtime
+   - Mutation-side improvements (allocation, barriers) affect the other 80%
+
+2. **Is the optimization addressing the root cause?**
+   - If the bottleneck is `memset`, check if the CPU's `memset` already uses NT stores (ERMS)
+   - If the bottleneck is cache misses, prefetching helps; faster computation does not
+   - If the bottleneck is lock contention, reducing critical section time helps; prefetching does not
+
+3. **What could go wrong?**
+   - Prefetching memory that's already cached wastes i-cache and bandwidth
+   - NT stores for memory that's immediately reused forces cache re-fetch
+   - Additional instructions in a hot loop can increase i-cache pressure
+
+### Step 4: Implement
+
+Follow these rules during implementation:
+
+1. **Commit changes before benchmarking** — `mmtk-dev` records the git commit hash
+2. **Make minimal, focused changes** — one optimization per commit for clean A/B comparison
+3. **Use `git checkout` for baselines** — never revert files manually (commit hash must differ)
+4. **Add comments citing the profiling data** that motivated the change
+
+### Step 5: Benchmark
+
+Use `mmtk-dev` for statistically rigorous comparison:
+
+```fish
+# If no baseline exists for the current config, create one:
+# 1. Checkout the parent commit
+cd mmtk-core && git checkout <parent-commit>
+# 2. Build
+cd ../openjdk && make CONF=linux-x86_64-server-release THIRD_PARTY_HEAP=$PWD/../mmtk-openjdk/openjdk images
+# 3. Run baseline
+cd ..
+uv run --project mmtk-core/tools/mmtk-dev mmtk-dev run -b lusearch,h2,fop -i 10 -n "baseline: describe parent state"
+uv run --project mmtk-core/tools/mmtk-dev mmtk-dev set-baseline <descriptive-name>
+
+# Switch to optimization commit and rebuild
+cd mmtk-core && git checkout <opt-branch>
+cd ../openjdk && make CONF=linux-x86_64-server-release THIRD_PARTY_HEAP=$PWD/../mmtk-openjdk/openjdk images
+
+# Compare
+cd ..
+uv run --project mmtk-core/tools/mmtk-dev mmtk-dev compare -n "describe the optimization"
+```
+
+**Reusing baselines:** If you revert to the exact baseline commit (verified via `git log`), you can reuse an existing baseline without re-running it. The same commit + plan + profile always produces the same build ID.
+
+**Benchmark selection for the optimization type:**
+
+| Optimization area | Primary benchmarks | Why |
+|-------------------|-------------------|-----|
+| Tracing / copying | `h2`, `lusearch` | H2 is tracing-dominated (95% of GC), lusearch has high allocation |
+| Allocation path | `lusearch`, `xalan` | High allocation rates |
+| Sweep / release | `lusearch`, `fop` | High object churn |
+| STW pause time | `spring`, `tomcat` | Latency-sensitive workloads |
+
+### Step 6: Report
+
+**Every optimization attempt — successful or not — MUST be documented.**
+
+Write a report in `docs/` with this structure:
+
+```markdown
+# [Optimization Name] Experiment Report
+
+**Date:** YYYY-MM-DD
+**Status:** ✅ Improvement / ❌ No improvement — reverted / ➡️ Neutral
+**Commit:** `<hash>` (reverted in `<hash>` if applicable)
+
+## Hypothesis
+What profiling data motivated this? What did you expect to happen?
+
+## Changes Made
+What files were modified and how?
+
+## Benchmark Results
+Table with baseline vs. optimized, CI, diff%, status.
+
+## Analysis
+Why did it work or not work? What did you learn?
+
+## Conclusions
+What's the next step based on these results?
+```
+
+Commit the report with a descriptive message (e.g., `docs: add NT zeroing experiment report`).
+
+### Step 7: Iterate
+
+After each attempt, decide the next action:
+
+| Result | Action |
+|--------|--------|
+| ✅ Improvement ≥ 2% | Keep the change. Re-profile to find the next bottleneck. |
+| ➡️ Neutral (< 2%) | Revert unless the change simplifies code. Move to next bottleneck. |
+| ❌ Regression | Revert immediately. Analyze why. Document in report. Move on. |
+| High variance | Increase invocations. Check for system noise. Re-run. |
+
+### Lessons Learned (from past optimization attempts)
+
+These are documented outcomes that future agents should use to avoid repeating failed approaches:
+
+1. **Non-temporal zeroing does NOT help on modern CPUs** (AMD Zen 3, Intel Ivy Bridge+).
+   The standard `memset` already uses `rep stosb` with ERMS which internally does NT stores for large fills.
+   See `docs/nontemporal-zeroing-report.md`.
+
+2. **SIMD hole search regressed (+11.46%)** because `get_next_available_lines` scans only 2–16 bytes.
+   SSE2 setup and `pmovmskb` FP→INT domain crossing (5 cycles on Zen 3) costs more than scalar code.
+   See `docs/genimmix-profiling-report.md`.
+
+3. **Cached mark states had no effect (−0.65%)** because `Ordering::Acquire` loads compile to plain `mov` on x86 (no fence). Saving 1–2 ns in a function that doesn't appear in the profile is unmeasurable.
+   See `docs/genimmix-profiling-report.md`.
+
+4. **The allocation fast path is NOT a bottleneck.** It has ~0 samples in profiling. Don't optimize it.
+   The allocation **slow path** (page acquisition + zeroing) is what shows up in profiles.
+
+5. **All GC hotspots are memory-latency-bound.** Computational optimizations (faster arithmetic, fewer branches, SIMD) do not help when the CPU is stalled on memory.
+
+### Current Known Bottlenecks (from profiling)
+
+Refer to `docs/genimmix-profiling-report.md` for the full analysis. Key targets:
+
+| Bottleneck | % of GC time | Root cause | Promising fix |
+|------------|-------------|------------|---------------|
+| CopySpace::trace_object CAS | 60% (H2) | Cache-line contention on forwarding bits | Work partitioning, reducing duplicate tracing |
+| ProcessEdgesWork pointer chasing | 29% (per-edge) | Memory latency on slot/oop loads | Prefetching edges N+k ahead in the processing loop |
+| PlanScanObjects header stall | 53% (self) | Cache miss loading compressed klass | Prefetching object headers during scan |
+| Side metadata access | 56% (self) | Cache miss on metadata byte load | Prefetching metadata alongside object headers |
+| Scheduler futex overhead | 52% (lusearch) | 32 GC threads competing for small work packets in 63MB heap | Larger work packets, adaptive thread count |
+
