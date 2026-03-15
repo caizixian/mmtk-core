@@ -142,6 +142,10 @@ and consistent with the profiling data.
 ## Experiment: Descriptor Map Prefetch
 
 **Commit**: `f489a27091` (reverted at `8111ea5663`)
+**Experiment run**: `a47316903934` ("descriptor-map-prefetch", 10 invocations)
+**Baseline**: No dedicated baseline run was collected for this experiment; the
+comparison used numbers from the previous session's header-only prefetch run
+`739b7ba79d3c` (5 invocations, different session). This is a methodological weakness.
 
 **Hypothesis**: Prefetching `descriptor_map[chunk_index]` alongside the object header
 in `process_slots()` would hide the latency of space descriptor lookup (6.5% of GC
@@ -151,12 +155,15 @@ self-time in the post-prefetch profile).
 implemented in `Map32` to prefetch the descriptor_map entry for the given address's
 chunk index.
 
-**Results** (10 invocations, 3× minheap, 32 GC threads):
+**Results** (3× minheap, 32 GC threads):
 
-| Benchmark | Header-only prefetch | +Descriptor prefetch | Diff |
-|-----------|---------------------:|---------------------:|-----:|
-| fop       | 1026.4 ms            | 1016.7 ms            | −0.94% (noise) |
-| h2        | 4208.2 ms            | 4243.6 ms            | +0.84% (noise) |
+| Run ID | Description | fop (ms) | h2 (ms) | Invocations |
+|--------|-------------|----------|---------|-------------|
+| `a47316903934` | +descriptor prefetch | 1016.7 | 4243.6 | 10 |
+
+Without a same-session baseline, impact cannot be reliably quantified.
+The absolute numbers are consistent with header-only prefetch runs from
+other sessions, suggesting no measurable improvement.
 
 **Conclusion**: No measurable impact. During nursery GC, only a few chunks contain
 nursery objects, so the `descriptor_map` entries for active chunks stay warm in L2/L3
@@ -166,6 +173,14 @@ cache. The 6.5% profile self-time is computation/dispatch overhead, not cache mi
 ## Experiment: Multi-Cache-Line Body Prefetch in ScanObjects
 
 **Commit**: `d3a987367c` (reverted at `08afa68e55`)
+**Experiment run**: `9eb66ebb3c3f` ("body-prefetch-3-cachelines", 10 invocations)
+**Baseline run**: `a47316903934` ("descriptor-map-prefetch", 10 invocations)
+
+> [!WARNING]
+> The baseline run `a47316903934` had both header prefetch AND descriptor-map
+> prefetch applied. However, the descriptor-map prefetch was independently shown
+> to have no measurable impact, so this baseline is approximately equivalent to
+> header-only prefetch. This is still not a proper A/B comparison.
 
 **Hypothesis**: When `ScanObjects` prefetches an object header D=4 positions ahead,
 also prefetching the second (+64 bytes) and third (+128 bytes) cache lines would
@@ -178,16 +193,14 @@ prefetch.
 
 **Results** (10 invocations, 3× minheap, 32 GC threads):
 
-| Benchmark | Header-only prefetch | +Body prefetch (3 CL) | Diff |
-|-----------|---------------------:|----------------------:|-----:|
-| fop       | 1026.4 ms (5inv)     | 1012.5 ms             | −1.35% |
-| h2        | 4243.6 ms (5inv)     | 4216.9 ms             | −0.63% |
+| Run ID | Description | fop (ms) | h2 (ms) |
+|--------|-------------|----------|---------|
+| `a47316903934` | baseline (header+descriptor prefetch) | 1016.7 | 4243.6 |
+| `9eb66ebb3c3f` | +body prefetch (3 cache lines) | 1012.5 | 4216.9 |
+| | **Diff** | **−0.41%** | **−0.63%** |
 
-**Note**: The baseline used 5 invocations while the experiment used 10, which
-introduces some measurement uncertainty. The improvement is within noise.
-
-**Conclusion**: Marginal improvement (≤1%). Most Java objects in nursery GC are small
-(< 64 bytes), so their reference fields are on the same cache line as the header.
-The extra prefetches are mostly wasted for small objects and only help for objects
-with many reference fields spanning multiple cache lines. **Reverted** to isolate
-the forwarding cache experiment.
+**Conclusion**: Marginal improvement (≤1%), within noise. Most Java objects in nursery
+GC are small (< 64 bytes), so their reference fields are on the same cache line as the
+header. The extra prefetches are mostly wasted for small objects and only help for
+objects with many reference fields spanning multiple cache lines. **Reverted** to
+isolate the forwarding cache experiment.
