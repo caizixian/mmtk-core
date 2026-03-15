@@ -47,6 +47,7 @@ console = Console()
     help="Comma-separated metric names to compare (e.g. time.stw,time.other)",
 )
 @click.option("--db", default=None, type=click.Path(), help="Path to SQLite database")
+@click.option("--note", "-n", default=None, help="Optional note to attach to this run")
 def compare_cmd(
     baseline,
     benchmarks,
@@ -59,6 +60,7 @@ def compare_cmd(
     run_id,
     metric,
     db,
+    note,
 ):
     """Compare current build performance against a baseline.
 
@@ -135,6 +137,7 @@ def compare_cmd(
             benchmarks=bm_list, plan=plan_resolved, profile=profile,
             invocations=invocations, heap_multiplier=heap_multiplier,
             iterations=iterations,
+            note=note,
         )
 
         if not orch.success:
