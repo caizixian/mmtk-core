@@ -84,11 +84,4 @@ pub trait VMMap: Sync {
     /// Get the space descriptor for the given address. Return SpaceDescriptor::UNINITIALIZED if the
     /// address is not within the MMTk heap range, or not within MMTk spaces.
     fn get_descriptor_for_address(&self, address: Address) -> SpaceDescriptor;
-
-    /// Prefetch the descriptor map entry for the given address.
-    /// This is used to hide memory latency when the descriptor will be needed soon
-    /// (e.g., during object tracing when we prefetch D slots ahead).
-    /// The default implementation is a no-op; Map32 overrides this to prefetch
-    /// the descriptor_map array entry for the object's chunk.
-    fn prefetch_descriptor_for_address(&self, _address: Address) {}
 }
