@@ -233,35 +233,35 @@ impl Block {
                 _ => unreachable!(),
             }
         } else {
+            // Calculate number of marked lines and holes.
+            let mut marked_lines = 0;
+            let mut holes = 0;
+            let mut prev_line_is_marked = true;
             let line_mark_state = line_mark_state.unwrap();
-            let mark_data = self.line_mark_table();
 
-            // Pass 1: Fast counting of marked lines and holes.
-            let (marked_lines, holes) = sweep_count(mark_data.as_slice(), line_mark_state);
-
-            // Pass 2: Side effects on unmarked lines (clearing stale marks, zeroing, pin bits).
-            // This pass is only needed in specific configurations.
-            let needs_mark_clear = line_mark_state > Line::MAX_MARK_STATE - 2;
-            #[allow(unused_variables)]
-            let needs_side_effects = needs_mark_clear
-                || cfg!(feature = "immix_zero_on_release")
-                || cfg!(feature = "object_pinning");
-            if needs_side_effects {
-                for line in self.lines() {
-                    if !line.is_marked(line_mark_state) {
-                        if needs_mark_clear {
-                            line.mark(0);
-                        }
-                        #[cfg(feature = "immix_zero_on_release")]
-                        crate::util::memory::zero(line.start(), Line::BYTES);
-
-                        #[cfg(feature = "object_pinning")]
-                        if let MetadataSpec::OnSide(side) =
-                            *VM::VMObjectModel::LOCAL_PINNING_BIT_SPEC
-                        {
-                            side.bzero_metadata(line.start(), Line::BYTES);
-                        }
+            for line in self.lines() {
+                if line.is_marked(line_mark_state) {
+                    marked_lines += 1;
+                    prev_line_is_marked = true;
+                } else {
+                    if prev_line_is_marked {
+                        holes += 1;
                     }
+                    // We need to clear the line mark state at least twice in every 128 GC
+                    // otherwise, the line mark state of the last GC will stick around
+                    if line_mark_state > Line::MAX_MARK_STATE - 2 {
+                        line.mark(0);
+                    }
+                    #[cfg(feature = "immix_zero_on_release")]
+                    crate::util::memory::zero(line.start(), Line::BYTES);
+
+                    // We need to clear the pin bit if it is on the side, as this line can be reused
+                    #[cfg(feature = "object_pinning")]
+                    if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_PINNING_BIT_SPEC {
+                        side.bzero_metadata(line.start(), Line::BYTES);
+                    }
+
+                    prev_line_is_marked = false;
                 }
             }
 
@@ -327,99 +327,6 @@ impl Block {
             }
         }
     }
-}
-
-/// Count marked lines and holes in a line mark table.
-///
-/// On x86_64, uses SSE2 vectorial transition detection for ~4.6× speedup
-/// over the scalar approach. On other architectures, falls back to scalar.
-///
-/// Returns (marked_lines, holes).
-fn sweep_count(data: &[u8; Block::LINES], mark_state: u8) -> (usize, usize) {
-    #[cfg(target_arch = "x86_64")]
-    {
-        // Safety: SSE2 is guaranteed on all x86_64 CPUs.
-        let (m, h) = unsafe { sweep_count_simd(data, mark_state) };
-        return (m as usize, h as usize);
-    }
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        sweep_count_scalar(data, mark_state)
-    }
-}
-
-/// Scalar fallback for counting marked lines and holes.
-#[cfg(not(target_arch = "x86_64"))]
-fn sweep_count_scalar(data: &[u8; Block::LINES], mark_state: u8) -> (usize, usize) {
-    let mut marked_lines = 0usize;
-    let mut holes = 0usize;
-    let mut prev_is_marked = true;
-    for &byte in data.iter() {
-        if byte == mark_state {
-            marked_lines += 1;
-            prev_is_marked = true;
-        } else {
-            if prev_is_marked {
-                holes += 1;
-            }
-            prev_is_marked = false;
-        }
-    }
-    (marked_lines, holes)
-}
-
-/// SSE2 vectorial transition detection for sweep counting.
-///
-/// Uses `pcmpeqb` + `pand(0x01)` + `psadbw` to count marked lines, and
-/// `pslldq(1)` + `psrldq(15)` + `por` + `pandn` + `psadbw` to count
-/// marked→unmarked transitions (holes). Stays entirely in the SIMD FP
-/// domain, avoiding the costly `pmovmskb` FP→INT domain crossing.
-#[cfg(target_arch = "x86_64")]
-unsafe fn sweep_count_simd(data: &[u8; Block::LINES], mark_state: u8) -> (u32, u32) {
-    use std::arch::x86_64::*;
-
-    let target = _mm_set1_epi8(mark_state as i8);
-    let ones = _mm_set1_epi8(1);
-
-    let mut acc_marked = _mm_setzero_si128();
-    let mut acc_holes = _mm_setzero_si128();
-
-    // Previous chunk's last byte comparison result (0xFF = marked, 0x00 = not).
-    // Initialize to all 0xFF because prev_line_is_marked starts as true.
-    let mut prev_last = _mm_set1_epi8(-1i8);
-
-    let chunks = Block::LINES / 16;
-    for chunk_idx in 0..chunks {
-        let vec = _mm_loadu_si128(data.as_ptr().add(chunk_idx * 16) as *const __m128i);
-
-        // Compare: 0xFF if byte == mark_state, 0x00 otherwise
-        let eq = _mm_cmpeq_epi8(vec, target);
-
-        // Count marked lines: map 0xFF → 0x01, then psadbw sums bytes horizontally.
-        let marked_01 = _mm_and_si128(eq, ones);
-        let sad = _mm_sad_epu8(marked_01, _mm_setzero_si128());
-        acc_marked = _mm_add_epi64(acc_marked, sad);
-
-        // Count holes: detect marked→unmarked transitions.
-        // Build "previous byte" vector: shift eq left by 1, fill byte[0] with
-        // the previous chunk's last byte.
-        let shifted = _mm_slli_si128(eq, 1);
-        let prev_byte = _mm_srli_si128(prev_last, 15);
-        let prev_eq = _mm_or_si128(shifted, prev_byte);
-
-        // Transition: prev was marked (0xFF) AND current is unmarked (0x00)
-        let transitions = _mm_andnot_si128(eq, prev_eq);
-        let trans_01 = _mm_and_si128(transitions, ones);
-        let trans_sad = _mm_sad_epu8(trans_01, _mm_setzero_si128());
-        acc_holes = _mm_add_epi64(acc_holes, trans_sad);
-
-        prev_last = eq;
-    }
-
-    // Horizontal sum: psadbw puts results in 64-bit halves (lanes 0 and 4 as i16).
-    let marked = (_mm_extract_epi16(acc_marked, 0) + _mm_extract_epi16(acc_marked, 4)) as u32;
-    let holes = (_mm_extract_epi16(acc_holes, 0) + _mm_extract_epi16(acc_holes, 4)) as u32;
-    (marked, holes)
 }
 
 /// A non-block single-linked list to store blocks.

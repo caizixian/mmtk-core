@@ -1603,15 +1603,6 @@ impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
         }
         value
     }
-
-    /// Get the underlying byte array as a slice.
-    ///
-    /// This is useful for bulk operations like SIMD-accelerated scanning
-    /// of the line mark table. The returned reference points directly to
-    /// contiguous side metadata memory.
-    pub fn as_slice(&self) -> &[u8; ENTRIES] {
-        self.data
-    }
 }
 
 #[cfg(test)]
