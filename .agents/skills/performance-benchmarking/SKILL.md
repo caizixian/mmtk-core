@@ -32,19 +32,22 @@ db_path = "~/.mmtk-dev/mmtk-dev.db"
 [defaults]
 plan = "GenImmix"
 benchmarks = ["fop"]
-invocations = 10
+invocations = 5
 heap_multiplier = 3.0
-iterations = 6
+iterations = 5
 gc_threads = 32        # optional: -XX:ParallelGCThreads
 app_threads = 32       # optional: DaCapo -t threads
 ```
 
 - **`probes_path`**: When set, mmtk-dev auto-adds probes classpath, JVM args (`-Dprobes=RustMMTk`), and the DaCapo callback for MMTk statistics.
 - **`heap_multiplier`**: Heap size = multiplier × minheap. Use 2–3× for stress-testing GC. The minheap values are defined in `mmtk-core/tools/mmtk-dev/src/mmtk_dev/config.py` (`DACAPO_MINHEAP` dict).
-- **`iterations`**: DaCapo timing iterations per invocation. More iterations = more warmup.
-- **`invocations`**: Number of JVM invocations. Use ≥10 for meaningful CI, ≥20 for CI mode.
+- **`iterations`**: DaCapo timing iterations per invocation. **Must be ≥ 5 for proper JIT warmup.** Setting this to 1 means no warmup — the JVM runs interpreted/C1-compiled code, making results meaningless. More iterations = more warmup before the timing iteration.
+- **`invocations`**: Number of JVM invocations (separate JVM startups). Use ≥5 for dev iteration, ≥10 for meaningful statistical confidence, ≥20 for CI mode. Reduce invocations (not iterations) when short on time.
 - **`gc_threads`**: Optional. Number of GC worker threads (`-XX:ParallelGCThreads`). If omitted, JVM auto-detects.
 - **`app_threads`**: Optional. Number of DaCapo application threads (`-t`). If omitted, DaCapo auto-detects.
+
+> [!CAUTION]
+> **Never set `iterations = 1`.** This skips JIT warmup entirely. DaCapo runs `iterations` loops within each JVM invocation — only the last is the "timing iteration". With `iterations = 1`, there is no warmup and C2-compiled code may not be ready. Always use ≥ 5.
 
 ## The Performance Optimization Workflow
 
@@ -89,8 +92,8 @@ uv run --project mmtk-core/tools/mmtk-dev mmtk-dev run -b fop,lusearch,xalan -i 
 
 **Quick benchmarks for development iteration:**
 ```fish
-# Single fast benchmark, 2 invocations — good for sanity checks
-uv run --project mmtk-core/tools/mmtk-dev mmtk-dev run -b fop -i 2 --iterations 1
+# Single fast benchmark, 3 invocations — good for sanity checks
+uv run --project mmtk-core/tools/mmtk-dev mmtk-dev run -b fop -i 3
 ```
 
 **Thorough benchmarks for validation:**
@@ -236,7 +239,7 @@ Pick 1–3 small benchmarks that are relevant to the specific optimization. Run 
 
 ```fish
 # Example: optimizing allocation path → lusearch is allocation-heavy
-uv run --project mmtk-core/tools/mmtk-dev mmtk-dev run -b lusearch -i 3 --iterations 1
+uv run --project mmtk-core/tools/mmtk-dev mmtk-dev run -b lusearch -i 3
 ```
 
 **Phase 2 — Validation** (once results look promising):
@@ -462,6 +465,11 @@ Build IDs are deterministic (hash of commit + plan), so the same code + plan alw
 
 This section defines a structured, repeatable workflow for an agent to autonomously discover, implement, and validate performance optimizations. Follow this cycle for each optimization attempt.
 
+> [!IMPORTANT]
+> **Before starting any optimization work**, read all existing reports in `docs/` (e.g., `docs/nontemporal-zeroing-report.md`, `docs/genimmix-profiling-report.md`). These contain profiling data, benchmark results, and analysis from previous sessions that inform what has already been tried and what bottlenecks are known.
+>
+> **After completing a session**, you MUST update the **Lessons Learned** and **Current Known Bottlenecks** sections at the bottom of this file to reflect any new findings, failed approaches, or newly discovered optimization opportunities. This keeps future agents from repeating mistakes and helps them prioritize effectively.
+
 ### The Optimization Cycle
 
 ```
@@ -521,20 +529,25 @@ Classify the bottleneck type to choose the right optimization strategy:
 
 ### Step 3: Design the Fix
 
-Before implementing, **search for relevant academic papers and prior work**:
+**First, check what already exists in the codebase:**
 
-- Search the web for papers on the specific optimization technique (e.g., "prefetching garbage collection tracing", "non-temporal stores memory zeroing", "work stealing GC scheduling")
-- Check if the technique has known limitations on modern hardware
+- Search `mmtk-core` for existing implementations, benchmarks, or prototypes related to the optimization. The `benches/mock_bench/` directory contains microbenchmarks for prefetching, AMAC, etc.
+- Check existing `docs/` reports for prior attempts at this optimization.
+- Read the **Lessons Learned** section below to avoid repeating known-failed approaches.
+
+**Then, research externally:**
+
+- Search the web for papers on the specific technique (e.g., "prefetching garbage collection tracing", "non-temporal stores memory zeroing", "work stealing GC scheduling")
+- Check if the technique has known limitations on modern hardware (e.g., ERMS on modern x86)
 - Look for existing implementations in other GC frameworks (ZGC, Shenandoah, Go GC, etc.)
-- Read the paper fully and note their benchmarking methodology and hardware
-- **Avoid repeating known-failed approaches** — check the Lessons Learned section below
+- Read papers fully and note their benchmarking methodology, hardware, and reported gains
 
-Then assess the expected impact:
+**Assess the expected impact:**
 
 1. **How much of total time does this bottleneck represent?**
    - GC workers are only 15-20% of total time in typical benchmarks
    - A 50% improvement within GC tracing saves only ~10% of total runtime
-   - Mutation-side improvements (allocation, barriers) affect the other 80%
+   - Mutation-side improvements (allocation, barriers) affect the other 80%, but require modifying compiler IR in the binding
 
 2. **Is the optimization addressing the root cause?**
    - If the bottleneck is `memset`, check if the CPU's `memset` already uses NT stores (ERMS)
@@ -545,15 +558,18 @@ Then assess the expected impact:
    - Prefetching memory that's already cached wastes i-cache and bandwidth
    - NT stores for memory that's immediately reused forces cache re-fetch
    - Additional instructions in a hot loop can increase i-cache pressure
+   - Modifying hot loops in `gc_work.rs` can have subtle perf effects — validate with microbenchmarks first
 
 ### Step 4: Implement
 
 Follow these rules during implementation:
 
-1. **Commit changes before benchmarking** — `mmtk-dev` records the git commit hash
-2. **Make minimal, focused changes** — one optimization per commit for clean A/B comparison
-3. **Use `git checkout` for baselines** — never revert files manually (commit hash must differ)
-4. **Add comments citing the profiling data** that motivated the change
+1. **Validate with microbenchmarks first** if one exists in `benches/mock_bench/` — this is faster than a full DaCapo run and catches obvious issues
+2. **Commit changes before benchmarking** — `mmtk-dev` records the git commit hash
+3. **Make minimal, focused changes** — one optimization per commit for clean A/B comparison
+4. **Use `git checkout`/`jj edit` for baselines** — never revert files manually (commit hash must differ)
+5. **Add comments citing the profiling data** that motivated the change
+6. **Test correctness first** — run `java -XX:+UseThirdPartyHeap ... -jar dacapo.jar fop` to verify no crashes before committing
 
 ### Step 5: Benchmark
 
@@ -580,15 +596,6 @@ uv run --project mmtk-core/tools/mmtk-dev mmtk-dev compare -n "describe the opti
 ```
 
 **Reusing baselines:** If you revert to the exact baseline commit (verified via `git log`), you can reuse an existing baseline without re-running it. The same commit + plan + profile always produces the same build ID.
-
-**Benchmark selection for the optimization type:**
-
-| Optimization area | Primary benchmarks | Why |
-|-------------------|-------------------|-----|
-| Tracing / copying | `h2`, `lusearch` | H2 is tracing-dominated (95% of GC), lusearch has high allocation |
-| Allocation path | `lusearch`, `xalan` | High allocation rates |
-| Sweep / release | `lusearch`, `fop` | High object churn |
-| STW pause time | `spring`, `tomcat` | Latency-sensitive workloads |
 
 ### Step 6: Report
 
@@ -647,20 +654,37 @@ These are documented outcomes that future agents should use to avoid repeating f
 3. **Cached mark states had no effect (−0.65%)** because `Ordering::Acquire` loads compile to plain `mov` on x86 (no fence). Saving 1–2 ns in a function that doesn't appear in the profile is unmeasurable.
    See `docs/genimmix-profiling-report.md`.
 
-4. **The allocation fast path is NOT a bottleneck.** It has ~0 samples in profiling. Don't optimize it.
-   The allocation **slow path** (page acquisition + zeroing) is what shows up in profiles.
+4. **The allocation fast path doesn't appear in Rust-side profiling** because it's JIT-compiled
+   by C1/C2 using the barrier set assembler (`mmtkBarrierSetAssembler_x86.cpp` in `mmtk-openjdk`).
+   It IS a valid optimization target, but requires modifying compiler IR in the OpenJDK binding.
+   The allocation **slow path** (page acquisition + zeroing in Rust) is what shows up in `perf`/async-profiler.
 
 5. **All GC hotspots are memory-latency-bound.** Computational optimizations (faster arithmetic, fewer branches, SIMD) do not help when the CPU is stalled on memory.
 
+6. **Always validate with microbenchmarks before modifying production hot paths.** The `benches/mock_bench/` directory contains prefetching (`prefetch_tracing.rs`) and AMAC (`amac_tracing.rs`) benchmarks that model the tracing loop. Use these to validate prefetch distances, cache hints, and pipeline strategies before touching `gc_work.rs`.
+
 ### Current Known Bottlenecks (from profiling)
 
-Refer to `docs/genimmix-profiling-report.md` for the full analysis. Key targets:
+Refer to `docs/genimmix-profiling-report.md` for full analysis. Key targets, ordered by potential impact:
 
-| Bottleneck | % of GC time | Root cause | Promising fix |
-|------------|-------------|------------|---------------|
-| CopySpace::trace_object CAS | 60% (H2) | Cache-line contention on forwarding bits | Work partitioning, reducing duplicate tracing |
-| ProcessEdgesWork pointer chasing | 29% (per-edge) | Memory latency on slot/oop loads | Prefetching edges N+k ahead in the processing loop |
-| PlanScanObjects header stall | 53% (self) | Cache miss loading compressed klass | Prefetching object headers during scan |
-| Side metadata access | 56% (self) | Cache miss on metadata byte load | Prefetching metadata alongside object headers |
-| Scheduler futex overhead | 52% (lusearch) | 32 GC threads competing for small work packets in 63MB heap | Larger work packets, adaptive thread count |
+| Bottleneck | % of GC time | Root cause | Promising fix | Existing code/references |
+|------------|-------------|------------|---------------|-------------------------|
+| ProcessEdgesWork pointer chasing | 29% (per-edge) | Memory latency on slot/oop loads | Prefetching edges N+k ahead in `process_slots()` | `benches/mock_bench/prefetch_tracing.rs` has validated E=32/O=16 NTA config |
+| PlanScanObjects header stall | 53% (self) | Cache miss loading compressed klass | Prefetching object headers during scan | `benches/mock_bench/prefetch_tracing.rs`, `Slot::prefetch_load()` exists but unused |
+| Side metadata access | 56% (self) | Cache miss on metadata byte load | Prefetching metadata alongside object headers | Could combine with object header prefetch |
+| CopySpace::trace_object CAS | 60% (H2) | Cache-line contention on forwarding bits | Work partitioning, reducing duplicate tracing | Requires scheduler-level changes |
+| Scheduler futex overhead | 52% (lusearch) | 32 GC threads competing for small work packets in 63MB heap | Larger work packets, adaptive thread count | Only matters with many GC threads + small heap |
+| Allocation fast path (JIT) | Not visible in Rust profiles | JIT-compiled in `mmtkBarrierSetAssembler_x86.cpp` | C2 IR optimization in binding | `mmtk-openjdk/openjdk/cpu/x86/mmtkBarrierSetAssembler_x86.cpp` |
+
+### Session-End Checklist
+
+> [!CAUTION]
+> **You MUST complete this checklist at the end of every optimization session:**
+>
+> 1. **Write a report** in `docs/` for every optimization attempted (successful or not) and `git commit` it
+> 2. **Update Lessons Learned** above with any new findings or failed approaches
+> 3. **Update Current Known Bottlenecks** if profiling revealed new data or resolved existing items
+> 4. **Commit this skill file** with `git add .agents/skills/performance-benchmarking/SKILL.md && git commit`
+>
+> Failure to update this file means the next agent will repeat your mistakes.
 
