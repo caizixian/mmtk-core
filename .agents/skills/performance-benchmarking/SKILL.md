@@ -678,6 +678,8 @@ These are documented outcomes that future agents should use to avoid repeating f
 9. **After prefetch, remaining GC bottlenecks are broadly distributed** with no single target offering >2% total runtime improvement. The bottleneck shifted from one dominant stall (29% pointer chasing) to many small targets: object copying 18.9%, side metadata 9.1%, CAS 9.1%, descriptor lookup 6.5%. Further gains require architectural changes (compound prefetch, scheduler redesign) or are fundamental work (memcpy).
    See `docs/genimmix-profiling-report.md` § Post-Prefetch Re-Profiling.
 
+10. **Prefetching `descriptor_map` entries had no measurable impact** (h2 +0.84%, fop -0.94%, both in noise). During nursery GC, only a few chunks contain nursery objects, so the `descriptor_map[chunk_index]` entries stay warm in L2/L3 cache. The 6.5% profile self-time in `get_descriptor_for_address` is likely attributable to the computation/dispatch overhead rather than actual cache misses on the descriptor_map array. Reverted at `8111ea5663`.
+
 ### Current Known Bottlenecks (from profiling)
 
 Refer to `docs/genimmix-profiling-report.md` and `docs/prefetch-tracing-report.md` for full analysis. Key targets, ordered by potential impact:
@@ -696,7 +698,7 @@ Refer to `docs/genimmix-profiling-report.md` and `docs/prefetch-tracing-report.m
 | Object copying | 18.9% (self) | ~2.3% | Fundamental memcpy of nursery objects | Nursery sizing, copy strategy changes | ❌ Design-level |
 | Side metadata access | 9.1% (self) | ~1.1% | Cache miss on metadata byte load | Compound prefetch (metadata + header) | ⚠️ Complex — needs per-space spec access |
 | CopySpace CAS contention | 9.1% (self) | ~1.1% | Cache-line contention on forwarding bits | Work partitioning, reducing duplicate tracing | ❌ Requires scheduler-level changes |
-| Space descriptor lookup | 6.5% (self) | ~0.8% | descriptor_map cache miss in `in_space()` | Prefetch descriptor_map entry with object | ⚠️ Needs global map access in process_slots |
+| Space descriptor lookup | 6.5% (self) | ~0.8% | descriptor_map entries warm (few active chunks) | Prefetch tried — no effect (reverted `8111ea5663`) | ❌ Not a cache miss bottleneck |
 | Vec reallocation | 3.6% (PEW %) | ~0.4% | nodes VectorQueue growing beyond capacity | Pre-allocate with larger initial capacity | ✅ Easy but tiny impact |
 | Scheduler futex overhead | 52% (lusearch) | — | 32 GC threads competing for small work packets | Larger work packets, adaptive thread count | 🔲 Only matters with many GC threads + small heap |
 | Allocation fast path (JIT) | Not visible in Rust profiles | — | JIT-compiled in `mmtkBarrierSetAssembler_x86.cpp` | C2 IR optimization in binding | 🔲 Requires binding changes |
