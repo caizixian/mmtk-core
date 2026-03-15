@@ -666,14 +666,22 @@ pub trait ProcessEdgesWork:
 
     /// Process all the slots in the work packet.
     fn process_slots(&mut self) {
-        use crate::util::prefetch::{prefetch_nta, OBJECT_PREFETCH_DISTANCE};
+        use crate::util::prefetch::{prefetch_nta, EDGE_PREFETCH_DISTANCE, OBJECT_PREFETCH_DISTANCE};
 
         probe!(mmtk, process_slots, self.slots.len(), self.is_roots());
         let len = self.slots.len();
         for i in 0..len {
-            // Prefetch object header D positions ahead to hide memory latency.
-            // This loads the future slot to get the object reference, then
-            // prefetches the object's header cache line (mark bits, forwarding word).
+            // === Two-stage prefetch pipeline ===
+            // Stage 1 (edge PF): Load slots[i+E] to bring the slot's content
+            // into L1 cache, feeding stage 2 when the loop reaches i+O.
+            if i + EDGE_PREFETCH_DISTANCE < len {
+                if let Some(obj) = self.slots[i + EDGE_PREFETCH_DISTANCE].load() {
+                    prefetch_nta(obj.to_raw_address());
+                }
+            }
+            // Stage 2 (object PF): Dereference slots[i+O] (now in L1 thanks
+            // to edge PF from E-O iterations ago) and prefetch the object's
+            // header cache line (mark bits, forwarding word, compressed klass).
             if i + OBJECT_PREFETCH_DISTANCE < len {
                 if let Some(obj) = self.slots[i + OBJECT_PREFETCH_DISTANCE].load() {
                     prefetch_nta(obj.to_raw_address());
