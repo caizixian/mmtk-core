@@ -13,6 +13,10 @@ use std::ops::{Deref, DerefMut};
 
 use super::global::GenerationalPlanExt;
 
+/// Size of the forwarding pointer cache in GenNurseryProcessEdges.
+/// 256 entries × 16 bytes = 4KB, fits comfortably in L1 data cache.
+const FWD_CACHE_SIZE: usize = 256;
+
 /// Process edges for a nursery GC. This type is provided if a generational plan does not use
 /// [`crate::scheduler::gc_work::SFTProcessEdges`]. If a plan uses `SFTProcessEdges`,
 /// it does not need to use this type.
@@ -23,6 +27,24 @@ pub struct GenNurseryProcessEdges<
 > {
     plan: &'static P,
     base: ProcessEdgesBase<VM>,
+    /// A direct-mapped cache mapping original nursery object addresses to their forwarded
+    /// addresses. When multiple slots in a work packet reference the same nursery object,
+    /// the cache avoids redundant trace_object calls (which include in_space checks and
+    /// CAS on the forwarding word). 256 entries × 16 bytes = 4KB, fits in L1 data cache.
+    fwd_cache: [(usize, usize); FWD_CACHE_SIZE],
+}
+
+impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>, const KIND: TraceKind>
+    GenNurseryProcessEdges<VM, P, KIND>
+{
+    /// Compute a cache index from an object address.
+    /// Objects are at least 8-byte aligned, so shift right by 3 to get a better hash.
+    #[inline(always)]
+    fn cache_index(addr: usize) -> usize {
+        // Mix bits to spread adjacent addresses across cache entries.
+        // Shift by 3 (8-byte alignment) and XOR with upper bits for better distribution.
+        ((addr >> 3) ^ (addr >> 11)) & (FWD_CACHE_SIZE - 1)
+    }
 }
 
 impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>, const KIND: TraceKind>
@@ -39,7 +61,11 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>, const KIND
     ) -> Self {
         let base = ProcessEdgesBase::new(slots, roots, mmtk, bucket);
         let plan = base.plan().downcast_ref().unwrap();
-        Self { plan, base }
+        Self {
+            plan,
+            base,
+            fwd_cache: [(0, 0); FWD_CACHE_SIZE],
+        }
     }
 
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
@@ -57,11 +83,30 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>, const KIND
             // Skip slots that are not holding an object reference.
             return;
         };
+
+        let addr = object.to_raw_address().as_usize();
+        let idx = Self::cache_index(addr);
+
+        // Check forwarding cache: if this object was already forwarded in this work packet,
+        // reuse the cached result to avoid redundant trace_object (in_space check + CAS).
+        let (cached_orig, cached_fwd) = self.fwd_cache[idx];
+        if cached_orig == addr && cached_orig != cached_fwd && cached_orig != 0 {
+            // Cache hit: object was forwarded earlier in this work packet.
+            // Safety: cached_fwd was produced by trace_object, so it's a valid ObjectReference.
+            let new_object =
+                unsafe { ObjectReference::from_raw_address_unchecked(crate::util::Address::from_usize(cached_fwd)) };
+            slot.store(new_object);
+            return;
+        }
+
         let new_object = self.trace_object(object);
         debug_assert!(!self.plan.is_object_in_nursery(new_object));
-        // Note: If `object` is a mature object, `trace_object` will not call `space.trace_object`,
-        // but will still return `object`.  In that case, we don't need to write it back.
+
+        // Update cache with the mapping (original -> forwarded).
+        // For mature objects (new_object == object), we don't cache since there's no benefit:
+        // the trace_object for mature objects is already cheap (just an in_space check + return).
         if new_object != object {
+            self.fwd_cache[idx] = (addr, new_object.to_raw_address().as_usize());
             slot.store(new_object);
         }
     }
