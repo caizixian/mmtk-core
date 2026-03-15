@@ -122,11 +122,20 @@ and consistent with the profiling data.
    bottleneck analysis from `genimmix-profiling-report.md`.
 
 3. **Next steps for further optimization:**
-   - **Wider benchmark validation**: Test on xalan, sunflow, eclipse, pmd to confirm
-     no regressions and measure improvements on other tracing-relevant workloads.
-   - **Profile with prefetching enabled**: Re-profile h2 to see where the new hotspot
-     is — has the bottleneck shifted from ProcessEdgesWork to CopySpace CAS contention?
-   - **Tune prefetch distances**: The current E=16/S=4 are from microbenchmarks; real
-     workloads may benefit from different values (e.g., try E=8, E=32, S=2, S=8).
-   - **Prefetch side metadata**: The 56% self-time in `side_metadata_access` could
-     potentially be reduced by prefetching the metadata byte alongside the object header.
+   - ~~**Wider benchmark validation**~~: ✅ Done — tested on sunflow, eclipse, pmd,
+     biojava (10 invocations each at 3× minheap). **No regressions**: biojava −0.59%,
+     eclipse −1.48%, pmd +1.25%, sunflow −0.54%, geometric mean −0.35% (all neutral).
+     Xalan failed all invocations at 3× minheap.
+   - ~~**Profile with prefetching enabled**~~: ✅ Done — h2 re-profiled with async-profiler.
+     ProcessEdgesWork self-time dropped from 29% to 13.4% (>50% reduction). Bottleneck
+     shifted to object copying (18.9%), side metadata (9.1%), CAS contention (9.1%),
+     and descriptor lookup (6.5%). No single remaining target offers >2% total improvement.
+     See `genimmix-profiling-report.md` § Post-Prefetch Re-Profiling.
+   - **Compound metadata prefetch** (side metadata + descriptor_map): Architecturally
+     complex — requires exposing per-space metadata specs and the descriptor_map to
+     `process_slots()`, which currently only has the object address. Maximum theoretical
+     improvement ~2% total.
+   - **Tune prefetch distances**: The current O=16/S=4 are from microbenchmarks and
+     validated on real workloads. Testing wider range (O=8, O=32, S=2, S=8) could
+     yield marginal gains, but the slot-processing loop timing is well-matched.
+

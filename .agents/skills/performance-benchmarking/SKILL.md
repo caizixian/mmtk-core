@@ -309,10 +309,11 @@ uv run --project mmtk-core/tools/mmtk-dev mmtk-dev ci --plans GenImmix,Immix -b 
 ### Reducing Noise
 
 1. **System isolation**: Close other applications, disable CPU frequency scaling if possible
-2. **Sufficient invocations**: Use ≥10 for development, ≥20 for publishable results
-3. **Consistent heap size**: Always use the same `--heap-multiplier` between baseline and comparison
-4. **Same testbed**: Compare results from the same machine only
-5. **Same plan and profile**: Don't compare GenImmix release against Immix fastdebug
+2. **No other work during benchmarks**: Do NOT run any other processes (file searches, builds, profiling prep, web searches, etc.) while benchmarks are executing. Any CPU activity introduces noise. Wait idle for benchmark completion.
+3. **Sufficient invocations**: Use ≥10 for development, ≥20 for publishable results
+4. **Consistent heap size**: Always use the same `--heap-multiplier` between baseline and comparison
+5. **Same testbed**: Compare results from the same machine only
+6. **Same plan and profile**: Don't compare GenImmix release against Immix fastdebug
 
 ### Choosing Heap Multiplier
 
@@ -674,18 +675,33 @@ These are documented outcomes that future agents should use to avoid repeating f
 7. **Software prefetching in the tracing loop works** (-2.66% geomean, -3.83% on h2). Prefetching object headers 16 slots ahead in `process_slots()` and 4 objects ahead in `ScanObjectsWork::do_work_common()` with NTA hint effectively hides memory latency. Validated with microbenchmarks first. Lusearch is neutral because it's scheduler-dominated, not tracing-dominated.
    See `docs/prefetch-tracing-report.md`.
 
+9. **After prefetch, remaining GC bottlenecks are broadly distributed** with no single target offering >2% total runtime improvement. The bottleneck shifted from one dominant stall (29% pointer chasing) to many small targets: object copying 18.9%, side metadata 9.1%, CAS 9.1%, descriptor lookup 6.5%. Further gains require architectural changes (compound prefetch, scheduler redesign) or are fundamental work (memcpy).
+   See `docs/genimmix-profiling-report.md` § Post-Prefetch Re-Profiling.
+
 ### Current Known Bottlenecks (from profiling)
 
 Refer to `docs/genimmix-profiling-report.md` and `docs/prefetch-tracing-report.md` for full analysis. Key targets, ordered by potential impact:
 
+#### Pre-Prefetch Bottlenecks (resolved or unchanged)
+
 | Bottleneck | % of GC time | Root cause | Promising fix | Status |
 |------------|-------------|------------|---------------|--------|
-| ProcessEdgesWork pointer chasing | 29% (per-edge) | Memory latency on slot/oop loads | Prefetching edges 16 ahead in `process_slots()` | ✅ Addressed in `79463f7f72` (-3.83% h2) |
-| PlanScanObjects header stall | 53% (self) | Cache miss loading compressed klass | Prefetching object headers 4 ahead during scan | ✅ Addressed in `79463f7f72` |
-| Side metadata access | 56% (self) | Cache miss on metadata byte load | Prefetch metadata alongside object header | 🔲 Next target — may combine with existing prefetch |
-| CopySpace::trace_object CAS | 60% (H2) | Cache-line contention on forwarding bits | Work partitioning, reducing duplicate tracing | 🔲 Requires scheduler-level changes |
-| Scheduler futex overhead | 52% (lusearch) | 32 GC threads competing for small work packets in 63MB heap | Larger work packets, adaptive thread count | 🔲 Only matters with many GC threads + small heap |
-| Allocation fast path (JIT) | Not visible in Rust profiles | JIT-compiled in `mmtkBarrierSetAssembler_x86.cpp` | C2 IR optimization in binding | 🔲 Requires binding changes |
+| ProcessEdgesWork pointer chasing | 29% → **13.4%** | Memory latency on slot/oop loads | Prefetching objects 16 ahead in `process_slots()` | ✅ Addressed (`929c46144d`, -2.66% geomean) |
+| PlanScanObjects header stall | 53% → 8.4% | Cache miss loading compressed klass | Prefetching object headers 4 ahead during scan | ✅ Addressed (`929c46144d`) |
+
+#### Post-Prefetch Bottlenecks (current state, from h2 re-profiling)
+
+| Bottleneck | % of GC time | Total % | Root cause | Promising fix | Status |
+|------------|-------------|---------|------------|---------------|--------|
+| Object copying | 18.9% (self) | ~2.3% | Fundamental memcpy of nursery objects | Nursery sizing, copy strategy changes | ❌ Design-level |
+| Side metadata access | 9.1% (self) | ~1.1% | Cache miss on metadata byte load | Compound prefetch (metadata + header) | ⚠️ Complex — needs per-space spec access |
+| CopySpace CAS contention | 9.1% (self) | ~1.1% | Cache-line contention on forwarding bits | Work partitioning, reducing duplicate tracing | ❌ Requires scheduler-level changes |
+| Space descriptor lookup | 6.5% (self) | ~0.8% | descriptor_map cache miss in `in_space()` | Prefetch descriptor_map entry with object | ⚠️ Needs global map access in process_slots |
+| Vec reallocation | 3.6% (PEW %) | ~0.4% | nodes VectorQueue growing beyond capacity | Pre-allocate with larger initial capacity | ✅ Easy but tiny impact |
+| Scheduler futex overhead | 52% (lusearch) | — | 32 GC threads competing for small work packets | Larger work packets, adaptive thread count | 🔲 Only matters with many GC threads + small heap |
+| Allocation fast path (JIT) | Not visible in Rust profiles | — | JIT-compiled in `mmtkBarrierSetAssembler_x86.cpp` | C2 IR optimization in binding | 🔲 Requires binding changes |
+
+> **NOTE**: After prefetching, no single remaining target offers >2% total improvement. The bottleneck is now broadly distributed across fundamental work (copying, CAS, metadata).
 
 ### Session-End Checklist
 
