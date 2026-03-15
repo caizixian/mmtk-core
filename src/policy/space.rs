@@ -225,11 +225,9 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
             mmap();
         }
 
-        // Use non-temporal stores to zero newly acquired pages. These pages won't be
-        // accessed immediately, so bypassing the cache avoids polluting it with zeroed data.
-        // See: Blackburn et al., "Fast Conservative Garbage Collection", OOPSLA 2011.
+        // TODO: Concurrent zeroing
         if self.common().zeroed {
-            memory::nontemporal_zero(res.start, bytes);
+            memory::zero(res.start, bytes);
         }
 
         // Some assertions

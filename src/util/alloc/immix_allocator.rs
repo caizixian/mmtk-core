@@ -250,7 +250,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     end_line,
                     self.tls
                 );
-                crate::util::memory::nontemporal_zero(
+                crate::util::memory::zero(
                     self.bump_pointer.cursor,
                     self.bump_pointer.limit - self.bump_pointer.cursor,
                 );
