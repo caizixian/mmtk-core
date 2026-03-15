@@ -668,6 +668,9 @@ These are documented outcomes that future agents should use to avoid repeating f
 
 6. **Always validate with microbenchmarks before modifying production hot paths.** The `benches/mock_bench/` directory contains prefetching (`prefetch_tracing.rs`) and AMAC (`amac_tracing.rs`) benchmarks that model the tracing loop. Use these to validate prefetch distances, cache hints, and pipeline strategies before touching `gc_work.rs`.
 
+8. **Two-stage edge+object prefetch regressed vs object-only** (-0.91% vs -2.66%). Slot buffers within work packets have good spatial locality (produced by scanning contiguous OopMap fields), so the HW prefetcher handles edge data. The extra `slot.load()` at `i+32` wastes load ports. Microbenchmarks use random DAGs that maximize cache misses, hiding this effect.
+   See `docs/prefetch-tracing-report.md`.
+
 7. **Software prefetching in the tracing loop works** (-2.66% geomean, -3.83% on h2). Prefetching object headers 16 slots ahead in `process_slots()` and 4 objects ahead in `ScanObjectsWork::do_work_common()` with NTA hint effectively hides memory latency. Validated with microbenchmarks first. Lusearch is neutral because it's scheduler-dominated, not tracing-dominated.
    See `docs/prefetch-tracing-report.md`.
 

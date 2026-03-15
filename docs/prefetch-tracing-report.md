@@ -57,6 +57,30 @@ Comparison: 5 invocations
 
 **Geometric mean: -2.66% (improvement)**
 
+## Follow-up: Two-Stage Pipeline (E=32 + O=16) — Reverted
+
+Microbenchmark analysis (`prefetch_tracing_analysis.md`) showed that combined
+edge (E=32) + object (O=16) prefetch achieves -37.8% tracing speedup in synthetic
+workloads. We tested this configuration:
+
+| Benchmark | Baseline (ms) | Two-Stage (ms) | Diff   | vs Object-Only |
+|-----------|:-------------:|:--------------:|:------:|:--------------:|
+| fop       | 1067.4 ±47.1  | 1066.2 ±102.4  | -0.11% | worse (-3.84% → -0.11%) |
+| h2        | 4375.9 ±99.7  | 4248.8 ±136.5  | -2.90% | similar (-3.83% → -2.90%) |
+| lusearch  | 9429.1 ±119.1 | 9459.8 ±396.0  | +0.33% | similar |
+
+**Geometric mean: -0.91% (neutral) — worse than object-only (-2.66%)**
+
+The edge prefetch regresses performance because:
+1. Slot buffers within work packets have good spatial locality (produced by
+   scanning contiguous OopMap fields), so the HW prefetcher already handles them.
+2. The extra `slot.load()` at `i+32` competes for load ports with useful work.
+3. Microbenchmarks use random DAGs maximizing cache misses, but real heaps have
+   partial locality that the HW prefetcher exploits.
+
+**Conclusion:** Object-only prefetch (O=16) is the better configuration for real
+workloads. The two-stage pipeline was reverted.
+
 ## Analysis
 
 ### fop (-3.84%)
