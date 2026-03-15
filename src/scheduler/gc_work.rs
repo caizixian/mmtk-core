@@ -882,12 +882,19 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
             }
 
             for (idx, object) in objects_to_scan.iter().copied().enumerate() {
-                // Prefetch next object's header to hide klass decompression stall.
+                // Prefetch future object's header AND body to hide klass decompression
+                // and reference field iteration stalls. scan_object iterates reference
+                // fields that may span multiple cache lines beyond the header.
                 if idx + crate::util::prefetch::SCAN_PREFETCH_DISTANCE < objects_to_scan.len() {
-                    crate::util::prefetch::prefetch_nta(
+                    let addr =
                         objects_to_scan[idx + crate::util::prefetch::SCAN_PREFETCH_DISTANCE]
-                            .to_raw_address(),
-                    );
+                            .to_raw_address();
+                    // Cache line 0: object header (klass pointer, mark word)
+                    crate::util::prefetch::prefetch_nta(addr);
+                    // Cache line 1: first reference fields (bytes 64-127)
+                    crate::util::prefetch::prefetch_nta(addr + 64usize);
+                    // Cache line 2: more reference fields (bytes 128-191)
+                    crate::util::prefetch::prefetch_nta(addr + 128usize);
                 }
                 if <VM as VMBinding>::VMScanning::support_slot_enqueuing(tls, object) {
                     trace!("Scan object (slot) {}", object);
