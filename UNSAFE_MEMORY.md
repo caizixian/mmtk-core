@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 544
-- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=133 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
+- Current unsafe count: 532
+- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=145 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/bumpallocator.rs
@@ -236,6 +236,50 @@
 | Line | Category | Status | Notes |
 |------|----------|--------|-------|
 | 111 | FFI | ELIMINATED | Replaced `libc::getpid()` with `std::process::id()` |
+
+### src/util/metadata/side_metadata/constants.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 18 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+| 26 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+
+### src/util/metadata/side_metadata/sanity.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 382 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+| 760 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+
+### src/util/metadata/side_metadata/ranges.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 177 | UncheckedCall | ELIMINATED | Made `mk_addr` safe using `Address::ZERO.add` |
+
+### src/util/test_util/mod.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 52 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` in const |
+| 55 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` in const |
+
+### src/util/alloc/immix_allocator.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 361 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+| 375 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+
+### src/util/api_util.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 23 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+
+### src/policy/compressor/forwarding.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 87 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+
+### src/util/heap/layout/mmapper/csm/byte_map_storage.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 94 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
 
 ## Refactoring Ideas
 - Use `load_atomic(Ordering::Relaxed)` and `store_atomic(Ordering::Relaxed)` on `SideMetadataSpec` to replace non-atomic `load`/`store` in `src/util/metadata/vo_bit/mod.rs` and make functions safe.

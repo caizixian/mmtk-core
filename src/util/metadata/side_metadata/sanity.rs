@@ -379,7 +379,7 @@ fn verify_metadata_address_bound(spec: &SideMetadataSpec, data_addr: Address) {
     let data_addr_in_address_space = true;
     #[cfg(target_pointer_width = "64")]
     let data_addr_in_address_space =
-        data_addr <= unsafe { Address::from_usize(1usize << vm_layout().log_address_space) };
+        data_addr <= Address::ZERO.add(1usize << vm_layout().log_address_space);
 
     if !data_addr_in_address_space {
         warn!(
@@ -757,7 +757,7 @@ mod tests {
         let spec_1 = SideMetadataSpec {
             name: "spec_1",
             is_global: true,
-            offset: SideMetadataOffset::addr(unsafe { Address::from_usize(1) }),
+            offset: SideMetadataOffset::addr(Address::ZERO.add(1)),
             log_num_of_bits: 0,
             log_bytes_in_region: 0,
         };

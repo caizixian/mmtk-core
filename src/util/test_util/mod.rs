@@ -49,10 +49,10 @@ mod test {
 // Test with an address that works for 32bits. The address is chosen empirically.
 #[cfg(target_os = "linux")]
 const TEST_ADDRESS: Address =
-    crate::util::conversions::chunk_align_down(unsafe { Address::from_usize(0x7000_0000) });
+    crate::util::conversions::chunk_align_down(Address::ZERO.add(0x7000_0000));
 #[cfg(target_os = "macos")]
 const TEST_ADDRESS: Address =
-    crate::util::conversions::chunk_align_down(unsafe { Address::from_usize(0x2_0000_0000) });
+    crate::util::conversions::chunk_align_down(Address::ZERO.add(0x2_0000_0000));
 
 // util::heap::layout::mmapper::csm
 pub(crate) const CHUNK_STATE_MMAPPER_TEST_REGION: MmapTestRegion =

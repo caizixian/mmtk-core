@@ -84,7 +84,7 @@ impl Transducer {
 
     pub fn decode(offset: usize, current_position: Address) -> Self {
         Transducer {
-            to: unsafe { Address::from_usize(offset & !1) },
+            to: Address::ZERO.add(offset & !1),
             last_bit_visited: current_position,
             in_object: (offset & 1) == 1,
         }
