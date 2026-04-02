@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 457
-- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=217 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=4 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
+- Current unsafe count: 456
+- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=218 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=4 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/bumpallocator.rs
@@ -229,6 +229,7 @@
 |------|----------|--------|-------|
 | 29 | UncheckedCall | ELIMINATED | Replaced non-atomic load with Relaxed atomic load |
 | 48 | UncheckedCall | ELIMINATED | Replaced non-atomic load with Relaxed atomic load |
+| 72 | UncheckedCall | ELIMINATED | Replaced non-atomic load with Relaxed atomic load |
 | 81 | UncheckedCall | ELIMINATED | Replaced non-atomic store with Relaxed atomic store |
 | 85 | UncheckedCall | ELIMINATED | Removed unsafe from signature |
 | 90 | UncheckedCall | ELIMINATED | Replaced non-atomic store with Relaxed atomic store |
