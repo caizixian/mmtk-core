@@ -2,7 +2,7 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 465
+- Current unsafe count: 461
 - Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=214 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
@@ -447,6 +447,7 @@
 | Line | Category | Status | Notes |
 |------|----------|--------|-------|
 | 201 | UncheckedCall | ELIMINATED | Replaced `new_zeroed_vec` with `vec![MaybeUninit::uninit(); CAPACITY]` |
+| 214 | UncheckedCall | ELIMINATED | Replaced `assume_init` with `unwrap` by using `Option` |
 
 ### src/util/heap/layout/mmapper/csm/two_level_storage.rs
 | Line | Category | Status | Notes |

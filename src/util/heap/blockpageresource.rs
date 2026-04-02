@@ -12,7 +12,6 @@ use crate::vm::*;
 use atomic::Ordering;
 use spin::RwLock;
 use std::cell::UnsafeCell;
-use std::mem::MaybeUninit;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
 
@@ -191,13 +190,13 @@ struct BlockQueue<B: Region> {
     ///
     /// The implementaiton of `BlockQueue` must ensure there is no data race, and it never reads
     /// uninitialized elements.
-    data: UnsafeCell<Box<[MaybeUninit<B>]>>,
+    data: UnsafeCell<Box<[Option<B>]>>,
 }
 
 impl<B: Region> BlockQueue<B> {
     /// Create an array
     fn new() -> Self {
-        let boxed_slice = vec![MaybeUninit::uninit(); Self::CAPACITY].into_boxed_slice();
+        let boxed_slice = vec![None; Self::CAPACITY].into_boxed_slice();
         let data = UnsafeCell::new(boxed_slice);
         Self {
             cursor: AtomicUsize::new(0),
@@ -211,14 +210,14 @@ impl<B: Region> BlockQueue<B> {
 
     /// Get an entry
     fn get_entry(&self, i: usize) -> B {
-        unsafe { (*self.data.get())[i].assume_init() }
+        unsafe { (*self.data.get())[i].unwrap() }
     }
 
     /// Set an entry.
     ///
     /// It's unsafe unless the array is accessed by only one thread (i.e. used as a thread-local array).
     unsafe fn set_entry(&self, i: usize, block: B) {
-        (*self.data.get())[i].write(block);
+        (*self.data.get())[i] = Some(block);
     }
 
     /// Non-atomically push an element.
