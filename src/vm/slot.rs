@@ -346,7 +346,8 @@ mod tests {
         let src: Vec<usize> = (0..32).collect();
         let src_slice = Address::from_ptr(&src[0])..Address::from_ptr(&src[0]) + src.len();
         for (i, v) in src_slice.iter_slots().enumerate() {
-            assert_eq!(i, unsafe { v.load::<usize>() })
+            let index = (v - Address::from_ptr(&src[0])) / BYTES_IN_ADDRESS;
+            assert_eq!(i, src[index]);
         }
     }
 
