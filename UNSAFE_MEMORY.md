@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 509
-- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=169 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
+- Current unsafe count: 505
+- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=174 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/bumpallocator.rs
@@ -316,6 +316,27 @@
 | 107 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
 | 124 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
 | 262 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+
+### src/util/heap/layout/map32.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 120 | UncheckedCall | ELIMINATED | Replaced `Address::zero()` with `Address::ZERO` |
+| 139 | UncheckedCall | ELIMINATED | Replaced `unsafe { Address::zero() }` with `Address::ZERO` |
+
+### src/util/alloc/free_list_allocator.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 346 | UncheckedCall | ELIMINATED | Replaced `unsafe { Address::zero() }` with `Address::ZERO` |
+
+### src/policy/marksweepspace/malloc_ms/global.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 383 | UncheckedCall | ELIMINATED | Replaced `unsafe { Address::zero() }` with `Address::ZERO` |
+
+### src/policy/space.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 635 | UncheckedCall | ELIMINATED | Replaced `unsafe { Address::zero() }` with `Address::ZERO` |
 
 ## Refactoring Ideas
 - Use `load_atomic(Ordering::Relaxed)` and `store_atomic(Ordering::Relaxed)` on `SideMetadataSpec` to replace non-atomic `load`/`store` in `src/util/metadata/vo_bit/mod.rs` and make functions safe.

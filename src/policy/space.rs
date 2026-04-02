@@ -632,7 +632,7 @@ impl<VM: VMBinding> CommonSpace<VM> {
             contiguous: true,
             permission_exec: args.plan_args.permission_exec,
             zeroed: args.plan_args.zeroed,
-            start: unsafe { Address::zero() },
+            start: Address::ZERO,
             extent: 0,
             vm_map: args.plan_args.vm_map,
             mmapper: args.plan_args.mmapper,
