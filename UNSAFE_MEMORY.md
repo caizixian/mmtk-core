@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 511
-- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=167 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
+- Current unsafe count: 509
+- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=169 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/bumpallocator.rs
@@ -190,6 +190,12 @@
 | Line | Category | Status | Notes |
 |------|----------|--------|-------|
 | 36 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+
+### src/util/heap/chunk_map.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 148 | UncheckedCall | ELIMINATED | Replaced non-atomic `store` with `store_atomic` (Relaxed) |
+| 173 | UncheckedCall | ELIMINATED | Replaced non-atomic `load` with `load_atomic` (Relaxed) |
 
 ### src/util/heap/space_descriptor.rs
 | Line | Category | Status | Notes |
