@@ -27,8 +27,8 @@ pub fn bench(c: &mut Criterion) {
         mmtk::AllocationSemantics::Los,
     );
 
-    let low = unsafe { Address::from_usize(42usize) };
-    let high = unsafe { Address::from_usize(usize::MAX - 1024usize) };
+    let low = Address::ZERO.add(42usize);
+    let high = Address::ZERO.add(usize::MAX - 1024usize);
 
     c.bench_function("is_mapped_regular", |b| {
         b.iter(|| {
@@ -67,7 +67,7 @@ pub fn bench(c: &mut Criterion) {
             let num_chunks = 16384usize;
             let end = start + num_chunks * BYTES_IN_CHUNK;
             for addr_usize in (start..end).step_by(BYTES_IN_CHUNK) {
-                let addr = unsafe { Address::from_usize(addr_usize) };
+                let addr = Address::ZERO.add(addr_usize);
                 let _is_mapped = addr.is_mapped();
             }
         })
