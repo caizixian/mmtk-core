@@ -108,6 +108,7 @@
 | 692 | RawPointerDeref | ELIMINATED | Replaced manual allocation with `Vec` |
 | 693 | RawPointerDeref | ELIMINATED | Replaced manual allocation with `Vec` |
 | 699 | UncheckedCall | ELIMINATED | Replaced manual allocation with `Vec` |
+| 679-1030 | RawPointerDeref | ELIMINATED | Replaced raw pointers with slice references in tests |
 
 ### src/policy/marksweepspace/native_ms/block.rs
 | Line | Category | Status | Notes |
@@ -172,4 +173,6 @@
 | 111 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
 
 ## Refactoring Ideas
-- Replace `MaybeUninit::uninit().assume_init()` with `std::array::from_fn(|_| MaybeUninit::uninit())` in `src/util/alloc/allocators.rs`. (DONE)
+- Use `load_atomic(Ordering::Relaxed)` and `store_atomic(Ordering::Relaxed)` on `SideMetadataSpec` to replace non-atomic `load`/`store` in `src/util/metadata/vo_bit/mod.rs` and make functions safe.
+- Use `load_atomic(Ordering::Relaxed)` and `store_atomic(Ordering::Relaxed)` on `SideMetadataSpec` to replace non-atomic `load`/`store` in `src/policy/marksweepspace/native_ms/block.rs` and eliminate `unsafe` blocks.
+
