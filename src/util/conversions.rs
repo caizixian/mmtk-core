@@ -39,7 +39,7 @@ pub fn address_to_chunk_index(addr: Address) -> usize {
 
 /// Convert a chunk index to the start address of the chunk.
 pub fn chunk_index_to_address(chunk: usize) -> Address {
-    unsafe { Address::from_usize(chunk << LOG_BYTES_IN_CHUNK) }
+    Address::ZERO.add(chunk << LOG_BYTES_IN_CHUNK)
 }
 
 /// Align up an integer to the given alignment. `align` must be a power of two.
@@ -100,23 +100,17 @@ mod tests {
 
     #[test]
     fn test_page_align() {
-        let addr = unsafe { Address::from_usize(0x2345_6789) };
-        assert_eq!(page_align_down(addr), unsafe {
-            Address::from_usize(0x2345_6000)
-        });
+        let addr = Address::ZERO.add(0x2345_6789);
+        assert_eq!(page_align_down(addr), Address::ZERO.add(0x2345_6000));
         assert!(!is_page_aligned(addr));
         assert!(is_page_aligned(page_align_down(addr)));
     }
 
     #[test]
     fn test_chunk_align() {
-        let addr = unsafe { Address::from_usize(0x2345_6789) };
-        assert_eq!(chunk_align_down(addr), unsafe {
-            Address::from_usize(0x2340_0000)
-        });
-        assert_eq!(chunk_align_up(addr), unsafe {
-            Address::from_usize(0x2380_0000)
-        });
+        let addr = Address::ZERO.add(0x2345_6789);
+        assert_eq!(chunk_align_down(addr), Address::ZERO.add(0x2340_0000));
+        assert_eq!(chunk_align_up(addr), Address::ZERO.add(0x2380_0000));
     }
 
     #[test]

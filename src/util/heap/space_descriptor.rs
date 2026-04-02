@@ -98,7 +98,7 @@ impl SpaceDescriptor {
             // For 64-bit discontiguous space, use 32-bit start address
             self.get_start_32()
         } else {
-            unsafe { Address::from_usize(self.get_index() << vm_layout().log_space_extent) }
+            Address::ZERO.add(self.get_index() << vm_layout().log_space_extent)
         }
     }
 
@@ -108,7 +108,7 @@ impl SpaceDescriptor {
         let descriptor = self.0;
         let mantissa = descriptor >> MANTISSA_SHIFT;
         let exponent = (descriptor & EXPONENT_MASK) >> EXPONENT_SHIFT;
-        unsafe { Address::from_usize(mantissa << (BASE_EXPONENT + exponent)) }
+        Address::ZERO.add(mantissa << (BASE_EXPONENT + exponent))
     }
 
     #[cfg(target_pointer_width = "64")]
