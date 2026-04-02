@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 671
-- Categories: FFI=?, RawHeapAccess=?, UncheckedCall=47 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated)
+- Current unsafe count: 665
+- Categories: FFI=?, RawHeapAccess=?, UncheckedCall=51 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=3 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/allocators.rs
@@ -81,6 +81,15 @@
 | 180 | UnsafeTraitImpl | ELIMINATED | Removed redundant `unsafe impl Sync for SFTSpaceMap` |
 | 344 | UnsafeTraitImpl | ELIMINATED | Removed redundant `unsafe impl Sync for SFTDenseChunkMap` |
 | 470 | UnsafeTraitImpl | ELIMINATED | Removed redundant `unsafe impl Sync for SFTSparseChunkMap` |
+### src/util/metadata/header_metadata.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 687 | UncheckedCall | ELIMINATED | Replaced manual allocation with `Vec` |
+| 689 | UncheckedCall | ELIMINATED | Replaced manual allocation with `Vec` |
+| 691 | RawPointerDeref | ELIMINATED | Replaced manual allocation with `Vec` |
+| 692 | RawPointerDeref | ELIMINATED | Replaced manual allocation with `Vec` |
+| 693 | RawPointerDeref | ELIMINATED | Replaced manual allocation with `Vec` |
+| 699 | UncheckedCall | ELIMINATED | Replaced manual allocation with `Vec` |
 
 ## Refactoring Ideas
 - Replace `MaybeUninit::uninit().assume_init()` with `std::array::from_fn(|_| MaybeUninit::uninit())` in `src/util/alloc/allocators.rs`. (DONE)

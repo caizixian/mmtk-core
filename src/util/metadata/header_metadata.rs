@@ -680,25 +680,10 @@ mod tests {
         ($type: ty) => {
             paste!{
                 fn [<with_ $type _obj>]<F>(f: F) where F: FnOnce(Address, *mut $type) + std::panic::UnwindSafe {
-                    // Allocate a tuple that can hold 3 integers
-                    let ty_size = ($type::BITS >> LOG_BITS_IN_BYTE) as usize;
-                    let layout = std::alloc::Layout::from_size_align(ty_size * 3, ty_size).unwrap();
-                    let (obj, ptr) = {
-                        let ptr_raw: *mut $type = unsafe { std::alloc::alloc_zeroed(layout) as *mut $type };
-                        // Use the mid one for testing, as we can use offset to access the other integers.
-                        let ptr_mid: *mut $type = unsafe { ptr_raw.offset(1) };
-                        // Make sure they are all empty
-                        assert_eq!(unsafe { *(ptr_mid.offset(-1)) }, 0, "memory at offset -1 is not zero");
-                        assert_eq!(unsafe { *ptr_mid }, 0, "memory at offset 0 is not zero");
-                        assert_eq!(unsafe { *(ptr_mid.offset(1)) }, 0, "memory at offset 1 is not zero");
-                        (Address::from_ptr(ptr_mid), ptr_mid)
-                    };
-                    crate::util::test_util::with_cleanup(
-                        || f(obj, ptr),
-                        || {
-                            unsafe { std::alloc::dealloc(ptr.offset(-1) as *mut u8, layout); }
-                        }
-                    )
+                    let mut storage: Vec<$type> = vec![0; 3];
+                    let ptr_mid = &mut storage[1] as *mut $type;
+                    let obj = Address::from_ptr(ptr_mid);
+                    f(obj, ptr_mid);
                 }
             }
         }
