@@ -2,7 +2,7 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 425
+- Current unsafe count: 401
 - Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=219 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=11 (Eliminated), RawPointerDeref=15 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
@@ -115,6 +115,14 @@
 | 179 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
 | 183 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
 | 187 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+| 601 | UncheckedCall | ELIMINATED | Replaced unsafe store with safe store_atomic |
+| 604 | UncheckedCall | ELIMINATED | Replaced unsafe load with safe load_atomic |
+| 611 | UncheckedCall | ELIMINATED | Replaced unsafe load with safe load_atomic |
+| 613 | UncheckedCall | ELIMINATED | Replaced unsafe load with safe load_atomic |
+| 658 | UncheckedCall | ELIMINATED | Replaced unsafe store with safe store_atomic |
+| 661 | UncheckedCall | ELIMINATED | Replaced unsafe load with safe load_atomic |
+| 668 | UncheckedCall | ELIMINATED | Replaced unsafe load with safe load_atomic |
+| 672 | UncheckedCall | ELIMINATED | Replaced unsafe load with safe load_atomic |
 | 683-716 | UncheckedCall | ELIMINATED | Replaced heap allocation and direct loads with local variable |
 
 ### src/policy/sft_map.rs
@@ -170,6 +178,7 @@
 | 204 | UncheckedCall | ELIMINATED | Replaced `store` with `store_atomic` (SeqCst) |
 | 209 | UncheckedCall | ELIMINATED | Replaced `store` with `store_atomic` (SeqCst) |
 | 214 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+| 226 | RawPointerDeref | KEPT | Dereferencing BlockList pointer stored in side metadata |
 | 290 | UncheckedCall | ELIMINATED | Replaced `Address::zero()` with `Address::ZERO` |
 
 ### src/util/metadata/side_metadata/helpers.rs
@@ -242,6 +251,8 @@
 | 98 | UncheckedCall | ELIMINATED | Replaced non-atomic store with Relaxed atomic store |
 | 125 | UncheckedCall | ELIMINATED | Removed unsafe from signature (body uses Relaxed load) |
 | 143 | UncheckedCall | ELIMINATED | Replaced non-atomic load with Relaxed atomic load |
+| 173 | RawPointerDeref | KEPT | Reading raw word from side metadata |
+| 185-187 | UncheckedCall | KEPT | Calling unsafe find_prev_non_zero_value |
 | 206 | UncheckedCall | ELIMINATED | Removed unused unsafe block |
 | 234 | UncheckedCall | ELIMINATED | Removed unsafe from signature (body uses Relaxed load) |
 
@@ -530,6 +541,9 @@
 ### src/scheduler/gc_work.rs
 | Line | Category | Status | Notes |
 |------|----------|--------|-------|
+| 59 | RawPointerCast | KEPT | Casting away const for Plan (single-threaded prep phase) |
+| 139 | RawPointerCast | KEPT | Casting away const for Plan (single-threaded release phase) |
+| 517 | RawPointerDeref | KEPT | Dereferencing raw worker pointer (architectural constraint for 'static work packets) |
 | 719 | UncheckedCall | ELIMINATED | Replaced `SFT_MAP.get_unchecked` with `get_checked` |
 | 438 | RawPointerDeref | ELIMINATED | Refactored `ScanMutatorRoots` to use `Option` and `take()` to avoid unsafe cast |
 
@@ -567,9 +581,7 @@
 
 
 ## Refactoring Ideas
-- Use `load_atomic(Ordering::Relaxed)` and `store_atomic(Ordering::Relaxed)` on `SideMetadataSpec` to replace non-atomic `load`/`store` in `src/util/metadata/vo_bit/mod.rs` and make functions safe.
-- Use `load_atomic(Ordering::Relaxed)` and `store_atomic(Ordering::Relaxed)` on `SideMetadataSpec` to replace non-atomic `load`/`store` in `src/policy/marksweepspace/native_ms/block.rs` and eliminate `unsafe` blocks.
-- Refactor `Map64` to use `Vec<AtomicUsize>` for `descriptor_map`, `base_address`, and `high_water` to eliminate `UnsafeCell` and `unsafe` in `mut_self`.
-- Refactor `Map32` to use `Vec<AtomicUsize>` for `descriptor_map` (hot path) and move other fields into the existing `Mutex` to eliminate `UnsafeCell` and `unsafe` in `mut_self`.
+- Investigate if `Allocators` can be made safe by using a safe wrapper that checks initialization (if FFI allows).
+- Investigate if `Prepare` work packet can use interior mutability for the parts of `Plan` it mutates, instead of casting away const.
 
 
