@@ -631,6 +631,24 @@
 | 173 | UncheckedCall | KEPT | `load_raw_word` is a low-level primitive for side metadata. |
 | 185 | UncheckedCall | KEPT | `find_prev_non_zero_value` searches raw memory for metadata. |
 
+### src/util/memory.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 174 | RawHeapAccess | KEPT | `std::ptr::write_bytes` used for zeroing memory. |
+| 188 | UncheckedCall | KEPT | `dzmmap` is unsafe by design to prevent overwriting existing mappings. |
+| 248 | FFI | KEPT | `libc::mmap` call. |
+| 266 | FFI | KEPT | `libc::prctl` call. |
+| 288 | FFI | KEPT | `libc::madvise` call. |
+| 302 | FFI | KEPT | `libc::munmap` call. |
+| 384 | FFI | KEPT | `libc::mprotect` call. |
+| 393 | FFI | KEPT | `libc::mprotect` call. |
+
+### src/policy/space.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 371 | UncheckedCall | KEPT | `SFT_MAP.update` is unsafe because it modifies global SFT map. Caller must ensure validity. |
+| 750 | UncheckedCall | KEPT | `sft_map.eager_initialize` is unsafe for same reason. |
+
 ## Refactoring Ideas
 - Investigate if `Allocators` can be made safe by using a safe wrapper that checks initialization (if FFI allows).
 - Explore zero-cost abstractions for `Address` that can encapsulate safety invariants where lifetimes can be proven.
