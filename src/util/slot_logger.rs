@@ -8,14 +8,12 @@ use crate::plan::Plan;
 use crate::vm::slot::Slot;
 use crate::vm::VMBinding;
 use std::collections::HashSet;
-use std::sync::RwLock;
+use std::sync::Mutex;
 
 pub struct SlotLogger<SL: Slot> {
     // A private hash-set to keep track of slots.
-    slot_log: RwLock<HashSet<SL>>,
+    slot_log: Mutex<HashSet<SL>>,
 }
-
-unsafe impl<SL: Slot> Sync for SlotLogger<SL> {}
 
 impl<SL: Slot> SlotLogger<SL> {
     pub fn new() -> Self {
@@ -33,7 +31,7 @@ impl<SL: Slot> SlotLogger<SL> {
     ///
     pub fn log_slot(&self, slot: SL) {
         trace!("log_slot({:?})", slot);
-        let mut slot_log = self.slot_log.write().unwrap();
+        let mut slot_log = self.slot_log.lock().unwrap();
         assert!(
             slot_log.insert(slot),
             "duplicate slot ({:?}) detected",
@@ -45,7 +43,7 @@ impl<SL: Slot> SlotLogger<SL> {
     /// This function is called at the end of each GC iteration.
     ///
     pub fn reset(&self) {
-        let mut slot_log = self.slot_log.write().unwrap();
+        let mut slot_log = self.slot_log.lock().unwrap();
         slot_log.clear();
     }
 }

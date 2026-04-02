@@ -558,6 +558,11 @@
 | 63 | FFI | KEPT | Calling `malloc_usable_size` |
 | 75 | FFI | KEPT | Calling `calloc` |
 
+### src/util/slot_logger.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 18 | UnsafeTraitImpl | ELIMINATED | Changed RwLock to Mutex to make it automatically Sync |
+
 
 
 
