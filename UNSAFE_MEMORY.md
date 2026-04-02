@@ -2,7 +2,7 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 399
+- Current unsafe count: 398
 - Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=219 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=11 (Eliminated), RawPointerDeref=15 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
@@ -242,6 +242,7 @@
 ### src/util/heap/space_descriptor.rs
 | Line | Category | Status | Notes |
 |------|----------|--------|-------|
+| 34 | UnsafeTraitImpl | ELIMINATED | Derived `Zeroable` with `bytemuck` |
 | 101 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
 | 111 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
 
