@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 705
-- Categories: FFI=?, RawHeapAccess=?, UncheckedCall=17 (Eliminated)
+- Current unsafe count: 699
+- Categories: FFI=?, RawHeapAccess=?, UncheckedCall=22 (Eliminated), MutableStatic=2 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/allocators.rs
@@ -34,6 +34,17 @@
 | 431 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` in tests |
 | 441 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` in tests |
 | 455 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` in tests |
+| 465 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` in tests |
+
+### src/util/heap/layout/vm_layout.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 135 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+| 136 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+| 149 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+| 151 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+| 170 | MutableStatic | ELIMINATED | Replaced `static mut VM_LAYOUT` with `OnceLock` |
+| 202 | MutableStatic | ELIMINATED | Replaced `static mut VM_LAYOUT` with `OnceLock` |
 
 ## Refactoring Ideas
 - Replace `MaybeUninit::uninit().assume_init()` with `std::array::from_fn(|_| MaybeUninit::uninit())` in `src/util/alloc/allocators.rs`. (DONE)

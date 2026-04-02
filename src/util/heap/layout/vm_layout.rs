@@ -1,7 +1,7 @@
 //! The module defines virutal memory layout parameters.
 
-use std::ptr::addr_of;
 use std::sync::atomic::AtomicBool;
+use std::sync::OnceLock;
 
 use atomic::Ordering;
 
@@ -132,8 +132,8 @@ impl VMLayout {
     pub const fn new_32bit() -> Self {
         let layout32 = Self {
             log_address_space: 32,
-            heap_start: chunk_align_down(unsafe { Address::from_usize(0x8000_0000) }),
-            heap_end: chunk_align_up(unsafe { Address::from_usize(0xd000_0000) }),
+            heap_start: chunk_align_down(Address::ZERO.add(0x8000_0000)),
+            heap_end: chunk_align_up(Address::ZERO.add(0xd000_0000)),
             log_space_extent: 31,
             force_use_contiguous_spaces: false,
         };
@@ -145,10 +145,8 @@ impl VMLayout {
     pub const fn new_64bit() -> Self {
         let layout64 = Self {
             log_address_space: 47,
-            heap_start: chunk_align_down(unsafe {
-                Address::from_usize(0x0000_0200_0000_0000usize)
-            }),
-            heap_end: chunk_align_up(unsafe { Address::from_usize(0x0000_2200_0000_0000usize) }),
+            heap_start: chunk_align_down(Address::ZERO.add(0x0000_0200_0000_0000usize)),
+            heap_end: chunk_align_up(Address::ZERO.add(0x0000_2200_0000_0000usize)),
             log_space_extent: 41,
             force_use_contiguous_spaces: true,
         };
@@ -166,9 +164,9 @@ impl VMLayout {
             );
         }
         constants.validate();
-        unsafe {
-            VM_LAYOUT = constants;
-        }
+        VM_LAYOUT
+            .set(constants)
+            .expect("vm_layout is already been used before setup");
     }
 }
 
@@ -185,10 +183,7 @@ impl std::default::Default for VMLayout {
     }
 }
 
-#[cfg(target_pointer_width = "32")]
-static mut VM_LAYOUT: VMLayout = VMLayout::new_32bit();
-#[cfg(target_pointer_width = "64")]
-static mut VM_LAYOUT: VMLayout = VMLayout::new_64bit();
+static VM_LAYOUT: OnceLock<VMLayout> = OnceLock::new();
 
 static VM_LAYOUT_FETCHED: AtomicBool = AtomicBool::new(false);
 
@@ -199,5 +194,5 @@ pub fn vm_layout() -> &'static VMLayout {
     if cfg!(debug_assertions) {
         VM_LAYOUT_FETCHED.store(true, Ordering::SeqCst);
     }
-    unsafe { &*addr_of!(VM_LAYOUT) }
+    VM_LAYOUT.get_or_init(VMLayout::default)
 }
