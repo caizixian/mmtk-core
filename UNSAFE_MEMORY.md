@@ -80,6 +80,7 @@
 | 179 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
 | 183 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
 | 187 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+| 683-716 | UncheckedCall | ELIMINATED | Replaced heap allocation and direct loads with local variable |
 
 ### src/policy/sft_map.rs
 | Line | Category | Status | Notes |
