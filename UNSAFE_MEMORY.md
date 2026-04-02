@@ -581,6 +581,14 @@
 
 
 
+### src/util/int_array_freelist.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 12 | UnsafeTraitImpl | KEPT | `NonNull` parent pointer requires manual Send/Sync |
+| 13 | UnsafeTraitImpl | KEPT | `NonNull` parent pointer requires manual Send/Sync |
+| 60 | RawPointerDeref | KEPT | Accessing parent table via `NonNull` |
+| 69 | RawPointerDeref | KEPT | Accessing parent table via `NonNull` |
+
 ## Refactoring Ideas
 - Investigate if `Allocators` can be made safe by using a safe wrapper that checks initialization (if FFI allows).
 - Investigate if `Prepare` work packet can use interior mutability for the parts of `Plan` it mutates, instead of casting away const.
