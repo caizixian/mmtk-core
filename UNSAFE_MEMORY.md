@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 465
-- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=213 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
+- Current unsafe count: 466
+- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=214 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/bumpallocator.rs
@@ -456,6 +456,11 @@
 | Line | Category | Status | Notes |
 |------|----------|--------|-------|
 | 48 | UncheckedCall | ELIMINATED | Replaced `new_zeroed_vec` with `vec![SpaceDescriptor::UNINITIALIZED; max_chunks]` |
+### src/scheduler/gc_work.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 719 | UncheckedCall | ELIMINATED | Replaced `SFT_MAP.get_unchecked` with `get_checked` |
+
 
 ## Refactoring Ideas
 - Use `load_atomic(Ordering::Relaxed)` and `store_atomic(Ordering::Relaxed)` on `SideMetadataSpec` to replace non-atomic `load`/`store` in `src/util/metadata/vo_bit/mod.rs` and make functions safe.
