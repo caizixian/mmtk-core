@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 426
-- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=219 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=11 (Eliminated), RawPointerDeref=14 (Eliminated), UnionAccess=11 (Eliminated)
+- Current unsafe count: 425
+- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=219 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=11 (Eliminated), RawPointerDeref=15 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
 ### src/util/heap/gc_trigger.rs
@@ -531,6 +531,7 @@
 | Line | Category | Status | Notes |
 |------|----------|--------|-------|
 | 719 | UncheckedCall | ELIMINATED | Replaced `SFT_MAP.get_unchecked` with `get_checked` |
+| 438 | RawPointerDeref | ELIMINATED | Refactored `ScanMutatorRoots` to use `Option` and `take()` to avoid unsafe cast |
 
 ### src/plan/global.rs
 | Line | Category | Status | Notes |
