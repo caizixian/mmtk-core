@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 450
-- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=218 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=5 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
+- Current unsafe count: 446
+- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=218 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=9 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/bumpallocator.rs
@@ -351,6 +351,10 @@
 | 107 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
 | 124 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
 | 262 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+| 70 | UnsafeTraitImpl | ELIMINATED | Removed `unsafe impl Send for CompressedOopSlot` by using Address field |
+| 150 | UnsafeTraitImpl | ELIMINATED | Removed `unsafe impl Send for OffsetSlot` by using Address field |
+| 244 | UnsafeTraitImpl | ELIMINATED | Removed `unsafe impl Send for TaggedSlot` by using Address field |
+| 361 | UnsafeTraitImpl | ELIMINATED | Removed `unsafe impl Send for DummyVMSlot` auto-derived |
 
 ### src/util/heap/layout/map32.rs
 | Line | Category | Status | Notes |
@@ -494,4 +498,7 @@
 ## Refactoring Ideas
 - Use `load_atomic(Ordering::Relaxed)` and `store_atomic(Ordering::Relaxed)` on `SideMetadataSpec` to replace non-atomic `load`/`store` in `src/util/metadata/vo_bit/mod.rs` and make functions safe.
 - Use `load_atomic(Ordering::Relaxed)` and `store_atomic(Ordering::Relaxed)` on `SideMetadataSpec` to replace non-atomic `load`/`store` in `src/policy/marksweepspace/native_ms/block.rs` and eliminate `unsafe` blocks.
+- Refactor `Map64` to use `Vec<AtomicUsize>` for `descriptor_map`, `base_address`, and `high_water` to eliminate `UnsafeCell` and `unsafe` in `mut_self`.
+- Refactor `Map32` to use `Vec<AtomicUsize>` for `descriptor_map` (hot path) and move other fields into the existing `Mutex` to eliminate `UnsafeCell` and `unsafe` in `mut_self`.
+
 
