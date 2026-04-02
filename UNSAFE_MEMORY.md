@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 479
-- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=199 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
+- Current unsafe count: 473
+- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=205 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/bumpallocator.rs
@@ -55,6 +55,12 @@
 | 465 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` in tests |
 | 158 | UncheckedCall | ELIMINATED | Removed `Address::zero()` as it was unused |
 | 166 | UncheckedCall | ELIMINATED | Removed `Address::max()` as it was unused |
+| 649 | UncheckedCall | ELIMINATED | Replaced `SFT_MAP.get_unchecked` with `get_checked` in `is_reachable` |
+| 654 | UncheckedCall | ELIMINATED | Replaced `SFT_MAP.get_unchecked` with `get_checked` in `is_live` |
+| 659 | UncheckedCall | ELIMINATED | Replaced `SFT_MAP.get_unchecked` with `get_checked` in `is_movable` |
+| 664 | UncheckedCall | ELIMINATED | Replaced `SFT_MAP.get_unchecked` with `get_checked` in `get_forwarded_object` |
+| 669 | UncheckedCall | ELIMINATED | Replaced `SFT_MAP.get_unchecked` with `get_checked` in `is_in_any_space` |
+| 675 | UncheckedCall | ELIMINATED | Replaced `SFT_MAP.get_unchecked` with `get_checked` in `is_sane` |
 
 ### src/util/heap/layout/vm_layout.rs
 | Line | Category | Status | Notes |
