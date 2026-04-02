@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 674
-- Categories: FFI=?, RawHeapAccess=?, UncheckedCall=47 (Eliminated), MutableStatic=2 (Eliminated)
+- Current unsafe count: 671
+- Categories: FFI=?, RawHeapAccess=?, UncheckedCall=47 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/allocators.rs
@@ -74,6 +74,13 @@
 | 179 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
 | 183 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
 | 187 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+
+### src/policy/sft_map.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 180 | UnsafeTraitImpl | ELIMINATED | Removed redundant `unsafe impl Sync for SFTSpaceMap` |
+| 344 | UnsafeTraitImpl | ELIMINATED | Removed redundant `unsafe impl Sync for SFTDenseChunkMap` |
+| 470 | UnsafeTraitImpl | ELIMINATED | Removed redundant `unsafe impl Sync for SFTSparseChunkMap` |
 
 ## Refactoring Ideas
 - Replace `MaybeUninit::uninit().assume_init()` with `std::array::from_fn(|_| MaybeUninit::uninit())` in `src/util/alloc/allocators.rs`. (DONE)
