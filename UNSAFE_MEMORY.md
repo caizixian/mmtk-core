@@ -2,7 +2,7 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 398
+- Current unsafe count: 416
 - Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=219 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=11 (Eliminated), RawPointerDeref=15 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
@@ -201,6 +201,12 @@
 | 1272 | UnionAccess | ELIMINATED | Refactored `SideMetadataOffset` to `enum` |
 | 1313-1324 | UnionAccess | ELIMINATED | Refactored `SideMetadataOffset` to `enum` |
 | 1602 | UnionAccess | ELIMINATED | Refactored `SideMetadataOffset` to `enum` |
+
+### src/util/metadata/metadata_val_traits.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 84-131 | RawPointerDeref | KEPT | Trait signatures for low-level memory access via `Address` |
+| 143-186 | RawPointerDeref | KEPT | Implementations using `Address::load` or `Address::as_ref` in macro |
 
 ### src/util/linear_scan.rs
 | Line | Category | Status | Notes |
