@@ -61,7 +61,7 @@ pub(super) fn contiguous_meta_address_to_address(
     let data_addr = (data_addr_intermediate << metadata_spec.log_bytes_in_region)
         + ((bit as usize) << data_addr_bit_shift);
 
-    unsafe { Address::from_usize(data_addr) }
+    Address::ZERO.add(data_addr)
 }
 
 /// Align an pair of a metadata address and a metadata bit offset to the start of this metadata value.
@@ -433,14 +433,14 @@ mod tests {
     }
 
     const TEST_ADDRESS_8B_REGION: [Address; 8] = [
-        unsafe { Address::from_usize(0x8000_0000) },
-        unsafe { Address::from_usize(0x8000_0008) },
-        unsafe { Address::from_usize(0x8000_0010) },
-        unsafe { Address::from_usize(0x8000_0018) },
-        unsafe { Address::from_usize(0x8000_0020) },
-        unsafe { Address::from_usize(0x8001_0000) },
-        unsafe { Address::from_usize(0x8001_0008) },
-        unsafe { Address::from_usize(0xd000_0000) },
+        Address::ZERO.add(0x8000_0000),
+        Address::ZERO.add(0x8000_0008),
+        Address::ZERO.add(0x8000_0010),
+        Address::ZERO.add(0x8000_0018),
+        Address::ZERO.add(0x8000_0020),
+        Address::ZERO.add(0x8001_0000),
+        Address::ZERO.add(0x8001_0008),
+        Address::ZERO.add(0xd000_0000),
     ];
 
     #[test]
@@ -496,14 +496,14 @@ mod tests {
     }
 
     const TEST_ADDRESS_4KB_REGION: [Address; 8] = [
-        unsafe { Address::from_usize(0x8000_0000) },
-        unsafe { Address::from_usize(0x8000_1000) },
-        unsafe { Address::from_usize(0x8000_2000) },
-        unsafe { Address::from_usize(0x8000_3000) },
-        unsafe { Address::from_usize(0x8000_4000) },
-        unsafe { Address::from_usize(0x8001_0000) },
-        unsafe { Address::from_usize(0x8001_1000) },
-        unsafe { Address::from_usize(0xd000_0000) },
+        Address::ZERO.add(0x8000_0000),
+        Address::ZERO.add(0x8000_1000),
+        Address::ZERO.add(0x8000_2000),
+        Address::ZERO.add(0x8000_3000),
+        Address::ZERO.add(0x8000_4000),
+        Address::ZERO.add(0x8001_0000),
+        Address::ZERO.add(0x8001_1000),
+        Address::ZERO.add(0xd000_0000),
     ];
 
     #[test]
@@ -545,16 +545,16 @@ mod tests {
             log_bytes_in_region: 3,
         };
 
-        const ADDR_1000: Address = unsafe { Address::from_usize(0x1000) };
-        const ADDR_1001: Address = unsafe { Address::from_usize(0x1001) };
-        const ADDR_1002: Address = unsafe { Address::from_usize(0x1002) };
-        const ADDR_1003: Address = unsafe { Address::from_usize(0x1003) };
-        const ADDR_1004: Address = unsafe { Address::from_usize(0x1004) };
-        const ADDR_1005: Address = unsafe { Address::from_usize(0x1005) };
-        const ADDR_1006: Address = unsafe { Address::from_usize(0x1006) };
-        const ADDR_1007: Address = unsafe { Address::from_usize(0x1007) };
-        const ADDR_1008: Address = unsafe { Address::from_usize(0x1008) };
-        const ADDR_1009: Address = unsafe { Address::from_usize(0x1009) };
+        const ADDR_1000: Address = Address::ZERO.add(0x1000);
+        const ADDR_1001: Address = Address::ZERO.add(0x1001);
+        const ADDR_1002: Address = Address::ZERO.add(0x1002);
+        const ADDR_1003: Address = Address::ZERO.add(0x1003);
+        const ADDR_1004: Address = Address::ZERO.add(0x1004);
+        const ADDR_1005: Address = Address::ZERO.add(0x1005);
+        const ADDR_1006: Address = Address::ZERO.add(0x1006);
+        const ADDR_1007: Address = Address::ZERO.add(0x1007);
+        const ADDR_1008: Address = Address::ZERO.add(0x1008);
+        const ADDR_1009: Address = Address::ZERO.add(0x1009);
 
         let metadata_2bits = create_spec(1);
         assert_eq!(
