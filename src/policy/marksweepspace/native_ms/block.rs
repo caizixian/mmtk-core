@@ -41,11 +41,11 @@ impl Region for Block {
     fn from_aligned_address(address: Address) -> Self {
         debug_assert!(address.is_aligned_to(Self::BYTES));
         debug_assert!(!address.is_zero());
-        Self(unsafe { NonZeroUsize::new_unchecked(address.as_usize()) })
+        Self(NonZeroUsize::new(address.as_usize()).unwrap())
     }
 
     fn start(&self) -> Address {
-        unsafe { Address::from_usize(self.0.get()) }
+        Address::ZERO.add(self.0.get())
     }
 }
 
@@ -101,7 +101,8 @@ impl Block {
         crate::util::metadata::side_metadata::spec_defs::MS_BLOCK_TLS;
 
     pub fn load_free_list(&self) -> Address {
-        unsafe { Address::from_usize(Block::FREE_LIST_TABLE.load::<usize>(self.start())) }
+        let addr = unsafe { Block::FREE_LIST_TABLE.load::<usize>(self.start()) };
+        Address::ZERO.add(addr)
     }
 
     pub fn store_free_list(&self, free_list: Address) {
@@ -110,7 +111,8 @@ impl Block {
 
     #[cfg(feature = "malloc_native_mimalloc")]
     pub fn load_local_free_list(&self) -> Address {
-        unsafe { Address::from_usize(Block::LOCAL_FREE_LIST_TABLE.load::<usize>(self.start())) }
+        let addr = unsafe { Block::LOCAL_FREE_LIST_TABLE.load::<usize>(self.start()) };
+        Address::ZERO.add(addr)
     }
 
     #[cfg(feature = "malloc_native_mimalloc")]
@@ -120,11 +122,10 @@ impl Block {
 
     #[cfg(feature = "malloc_native_mimalloc")]
     pub fn load_thread_free_list(&self) -> Address {
-        unsafe {
-            Address::from_usize(
-                Block::THREAD_FREE_LIST_TABLE.load_atomic::<usize>(self.start(), Ordering::SeqCst),
-            )
-        }
+        let addr = unsafe {
+            Block::THREAD_FREE_LIST_TABLE.load_atomic::<usize>(self.start(), Ordering::SeqCst)
+        };
+        Address::ZERO.add(addr)
     }
 
     #[cfg(feature = "malloc_native_mimalloc")]
@@ -210,9 +211,7 @@ impl Block {
 
     pub fn load_tls(&self) -> VMThread {
         let tls = Block::TLS_TABLE.load_atomic::<usize>(self.start(), Ordering::SeqCst);
-        VMThread(OpaquePointer::from_address(unsafe {
-            Address::from_usize(tls)
-        }))
+        VMThread(OpaquePointer::from_address(Address::ZERO.add(tls)))
     }
 
     pub fn has_free_cells(&self) -> bool {
@@ -287,7 +286,7 @@ impl Block {
         let cell_size = self.load_block_cell_size();
         debug_assert_ne!(cell_size, 0);
         let mut cell = self.start();
-        let mut last = unsafe { Address::zero() };
+        let mut last = Address::ZERO;
         while cell + cell_size <= self.start() + Block::BYTES {
             // The invariants we checked earlier ensures that we can use cell and object reference interchangably
             // We may not really have an object in this cell, but if we do, this object reference is correct.

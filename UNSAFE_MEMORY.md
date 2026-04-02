@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 665
-- Categories: FFI=?, RawHeapAccess=?, UncheckedCall=51 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=3 (Eliminated)
+- Current unsafe count: 661
+- Categories: FFI=?, RawHeapAccess=?, UncheckedCall=55 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=3 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/allocators.rs
@@ -90,6 +90,16 @@
 | 692 | RawPointerDeref | ELIMINATED | Replaced manual allocation with `Vec` |
 | 693 | RawPointerDeref | ELIMINATED | Replaced manual allocation with `Vec` |
 | 699 | UncheckedCall | ELIMINATED | Replaced manual allocation with `Vec` |
+### src/policy/marksweepspace/native_ms/block.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 44 | UncheckedCall | ELIMINATED | Replaced `NonZeroUsize::new_unchecked` with `NonZeroUsize::new().unwrap()` |
+| 48 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+| 104 | UncheckedCall | KEPT | Separated `Address::from_usize` (safe) from `load` (unsafe) |
+| 113 | UncheckedCall | KEPT | Separated `Address::from_usize` (safe) from `load` (unsafe) |
+| 124 | UncheckedCall | KEPT | Separated `Address::from_usize` (safe) from `load_atomic` (unsafe) |
+| 214 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+| 290 | UncheckedCall | ELIMINATED | Replaced `Address::zero()` with `Address::ZERO` |
 
 ## Refactoring Ideas
 - Replace `MaybeUninit::uninit().assume_init()` with `std::array::from_fn(|_| MaybeUninit::uninit())` in `src/util/alloc/allocators.rs`. (DONE)
