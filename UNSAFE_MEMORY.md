@@ -2,7 +2,7 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 401
+- Current unsafe count: 399
 - Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=219 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=11 (Eliminated), RawPointerDeref=15 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
@@ -516,8 +516,8 @@
 ### src/util/rust_util/zeroed_alloc.rs
 | Line | Category | Status | Notes |
 |------|----------|--------|-------|
-| 43 | UncheckedCall | ELIMINATED | Replaced `new_zeroed_vec` with safe alternatives in all use sites |
-| 48 | UncheckedCall | ELIMINATED | Replaced `new_zeroed_vec` with safe alternatives in all use sites |
+| 43 | UncheckedCall | ELIMINATED | Emptied file as it was dead code |
+| 47 | UncheckedCall | ELIMINATED | Emptied file as it was dead code |
 
 ### src/util/heap/blockpageresource.rs
 | Line | Category | Status | Notes |
