@@ -105,12 +105,12 @@ impl<VM: VMBinding> Allocators<VM> {
         space_mapping: &[(AllocatorSelector, &'static dyn Space<VM>)],
     ) -> Self {
         let mut ret = Allocators {
-            bump_pointer: unsafe { MaybeUninit::uninit().assume_init() },
-            large_object: unsafe { MaybeUninit::uninit().assume_init() },
-            malloc: unsafe { MaybeUninit::uninit().assume_init() },
-            immix: unsafe { MaybeUninit::uninit().assume_init() },
-            free_list: unsafe { MaybeUninit::uninit().assume_init() },
-            markcompact: unsafe { MaybeUninit::uninit().assume_init() },
+            bump_pointer: std::array::from_fn(|_| MaybeUninit::uninit()),
+            large_object: std::array::from_fn(|_| MaybeUninit::uninit()),
+            malloc: std::array::from_fn(|_| MaybeUninit::uninit()),
+            immix: std::array::from_fn(|_| MaybeUninit::uninit()),
+            free_list: std::array::from_fn(|_| MaybeUninit::uninit()),
+            markcompact: std::array::from_fn(|_| MaybeUninit::uninit()),
         };
         let context = Arc::new(AllocatorContext::new(mmtk));
 
