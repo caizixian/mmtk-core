@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 494
-- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=184 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
+- Current unsafe count: 489
+- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=189 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/bumpallocator.rs
@@ -363,6 +363,15 @@
 | 5 | UncheckedCall | ELIMINATED | Replaced `Address::zero()` with `Address::ZERO` |
 | 13 | UncheckedCall | ELIMINATED | Replaced `Address::zero()` with `Address::ZERO` |
 | 16 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+
+### src/util/heap/freelistpageresource.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 91 | UncheckedCall | ELIMINATED | Removed unsafe block around allocate_contiguous_chunks |
+| 253 | UncheckedCall | ELIMINATED | Removed unsafe block around allocate_contiguous_chunks |
+| 272 | UncheckedCall | ELIMINATED | Removed unsafe from allocate_contiguous_chunks signature |
+| 305 | UncheckedCall | ELIMINATED | Removed unsafe from free_contiguous_chunk signature |
+| 382 | UncheckedCall | ELIMINATED | Removed unsafe block around free_contiguous_chunk |
 
 ## Refactoring Ideas
 - Use `load_atomic(Ordering::Relaxed)` and `store_atomic(Ordering::Relaxed)` on `SideMetadataSpec` to replace non-atomic `load`/`store` in `src/util/metadata/vo_bit/mod.rs` and make functions safe.
