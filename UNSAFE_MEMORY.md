@@ -155,7 +155,7 @@
 | 692 | RawPointerDeref | ELIMINATED | Replaced manual allocation with `Vec` |
 | 693 | RawPointerDeref | ELIMINATED | Replaced manual allocation with `Vec` |
 | 699 | UncheckedCall | ELIMINATED | Replaced manual allocation with `Vec` |
-| 679-1030 | RawPointerDeref | ELIMINATED | Replaced raw pointers with slice references in tests |
+| 679-1030 | UnsafeFnCall | ELIMINATED | Replaced unsafe calls to spec.load/store with safe helpers in tests |
 
 ### src/policy/marksweepspace/native_ms/block.rs
 | Line | Category | Status | Notes |
