@@ -39,29 +39,29 @@ mod tests {
         };
 
         assert_eq!(
-            address_to_meta_address(&gspec, unsafe { Address::from_usize(0) }),
+            address_to_meta_address(&gspec, Address::ZERO),
             GLOBAL_SIDE_METADATA_BASE_ADDRESS
         );
         assert_eq!(
-            address_to_meta_address(&lspec, unsafe { Address::from_usize(0) }),
+            address_to_meta_address(&lspec, Address::ZERO),
             LOCAL_SIDE_METADATA_BASE_ADDRESS
         );
 
         assert_eq!(
-            address_to_meta_address(&gspec, unsafe { Address::from_usize(7) }),
+            address_to_meta_address(&gspec, Address::ZERO.add(7)),
             GLOBAL_SIDE_METADATA_BASE_ADDRESS
         );
         assert_eq!(
-            address_to_meta_address(&lspec, unsafe { Address::from_usize(7) }),
+            address_to_meta_address(&lspec, Address::ZERO.add(7)),
             LOCAL_SIDE_METADATA_BASE_ADDRESS
         );
 
         assert_eq!(
-            address_to_meta_address(&gspec, unsafe { Address::from_usize(27) }),
+            address_to_meta_address(&gspec, Address::ZERO.add(27)),
             GLOBAL_SIDE_METADATA_BASE_ADDRESS + 3usize
         );
         assert_eq!(
-            address_to_meta_address(&lspec, unsafe { Address::from_usize(129) }),
+            address_to_meta_address(&lspec, Address::ZERO.add(129)),
             LOCAL_SIDE_METADATA_BASE_ADDRESS + 16usize
         );
 
@@ -69,29 +69,29 @@ mod tests {
         lspec.log_bytes_in_region = 1;
 
         assert_eq!(
-            address_to_meta_address(&gspec, unsafe { Address::from_usize(0) }),
+            address_to_meta_address(&gspec, Address::ZERO),
             GLOBAL_SIDE_METADATA_BASE_ADDRESS
         );
         assert_eq!(
-            address_to_meta_address(&lspec, unsafe { Address::from_usize(0) }),
+            address_to_meta_address(&lspec, Address::ZERO),
             LOCAL_SIDE_METADATA_BASE_ADDRESS
         );
 
         assert_eq!(
-            address_to_meta_address(&gspec, unsafe { Address::from_usize(32) }),
+            address_to_meta_address(&gspec, Address::ZERO.add(32)),
             GLOBAL_SIDE_METADATA_BASE_ADDRESS + 1usize
         );
         assert_eq!(
-            address_to_meta_address(&lspec, unsafe { Address::from_usize(32) }),
+            address_to_meta_address(&lspec, Address::ZERO.add(32)),
             LOCAL_SIDE_METADATA_BASE_ADDRESS + 2usize
         );
 
         assert_eq!(
-            address_to_meta_address(&gspec, unsafe { Address::from_usize(316) }),
+            address_to_meta_address(&gspec, Address::ZERO.add(316)),
             GLOBAL_SIDE_METADATA_BASE_ADDRESS + 9usize
         );
         assert_eq!(
-            address_to_meta_address(&lspec, unsafe { Address::from_usize(316) }),
+            address_to_meta_address(&lspec, Address::ZERO.add(316)),
             LOCAL_SIDE_METADATA_BASE_ADDRESS + 19usize
         );
 
@@ -99,29 +99,29 @@ mod tests {
         lspec.log_num_of_bits = 3;
 
         assert_eq!(
-            address_to_meta_address(&gspec, unsafe { Address::from_usize(0) }),
+            address_to_meta_address(&gspec, Address::ZERO),
             GLOBAL_SIDE_METADATA_BASE_ADDRESS
         );
         assert_eq!(
-            address_to_meta_address(&lspec, unsafe { Address::from_usize(0) }),
+            address_to_meta_address(&lspec, Address::ZERO),
             LOCAL_SIDE_METADATA_BASE_ADDRESS
         );
 
         assert_eq!(
-            address_to_meta_address(&gspec, unsafe { Address::from_usize(32) }),
+            address_to_meta_address(&gspec, Address::ZERO.add(32)),
             GLOBAL_SIDE_METADATA_BASE_ADDRESS + 2usize
         );
         assert_eq!(
-            address_to_meta_address(&lspec, unsafe { Address::from_usize(32) }),
+            address_to_meta_address(&lspec, Address::ZERO.add(32)),
             LOCAL_SIDE_METADATA_BASE_ADDRESS + 16usize
         );
 
         assert_eq!(
-            address_to_meta_address(&gspec, unsafe { Address::from_usize(316) }),
+            address_to_meta_address(&gspec, Address::ZERO.add(316)),
             GLOBAL_SIDE_METADATA_BASE_ADDRESS + 19usize
         );
         assert_eq!(
-            address_to_meta_address(&lspec, unsafe { Address::from_usize(318) }),
+            address_to_meta_address(&lspec, Address::ZERO.add(318)),
             LOCAL_SIDE_METADATA_BASE_ADDRESS + 159usize
         );
     }
@@ -157,34 +157,34 @@ mod tests {
         };
 
         assert_eq!(
-            meta_byte_lshift(&spec, unsafe { Address::from_usize(0) }),
+            meta_byte_lshift(&spec, Address::ZERO),
             0
         );
         assert_eq!(
-            meta_byte_lshift(&spec, unsafe { Address::from_usize(5) }),
+            meta_byte_lshift(&spec, Address::ZERO.add(5)),
             5
         );
         assert_eq!(
-            meta_byte_lshift(&spec, unsafe { Address::from_usize(15) }),
+            meta_byte_lshift(&spec, Address::ZERO.add(15)),
             7
         );
 
         spec.log_num_of_bits = 2;
 
         assert_eq!(
-            meta_byte_lshift(&spec, unsafe { Address::from_usize(0) }),
+            meta_byte_lshift(&spec, Address::ZERO),
             0
         );
         assert_eq!(
-            meta_byte_lshift(&spec, unsafe { Address::from_usize(5) }),
+            meta_byte_lshift(&spec, Address::ZERO.add(5)),
             4
         );
         assert_eq!(
-            meta_byte_lshift(&spec, unsafe { Address::from_usize(15) }),
+            meta_byte_lshift(&spec, Address::ZERO.add(15)),
             4
         );
         assert_eq!(
-            meta_byte_lshift(&spec, unsafe { Address::from_usize(0x10010) }),
+            meta_byte_lshift(&spec, Address::ZERO.add(0x10010)),
             0
         );
     }
