@@ -152,14 +152,7 @@ impl Address {
     }
 
 
-    /// creates an arbitrary Address
-    /// # Safety
-    /// It is unsafe and the user needs to be aware that they may create an invalid address.
-    /// This creates arbitrary addresses which may not be valid. This should only be used for hard-coded addresses. Any other uses of this function could be
-    /// replaced with more proper alternatives.
-    pub const unsafe fn from_usize(raw: usize) -> Address {
-        Address(raw)
-    }
+
 
     /// shifts the address by N T-typed objects (returns addr + N * size_of(T))
     pub fn shift<T>(self, offset: isize) -> Self {

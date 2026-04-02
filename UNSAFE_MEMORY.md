@@ -2,7 +2,7 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 466
+- Current unsafe count: 465
 - Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=214 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
@@ -54,6 +54,7 @@
 | 455 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` in tests |
 | 465 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` in tests |
 | 158 | UncheckedCall | ELIMINATED | Removed `Address::zero()` as it was unused |
+| 160 | UncheckedCall | ELIMINATED | Removed unused `Address::from_usize` |
 | 166 | UncheckedCall | ELIMINATED | Removed `Address::max()` as it was unused |
 | 649 | UncheckedCall | ELIMINATED | Replaced `SFT_MAP.get_unchecked` with `get_checked` in `is_reachable` |
 | 654 | UncheckedCall | ELIMINATED | Replaced `SFT_MAP.get_unchecked` with `get_checked` in `is_live` |
