@@ -660,6 +660,12 @@
 |------|----------|--------|-------|
 | 198 | UncheckedCall | KEPT | `S::UNLOG_BIT_SPEC.load` accesses side metadata (raw memory). |
 
+### src/plan/mutator_context.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 36, 59, 66 | UncheckedCall | KEPT | `allocator_impl_mut_for_semantic` calls. Rely on `Allocators` unchecked downcasting for performance. |
+| 196, 213, 229, 246, 262, 296 | UncheckedCall | KEPT | `get_allocator_mut` calls. Rely on `Allocators` layout and initialization guarantees. |
+
 ## Refactoring Ideas
 - Investigate if `Allocators` can be made safe by using a safe wrapper that checks initialization (if FFI allows).
 - Explore zero-cost abstractions for `Address` that can encapsulate safety invariants where lifetimes can be proven.
