@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 505
-- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=174 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
+- Current unsafe count: 500
+- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=179 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/bumpallocator.rs
@@ -337,6 +337,23 @@
 | Line | Category | Status | Notes |
 |------|----------|--------|-------|
 | 635 | UncheckedCall | ELIMINATED | Replaced `unsafe { Address::zero() }` with `Address::ZERO` |
+
+### src/vm/tests/mock_tests/mock_test_handle_mmap_conflict.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 12 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+
+### src/vm/tests/mock_tests/mock_test_handle_mmap_oom.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 18 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+
+### src/vm/tests/mock_tests/mock_test_is_in_mmtk_spaces.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 20 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+| 84 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+| 113 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
 
 ## Refactoring Ideas
 - Use `load_atomic(Ordering::Relaxed)` and `store_atomic(Ordering::Relaxed)` on `SideMetadataSpec` to replace non-atomic `load`/`store` in `src/util/metadata/vo_bit/mod.rs` and make functions safe.

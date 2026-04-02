@@ -9,7 +9,7 @@ pub fn test_handle_mmap_conflict() {
     with_mockvm(
         default_setup,
         || {
-            let start = unsafe { Address::from_usize(0x100_0000) };
+            let start = Address::ZERO.add(0x100_0000);
             let one_megabyte = 1000000;
             let mmap1_res = memory::dzmmap_noreplace(
                 start,
