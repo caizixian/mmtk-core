@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 564
-- Categories: FFI=?, RawHeapAccess=?, UncheckedCall=119 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
+- Current unsafe count: 550
+- Categories: FFI=?, RawHeapAccess=?, UncheckedCall=133 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/bumpallocator.rs
@@ -25,12 +25,24 @@
 ### src/util/copy/mod.rs
 | Line | Category | Status | Notes |
 |------|----------|--------|-------|
-| 183 | UncheckedCall | ELIMINATED | Replaced with `std::array::from_fn` |
-| 184 | UncheckedCall | ELIMINATED | Replaced with `std::array::from_fn` |
-| 185 | UncheckedCall | ELIMINATED | Replaced with `std::array::from_fn` |
-| 224 | UncheckedCall | ELIMINATED | Replaced with `std::array::from_fn` |
-| 225 | UncheckedCall | ELIMINATED | Replaced with `std::array::from_fn` |
-| 226 | UncheckedCall | ELIMINATED | Replaced with `std::array::from_fn` |
+| 92 | UncheckedCall | ELIMINATED | Replaced `assume_init_mut` with `unwrap` after using `Option` |
+| 95 | UncheckedCall | ELIMINATED | Replaced `assume_init_mut` with `unwrap` after using `Option` |
+| 98 | UncheckedCall | ELIMINATED | Replaced `assume_init_mut` with `unwrap` after using `Option` |
+| 124 | UncheckedCall | ELIMINATED | Replaced `assume_init_mut` with `unwrap` after using `Option` |
+| 127 | UncheckedCall | ELIMINATED | Replaced `assume_init_mut` with `unwrap` after using `Option` |
+| 130 | UncheckedCall | ELIMINATED | Replaced `assume_init_mut` with `unwrap` after using `Option` |
+| 143 | UncheckedCall | ELIMINATED | Replaced `assume_init_mut` with `unwrap` after using `Option` |
+| 146 | UncheckedCall | ELIMINATED | Replaced `assume_init_mut` with `unwrap` after using `Option` |
+| 149 | UncheckedCall | ELIMINATED | Replaced `assume_init_mut` with `unwrap` after using `Option` |
+| 162 | UncheckedCall | ELIMINATED | Replaced `assume_init_mut` with `unwrap` after using `Option` |
+| 165 | UncheckedCall | ELIMINATED | Replaced `assume_init_mut` with `unwrap` after using `Option` |
+| 168 | UncheckedCall | ELIMINATED | Replaced `assume_init_mut` with `unwrap` after using `Option` |
+| 183 | UncheckedCall | ELIMINATED | Replaced with `std::array::from_fn(|_| None)` |
+| 184 | UncheckedCall | ELIMINATED | Replaced with `std::array::from_fn(|_| None)` |
+| 185 | UncheckedCall | ELIMINATED | Replaced with `std::array::from_fn(|_| None)` |
+| 224 | UncheckedCall | ELIMINATED | Replaced with `std::array::from_fn(|_| None)` |
+| 225 | UncheckedCall | ELIMINATED | Replaced with `std::array::from_fn(|_| None)` |
+| 226 | UncheckedCall | ELIMINATED | Replaced with `std::array::from_fn(|_| None)` |
 
 ### src/util/address.rs
 | Line | Category | Status | Notes |
