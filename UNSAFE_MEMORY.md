@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 460
-- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=214 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=4 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
+- Current unsafe count: 457
+- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=217 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=4 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/bumpallocator.rs
@@ -454,6 +454,14 @@
 |------|----------|--------|-------|
 | 201 | UncheckedCall | ELIMINATED | Replaced `new_zeroed_vec` with `vec![MaybeUninit::uninit(); CAPACITY]` |
 | 214 | UncheckedCall | ELIMINATED | Replaced `assume_init` with `unwrap` by using `Option` |
+| 123 | UncheckedCall | ELIMINATED | Replaced `push_relaxed` with safe `push` on local variable |
+| 127 | UncheckedCall | ELIMINATED | Replaced `push_relaxed` with safe `push` on local variable |
+| 335 | UncheckedCall | ELIMINATED | Replaced `push_relaxed` with safe `push` on local variable |
+| 213 | RawPointerDeref | KEPT | Accessing `UnsafeCell` for interior mutability |
+| 219 | RawPointerDeref | KEPT | Accessing `UnsafeCell` for interior mutability |
+| 226 | RawPointerDeref | KEPT | Accessing `UnsafeCell` for interior mutability |
+| 283 | RawPointerDeref | KEPT | Swapping `UnsafeCell` contents |
+| 328 | UncheckedCall | KEPT | Using `push_relaxed` on thread-local queue |
 
 ### src/util/heap/layout/mmapper/csm/two_level_storage.rs
 | Line | Category | Status | Notes |

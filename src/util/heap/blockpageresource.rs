@@ -120,11 +120,11 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         let mut array = BlockQueue::new();
         let mut cursor = start + B::BYTES;
         while cursor < last_block {
-            let result = unsafe { array.push_relaxed(B::from_aligned_address(cursor)) };
+            let result = array.push(B::from_aligned_address(cursor));
             if let Err(block) = result {
                 self.block_queue.add_global_array(array);
                 array = BlockQueue::new();
-                let result2 = unsafe { array.push_relaxed(block) };
+                let result2 = array.push(block);
                 debug_assert!(result2.is_ok());
             }
             cursor += B::BYTES;
@@ -218,6 +218,18 @@ impl<B: Region> BlockQueue<B> {
     /// It's unsafe unless the array is accessed by only one thread (i.e. used as a thread-local array).
     unsafe fn set_entry(&self, i: usize, block: B) {
         (*self.data.get())[i] = Some(block);
+    }
+
+    /// Push an element using exclusive access.
+    fn push(&mut self, block: B) -> Result<(), B> {
+        let i = self.cursor.load(Ordering::Relaxed);
+        if i < Self::CAPACITY {
+            self.data.get_mut()[i] = Some(block);
+            self.cursor.store(i + 1, Ordering::Relaxed);
+            Ok(())
+        } else {
+            Err(block)
+        }
     }
 
     /// Non-atomically push an element.
@@ -331,8 +343,8 @@ impl<B: Region> BlockPool<B> {
                 .is_err()
         };
         if failed {
-            let queue = BlockQueue::new();
-            let result = unsafe { queue.push_relaxed(block) };
+            let mut queue = BlockQueue::new();
+            let result = queue.push(block);
             debug_assert!(result.is_ok());
             let old_queue = self.worker_local_freed_blocks[id].replace(queue);
             assert!(!old_queue.is_empty());
