@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 461
-- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=214 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
+- Current unsafe count: 460
+- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=214 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=4 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/bumpallocator.rs
@@ -271,6 +271,12 @@
 | 107 | UnsafeTraitImpl | KEPT | `InitializeOnce` is thread-safe after initialization |
 | 111 | FFI | ELIMINATED | Replaced `libc::getpid()` with `std::process::id()` |
 | 115 | FFI | KEPT | Calling `libc::gettid()` on Linux |
+
+### src/util/rust_util/atomic_box.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 24 | UnsafeTraitImpl | ELIMINATED | Derived `Zeroable` with `bytemuck` |
+
 
 ### src/util/metadata/side_metadata/constants.rs
 | Line | Category | Status | Notes |

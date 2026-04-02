@@ -1,6 +1,5 @@
 use std::sync::atomic::{AtomicPtr, Ordering};
 
-use bytemuck::Zeroable;
 
 /// A lazily initialized box.  Similar to an `Option<Box<T>>`, but can be initialized atomically.
 ///
@@ -20,6 +19,8 @@ use bytemuck::Zeroable;
 /// also has a field of [`std::sync::Once`] which increases the space overhead.  `OnceOptionBox`
 /// only has one atomic pointer field and is more suitable for large arrays of lazily initialized
 /// elements.
+#[derive(bytemuck::Zeroable)]
+#[zeroable(bound = "")]
 pub struct OnceOptionBox<T> {
     inner: AtomicPtr<T>,
 }
@@ -84,7 +85,7 @@ impl<T> Drop for OnceOptionBox<T> {
     }
 }
 
-unsafe impl<T> Zeroable for OnceOptionBox<T> {}
+
 
 #[cfg(test)]
 mod tests {
