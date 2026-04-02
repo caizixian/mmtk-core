@@ -31,6 +31,10 @@
 | 111 | UncheckedCall | ELIMINATED | Replaced with `std::array::from_fn` |
 | 112 | UncheckedCall | ELIMINATED | Replaced with `std::array::from_fn` |
 | 113 | UncheckedCall | ELIMINATED | Replaced with `std::array::from_fn` |
+| 46 | RawPointerDeref | KEPT | `assume_init_ref` needed because `Allocators` must use `MaybeUninit` for FFI layout compatibility |
+| 66 | RawPointerDeref | KEPT | `assume_init_ref` needed because `Allocators` must use `MaybeUninit` for FFI layout compatibility |
+| 72 | RawPointerDeref | KEPT | `assume_init_mut` needed because `Allocators` must use `MaybeUninit` for FFI layout compatibility |
+| 95 | RawPointerDeref | KEPT | `assume_init_mut` needed because `Allocators` must use `MaybeUninit` for FFI layout compatibility |
 
 ### src/util/copy/mod.rs
 | Line | Category | Status | Notes |
@@ -335,6 +339,12 @@
 |------|----------|--------|-------|
 | 361 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
 | 375 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+
+### src/util/alloc/allocator.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 110 | UnsafeTraitImpl | KEPT | Logical `Sync` for thread-local options shared via Arc |
+| 191 | UncheckedCall | KEPT | Direct memory writing for alignment gap filling (`std::ptr::write_bytes`) |
 
 ### src/util/api_util.rs
 | Line | Category | Status | Notes |
