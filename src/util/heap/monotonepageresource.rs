@@ -183,9 +183,9 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
         MonotonePageResource {
             common: CommonPageResource::new(false, true, vm_map),
             sync: Mutex::new(MonotonePageResourceSync {
-                cursor: unsafe { Address::zero() },
-                current_chunk: unsafe { Address::zero() },
-                sentinel: unsafe { Address::zero() },
+                cursor: Address::ZERO,
+                current_chunk: Address::ZERO,
+                sentinel: Address::ZERO,
                 conditional: MonotonePageResourceConditional::Discontiguous,
             }),
             _p: PhantomData,
@@ -325,9 +325,9 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
                 self.release_pages_extent(guard.current_chunk, bytes);
             }
 
-            guard.current_chunk = Address::zero();
-            guard.sentinel = Address::zero();
-            guard.cursor = Address::zero();
+            guard.current_chunk = Address::ZERO;
+            guard.sentinel = Address::ZERO;
+            guard.cursor = Address::ZERO;
             self.common.release_all_chunks();
         }
     }

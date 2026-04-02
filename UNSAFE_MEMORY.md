@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 518
-- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=160 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
+- Current unsafe count: 515
+- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=163 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/bumpallocator.rs
@@ -292,6 +292,16 @@
 | Line | Category | Status | Notes |
 |------|----------|--------|-------|
 | 94 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+
+### src/util/heap/monotonepageresource.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 186 | UncheckedCall | ELIMINATED | Replaced `unsafe { Address::zero() }` with `Address::ZERO` |
+| 187 | UncheckedCall | ELIMINATED | Replaced `unsafe { Address::zero() }` with `Address::ZERO` |
+| 188 | UncheckedCall | ELIMINATED | Replaced `unsafe { Address::zero() }` with `Address::ZERO` |
+| 328 | UncheckedCall | ELIMINATED | Replaced `Address::zero()` with `Address::ZERO` |
+| 329 | UncheckedCall | ELIMINATED | Replaced `Address::zero()` with `Address::ZERO` |
+| 330 | UncheckedCall | ELIMINATED | Replaced `Address::zero()` with `Address::ZERO` |
 
 ## Refactoring Ideas
 - Use `load_atomic(Ordering::Relaxed)` and `store_atomic(Ordering::Relaxed)` on `SideMetadataSpec` to replace non-atomic `load`/`store` in `src/util/metadata/vo_bit/mod.rs` and make functions safe.
