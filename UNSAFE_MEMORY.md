@@ -2,10 +2,20 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 428
-- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=218 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=11 (Eliminated), RawPointerDeref=13 (Eliminated), UnionAccess=11 (Eliminated)
+- Current unsafe count: 426
+- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=219 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=11 (Eliminated), RawPointerDeref=14 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
+### src/util/heap/gc_trigger.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 24 | UncheckedCall | ELIMINATED | Replaced `MaybeUninit` with `OnceLock` for `plan` |
+| 77 | UncheckedCall | ELIMINATED | Removed `unsafe` block in `plan()` as `OnceLock` is safe |
+
+### src/mmtk.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 187 | RawPointerDeref | ELIMINATED | Removed `unsafe` mutable cast for `GCTrigger` as `set_plan` is now safe |
 ### src/util/alloc/bumpallocator.rs
 | Line | Category | Status | Notes |
 |------|----------|--------|-------|
