@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 550
-- Categories: FFI=?, RawHeapAccess=?, UncheckedCall=133 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
+- Current unsafe count: 544
+- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=133 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/bumpallocator.rs
@@ -231,6 +231,11 @@
 | Line | Category | Status | Notes |
 |------|----------|--------|-------|
 | 24 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+
+### src/util/rust_util/mod.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 111 | FFI | ELIMINATED | Replaced `libc::getpid()` with `std::process::id()` |
 
 ## Refactoring Ideas
 - Use `load_atomic(Ordering::Relaxed)` and `store_atomic(Ordering::Relaxed)` on `SideMetadataSpec` to replace non-atomic `load`/`store` in `src/util/metadata/vo_bit/mod.rs` and make functions safe.
