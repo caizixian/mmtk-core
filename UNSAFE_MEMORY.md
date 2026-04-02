@@ -99,6 +99,9 @@
 ### src/policy/sft_map.rs
 | Line | Category | Status | Notes |
 |------|----------|--------|-------|
+| 135 | Transmute | KEPT | Transmuting trait object to DoubleWord for lock-free atomic storage |
+| 150 | Transmute | KEPT | Transmuting DoubleWord to trait object for lock-free atomic load |
+| 156 | Transmute | KEPT | Transmuting trait object to DoubleWord for lock-free atomic storage |
 | 180 | UnsafeTraitImpl | ELIMINATED | Removed redundant `unsafe impl Sync for SFTSpaceMap` |
 | 203 | UncheckedCall | ELIMINATED | Replaced slice `get_unchecked` with standard indexing |
 | 217 | RawPointerDeref | ELIMINATED | Replaced raw pointer with reference in SFTSpaceMap::update |
@@ -255,7 +258,12 @@
 ### src/util/rust_util/mod.rs
 | Line | Category | Status | Notes |
 |------|----------|--------|-------|
+| 74 | RawPointerDeref | KEPT | Writing to `UnsafeCell` during initialization |
+| 83 | RawPointerDeref | KEPT | `assume_init_ref` for zero-cost access |
+| 96 | RawPointerDeref | KEPT | `assume_init_mut` for zero-cost mutation |
+| 107 | UnsafeTraitImpl | KEPT | `InitializeOnce` is thread-safe after initialization |
 | 111 | FFI | ELIMINATED | Replaced `libc::getpid()` with `std::process::id()` |
+| 115 | FFI | KEPT | Calling `libc::gettid()` on Linux |
 
 ### src/util/metadata/side_metadata/constants.rs
 | Line | Category | Status | Notes |
