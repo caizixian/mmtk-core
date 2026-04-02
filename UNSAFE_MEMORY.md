@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 500
-- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=179 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
+- Current unsafe count: 494
+- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=184 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/bumpallocator.rs
@@ -53,6 +53,8 @@
 | 441 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` in tests |
 | 455 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` in tests |
 | 465 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` in tests |
+| 158 | UncheckedCall | ELIMINATED | Removed `Address::zero()` as it was unused |
+| 166 | UncheckedCall | ELIMINATED | Removed `Address::max()` as it was unused |
 
 ### src/util/heap/layout/vm_layout.rs
 | Line | Category | Status | Notes |
@@ -354,6 +356,13 @@
 | 20 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
 | 84 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
 | 113 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+
+### tests/test_address.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 5 | UncheckedCall | ELIMINATED | Replaced `Address::zero()` with `Address::ZERO` |
+| 13 | UncheckedCall | ELIMINATED | Replaced `Address::zero()` with `Address::ZERO` |
+| 16 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
 
 ## Refactoring Ideas
 - Use `load_atomic(Ordering::Relaxed)` and `store_atomic(Ordering::Relaxed)` on `SideMetadataSpec` to replace non-atomic `load`/`store` in `src/util/metadata/vo_bit/mod.rs` and make functions safe.
