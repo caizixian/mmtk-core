@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 661
-- Categories: FFI=?, RawHeapAccess=?, UncheckedCall=55 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=3 (Eliminated)
+- Current unsafe count: 659
+- Categories: FFI=?, RawHeapAccess=?, UncheckedCall=61 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=3 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/allocators.rs
@@ -79,8 +79,14 @@
 | Line | Category | Status | Notes |
 |------|----------|--------|-------|
 | 180 | UnsafeTraitImpl | ELIMINATED | Removed redundant `unsafe impl Sync for SFTSpaceMap` |
+| 203 | UncheckedCall | ELIMINATED | Replaced slice `get_unchecked` with standard indexing |
+| 232 | UncheckedCall | ELIMINATED | Replaced slice `get_unchecked` with standard indexing |
+| 237 | UncheckedCall | ELIMINATED | Replaced slice `get_unchecked` with standard indexing |
 | 344 | UnsafeTraitImpl | ELIMINATED | Removed redundant `unsafe impl Sync for SFTDenseChunkMap` |
+| 370 | UncheckedCall | ELIMINATED | Replaced slice `get_unchecked` with standard indexing |
 | 470 | UnsafeTraitImpl | ELIMINATED | Removed redundant `unsafe impl Sync for SFTSparseChunkMap` |
+| 487 | UncheckedCall | ELIMINATED | Replaced slice `get_unchecked` with standard indexing |
+| 604 | UncheckedCall | ELIMINATED | Replaced slice `get_unchecked` with standard indexing |
 ### src/util/metadata/header_metadata.rs
 | Line | Category | Status | Notes |
 |------|----------|--------|-------|
