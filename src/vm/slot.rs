@@ -6,8 +6,6 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 use std::{fmt::Debug, ops::Range};
 
-use atomic::Atomic;
-
 use crate::util::constants::{BYTES_IN_ADDRESS, LOG_BYTES_IN_ADDRESS};
 use crate::util::{Address, ObjectReference};
 
@@ -151,7 +149,7 @@ pub trait Slot: Copy + Send + Debug + PartialEq + Eq + Hash {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct SimpleSlot {
-    slot_addr: *mut Atomic<Address>,
+    slot_addr: Address,
 }
 
 impl SimpleSlot {
@@ -160,29 +158,25 @@ impl SimpleSlot {
     /// Arguments:
     /// *   `address`: The address in memory where an `ObjectReference` is stored.
     pub fn from_address(address: Address) -> Self {
-        Self {
-            slot_addr: address.to_mut_ptr(),
-        }
+        Self { slot_addr: address }
     }
 
     /// Get the address of the slot.
     ///
     /// Return the address at which the `ObjectReference` is stored.
     pub fn as_address(&self) -> Address {
-        Address::from_mut_ptr(self.slot_addr)
+        self.slot_addr
     }
 }
 
-unsafe impl Send for SimpleSlot {}
-
 impl Slot for SimpleSlot {
     fn load(&self) -> Option<ObjectReference> {
-        let addr = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
-        ObjectReference::from_raw_address(addr)
+        let addr = unsafe { self.slot_addr.atomic_load::<std::sync::atomic::AtomicUsize>(std::sync::atomic::Ordering::Relaxed) };
+        ObjectReference::from_raw_address(Address::ZERO.add(addr))
     }
 
     fn store(&self, object: ObjectReference) {
-        unsafe { (*self.slot_addr).store(object.to_raw_address(), atomic::Ordering::Relaxed) }
+        unsafe { self.slot_addr.atomic_store::<std::sync::atomic::AtomicUsize>(object.to_raw_address().as_usize(), std::sync::atomic::Ordering::Relaxed) }
     }
 }
 

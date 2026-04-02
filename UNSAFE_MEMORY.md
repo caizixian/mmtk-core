@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 456
-- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=218 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=4 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
+- Current unsafe count: 455
+- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=218 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=5 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/bumpallocator.rs
@@ -399,6 +399,7 @@
 | Line | Category | Status | Notes |
 |------|----------|--------|-------|
 | 349 | UncheckedCall | ELIMINATED | Replaced unsafe load with safe index calculation in tests |
+| 176 | UnsafeTraitImpl | ELIMINATED | Removed `unsafe impl Send for SimpleSlot` after changing field to `Address` |
 
 ### src/util/object_forwarding.rs
 | Line | Category | Status | Notes |
