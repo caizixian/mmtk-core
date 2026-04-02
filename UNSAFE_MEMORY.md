@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 446
-- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=218 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=9 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
+- Current unsafe count: 439
+- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=218 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=11 (Eliminated), RawPointerDeref=13 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/bumpallocator.rs
@@ -201,7 +201,14 @@
 ### src/util/heap/layout/map64.rs
 | Line | Category | Status | Notes |
 |------|----------|--------|-------|
-| 36 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+| 36 | UncheckedCall | ELIMINATED | Replaced Address::from_usize with Address::ZERO.add |
+| 17 | RawPointerDeref | ELIMINATED | Replaced UnsafeCell with Atomic types |
+| 27-28 | UnsafeTraitImpl | ELIMINATED | Removed unsafe impl Send/Sync for Map64 |
+| 60 | RawPointerDeref | ELIMINATED | Removed unsafe mut_self call in insert |
+| 79 | RawPointerDeref | ELIMINATED | Removed unsafe mut_self call in create_parent_freelist |
+| 124 | RawPointerDeref | ELIMINATED | Removed unsafe mut_self call in allocate_contiguous_chunks |
+| 186 | RawPointerDeref | ELIMINATED | Removed unsafe mut_self call in finalize_static_space_map |
+| 216-221 | RawPointerDeref | ELIMINATED | Removed unsafe mut_self and inner method definitions |
 
 ### src/util/heap/chunk_map.rs
 | Line | Category | Status | Notes |

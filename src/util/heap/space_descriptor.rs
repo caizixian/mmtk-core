@@ -36,6 +36,14 @@ unsafe impl Zeroable for SpaceDescriptor {}
 impl SpaceDescriptor {
     pub const UNINITIALIZED: Self = SpaceDescriptor(0);
 
+    pub const fn as_usize(self) -> usize {
+        self.0
+    }
+
+    pub const fn from_usize(v: usize) -> Self {
+        SpaceDescriptor(v)
+    }
+
     pub fn create_descriptor_from_heap_range(start: Address, end: Address) -> SpaceDescriptor {
         let top = end == vm_layout().heap_end;
         if vm_layout().force_use_contiguous_spaces {
