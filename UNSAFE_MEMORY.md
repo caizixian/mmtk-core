@@ -595,8 +595,44 @@
 | 60 | RawPointerDeref | KEPT | Accessing parent table via `NonNull` |
 | 69 | RawPointerDeref | KEPT | Accessing parent table via `NonNull` |
 
+## Analyzed Files (Continued)
+### src/util/metadata/side_metadata/helpers.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 293  | RawPointerDeref | KEPT | Direct memory load for scanning metadata bits. Dynamic mapping checks prevent creating safe slices over potentially unmapped memory. |
+| 323  | RawPointerDeref | KEPT | Direct memory load for scanning metadata bits. |
+
+### src/util/alloc/allocator.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 110  | UnsafeTraitImpl | KEPT | `Sync` for `AllocationOptionsHolder` is required to allow `Allocators` to be shared between threads, safe because options are only accessed by the owner thread. |
+| 191  | UncheckedCall | KEPT | `ptr::write_bytes` used to fill alignment gap. Converting `Address` to a slice safely is not possible without runtime overhead or unsafe slice creation. |
+
+### src/util/rust_util/atomic_box.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 39, 69, 73 | RawPointerDeref | KEPT | Pointer dereference for lock-free lazily initialized box. |
+| 72, 83 | UncheckedCall | KEPT | Reconstructing `Box` from raw pointer in lock-free context. |
+
+### src/util/linear_scan.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 57  | UncheckedCall | KEPT | Calling `is_vo_bit_set_unsafe` for performance when thread-local access is guaranteed by the caller. |
+
+### src/util/heap/pageresource.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 158 | UncheckedCall | KEPT | Calling `allocate_contiguous_chunks` on `VMMap`, which is an inherently unsafe trait interacting with virtual memory. |
+| 182 | UncheckedCall | KEPT | Calling `free_contiguous_chunks` on `VMMap`. |
+
+### src/util/metadata/vo_bit/mod.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 173 | UncheckedCall | KEPT | `load_raw_word` is a low-level primitive for side metadata. |
+| 185 | UncheckedCall | KEPT | `find_prev_non_zero_value` searches raw memory for metadata. |
+
 ## Refactoring Ideas
 - Investigate if `Allocators` can be made safe by using a safe wrapper that checks initialization (if FFI allows).
+- Explore zero-cost abstractions for `Address` that can encapsulate safety invariants where lifetimes can be proven.
+- Investigate if `UnsafeCell` usage in `BlockQueue` can be replaced with safer concurrent primitives if performance allows.
 - Investigate if `Prepare` work packet can use interior mutability for the parts of `Plan` it mutates, instead of casting away const.
-
-
