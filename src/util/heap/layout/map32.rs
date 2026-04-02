@@ -7,7 +7,6 @@ use crate::util::heap::layout::heap_parameters::*;
 use crate::util::heap::layout::vm_layout::*;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::int_array_freelist::IntArrayFreeList;
-use crate::util::rust_util::zeroed_alloc::new_zeroed_vec;
 use crate::util::Address;
 use std::cell::UnsafeCell;
 use std::sync::{Mutex, MutexGuard};
@@ -44,8 +43,7 @@ impl Map32 {
                 shared_discontig_fl_count: 0,
                 total_available_discontiguous_chunks: 0,
                 finalized: false,
-                // This can be big on 64-bit machines.  Use `new_zeroed_vec`.
-                descriptor_map: new_zeroed_vec(max_chunks),
+                descriptor_map: vec![SpaceDescriptor::UNINITIALIZED; max_chunks],
             }),
             sync: Mutex::new(()),
         }

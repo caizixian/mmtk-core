@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 467
-- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=211 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
+- Current unsafe count: 465
+- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=213 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/bumpallocator.rs
@@ -435,6 +435,27 @@
 | 30 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
 | 31 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
 | 70 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+
+### src/util/rust_util/zeroed_alloc.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 43 | UncheckedCall | ELIMINATED | Replaced `new_zeroed_vec` with safe alternatives in all use sites |
+| 48 | UncheckedCall | ELIMINATED | Replaced `new_zeroed_vec` with safe alternatives in all use sites |
+
+### src/util/heap/blockpageresource.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 201 | UncheckedCall | ELIMINATED | Replaced `new_zeroed_vec` with `vec![MaybeUninit::uninit(); CAPACITY]` |
+
+### src/util/heap/layout/mmapper/csm/two_level_storage.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 165 | UncheckedCall | ELIMINATED | Replaced `new_zeroed_vec` with `std::iter::repeat_with` |
+
+### src/util/heap/layout/map32.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 48 | UncheckedCall | ELIMINATED | Replaced `new_zeroed_vec` with `vec![SpaceDescriptor::UNINITIALIZED; max_chunks]` |
 
 ## Refactoring Ideas
 - Use `load_atomic(Ordering::Relaxed)` and `store_atomic(Ordering::Relaxed)` on `SideMetadataSpec` to replace non-atomic `load`/`store` in `src/util/metadata/vo_bit/mod.rs` and make functions safe.

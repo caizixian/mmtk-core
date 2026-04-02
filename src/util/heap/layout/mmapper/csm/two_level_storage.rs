@@ -8,7 +8,6 @@ use crate::util::heap::layout::mmapper::csm::{ChunkRange, MapStateStorage};
 use crate::util::heap::layout::vm_layout::*;
 use crate::util::rust_util::atomic_box::OnceOptionBox;
 use crate::util::rust_util::rev_group::RevisitableGroupByForIterator;
-use crate::util::rust_util::zeroed_alloc::new_zeroed_vec;
 use crate::util::Address;
 use atomic::{Atomic, Ordering};
 use std::fmt;
@@ -162,7 +161,7 @@ impl MapStateStorage for TwoLevelStateStorage {
 impl TwoLevelStateStorage {
     pub fn new() -> Self {
         Self {
-            slabs: new_zeroed_vec(MAX_SLABS),
+            slabs: std::iter::repeat_with(OnceOptionBox::new).take(MAX_SLABS).collect(),
         }
     }
 
