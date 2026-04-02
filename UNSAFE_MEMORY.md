@@ -649,6 +649,17 @@
 | 371 | UncheckedCall | KEPT | `SFT_MAP.update` is unsafe because it modifies global SFT map. Caller must ensure validity. |
 | 750 | UncheckedCall | KEPT | `sft_map.eager_initialize` is unsafe for same reason. |
 
+### src/plan/global.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 114 | UncheckedCall | KEPT | `SFT_MAP.get_mut()` is used to initialize the global SFT map during single-threaded plan creation. |
+| 761 | RawPointerCast | KEPT | `&*(self as *const CommonPlan<VM>)` used to pass a `'static` reference of `self` to a work packet. Safe as `Plan` is `'static`. |
+
+### src/plan/barriers.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 198 | UncheckedCall | KEPT | `S::UNLOG_BIT_SPEC.load` accesses side metadata (raw memory). |
+
 ## Refactoring Ideas
 - Investigate if `Allocators` can be made safe by using a safe wrapper that checks initialization (if FFI allows).
 - Explore zero-cost abstractions for `Address` that can encapsulate safety invariants where lifetimes can be proven.
