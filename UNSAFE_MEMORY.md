@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 599
-- Categories: FFI=?, RawHeapAccess=?, UncheckedCall=104 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
+- Current unsafe count: 565
+- Categories: FFI=?, RawHeapAccess=?, UncheckedCall=119 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/bumpallocator.rs
@@ -172,6 +172,48 @@
 |------|----------|--------|-------|
 | 101 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
 | 111 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+
+### src/util/metadata/vo_bit/mod.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 98 | UncheckedCall | ELIMINATED | Replaced non-atomic store with Relaxed atomic store |
+| 125 | UncheckedCall | ELIMINATED | Removed unsafe from signature (body uses Relaxed load) |
+| 143 | UncheckedCall | ELIMINATED | Replaced non-atomic load with Relaxed atomic load |
+| 206 | UncheckedCall | ELIMINATED | Removed unused unsafe block |
+| 234 | UncheckedCall | ELIMINATED | Removed unsafe from signature (body uses Relaxed load) |
+
+### src/policy/marksweepspace/malloc_ms/metadata.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 29 | UncheckedCall | ELIMINATED | Replaced non-atomic load with Relaxed atomic load |
+| 48 | UncheckedCall | ELIMINATED | Replaced non-atomic load with Relaxed atomic load |
+| 81 | UncheckedCall | ELIMINATED | Replaced non-atomic store with Relaxed atomic store |
+| 85 | UncheckedCall | ELIMINATED | Removed unsafe from signature |
+| 90 | UncheckedCall | ELIMINATED | Replaced non-atomic store with Relaxed atomic store |
+| 95 | UncheckedCall | ELIMINATED | Replaced non-atomic store with Relaxed atomic store |
+
+### src/policy/marksweepspace/malloc_ms/global.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 357 | UncheckedCall | ELIMINATED | Made `unset_page_mark` safe |
+| 468 | UncheckedCall | ELIMINATED | Removed unused unsafe block |
+| 610 | UncheckedCall | ELIMINATED | Removed unused unsafe block |
+| 619 | UncheckedCall | ELIMINATED | Removed unused unsafe block |
+| 626 | UncheckedCall | ELIMINATED | Removed unused unsafe block |
+| 640 | UncheckedCall | ELIMINATED | Removed unused unsafe block |
+| 781 | UncheckedCall | ELIMINATED | Removed unused unsafe block |
+| 850 | UncheckedCall | ELIMINATED | Removed unused unsafe block |
+| 870 | UncheckedCall | ELIMINATED | Removed unused unsafe block |
+
+### src/util/linear_scan.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 57 | UncheckedCall | ELIMINATED | Removed unused unsafe block |
+
+### src/policy/largeobjectspace.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 166 | UncheckedCall | ELIMINATED | Removed unused unsafe block |
 
 ## Refactoring Ideas
 - Use `load_atomic(Ordering::Relaxed)` and `store_atomic(Ordering::Relaxed)` on `SideMetadataSpec` to replace non-atomic `load`/`store` in `src/util/metadata/vo_bit/mod.rs` and make functions safe.

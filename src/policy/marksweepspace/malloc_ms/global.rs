@@ -354,7 +354,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
     ///
     /// # Safety
     /// We need to ensure that only one GC thread is accessing the range.
-    unsafe fn unset_page_mark(&self, start: Address, size: usize) {
+    fn unset_page_mark(&self, start: Address, size: usize) {
         debug_assert!(start.is_aligned_to(BYTES_IN_MALLOC_PAGE));
         debug_assert!(crate::util::conversions::raw_is_aligned(
             size,
@@ -465,7 +465,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
         if offset_malloc_bit {
             trace!("Free memory {:x}", addr);
             offset_free(addr);
-            unsafe { unset_offset_malloc_bit_unsafe(addr) };
+            unset_offset_malloc_bit_unsafe(addr);
         } else {
             let ptr = addr.to_mut_ptr();
             trace!("Free memory {:?}", ptr);
@@ -607,7 +607,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
         // Clear the SFT entry
         unsafe { crate::mmtk::SFT_MAP.clear(chunk_start) };
         // Clear the page marks - we are the only GC thread that is accessing this chunk
-        unsafe { self.unset_page_mark(chunk_start, BYTES_IN_CHUNK) };
+        self.unset_page_mark(chunk_start, BYTES_IN_CHUNK);
     }
 
     /// Sweep an object if it is dead, and unset page marks for empty pages before this object.
@@ -616,14 +616,14 @@ impl<VM: VMBinding> MallocSpace<VM> {
         let (obj_start, offset_malloc, bytes) = Self::get_malloc_addr_size(object);
 
         // We are the only thread that is dealing with the object. We can use non-atomic methods for the metadata.
-        if !unsafe { is_marked_unsafe::<VM>(object) } {
+        if !is_marked_unsafe::<VM>(object) {
             // Dead object
             trace!("Object {} has been allocated but not marked", object);
 
             // Free object
             self.free_internal(obj_start, bytes, offset_malloc);
             trace!("free object {}", object);
-            unsafe { unset_vo_bit_unsafe(object) };
+            unset_vo_bit_unsafe(object);
 
             true
         } else {
@@ -637,9 +637,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
                     .align_down(BYTES_IN_MALLOC_PAGE);
                 if current_page > *empty_page_start {
                     // we are the only GC thread that is accessing this chunk
-                    unsafe {
-                        self.unset_page_mark(*empty_page_start, current_page - *empty_page_start)
-                    };
+                    self.unset_page_mark(*empty_page_start, current_page - *empty_page_start);
                 }
             }
 
@@ -778,7 +776,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
                     }
 
                     debug_assert!(
-                        unsafe { is_marked_unsafe::<VM>(object) },
+                        is_marked_unsafe::<VM>(object),
                         "Dead object = {} found after sweep",
                         object
                     );
@@ -847,7 +845,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
             if live {
                 // Live object. Unset mark bit.
                 // We should be the only thread that access this chunk, it is okay to use non-atomic store.
-                unsafe { unset_mark_bit::<VM>(object) };
+                unset_mark_bit::<VM>(object);
 
                 #[cfg(debug_assertions)]
                 {
@@ -867,12 +865,10 @@ impl<VM: VMBinding> MallocSpace<VM> {
             // 0x0-0x400000 where only one object at 0x100 is alive. We will unset page bits
             // for 0x0-0x100 but then not unset it for the pages after 0x100. This checks
             // if we have empty pages at the end of a chunk that needs to be cleared.
-            unsafe {
-                self.unset_page_mark(
-                    empty_page_start,
-                    chunk_start + BYTES_IN_CHUNK - empty_page_start,
-                )
-            };
+            self.unset_page_mark(
+                empty_page_start,
+                chunk_start + BYTES_IN_CHUNK - empty_page_start,
+            );
         }
 
         #[cfg(debug_assertions)]
