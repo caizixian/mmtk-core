@@ -21,7 +21,7 @@ const LOG_MAPPABLE_BYTES: usize = 48;
 /// Address space size a user-space program is allowed to use.
 const MAPPABLE_BYTES: usize = 1 << LOG_MAPPABLE_BYTES;
 /// The limit of mappable address
-const MAPPABLE_ADDRESS_LIMIT: Address = unsafe { Address::from_usize(MAPPABLE_BYTES) };
+const MAPPABLE_ADDRESS_LIMIT: Address = Address::ZERO.add(MAPPABLE_BYTES);
 
 /// Log number of bytes per slab. For a two-level array, it is advisable to choose the arithmetic
 /// mean of [`LOG_MAPPABLE_BYTES`] and [`LOG_BYTES_IN_CHUNK`] in order to make [`MMAP_SLAB_BYTES`]
