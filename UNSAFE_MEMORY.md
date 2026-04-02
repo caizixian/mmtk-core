@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 488
-- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=190 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
+- Current unsafe count: 479
+- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=199 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/bumpallocator.rs
@@ -377,6 +377,36 @@
 | Line | Category | Status | Notes |
 |------|----------|--------|-------|
 | 349 | UncheckedCall | ELIMINATED | Replaced unsafe load with safe index calculation in tests |
+
+### src/util/object_forwarding.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 173 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+
+### src/vm/tests/mock_tests/mock_test_conservatism.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 113 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+| 183 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+| 210 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+
+### src/vm/tests/mock_tests/mock_test_mmtk_julia_pr_143.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 19 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+| 20 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+
+### src/vm/tests/mock_tests/mock_test_vm_layout_compressed_pointer.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 30 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+| 31 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+
+### src/vm/tests/mock_tests/mock_test_vm_layout_heap_start.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 17 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
+| 19 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
 
 ## Refactoring Ideas
 - Use `load_atomic(Ordering::Relaxed)` and `store_atomic(Ordering::Relaxed)` on `SideMetadataSpec` to replace non-atomic `load`/`store` in `src/util/metadata/vo_bit/mod.rs` and make functions safe.

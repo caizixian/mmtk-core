@@ -16,8 +16,8 @@ fn test_set_vm_space() {
         || {
             let mut fixture = MMTKFixture::create();
 
-            let start_addr = unsafe { Address::from_usize(0x78624DC00000) };
-            let end_addr = unsafe { Address::from_usize(0x786258000000) };
+            let start_addr = Address::ZERO.add(0x78624DC00000);
+            let end_addr = Address::ZERO.add(0x786258000000);
             let size = end_addr - start_addr;
 
             memory_manager::set_vm_space::<MockVM>(fixture.get_mmtk_mut(), start_addr, size);

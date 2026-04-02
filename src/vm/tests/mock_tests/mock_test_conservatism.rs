@@ -110,7 +110,7 @@ pub fn too_big() {
         || {
             SINGLE_OBJECT.with_fixture(|fixture| {
                 for offset in iter_aligned_offsets(SMALL_OFFSET) {
-                    let addr = unsafe { Address::from_usize(0usize.wrapping_sub(offset)) };
+                    let addr = Address::ZERO.add(0usize.wrapping_sub(offset));
                     assert_invalid_objref(addr, fixture.objref.to_raw_address());
                 }
             });
@@ -180,7 +180,7 @@ pub fn large_offsets_aligned() {
                         .as_usize()
                         .checked_add(offset)
                     {
-                        Some(n) => unsafe { Address::from_usize(n) },
+                        Some(n) => Address::ZERO.add(n),
                         None => break,
                     };
                     assert_filter_pass(addr);
@@ -207,7 +207,7 @@ pub fn negative_offsets() {
                         .checked_sub(offset)
                     {
                         Some(0) => break,
-                        Some(n) => unsafe { Address::from_usize(n) },
+                        Some(n) => Address::ZERO.add(n),
                         None => break,
                     };
                     assert_filter_pass(addr);
