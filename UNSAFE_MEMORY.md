@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 604
-- Categories: FFI=?, RawHeapAccess=?, UncheckedCall=104 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=3 (Eliminated), UnionAccess=11 (Eliminated)
+- Current unsafe count: 599
+- Categories: FFI=?, RawHeapAccess=?, UncheckedCall=104 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/bumpallocator.rs
@@ -86,12 +86,17 @@
 |------|----------|--------|-------|
 | 180 | UnsafeTraitImpl | ELIMINATED | Removed redundant `unsafe impl Sync for SFTSpaceMap` |
 | 203 | UncheckedCall | ELIMINATED | Replaced slice `get_unchecked` with standard indexing |
+| 217 | RawPointerDeref | ELIMINATED | Replaced raw pointer with reference in SFTSpaceMap::update |
 | 232 | UncheckedCall | ELIMINATED | Replaced slice `get_unchecked` with standard indexing |
 | 237 | UncheckedCall | ELIMINATED | Replaced slice `get_unchecked` with standard indexing |
 | 344 | UnsafeTraitImpl | ELIMINATED | Removed redundant `unsafe impl Sync for SFTDenseChunkMap` |
 | 370 | UncheckedCall | ELIMINATED | Replaced slice `get_unchecked` with standard indexing |
+| 375 | RawPointerDeref | ELIMINATED | Replaced raw pointer with reference in SFTDenseChunkMap::notify_space_creation |
+| 405 | RawPointerDeref | ELIMINATED | Replaced raw pointer with reference in SFTDenseChunkMap::update |
 | 470 | UnsafeTraitImpl | ELIMINATED | Removed redundant `unsafe impl Sync for SFTSparseChunkMap` |
 | 487 | UncheckedCall | ELIMINATED | Replaced slice `get_unchecked` with standard indexing |
+| 499 | RawPointerDeref | ELIMINATED | Replaced raw pointer with reference in SFTSparseChunkMap::update |
+| 504 | RawPointerDeref | ELIMINATED | Replaced raw pointer with reference in SFTSparseChunkMap::update |
 | 604 | UncheckedCall | ELIMINATED | Replaced slice `get_unchecked` with standard indexing |
 
 ### src/util/metadata/header_metadata.rs
