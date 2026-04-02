@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 532
-- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=145 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
+- Current unsafe count: 518
+- Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=160 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/bumpallocator.rs
@@ -128,9 +128,21 @@
 |------|----------|--------|-------|
 | 44 | UncheckedCall | ELIMINATED | Replaced `NonZeroUsize::new_unchecked` with `NonZeroUsize::new().unwrap()` |
 | 48 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
-| 104 | UncheckedCall | KEPT | Separated `Address::from_usize` (safe) from `load` (unsafe) |
-| 113 | UncheckedCall | KEPT | Separated `Address::from_usize` (safe) from `load` (unsafe) |
-| 124 | UncheckedCall | KEPT | Separated `Address::from_usize` (safe) from `load_atomic` (unsafe) |
+| 104 | UncheckedCall | ELIMINATED | Replaced `load` with `load_atomic` (SeqCst) |
+| 109 | UncheckedCall | ELIMINATED | Replaced `store` with `store_atomic` (SeqCst) |
+| 114 | UncheckedCall | ELIMINATED | Replaced `load` with `load_atomic` (SeqCst) |
+| 120 | UncheckedCall | ELIMINATED | Replaced `store` with `store_atomic` (SeqCst) |
+| 125 | UncheckedCall | ELIMINATED | Removed unnecessary `unsafe` block around `load_atomic` |
+| 134 | UncheckedCall | ELIMINATED | Replaced `store` with `store_atomic` (SeqCst) |
+| 152 | UncheckedCall | ELIMINATED | Replaced `load` with `load_atomic` (SeqCst) |
+| 157 | UncheckedCall | ELIMINATED | Replaced `load` with `load_atomic` (SeqCst) |
+| 163 | UncheckedCall | ELIMINATED | Replaced `store` with `store_atomic` (SeqCst) |
+| 169 | UncheckedCall | ELIMINATED | Replaced `store` with `store_atomic` (SeqCst) |
+| 175 | UncheckedCall | ELIMINATED | Replaced `store` with `store_atomic` (SeqCst) |
+| 181 | UncheckedCall | ELIMINATED | Replaced `store` with `store_atomic` (SeqCst) |
+| 188 | UncheckedCall | ELIMINATED | Replaced `store` with `store_atomic` (SeqCst) |
+| 204 | UncheckedCall | ELIMINATED | Replaced `store` with `store_atomic` (SeqCst) |
+| 209 | UncheckedCall | ELIMINATED | Replaced `store` with `store_atomic` (SeqCst) |
 | 214 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` |
 | 290 | UncheckedCall | ELIMINATED | Replaced `Address::zero()` with `Address::ZERO` |
 
