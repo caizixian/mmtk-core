@@ -2,8 +2,8 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 632
-- Categories: FFI=?, RawHeapAccess=?, UncheckedCall=88 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=3 (Eliminated)
+- Current unsafe count: 621
+- Categories: FFI=?, RawHeapAccess=?, UncheckedCall=88 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=3 (Eliminated), RawPointerDeref=3 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
 ### src/util/alloc/allocators.rs
@@ -116,6 +116,19 @@
 | 436-443 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` in tests |
 | 499-506 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` in tests |
 | 548-557 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` in tests |
+
+### src/util/metadata/side_metadata/global.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 54 | UnionAccess | ELIMINATED | Refactored `SideMetadataOffset` to `enum` |
+| 63 | UnionAccess | ELIMINATED | Refactored `SideMetadataOffset` to `enum` |
+| 67 | UnionAccess | ELIMINATED | Refactored `SideMetadataOffset` to `enum` |
+| 77 | UnionAccess | ELIMINATED | Refactored `SideMetadataOffset` to `enum` |
+| 98 | UnionAccess | ELIMINATED | Refactored `SideMetadataOffset` to `enum` |
+| 108 | UnionAccess | ELIMINATED | Refactored `SideMetadataOffset` to `enum` |
+| 1272 | UnionAccess | ELIMINATED | Refactored `SideMetadataOffset` to `enum` |
+| 1313-1324 | UnionAccess | ELIMINATED | Refactored `SideMetadataOffset` to `enum` |
+| 1602 | UnionAccess | ELIMINATED | Refactored `SideMetadataOffset` to `enum` |
 
 ## Refactoring Ideas
 - Replace `MaybeUninit::uninit().assume_init()` with `std::array::from_fn(|_| MaybeUninit::uninit())` in `src/util/alloc/allocators.rs`. (DONE)
