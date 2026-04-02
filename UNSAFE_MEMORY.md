@@ -298,6 +298,12 @@
 | Line | Category | Status | Notes |
 |------|----------|--------|-------|
 | 24 | UnsafeTraitImpl | ELIMINATED | Derived `Zeroable` with `bytemuck` |
+| 39 | RawPointerDeref | KEPT | Accessing `AtomicPtr` content |
+| 69 | RawPointerDeref | KEPT | Accessing `AtomicPtr` content |
+| 72 | RawPointerDeref | KEPT | Reconstructing `Box` from raw pointer to drop |
+| 73 | RawPointerDeref | KEPT | Accessing `AtomicPtr` content |
+| 83 | RawPointerDeref | KEPT | Reconstructing `Box` from raw pointer to drop |
+
 
 
 ### src/util/metadata/side_metadata/constants.rs
@@ -525,6 +531,19 @@
 | Line | Category | Status | Notes |
 |------|----------|--------|-------|
 | 719 | UncheckedCall | ELIMINATED | Replaced `SFT_MAP.get_unchecked` with `get_checked` |
+
+### src/plan/global.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 114 | MutableStatic | KEPT | Bypassing initialization check for `SFT_MAP` to notify space creation (single-threaded startup) |
+| 761 | Transmute | KEPT | Casting `&self` to `&'static CommonPlan` for work packet (valid for collection cycle) |
+
+### src/util/opaque_pointer.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 12 | UnsafeTraitImpl | KEPT | `OpaquePointer` is just a raw pointer passed to VM, safe to Send/Sync in MMTk |
+| 13 | UnsafeTraitImpl | KEPT | `OpaquePointer` is just a raw pointer passed to VM, safe to Send/Sync in MMTk |
+
 
 
 ## Refactoring Ideas
