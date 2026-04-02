@@ -544,6 +544,20 @@
 | 12 | UnsafeTraitImpl | KEPT | `OpaquePointer` is just a raw pointer passed to VM, safe to Send/Sync in MMTk |
 | 13 | UnsafeTraitImpl | KEPT | `OpaquePointer` is just a raw pointer passed to VM, safe to Send/Sync in MMTk |
 
+### src/util/malloc/malloc_ms_util.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 10 | FFI | KEPT | Calling `posix_memalign` |
+| 25 | FFI | KEPT | Calling `calloc` |
+| 37 | RawPointerDeref | KEPT | Writing original malloc address unaligned |
+| 44 | RawPointerDeref | KEPT | Reading original malloc address unaligned |
+| 45 | FFI | KEPT | Calling `malloc_usable_size` |
+| 51 | RawPointerDeref | KEPT | Reading original malloc address unaligned |
+| 52 | FFI | KEPT | Calling `free` |
+| 63 | FFI | KEPT | Calling `malloc_usable_size` |
+| 75 | FFI | KEPT | Calling `calloc` |
+
+
 
 
 ## Refactoring Ideas
