@@ -2,7 +2,7 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 455
+- Current unsafe count: 450
 - Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=218 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=5 (Eliminated), RawPointerDeref=8 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
@@ -301,6 +301,17 @@
 |------|----------|--------|-------|
 | 52 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` in const |
 | 55 | UncheckedCall | ELIMINATED | Replaced `Address::from_usize` with `Address::ZERO.add` in const |
+
+### src/util/test_util/fixtures.rs
+| Line | Category | Status | Notes |
+|------|----------|--------|-------|
+| 24 | UnsafeTraitImpl | ELIMINATED | Removed `unsafe impl Sync for Fixture` (auto-derived) |
+| 118 | RawPointerDeref | ELIMINATED | Changed `*mut MMTK` to `&'static mut MMTK` |
+| 148 | UncheckedCall | ELIMINATED | Replaced `Box::into_raw` + `unsafe { &*ptr }` with `Box::leak` |
+| 156 | RawPointerDeref | ELIMINATED | Removed `unsafe` from `get_mmtk` (safe reference access) |
+| 160 | RawPointerDeref | ELIMINATED | Removed `unsafe` from `get_mmtk_mut` (safe reference access) |
+| 167 | RawPointerDeref | KEPT | `Box::from_raw` in `Drop` to avoid memory leak in tests |
+| 216 | UnsafeTraitImpl | ELIMINATED | Removed `unsafe impl Send for MutatorFixture` (auto-derived) |
 
 ### src/util/alloc/immix_allocator.rs
 | Line | Category | Status | Notes |
