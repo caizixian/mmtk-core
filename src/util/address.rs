@@ -392,76 +392,66 @@ mod tests {
 
     #[test]
     fn align_up() {
-        unsafe {
-            assert_eq!(
-                Address::from_usize(0x10).align_up(0x10),
-                Address::from_usize(0x10)
-            );
-            assert_eq!(
-                Address::from_usize(0x11).align_up(0x10),
-                Address::from_usize(0x20)
-            );
-            assert_eq!(
-                Address::from_usize(0x20).align_up(0x10),
-                Address::from_usize(0x20)
-            );
-        }
+        assert_eq!(
+            Address::ZERO.add(0x10).align_up(0x10),
+            Address::ZERO.add(0x10)
+        );
+        assert_eq!(
+            Address::ZERO.add(0x11).align_up(0x10),
+            Address::ZERO.add(0x20)
+        );
+        assert_eq!(
+            Address::ZERO.add(0x20).align_up(0x10),
+            Address::ZERO.add(0x20)
+        );
     }
 
     #[test]
     fn align_down() {
-        unsafe {
-            assert_eq!(
-                Address::from_usize(0x10).align_down(0x10),
-                Address::from_usize(0x10)
-            );
-            assert_eq!(
-                Address::from_usize(0x11).align_down(0x10),
-                Address::from_usize(0x10)
-            );
-            assert_eq!(
-                Address::from_usize(0x20).align_down(0x10),
-                Address::from_usize(0x20)
-            );
-        }
+        assert_eq!(
+            Address::ZERO.add(0x10).align_down(0x10),
+            Address::ZERO.add(0x10)
+        );
+        assert_eq!(
+            Address::ZERO.add(0x11).align_down(0x10),
+            Address::ZERO.add(0x10)
+        );
+        assert_eq!(
+            Address::ZERO.add(0x20).align_down(0x10),
+            Address::ZERO.add(0x20)
+        );
     }
 
     #[test]
     fn is_aligned_to() {
-        unsafe {
-            assert!(Address::from_usize(0x10).is_aligned_to(0x10));
-            assert!(!Address::from_usize(0x11).is_aligned_to(0x10));
-            assert!(Address::from_usize(0x10).is_aligned_to(0x8));
-            assert!(!Address::from_usize(0x10).is_aligned_to(0x20));
-        }
+        assert!(Address::ZERO.add(0x10).is_aligned_to(0x10));
+        assert!(!Address::ZERO.add(0x11).is_aligned_to(0x10));
+        assert!(Address::ZERO.add(0x10).is_aligned_to(0x8));
+        assert!(!Address::ZERO.add(0x10).is_aligned_to(0x20));
     }
 
     #[test]
     fn bit_and() {
-        unsafe {
-            assert_eq!(
-                Address::from_usize(0b1111_1111_1100usize) & 0b1010u8,
-                0b1000u8
-            );
-            assert_eq!(
-                Address::from_usize(0b1111_1111_1100usize) & 0b1000_0000_1010usize,
-                0b1000_0000_1000usize
-            );
-        }
+        assert_eq!(
+            Address::ZERO.add(0b1111_1111_1100usize) & 0b1010u8,
+            0b1000u8
+        );
+        assert_eq!(
+            Address::ZERO.add(0b1111_1111_1100usize) & 0b1000_0000_1010usize,
+            0b1000_0000_1000usize
+        );
     }
 
     #[test]
     fn bit_or() {
-        unsafe {
-            assert_eq!(
-                Address::from_usize(0b1111_1111_1100usize) | 0b1010u8,
-                0b1111_1111_1110usize
-            );
-            assert_eq!(
-                Address::from_usize(0b1111_1111_1100usize) | 0b1000_0000_1010usize,
-                0b1111_1111_1110usize
-            );
-        }
+        assert_eq!(
+            Address::ZERO.add(0b1111_1111_1100usize) | 0b1010u8,
+            0b1111_1111_1110usize
+        );
+        assert_eq!(
+            Address::ZERO.add(0b1111_1111_1100usize) | 0b1000_0000_1010usize,
+            0b1111_1111_1110usize
+        );
     }
 }
 
