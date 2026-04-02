@@ -2,7 +2,7 @@
 
 ## Summary
 - Total unsafe at start: 722
-- Current unsafe count: 439
+- Current unsafe count: 428
 - Categories: FFI=1 (Eliminated), RawHeapAccess=?, UncheckedCall=218 (Eliminated), MutableStatic=2 (Eliminated), UnsafeTraitImpl=11 (Eliminated), RawPointerDeref=13 (Eliminated), UnionAccess=11 (Eliminated)
 
 ## Analyzed Files
@@ -366,8 +366,17 @@
 ### src/util/heap/layout/map32.rs
 | Line | Category | Status | Notes |
 |------|----------|--------|-------|
+| 16 | RawPointerDeref | ELIMINATED | Replaced `UnsafeCell` with `Mutex` and Atomic types |
+| 31-32 | UnsafeTraitImpl | ELIMINATED | Removed manual `Send`/`Sync` impls |
+| 48 | UncheckedCall | ELIMINATED | Replaced `new_zeroed_vec` with `vec!` |
+| 53-58 | RawPointerDeref | ELIMINATED | Removed `Deref` impl that bypassed aliasing rules |
+| 64 | RawPointerDeref | ELIMINATED | Removed `mut_self` usage in `insert` |
+| 114 | RawPointerDeref | ELIMINATED | Removed `mut_self_with_sync` in `allocate_contiguous_chunks` |
 | 120 | UncheckedCall | ELIMINATED | Replaced `Address::zero()` with `Address::ZERO` |
 | 139 | UncheckedCall | ELIMINATED | Replaced `unsafe { Address::zero() }` with `Address::ZERO` |
+| 196 | RawPointerDeref | ELIMINATED | Removed `mut_self` in `finalize_static_space_map` |
+| 264-274 | RawPointerDeref | ELIMINATED | Removed `mut_self` and `mut_self_with_sync` methods |
+| 277 | RawPointerDeref | ELIMINATED | Made `free_contiguous_chunks_no_lock` safe |
 
 ### src/util/alloc/free_list_allocator.rs
 | Line | Category | Status | Notes |
@@ -492,10 +501,6 @@
 |------|----------|--------|-------|
 | 165 | UncheckedCall | ELIMINATED | Replaced `new_zeroed_vec` with `std::iter::repeat_with` |
 
-### src/util/heap/layout/map32.rs
-| Line | Category | Status | Notes |
-|------|----------|--------|-------|
-| 48 | UncheckedCall | ELIMINATED | Replaced `new_zeroed_vec` with `vec![SpaceDescriptor::UNINITIALIZED; max_chunks]` |
 ### src/scheduler/gc_work.rs
 | Line | Category | Status | Notes |
 |------|----------|--------|-------|
