@@ -22,6 +22,11 @@ impl MetadataSlot {
         unsafe { self.0.as_ref::<AtomicU8>() }
     }
 
+    fn get_ref<T>(&self) -> &T {
+        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T`.
+        unsafe { self.0.as_ref::<T>() }
+    }
+
     pub(crate) fn fetch_and(&self, mask: u8, order: Ordering) -> u8 {
         self.as_atomic_u8().fetch_and(mask, order)
     }
@@ -56,20 +61,16 @@ impl MetadataSlot {
     }
 
     pub(crate) fn load_non_atomic(&self) -> u8 {
-        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `u8`.
-        unsafe { self.0.load::<u8>() }
+        *self.get_ref::<u8>()
     }
 
     pub(crate) fn load_usize_non_atomic(&self) -> usize {
-        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `usize`.
-        unsafe { self.0.load::<usize>() }
+        *self.get_ref::<usize>()
     }
 
     pub(crate) fn load_usize_atomic(&self, order: Ordering) -> usize {
-        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `AtomicUsize`.
-        unsafe { self.0.atomic_load::<std::sync::atomic::AtomicUsize>(order) }
+        self.get_ref::<std::sync::atomic::AtomicUsize>().load(order)
     }
-
     pub(crate) fn store_non_atomic(&self, val: u8) {
         // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `u8`.
         unsafe { self.0.store::<u8>(val) }
