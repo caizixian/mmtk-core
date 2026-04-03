@@ -85,8 +85,7 @@ impl MetadataSlot {
     }
 
     pub(crate) fn load_atomic_val<T: MetadataValue>(&self, order: Ordering) -> T {
-        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T::Atomic`.
-        T::load_atomic(unsafe { self.0.as_ref::<T::Atomic>() }, order)
+        T::load_atomic(self.get_ref::<T::Atomic>(), order)
     }
 
     pub(crate) fn store_val<T: MetadataValue>(&self, val: T) {
@@ -94,8 +93,7 @@ impl MetadataSlot {
     }
 
     pub(crate) fn store_atomic_val<T: MetadataValue>(&self, val: T, order: Ordering) {
-        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T::Atomic`.
-        T::store_atomic(unsafe { self.0.as_ref::<T::Atomic>() }, val, order)
+        T::store_atomic(self.get_ref::<T::Atomic>(), val, order)
     }
 
     pub(crate) fn compare_exchange_val<T: MetadataValue>(
@@ -105,36 +103,30 @@ impl MetadataSlot {
         success: Ordering,
         failure: Ordering,
     ) -> std::result::Result<T, T> {
-        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T::Atomic`.
-        T::compare_exchange(unsafe { self.0.as_ref::<T::Atomic>() }, old, new, success, failure)
+        T::compare_exchange(self.get_ref::<T::Atomic>(), old, new, success, failure)
     }
 
     pub(crate) fn fetch_add_val<T: MetadataValue>(&self, val: T, order: Ordering) -> T {
-        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T::Atomic`.
-        T::fetch_add(unsafe { self.0.as_ref::<T::Atomic>() }, val, order)
+        T::fetch_add(self.get_ref::<T::Atomic>(), val, order)
     }
 
     pub(crate) fn fetch_sub_val<T: MetadataValue>(&self, val: T, order: Ordering) -> T {
-        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T::Atomic`.
-        T::fetch_sub(unsafe { self.0.as_ref::<T::Atomic>() }, val, order)
+        T::fetch_sub(self.get_ref::<T::Atomic>(), val, order)
     }
 
     pub(crate) fn fetch_and_val<T: MetadataValue>(&self, val: T, order: Ordering) -> T {
-        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T::Atomic`.
-        T::fetch_and(unsafe { self.0.as_ref::<T::Atomic>() }, val, order)
+        T::fetch_and(self.get_ref::<T::Atomic>(), val, order)
     }
 
     pub(crate) fn fetch_or_val<T: MetadataValue>(&self, val: T, order: Ordering) -> T {
-        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T::Atomic`.
-        T::fetch_or(unsafe { self.0.as_ref::<T::Atomic>() }, val, order)
+        T::fetch_or(self.get_ref::<T::Atomic>(), val, order)
     }
 
     pub(crate) fn fetch_update_val<T: MetadataValue, F>(&self, set_order: Ordering, fetch_order: Ordering, f: F) -> std::result::Result<T, T>
     where
         F: FnMut(T) -> Option<T>,
     {
-        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T::Atomic`.
-        T::fetch_update(unsafe { self.0.as_ref::<T::Atomic>() }, set_order, fetch_order, f)
+        T::fetch_update(self.get_ref::<T::Atomic>(), set_order, fetch_order, f)
     }
 }
 
