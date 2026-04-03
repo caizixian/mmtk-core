@@ -114,7 +114,7 @@ impl<T: FixtureContent> Default for SerialFixture<T> {
 }
 
 pub struct MMTKFixture {
-    mmtk: *mut MMTK<MockVM>,
+    mmtk: &'static mut MMTK<MockVM>,
 }
 
 impl FixtureContent for MMTKFixture {
@@ -141,29 +141,27 @@ impl MMTKFixture {
         with_builder(&mut builder);
 
         let mmtk = memory_manager::mmtk_init(&builder);
-        let mmtk_ptr = Box::into_raw(mmtk);
+        let mmtk_ref = Box::leak(mmtk);
 
         if initialize_collection {
-            let mmtk_static: &'static MMTK<MockVM> = unsafe { &*mmtk_ptr };
-            memory_manager::initialize_collection(mmtk_static, VMThread::UNINITIALIZED);
+            memory_manager::initialize_collection(mmtk_ref, VMThread::UNINITIALIZED);
         }
 
-        MMTKFixture { mmtk: mmtk_ptr }
+        MMTKFixture { mmtk: mmtk_ref }
     }
 
     pub fn get_mmtk(&self) -> &'static MMTK<MockVM> {
-        unsafe { &*self.mmtk }
+        self.mmtk
     }
 
     pub fn get_mmtk_mut(&mut self) -> &'static mut MMTK<MockVM> {
-        unsafe { &mut *self.mmtk }
+        self.mmtk
     }
 }
 
 impl Drop for MMTKFixture {
     fn drop(&mut self) {
-        let mmtk_ptr: *const MMTK<MockVM> = self.mmtk as _;
-        let _ = unsafe { Box::from_raw(mmtk_ptr as *mut MMTK<MockVM>) };
+        let _ = unsafe { Box::from_raw(self.mmtk as *mut MMTK<MockVM>) };
     }
 }
 
@@ -212,7 +210,6 @@ impl MutatorFixture {
     }
 }
 
-unsafe impl Send for MutatorFixture {}
 
 pub struct SingleObject {
     pub objref: ObjectReference,
