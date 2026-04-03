@@ -280,7 +280,8 @@ impl MemorySlice for Range<Address> {
             0,
             "bytes are not a multiple of words"
         );
-        // Raw memory copy
+        // SAFETY: The caller must ensure that `src` and `tgt` represent valid, mapped memory ranges.
+        // `std::ptr::copy` is used which handles overlapping regions correctly.
         unsafe {
             let words = tgt.bytes() >> LOG_BYTES_IN_ADDRESS;
             let src = src.start().to_ptr::<usize>();
