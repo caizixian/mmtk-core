@@ -12,7 +12,6 @@ use crate::util::rust_util::zeroed_alloc::new_zeroed_vec;
 use crate::vm::*;
 use atomic::Ordering;
 use spin::RwLock;
-use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
@@ -192,15 +191,14 @@ struct BlockQueue<B: Region> {
     ///
     /// The implementaiton of `BlockQueue` must ensure there is no data race, and it never reads
     /// uninitialized elements.
-    data: UnsafeCell<Box<[MaybeUninit<B>]>>,
+    data: Box<[MaybeUninit<B>]>,
 }
 
 impl<B: Region> BlockQueue<B> {
     /// Create an array
     fn new() -> Self {
         let zeroed_vec = new_zeroed_vec(Self::CAPACITY);
-        let boxed_slice = zeroed_vec.into_boxed_slice();
-        let data = UnsafeCell::new(boxed_slice);
+        let data = zeroed_vec.into_boxed_slice();
         Self {
             cursor: AtomicUsize::new(0),
             data,
@@ -213,21 +211,14 @@ impl<B: Region> BlockQueue<B> {
 
     /// Get an entry
     fn get_entry(&self, i: usize) -> B {
-        unsafe { (*self.data.get())[i].assume_init() }
-    }
-
-    /// Set an entry.
-    ///
-    /// It's unsafe unless the array is accessed by only one thread (i.e. used as a thread-local array).
-    unsafe fn set_entry(&self, i: usize, block: B) {
-        (*self.data.get())[i].write(block);
+        unsafe { self.data[i].assume_init() }
     }
 
     /// Push an element to a unique queue.
     fn push(&mut self, block: B) -> Result<(), B> {
         let i = *self.cursor.get_mut();
         if i < Self::CAPACITY {
-            self.data.get_mut()[i].write(block);
+            self.data[i].write(block);
             *self.cursor.get_mut() = i + 1;
             Ok(())
         } else {
