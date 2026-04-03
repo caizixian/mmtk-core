@@ -1,14 +1,14 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 493 | Current: 409 | Δ: -84
+- Starting count: 493 | Current: 402 | Δ: -91
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - `Address::from_usize` is marked unsafe by design to warn about invalid addresses. Replacing it with `ZERO.add` is considered an anti-pattern as it is semantically identical.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: Investigate `MaybeUninit` usages in `src/util/heap/blockpageresource.rs` or `src/util/alloc/allocators.rs` for potential safe abstractions.
+1. 🔴 HIGH: Investigate `MaybeUninit` usages in `src/util/alloc/allocators.rs` for potential safe abstractions.
 2. 🟡 MED: Identify other `MaybeUninit` usages in the codebase and apply safe abstractions.
 3. 🟢 LOW: Check if other files have unnecessary `unsafe` on functions that can be made safe.
 
@@ -40,6 +40,7 @@
 - **Replacing get_unchecked with get_checked**: In `SFTProcessEdges::trace_object`, replaced `get_unchecked` with `get_checked` on `SFT_MAP` to remove an unsafe block, as the function is marked as unused/deprecated.
 - **StwProof for Header Metadata**: Applied `StwProof` to `HeaderMetadataSpec::load_stw` and `store_stw` and `ObjectModel::load_metadata` and `store_metadata` to make non-atomic header metadata access safe.
 - **Passing spec to helpers functions**: Added `&SideMetadataSpec` parameter to scanning functions in `helpers.rs` to use `slot_from_meta_addr` and remove unsafe blocks.
+- **Replacing MaybeUninit with Option in BlockQueue**: Eliminated unsafe `assume_init()` and safe initialization in `src/util/heap/blockpageresource.rs`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.
@@ -50,7 +51,7 @@
 - `src/util/metadata/side_metadata/side_metadata_tests.rs` — All unsafe are `Address::from_usize(...)` for creating test addresses.
 - `src/policy/marksweepspace/native_ms/block.rs` — Remaining unsafe are `Address::from_usize`, `ObjectReference::from_raw_address_unchecked`, and raw pointer dereferencing for `BlockList`.
 - `src/util/heap/layout/map32.rs` — Remaining unsafe are `mut_self` calls in `finalize_static_space_map` and `get_discontig_freelist_pr_ordinal` claimed to be safe due to single-threaded boot time.
-- `src/util/heap/blockpageresource.rs` — Custom lock-free queue (`BlockQueue`) using `UnsafeCell` and `MaybeUninit`.
+- `src/util/heap/blockpageresource.rs` — Custom lock-free queue (`BlockQueue`) using `UnsafeCell` and `Option` (refactored from `MaybeUninit`).
 - `src/scheduler/gc_work.rs` — Plan casts in `Prepare`/`Release` require raw pointers to avoid UB lint when casting to `&mut`.
 - `src/util/memory.rs` — Calls to `libc` functions (`mmap`, `mprotect`, etc.) and safe wrappers around them.
 - `src/util/address.rs` — Primitives for raw memory access and address arithmetic.
