@@ -64,25 +64,22 @@ mod compressed_oop {
     /// OpenJDK uses this kind of slot to store compressed OOPs on 64-bit machines.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub struct CompressedOopSlot {
-        slot_addr: *mut Atomic<u32>,
+        addr: Address,
     }
-
-    unsafe impl Send for CompressedOopSlot {}
 
     impl CompressedOopSlot {
         pub fn from_address(address: Address) -> Self {
-            Self {
-                slot_addr: address.to_mut_ptr(),
-            }
+            Self { addr: address }
         }
         pub fn as_address(&self) -> Address {
-            Address::from_mut_ptr(self.slot_addr)
+            self.addr
         }
     }
 
     impl Slot for CompressedOopSlot {
         fn load(&self) -> Option<ObjectReference> {
-            let compressed = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
+            let ptr = self.addr.to_mut_ptr::<Atomic<u32>>();
+            let compressed = unsafe { (*ptr).load(atomic::Ordering::Relaxed) };
             let expanded = (compressed as usize) << 3;
             ObjectReference::from_raw_address(unsafe { Address::from_usize(expanded) })
         }
@@ -90,7 +87,8 @@ mod compressed_oop {
         fn store(&self, object: ObjectReference) {
             let expanded = object.to_raw_address().as_usize();
             let compressed = (expanded >> 3) as u32;
-            unsafe { (*self.slot_addr).store(compressed, atomic::Ordering::Relaxed) }
+            let ptr = self.addr.to_mut_ptr::<Atomic<u32>>();
+            unsafe { (*ptr).store(compressed, atomic::Ordering::Relaxed) }
         }
     }
 
@@ -143,29 +141,27 @@ mod offset_slot {
     /// Julia uses this trick to facilitate deleting array elements from the front.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub struct OffsetSlot {
-        slot_addr: *mut Atomic<Address>,
+        addr: Address,
         offset: usize,
     }
-
-    unsafe impl Send for OffsetSlot {}
 
     impl OffsetSlot {
         pub fn new_no_offset(address: Address) -> Self {
             Self {
-                slot_addr: address.to_mut_ptr(),
+                addr: address,
                 offset: 0,
             }
         }
 
         pub fn new_with_offset(address: Address, offset: usize) -> Self {
             Self {
-                slot_addr: address.to_mut_ptr(),
+                addr: address,
                 offset,
             }
         }
 
         pub fn slot_address(&self) -> Address {
-            Address::from_mut_ptr(self.slot_addr)
+            self.addr
         }
 
         pub fn offset(&self) -> usize {
@@ -175,7 +171,8 @@ mod offset_slot {
 
     impl Slot for OffsetSlot {
         fn load(&self) -> Option<ObjectReference> {
-            let middle = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
+            let ptr = self.addr.to_mut_ptr::<Atomic<Address>>();
+            let middle = unsafe { (*ptr).load(atomic::Ordering::Relaxed) };
             let begin = middle - self.offset;
             ObjectReference::from_raw_address(begin)
         }
@@ -183,7 +180,8 @@ mod offset_slot {
         fn store(&self, object: ObjectReference) {
             let begin = object.to_raw_address();
             let middle = begin + self.offset;
-            unsafe { (*self.slot_addr).store(middle, atomic::Ordering::Relaxed) }
+            let ptr = self.addr.to_mut_ptr::<Atomic<Address>>();
+            unsafe { (*ptr).store(middle, atomic::Ordering::Relaxed) }
         }
     }
 
@@ -238,10 +236,8 @@ mod tagged_slot {
     /// The last two bits are tag bits and are not part of the object reference.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub struct TaggedSlot {
-        slot_addr: *mut Atomic<usize>,
+        addr: Address,
     }
-
-    unsafe impl Send for TaggedSlot {}
 
     impl TaggedSlot {
         // The DummyVM has OBJECT_REF_OFFSET = 4.
@@ -249,24 +245,24 @@ mod tagged_slot {
         const TAG_BITS_MASK: usize = 0b11;
 
         pub fn new(address: Address) -> Self {
-            Self {
-                slot_addr: address.to_mut_ptr(),
-            }
+            Self { addr: address }
         }
     }
 
     impl Slot for TaggedSlot {
         fn load(&self) -> Option<ObjectReference> {
-            let tagged = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
+            let ptr = self.addr.to_mut_ptr::<Atomic<usize>>();
+            let tagged = unsafe { (*ptr).load(atomic::Ordering::Relaxed) };
             let untagged = tagged & !Self::TAG_BITS_MASK;
             ObjectReference::from_raw_address(unsafe { Address::from_usize(untagged) })
         }
 
         fn store(&self, object: ObjectReference) {
-            let old_tagged = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
+            let ptr = self.addr.to_mut_ptr::<Atomic<usize>>();
+            let old_tagged = unsafe { (*ptr).load(atomic::Ordering::Relaxed) };
             let new_untagged = object.to_raw_address().as_usize();
             let new_tagged = new_untagged | (old_tagged & Self::TAG_BITS_MASK);
-            unsafe { (*self.slot_addr).store(new_tagged, atomic::Ordering::Relaxed) }
+            unsafe { (*ptr).store(new_tagged, atomic::Ordering::Relaxed) }
         }
     }
 
@@ -357,8 +353,6 @@ mod mixed {
         Offset(OffsetSlot),
         Tagged(TaggedSlot),
     }
-
-    unsafe impl Send for DummyVMSlot {}
 
     impl Slot for DummyVMSlot {
         fn load(&self) -> Option<ObjectReference> {

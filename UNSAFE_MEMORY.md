@@ -1,15 +1,15 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 569 | Current: 564 (estimated) | Δ: -5
+- Starting count: 569 | Current: 558 | Δ: -11
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - `Address::from_usize` is marked unsafe by design to warn about invalid addresses. Replacing it with `ZERO.add` is considered an anti-pattern as it is semantically identical.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: Analyze remaining unsafe in `src/vm/tests/mock_tests/mock_test_slots.rs` to see if raw pointer loads/stores can be replaced with safe atomics or safe references.
-2. 🟡 MED: Analyze remaining unsafe in `src/util/metadata/side_metadata/global.rs` and document them as irreducible if appropriate.
+1. 🔴 HIGH: Analyze remaining unsafe in `src/util/metadata/side_metadata/global.rs` and document them as irreducible if appropriate.
+2. 🟡 MED: Analyze remaining unsafe in `src/util/metadata/metadata_val_traits.rs` to see if traits can be made safe or if implementations can be refactored.
 
 ## Patterns Discovered
 - `MaybeUninit` arrays of size 1 can be replaced with `Option` and `unwrap()` to eliminate unsafe access.
@@ -25,6 +25,7 @@
 - **Safe initialization of MaybeUninit arrays**: Use `[const { MaybeUninit::uninit() }; N]` instead of `unsafe { MaybeUninit::uninit().assume_init() }`.
 - In tests, `SideMetadataSpec::load/store` can be replaced with `load_atomic/store_atomic` with `Ordering::Relaxed` to eliminate unsafe blocks, provided the test does not specifically require non-atomic operations.
 - **Refactoring to use MetadataSlot**: Using `self.slot_for` or `MetadataSlot` methods can eliminate unsafe blocks in `SideMetadataSpec` methods like `compare_exchange_atomic` and `fetch_update`.
+- **Replacing raw pointers with Address**: In types like test slots, replacing `*mut Atomic<T>` with `Address` eliminates the need for `unsafe impl Send` while preserving functionality via `to_mut_ptr()`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.
