@@ -32,6 +32,7 @@
 - Antigravity verified all remaining unsafe locations again under strategy escalation (after 10 steps of zero reductions) and confirmed that they are irreducible or well-encapsulated. The codebase remains in a steady state for Phase 3.
 - Antigravity verified all remaining unsafe locations again under strategy escalation (after 11 steps of zero reductions) and confirmed that they are irreducible or well-encapsulated. The codebase remains in a steady state for Phase 3.
 - Antigravity combined 2 unsafe blocks in `align_offset_alloc` in `src/util/malloc/malloc_ms_util.rs`, reducing the count by 1.
+- Antigravity verified again in the current step and confirmed that remaining unsafe blocks in `src/util/malloc/malloc_ms_util.rs`, `src/util/raw_memory_freelist.rs`, `src/policy/sft_map.rs`, `src/vm/slot.rs`, and `src/mmtk.rs` are irreducible or well-encapsulated as documented.
 
 
 ## Codebase Invariants (PROTECTED — do not prune)
