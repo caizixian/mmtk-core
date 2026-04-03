@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 326 | Δ: -25
+- Starting count: 351 | Current: 324 | Δ: -27
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,11 @@ Architectural insights that affect ALL future safety decisions:
 - Static plan references are needed because plan types are generic and cannot be stored in global statics easily.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: Scan for other files with count < 6 that are not in "Files NOT to Revisit".
-2. 🟢 LOW: Consider using a library like `core_affinity` to remove remaining unsafe in `src/scheduler/affinity.rs` in the future.
+1. 🔴 HIGH: `src/memory_manager.rs` — Replace `static mut` with `OnceLock` or atomic.
+2. 🔴 HIGH: `src/plan/concurrent/concurrent_marking_work.rs` — Replace `static mut` with `OnceLock` or atomic.
+3. 🔴 HIGH: `src/scheduler/gc_work.rs` — Replace `static mut` with `OnceLock` or atomic.
+4. 🟡 MED: Scan for other files with count < 6 that are not in "Files NOT to Revisit".
+5. 🟢 LOW: Consider using a library like `core_affinity` to remove remaining unsafe in `src/scheduler/affinity.rs` in the future.
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
