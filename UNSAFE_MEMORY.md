@@ -1,73 +1,43 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 331 | Δ: -391
+- Starting count: 351 | Current: 330 | Δ: -21
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
-- `Address` and `ObjectReference` are used to abstract over raw memory.
-- `SFTMap::get_unchecked` is now safe and uses bounds checks (or is guaranteed within bounds for `SFTSpaceMap`).
-- `SideMetadataOffset` is now a safe `enum` instead of a `union`.
+Architectural insights that affect ALL future safety decisions:
+- Work packets hold raw pointers to plans or spaces to bypass borrow checker and lifetimes.
+- Static plan references are needed because plan types are generic and cannot be stored in global statics easily.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: Scan for other files with count < 6 that are not in "Files NOT to Revisit".
-2. 🟡 MED: Re-evaluate "Files NOT to Revisit" to see if new abstractions can help.
+1. 🟡 MED: `src/plan/mutator_context.rs:293-335` — Consider refactoring `get_allocator` to be safe or use a safe wrapper that doesn't require unsafe at call sites. — expected Δ: 4
+2. 🟡 MED: Scan for other files with count < 6 that are not in "Files NOT to Revisit".
 
 ## Patterns Discovered
+Reusable refactoring patterns (recipe format):
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
-- Making `MetadataSlot` `pub(crate)` and adding `load_non_atomic` and `store_non_atomic` allows reusing it across modules (e.g., in `header_metadata.rs`).
-- `unsafe { MaybeUninit::uninit().assume_init() }` → `[MaybeUninit::uninit()]` when array size is 1. Works for initializing arrays of `MaybeUninit` safely.
-- For arrays of size N where type is not Copy: `[const { MaybeUninit::uninit() }; N]` is safe.
-- Using `Address(x)` directly in tests within the same module/submodule to avoid `unsafe` blocks for `Address::from_usize`.
 - Safe wrappers in `Mutator` (like `get_allocator_mut_safe`) can encapsulate `unsafe` array access by checking initialization against `space_mapping`.
-- Making trait methods safe when implementations can use safe operations (like indexing with bounds checks) even if they might panic on invalid input, to eliminate unsafe at call sites.
-- Refactoring `union` to `enum` for types like `SideMetadataOffset` eliminates unsafe field accesses and allows deriving `PartialEq`, `Eq`, and `Hash`.
-- Creating an extension trait (e.g., `SideMetadataSpecBlockExt`) to encapsulate unsafe operations on `SideMetadataSpec` for a specific handle type (like `Block`) can reduce unsafe blocks at many call sites.
-- Replacing `MaybeUninit` with `Option` for arrays of objects that are initialized late allows safe access via `as_mut().expect(...)` and eliminates `assume_init_mut` calls.
-- Adding runtime checks (asserts) in `Mutator` to validate that allocators are initialized before accessing them allows removing `unsafe` from accessor methods and callers.
-- Using `store_atomic` to replace raw stores in metadata updates, allowing helper functions to be safe and eliminating `unsafe` blocks at call sites.
-- Using references instead of raw pointers in test slots when the slots borrow from local variables in tests. This eliminates unsafe dereferences and `unsafe impl Send`.
-- Replacing non-atomic `load`/`store` on `SideMetadataSpec` with `load_atomic`/`store_atomic` (with `Relaxed` or `SeqCst`) to remove `unsafe` blocks at call sites.
-- Replacing `UnsafeCell` with `Mutex` for global state that is accessed via shared references, eliminating unsafe mutable access.
-- Extending `MetadataSlot` with generic methods for `MetadataValue` allows centralizing unsafe operations on types larger than `u8` (like `u16`, `u32`, `usize`) and removing unsafe blocks at call sites in `header_metadata.rs` and `global.rs`.
-- Removing raw pointers from work packets and using `mmtk.get_plan_mut()` eliminates the need for `unsafe impl Send` and raw pointer casts when the work packet only needs to call trait methods on the plan.
-- Introduce `FreeListCell` abstraction to encapsulate raw memory operations on free list cells.
-- Refactor `GCTrigger` to use `OnceLock` instead of `MaybeUninit` to remove `unsafe` in `plan()` and avoid `&mut` cast in `MMTK::new`.
-- Adding a safe `get_plan_mut_safe` to `MMTK` taking `&mut self` allows removing `unsafe` blocks when exclusive access to `MMTK` is available (e.g., in `set_vm_space`).
-- Replacing unsafe non-atomic `load` on `MetadataSpec` with safe `load_atomic` with `Relaxed` ordering when logic allows (e.g. monotonic transitions).
+- Extending `MetadataSlot` with generic methods for `MetadataValue` allows centralizing unsafe operations on types larger than `u8`.
 - Using safe wrappers in `Mutator` (like `allocator_impl_mut_for_semantic`) in plan-specific mutators to eliminate direct unsafe calls to `allocators.get_allocator_mut`.
-- Refactor `IntArrayFreeList` to use `Arc<RwLock<Vec<i32>>>` to eliminate `NonNull` and associated `unsafe` blocks, sharing the table safely between parent and children.
-- Removing unused unsafe functions in `malloc_ms/metadata.rs` and making others safe by using atomic operations.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
-- `src/util/metadata/side_metadata/helpers.rs` — All unsafe removed by using `MetadataSlot`. [Phase 2 confirmed]
-- `src/util/metadata/header_metadata.rs` — Irreducible raw loads from header addresses. Also refactored test macro to use safe wrappers. [Phase 2 confirmed]
-- `src/util/alloc/allocators.rs` — Irreducible `assume_init` for layout compatibility with VM bindings. [Phase 2 confirmed]
 - `src/policy/sft_map.rs` — `SFTRefStorage` uses transmute for atomic fat pointers. [Phase 2 confirmed]
 - `src/util/metadata/metadata_val_traits.rs` — Irreducible raw loads from addresses in trait default impls. [Phase 2 confirmed]
-- `src/vm/tests/mock_tests/mock_test_slots.rs` — All unsafe removed by refactoring to use references in tests. [Phase 2 confirmed]
-- `src/policy/marksweepspace/native_ms/block.rs` — Remaining unsafe are irreducible raw memory accesses for free list and raw pointer dereferences. [Phase 2 confirmed]
-- `src/util/heap/layout/map32.rs` — Remaining unsafe are trait methods that must match the unsafe trait definition. [Phase 2 confirmed]
-- `src/util/rust_util/mod.rs` — `InitializeOnce` is a custom optimization for `SFT_MAP` to avoid checks on reads. Unsafe in `gettid` removed. Remaining unsafe in `InitializeOnce` is irreducible for performance. [Phase 2 confirmed]
-- `src/util/metadata/side_metadata/side_metadata_tests.rs` — Remaining unsafe are irreducible raw memory accesses and allocation in tests. [Phase 2 confirmed]
-- `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are irreducible function signatures and raw memory copy. [Phase 2 confirmed]
-- `src/util/heap/blockpageresource.rs` — Remaining unsafe are irreducible UnsafeCell accesses in lock-free queue. [Phase 2 confirmed]
+- `src/util/memory.rs` — Contains wrappers for FFI calls. [Phase 2 confirmed]
+- `docs/dummyvm/src/api.rs` — Irreducible FFI boundaries in dummy VM. [Phase 2 confirmed]
 - `src/util/malloc/malloc_ms_util.rs` — Irreducible FFI and raw pointer manipulation. [Phase 2 confirmed]
-- `docs/dummyvm/src/api.rs` — Irreducible FFI boundaries in dummy VM implementation. [Phase 2 confirmed]
-- `src/util/memory.rs` — Contains wrappers for FFI calls. The unsafe blocks are the FFI calls themselves. [Phase 2 confirmed]
-- `src/util/address.rs` — Primitives for address operations. Unsafe signatures are necessary. [Phase 2 confirmed]
-- `src/vm/slot.rs` — `SimpleSlot` is a safe abstraction. Unsafe operations inside it are irreducible without viral lifetimes. Tests use unsafe to check address iteration. [Phase 2 confirmed]
-- `src/util/heap/freelistpageresource.rs` — Remaining unsafe are `Send`/`Sync` impls for the type. [Phase 2 confirmed]
-- `src/util/alloc/free_list_allocator.rs` — Remaining unsafe is irreducible ObjectReference creation from raw address. [Phase 2 confirmed]
-- `src/util/test_util/fixtures.rs` — Test fixtures require `'static` reference for `MMTK` which is irreducible without leaking or redesign. [Phase 2 confirmed]
-- `src/util/rust_util/atomic_box.rs` — Custom lock-free lazily initialized box with raw pointers for performance. Irreducible. [Phase 2 confirmed]
-- `src/mmtk.rs` — Irreducible unsafe for global plan access and extending lifetimes to avoid viral lifetimes. [Phase 2 confirmed]
-- `src/memory_manager.rs` — All unsafe removed (used `get_plan_mut_safe`). [Phase 2 confirmed]
-- `src/scheduler/gc_work.rs` — `get_plan_mut` calls are irreducible without major refactor to thread proof tokens or change trait signatures. [Phase 2 confirmed]
-- `src/plan/barriers.rs` — Reduced unsafe block in line 198. Remaining unsafe (if any) are likely irreducible. [Phase 2 confirmed]
-- `src/util/int_array_freelist.rs` — All unsafe removed by refactoring to use Arc<RwLock>. [Phase 2 confirmed]
-- `src/policy/immix/line.rs` — All unsafe removed by using atomic operations. [Phase 2 confirmed]
-- `src/scheduler/affinity.rs` — Irreducible FFI interaction for thread affinity. [Phase 2 confirmed]
-- `src/scheduler/worker.rs` — Remaining unsafe are `Send`/`Sync` impls. Function body unsafe removed. [Phase 2 confirmed]
-- `src/util/erase_vm.rs` — Type erasure for non-'static references is irreducible without unsafe. [Phase 2 confirmed]
-- `src/util/metadata/vo_bit/mod.rs` — Unsafe calls to `load_raw_word` and `find_prev_non_zero_value` are wrapped in safe functions `get_raw_vo_bit_word` and `find_object_from_internal_pointer`. [Phase 2 confirmed]
+- `src/util/address.rs` — Primitives for address operations. [Phase 2 confirmed]
+- `src/util/metadata/side_metadata/side_metadata_tests.rs` — Tests use unsafe to check address iteration. [Phase 2 confirmed]
+- `src/util/rust_util/atomic_box.rs` — Custom lock-free lazily initialized box. [Phase 2 confirmed]
+- `src/util/test_util/fixtures.rs` — Fixtures use unsafe for test setup. [Phase 2 confirmed]
+- `src/vm/slot.rs` — `SimpleSlot` is a safe abstraction. [Phase 2 confirmed]
+- `src/mmtk.rs` — Irreducible unsafe for global plan access. [Phase 2 confirmed]
+- `src/util/rust_util/mod.rs` — `InitializeOnce` is irreducible for performance. [Phase 2 confirmed]
+- `src/util/heap/blockpageresource.rs` — UnsafeCell accesses in lock-free queue. [Phase 2 confirmed]
+- `src/policy/marksweepspace/native_ms/block.rs` — Raw memory accesses for free list. [Phase 2 confirmed]
+- `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are irreducible function signatures and raw memory copy. [Phase 2 confirmed]
+- `src/policy/marksweepspace/malloc_ms/global.rs` — Remaining unsafe are irreducible FFI and lifetime extension. [Phase 2 confirmed]
+- `src/policy/copyspace.rs` — Remaining unsafe are irreducible FFI and lifetime extension. [Phase 2 confirmed]
+
+## Abstraction Proposals (for Phase 2)
+### None at this moment.
