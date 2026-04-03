@@ -19,6 +19,7 @@
 - Antigravity combined 2 unsafe blocks in `docs/dummyvm/src/api.rs` into 1, reducing the count by 1, and fixed a pre-existing compile error in `mmtk_bind_mutator`.
 - Antigravity verified again in the current step and confirmed that remaining unsafe blocks in `src/policy/marksweepspace/native_ms/block.rs`, `src/util/heap/layout/mmapper/csm/mod.rs`, `src/util/alloc/allocator.rs`, and `src/policy/marksweepspace/malloc_ms/global.rs` are irreducible as documented.
 - Antigravity investigated `sft_map.rs` lifetime extension and confirmed it is irreducible without performance regression or moving unsafe to callers.
+- Antigravity verified again under strategy escalation and confirmed that remaining unsafe blocks in `src/vm/slot.rs`, `src/mmtk.rs`, `src/util/raw_memory_freelist.rs`, and `src/policy/sft_map.rs` are irreducible or well-encapsulated.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Work packets hold raw pointers to plans or spaces to bypass borrow checker and lifetimes.
