@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 77 | Δ: -274
-- Phase: 2 (Safe Abstractions)
+- Starting count: 351 | Current: 78 | Δ: -273
+- Phase: 3 (Irreducible Documentation)
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Work packets hold raw pointers to plans or spaces to bypass borrow checker and lifetimes.
@@ -10,7 +10,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: `docs/dummyvm/src/api.rs:33-35` — add safety comments for `CStr::from_ptr` — expected Δ: 0
+- (None. All remaining unsafe blocks are documented as irreducible.)
 
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
