@@ -124,6 +124,11 @@ pub struct StwProtected<T> {
     value: UnsafeCell<T>,
 }
 
+// SAFETY: `StwProtected` allows shared access to the inner value via `get`.
+// This is safe because mutation via `get_mut` requires a `StwProof`, which
+// guarantees that the world is stopped and no other threads are accessing the value.
+// Since `T: Sync`, concurrent shared access from multiple threads is safe when
+// no mutation occurs.
 unsafe impl<T: Sync> Sync for StwProtected<T> {}
 
 impl<T> StwProtected<T> {
@@ -134,10 +139,15 @@ impl<T> StwProtected<T> {
     }
 
     pub fn get(&self) -> &T {
+        // SAFETY: `StwProtected` only allows mutation when the world is stopped
+        // (via `get_mut` which requires a `StwProof`). Therefore, shared access
+        // is safe during mutator time as no concurrent mutation can occur.
         unsafe { &*self.value.get() }
     }
 
     pub fn get_mut(&self, _proof: &StwProof) -> &mut T {
+        // SAFETY: The caller must provide a `StwProof`, which guarantees that
+        // the world is stopped and we have exclusive access to the value.
         unsafe { &mut *self.value.get() }
     }
 
@@ -223,6 +233,9 @@ impl<VM: VMBinding> MMTK<VM> {
         // We haven't finished creating MMTk. No one is using the GC trigger.
         {
             // We know the plan address will not change. Cast it to a static reference.
+            // SAFETY: The plan is moved into the `MMTK` struct on line 250, which is then
+            // owned by the user or stored globally. The reference is valid as long as
+            // the `MMTK` instance lives.
             let static_plan: &'static dyn Plan<VM = VM> = unsafe { &*(&*plan as *const _) };
             // Set the plan so we can trigger GC and check GC condition without using plan
             gc_trigger.set_plan(static_plan);
