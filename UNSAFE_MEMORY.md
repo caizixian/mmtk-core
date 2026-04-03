@@ -10,7 +10,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: Audit remaining files in 'Files NOT to Revisit' to ensure all unsafe blocks have safety comments.
+1. 🟢 LOW: Audit remaining files in 'Files NOT to Revisit' (checked global.rs and metadata_val_traits.rs).
 
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
@@ -24,8 +24,8 @@
 - **New**: Removed `impl Slot for Address` and changed `MemorySlice for Range<Address>` to use `SimpleSlot`, eliminating 2 unsafe blocks and aligning with the intent of using `SimpleSlot` directly.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
-- `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are irreducible function signatures and raw memory copy. [Phase 2 confirmed]
-- `src/util/metadata/metadata_val_traits.rs` — Defines contract for loading metadata values. Inherently unsafe. [Phase 2 confirmed]
+- `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are irreducible function signatures and raw memory copy. Audited safety comments. [Phase 2 confirmed]
+- `src/util/metadata/metadata_val_traits.rs` — Defines contract for loading metadata values. Inherently unsafe. Audited safety comments. [Phase 2 confirmed]
 - `src/util/memory.rs` — Wrappers around libc calls. Standard FFI wrappers. Verified safety comments. [Phase 3 confirmed]
 - `docs/dummyvm/src/api.rs` — Reduced unsafe by using `Option<&mut T>` and `Option<Box<T>>` in FFI signatures. Remaining are `CStr::from_ptr`. [Phase 3 confirmed]
 - `src/util/malloc/malloc_ms_util.rs` — Irreducible due to raw pointer manipulation in allocator. Verified safety comments. [Phase 3 confirmed]
