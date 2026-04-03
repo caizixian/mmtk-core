@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 709 | Δ: -13
+- Starting count: 722 | Current: 704 | Δ: -18
 - Phase: 1
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -14,6 +14,7 @@
 ## Patterns Discovered
 - `unsafe { MaybeUninit::uninit().assume_init() }` → `[MaybeUninit::uninit()]` when array size is 1. Works for initializing arrays of `MaybeUninit` safely.
 - For arrays of size N where type is not Copy: `[const { MaybeUninit::uninit() }; N]` is safe.
+- Using `Address(x)` directly in tests within the same module/submodule to avoid `unsafe` blocks for `Address::from_usize`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/policy/marksweepspace/native_ms/block.rs` — Irreducible address conversions and raw loads. [Phase 1 analysis]
