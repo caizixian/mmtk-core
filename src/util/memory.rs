@@ -387,9 +387,7 @@ pub(crate) fn panic_if_unmapped(_start: Address, _size: usize, _anno: &MmapAnnot
     }
 }
 
-/// Unprotect the given memory (in page granularity) to allow access (PROT_READ/WRITE/EXEC).
-pub fn munprotect(start: Address, size: usize, prot: MmapProtection) -> Result<()> {
-    let prot = prot.into_native_flags();
+fn mprotect_internal(start: Address, size: usize, prot: libc::c_int) -> Result<()> {
     wrap_libc_call(
         // SAFETY: The caller must ensure that the memory range is valid and was mapped by MMTk.
         &|| unsafe { libc::mprotect(start.to_mut_ptr(), size, prot) },
@@ -397,13 +395,15 @@ pub fn munprotect(start: Address, size: usize, prot: MmapProtection) -> Result<(
     )
 }
 
+/// Unprotect the given memory (in page granularity) to allow access (PROT_READ/WRITE/EXEC).
+pub fn munprotect(start: Address, size: usize, prot: MmapProtection) -> Result<()> {
+    let prot = prot.into_native_flags();
+    mprotect_internal(start, size, prot)
+}
+
 /// Protect the given memory (in page granularity) to forbid any access (PROT_NONE).
 pub fn mprotect(start: Address, size: usize) -> Result<()> {
-    wrap_libc_call(
-        // SAFETY: The caller must ensure that the memory range is valid and was mapped by MMTk.
-        &|| unsafe { libc::mprotect(start.to_mut_ptr(), size, PROT_NONE) },
-        0,
-    )
+    mprotect_internal(start, size, PROT_NONE)
 }
 
 fn wrap_libc_call<T: PartialEq>(f: &dyn Fn() -> T, expect: T) -> Result<()> {
