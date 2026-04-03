@@ -10,7 +10,7 @@ Architectural insights that affect ALL future safety decisions:
 - Static plan references are needed because plan types are generic and cannot be stored in global statics easily.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/erase_vm.rs:24` — investigate if we can use safe abstractions or trait objects instead of raw pointer casting — expected Δ: -1
+1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs:529` — investigate if we can use safe slices instead of `std::ptr::copy` — expected Δ: 0
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
@@ -45,6 +45,8 @@ Reusable refactoring patterns (recipe format):
 - `src/util/malloc/mod.rs` — Irreducible FFI wrappers. [Phase 2 confirmed]
 - `src/mmtk.rs` — Irreducible UnsafeCell access and circular initialization. [Phase 2 confirmed]
 - `src/policy/sft_map.rs` — Transmutes are irreducible due to fat pointer provenance. [Phase 2 confirmed]
+- `src/policy/marksweepspace/native_ms/global.rs` — Unsafe impl Sync required for BlockPageResource, and pointer casts for work packets are irreducible. [Phase 2 confirmed]
+- `src/util/erase_vm.rs` — Erased VM references are used to bypass generic type parameters in object-safe traits (SFT), and are necessary for performance and design. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 ### StwProof for safe plan access
