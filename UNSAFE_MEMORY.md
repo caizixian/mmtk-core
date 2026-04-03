@@ -18,6 +18,7 @@
 - Antigravity added a missing `// SAFETY:` comment in `src/util/address.rs` for `from_raw_address_unchecked`.
 - Antigravity combined 2 unsafe blocks in `docs/dummyvm/src/api.rs` into 1, reducing the count by 1, and fixed a pre-existing compile error in `mmtk_bind_mutator`.
 - Antigravity verified again in the current step and confirmed that remaining unsafe blocks in `src/policy/marksweepspace/native_ms/block.rs`, `src/util/heap/layout/mmapper/csm/mod.rs`, `src/util/alloc/allocator.rs`, and `src/policy/marksweepspace/malloc_ms/global.rs` are irreducible as documented.
+- Antigravity investigated `sft_map.rs` lifetime extension and confirmed it is irreducible without performance regression or moving unsafe to callers.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Work packets hold raw pointers to plans or spaces to bypass borrow checker and lifetimes.
@@ -25,7 +26,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/policy/sft_map.rs:103-115` — Investigate if we can avoid lifetime extension in `get_sft_wrapper` by using `&'static` references from a global registry or by changing the trait signature. — expected Δ: 0
+1. 🔴 HIGH: `src/policy/sft_map.rs:103-115` — Investigate if using `Arc` for spaces in `SFTMap` can eliminate unsafe lifetime extension, and measure overhead. — expected Δ: 0
 
 ## Patterns Discovered
 - Refactored `SFTWrapper` to hold a reference instead of a raw pointer, eliminating `unsafe impl Send` and `Sync` for the wrapper and reducing unsafe count.
