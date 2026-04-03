@@ -3,7 +3,7 @@
 ## Progress
 - Starting count: 351 | Current: 66 | Δ: -285
 - Phase: 2 (Safe Abstractions)
-- Status: Refactored `InitializeOnce` to use `OnceLock` and combined with `StwProtected` to eliminate unsafe in `mmtk.rs` and `rust_util/mod.rs`.
+- Status: Confirmed remaining work queue items are irreducible or already addressed.
 
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -12,8 +12,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/util/metadata/side_metadata/global.rs:550` — Investigate if `std::ptr::copy` in `bcopy_metadata_contiguous` can be replaced with a safe alternative or if it is irreducible.
-2. 🟡 MED: `src/util/address.rs` — Document safety invariants for core address operations.
+- All items addressed or confirmed irreducible.
 
 
 ## Patterns Discovered
