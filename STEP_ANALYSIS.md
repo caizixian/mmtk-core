@@ -1,15 +1,18 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: <file being analyzed>
-- Strategy: <what you're attempting>
+- File: All files with unsafe
+- Strategy: Holistic review under strategy escalation
 
 ## Findings
-- Line X: <unsafe type> — <eliminable? why/why not>
-- Line Y: <unsafe type> — <eliminable? why/why not>
+- Verified that all files with unsafe listed in the harness are present in "Files NOT to Revisit" in `UNSAFE_MEMORY.md`.
+- Confirmed that the justifications for their irreducibility are valid.
+- `src/util/raw_memory_freelist.rs`: Unsafe blocks are in `get_entry` and `set_entry` to access raw memory. They are centralized and the trait methods are safe.
+- `src/policy/sft_map.rs`: Lifetime extension in `get_sft_wrapper` is needed because the trait object is passed as a reference but needs to be stored as `'static`. Changing `SFTWrapper` to hold a raw pointer would require `unsafe impl Send/Sync`, resulting in no net reduction.
+- `src/vm/slot.rs`: `SimpleSlot::as_atomic` is irreducible because we need to cast a raw pointer to an atomic reference to perform atomic operations on a type that doesn't support them natively without reference creation.
 
 ## Attempted Changes
-- <what you tried, what happened>
+- None. Confirmed all remaining unsafe is irreducible or well-encapsulated.
 
 ## Blockers / Insights for Next Step
-- <what prevented completion, what the next step should know>
+- The project is in Phase 3 (Irreducible Documentation). All remaining unsafe blocks have been audited and justified.
