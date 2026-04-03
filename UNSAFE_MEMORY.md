@@ -1,9 +1,9 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 123 | Δ: -228
+- Starting count: 351 | Current: 122 | Δ: -229
 - Phase: 3 (Irreducible Documentation)
-- Note: Eliminated 1 unsafe block and 2 unsafe operations in `global.rs` by using `MetadataSlot` helpers.
+- Note: Eliminated raw pointer dereferences in tests in `src/util/metadata/side_metadata/global.rs` by using `MetadataSlot` safe wrappers.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Work packets hold raw pointers to plans or spaces to bypass borrow checker and lifetimes.
@@ -11,7 +11,8 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/util/metadata/side_metadata/global.rs` — Audit remaining unsafe blocks (approx 50) to see if they can be encapsulated by `MetadataSlot` or other abstractions.
+1. 🟡 MED: `src/util/metadata/side_metadata/global.rs` — Audit remaining production unsafe blocks to see if any can be further encapsulated, or confirm they are all irreducible.
+2. 🟡 MED: `src/util/memory.rs` — Re-evaluate if FFI wrappers can be made safer or if unsafe is strictly necessary at all call sites.
 
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
@@ -28,11 +29,12 @@
 - Refactored `MetadataValue` trait to take references instead of `Address`, eliminating unsafe blocks in trait implementations and narrowing unsafe scope at call sites in `MetadataSlot`.
 - Eliminated 8 unsafe blocks in `MetadataSlot` methods by using `self.get_ref::<T::Atomic>()` instead of direct unsafe casting.
 - Deriving `Zeroable` for `SpaceDescriptor` eliminated 1 unsafe block.
-- **New**: Eliminated direct unsafe operations in `SideMetadataSpec` methods by using `MetadataSlot` equivalents.
+- Used existing `MetadataSlot` abstraction to eliminate direct unsafe operations in `SideMetadataSpec` methods.
+- **New**: Using `MetadataSlot::load_val` and `store_val` in tests to avoid raw pointer dereferences when testing side metadata.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/heap/blockpageresource.rs` — Completely safe after removing `unsafe impl Sync` and adding `Send` bound to `Region` trait. [Phase 3 confirmed]
-- `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are irreducible function signatures and raw memory copy. Audited safety comments. [Phase 2 confirmed] (Re-evaluated in Phase 3: reduced count by 8 by using `get_ref` in `MetadataSlot` methods).
+- `src/util/metadata/side_metadata/global.rs` — Remaining production unsafe are irreducible function signatures and raw memory copy. Audited safety comments. [Phase 2 confirmed] (Re-evaluated in Phase 3: reduced count by using `get_ref` in `MetadataSlot` and removing raw pointer dereferences in tests).
 - `src/util/metadata/metadata_val_traits.rs` — Completely safe after refactoring trait to take references. [Phase 2 confirmed]
 - `src/util/memory.rs` — Wrappers around libc calls. Standard FFI wrappers. Verified safety comments. [Phase 3 confirmed]
 - `docs/dummyvm/src/api.rs` — Reduced unsafe by using `Option<&mut T>` and `Option<Box<T>>` in FFI signatures. Remaining are `CStr::from_ptr`. [Phase 3 confirmed]
