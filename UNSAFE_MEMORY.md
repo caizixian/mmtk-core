@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 242 | Δ: -109
+- Starting count: 351 | Current: 241 | Δ: -110
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -11,7 +11,7 @@ Architectural insights that affect ALL future safety decisions:
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/scheduler/worker.rs:304` — Investigate if `WorkerGroup` can eliminate `unsafe impl Sync` — expected Δ: 1
+1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs:21-40` — Refactor `MetadataSlot` to use `AtomicPtr` or similar to reduce unsafe in `as_ref` calls — expected Δ: 2
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):

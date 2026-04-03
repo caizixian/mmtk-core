@@ -298,10 +298,7 @@ pub(crate) struct WorkerGroup<VM: VMBinding> {
     state: Mutex<Option<WorkerCreationState<VM>>>,
 }
 
-/// We have to persuade Rust that `WorkerGroup` is safe to share because the compiler thinks one
-/// worker can refer to another worker via the path "worker -> scheduler -> worker_group ->
-/// `Surrendered::workers` -> worker" which is cyclic reference and unsafe.
-unsafe impl<VM: VMBinding> Sync for WorkerGroup<VM> {}
+
 
 impl<VM: VMBinding> WorkerGroup<VM> {
     /// Create a WorkerGroup
