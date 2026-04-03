@@ -38,65 +38,139 @@ pub struct Allocators<VM: VMBinding> {
     pub immix: [MaybeUninit<ImmixAllocator<VM>>; MAX_IMMIX_ALLOCATORS],
     pub free_list: [MaybeUninit<FreeListAllocator<VM>>; MAX_FREE_LIST_ALLOCATORS],
     pub markcompact: [MaybeUninit<MarkCompactAllocator<VM>>; MAX_MARK_COMPACT_ALLOCATORS],
+    pub initialized_bitmap: u32,
+}
+
+pub trait HasAllocatorArray<VM: VMBinding>: Sized {
+    fn get_array(allocators: &Allocators<VM>) -> &[MaybeUninit<Self>];
+    fn get_array_mut(allocators: &mut Allocators<VM>) -> &mut [MaybeUninit<Self>];
+    fn get_index(selector: AllocatorSelector) -> Option<usize>;
+    fn get_bit_offset(index: usize) -> usize;
+}
+
+impl<VM: VMBinding> HasAllocatorArray<VM> for BumpAllocator<VM> {
+    fn get_array(allocators: &Allocators<VM>) -> &[MaybeUninit<Self>] { &allocators.bump_pointer }
+    fn get_array_mut(allocators: &mut Allocators<VM>) -> &mut [MaybeUninit<Self>] { &mut allocators.bump_pointer }
+    fn get_index(selector: AllocatorSelector) -> Option<usize> {
+        if let AllocatorSelector::BumpPointer(i) = selector { Some(i as usize) } else { None }
+    }
+    fn get_bit_offset(index: usize) -> usize { index }
+}
+
+impl<VM: VMBinding> HasAllocatorArray<VM> for LargeObjectAllocator<VM> {
+    fn get_array(allocators: &Allocators<VM>) -> &[MaybeUninit<Self>] { &allocators.large_object }
+    fn get_array_mut(allocators: &mut Allocators<VM>) -> &mut [MaybeUninit<Self>] { &mut allocators.large_object }
+    fn get_index(selector: AllocatorSelector) -> Option<usize> {
+        if let AllocatorSelector::LargeObject(i) = selector { Some(i as usize) } else { None }
+    }
+    fn get_bit_offset(index: usize) -> usize { MAX_BUMP_ALLOCATORS + index }
+}
+
+impl<VM: VMBinding> HasAllocatorArray<VM> for MallocAllocator<VM> {
+    fn get_array(allocators: &Allocators<VM>) -> &[MaybeUninit<Self>] { &allocators.malloc }
+    fn get_array_mut(allocators: &mut Allocators<VM>) -> &mut [MaybeUninit<Self>] { &mut allocators.malloc }
+    fn get_index(selector: AllocatorSelector) -> Option<usize> {
+        if let AllocatorSelector::Malloc(i) = selector { Some(i as usize) } else { None }
+    }
+    fn get_bit_offset(index: usize) -> usize { MAX_BUMP_ALLOCATORS + MAX_LARGE_OBJECT_ALLOCATORS + index }
+}
+
+impl<VM: VMBinding> HasAllocatorArray<VM> for ImmixAllocator<VM> {
+    fn get_array(allocators: &Allocators<VM>) -> &[MaybeUninit<Self>] { &allocators.immix }
+    fn get_array_mut(allocators: &mut Allocators<VM>) -> &mut [MaybeUninit<Self>] { &mut allocators.immix }
+    fn get_index(selector: AllocatorSelector) -> Option<usize> {
+        if let AllocatorSelector::Immix(i) = selector { Some(i as usize) } else { None }
+    }
+    fn get_bit_offset(index: usize) -> usize { MAX_BUMP_ALLOCATORS + MAX_LARGE_OBJECT_ALLOCATORS + MAX_MALLOC_ALLOCATORS + index }
+}
+
+impl<VM: VMBinding> HasAllocatorArray<VM> for FreeListAllocator<VM> {
+    fn get_array(allocators: &Allocators<VM>) -> &[MaybeUninit<Self>] { &allocators.free_list }
+    fn get_array_mut(allocators: &mut Allocators<VM>) -> &mut [MaybeUninit<Self>] { &mut allocators.free_list }
+    fn get_index(selector: AllocatorSelector) -> Option<usize> {
+        if let AllocatorSelector::FreeList(i) = selector { Some(i as usize) } else { None }
+    }
+    fn get_bit_offset(index: usize) -> usize { MAX_BUMP_ALLOCATORS + MAX_LARGE_OBJECT_ALLOCATORS + MAX_MALLOC_ALLOCATORS + MAX_IMMIX_ALLOCATORS + index }
+}
+
+impl<VM: VMBinding> HasAllocatorArray<VM> for MarkCompactAllocator<VM> {
+    fn get_array(allocators: &Allocators<VM>) -> &[MaybeUninit<Self>] { &allocators.markcompact }
+    fn get_array_mut(allocators: &mut Allocators<VM>) -> &mut [MaybeUninit<Self>] { &mut allocators.markcompact }
+    fn get_index(selector: AllocatorSelector) -> Option<usize> {
+        if let AllocatorSelector::MarkCompact(i) = selector { Some(i as usize) } else { None }
+    }
+    fn get_bit_offset(index: usize) -> usize { MAX_BUMP_ALLOCATORS + MAX_LARGE_OBJECT_ALLOCATORS + MAX_MALLOC_ALLOCATORS + MAX_IMMIX_ALLOCATORS + MAX_FREE_LIST_ALLOCATORS + index }
 }
 
 impl<VM: VMBinding> Allocators<VM> {
+    pub fn is_initialized<T: HasAllocatorArray<VM>>(&self, index: usize) -> bool {
+        let bit = T::get_bit_offset(index);
+        (self.initialized_bitmap & (1 << bit)) != 0
+    }
+
+    pub fn set_initialized<T: HasAllocatorArray<VM>>(&mut self, index: usize) {
+        let bit = T::get_bit_offset(index);
+        self.initialized_bitmap |= 1 << bit;
+    }
+
     /// # Safety
     /// The selector needs to be valid, and points to an allocator that has been initialized.
-    pub unsafe fn get_allocator(&self, selector: AllocatorSelector) -> &dyn Allocator<VM> {
-        match selector {
-            AllocatorSelector::BumpPointer(index) => {
-                self.bump_pointer[index as usize].assume_init_ref()
+    pub fn get_allocator(&self, selector: AllocatorSelector) -> &dyn Allocator<VM> {
+        let bit = selector.get_bit_offset();
+        assert!((self.initialized_bitmap & (1 << bit)) != 0, "Allocator not initialized");
+        // SAFETY: we checked that it is initialized
+        unsafe {
+            match selector {
+                AllocatorSelector::BumpPointer(index) => self.bump_pointer[index as usize].assume_init_ref(),
+                AllocatorSelector::LargeObject(index) => self.large_object[index as usize].assume_init_ref(),
+                AllocatorSelector::Malloc(index) => self.malloc[index as usize].assume_init_ref(),
+                AllocatorSelector::Immix(index) => self.immix[index as usize].assume_init_ref(),
+                AllocatorSelector::FreeList(index) => self.free_list[index as usize].assume_init_ref(),
+                AllocatorSelector::MarkCompact(index) => self.markcompact[index as usize].assume_init_ref(),
+                AllocatorSelector::None => panic!("Allocator mapping is not initialized"),
             }
-            AllocatorSelector::LargeObject(index) => {
-                self.large_object[index as usize].assume_init_ref()
-            }
-            AllocatorSelector::Malloc(index) => self.malloc[index as usize].assume_init_ref(),
-            AllocatorSelector::Immix(index) => self.immix[index as usize].assume_init_ref(),
-            AllocatorSelector::FreeList(index) => self.free_list[index as usize].assume_init_ref(),
-            AllocatorSelector::MarkCompact(index) => {
-                self.markcompact[index as usize].assume_init_ref()
-            }
-            AllocatorSelector::None => panic!("Allocator mapping is not initialized"),
         }
     }
 
     /// # Safety
     /// The selector needs to be valid, and points to an allocator that has been initialized.
-    pub unsafe fn get_typed_allocator<T: Allocator<VM>>(&self, selector: AllocatorSelector) -> &T {
-        self.get_allocator(selector).downcast_ref().unwrap()
+    pub fn get_typed_allocator<T: HasAllocatorArray<VM>>(&self, selector: AllocatorSelector) -> &T {
+        let index = T::get_index(selector).expect("Selector does not match allocator type");
+        assert!(self.is_initialized::<T>(index), "Allocator not initialized");
+        unsafe { T::get_array(self)[index].assume_init_ref() }
     }
 
     /// # Safety
     /// The selector needs to be valid, and points to an allocator that has been initialized.
-    pub unsafe fn get_allocator_mut(
+    pub fn get_allocator_mut(
         &mut self,
         selector: AllocatorSelector,
     ) -> &mut dyn Allocator<VM> {
-        match selector {
-            AllocatorSelector::BumpPointer(index) => {
-                self.bump_pointer[index as usize].assume_init_mut()
+        let bit = selector.get_bit_offset();
+        assert!((self.initialized_bitmap & (1 << bit)) != 0, "Allocator not initialized");
+        // SAFETY: we checked that it is initialized
+        unsafe {
+            match selector {
+                AllocatorSelector::BumpPointer(index) => self.bump_pointer[index as usize].assume_init_mut(),
+                AllocatorSelector::LargeObject(index) => self.large_object[index as usize].assume_init_mut(),
+                AllocatorSelector::Malloc(index) => self.malloc[index as usize].assume_init_mut(),
+                AllocatorSelector::Immix(index) => self.immix[index as usize].assume_init_mut(),
+                AllocatorSelector::FreeList(index) => self.free_list[index as usize].assume_init_mut(),
+                AllocatorSelector::MarkCompact(index) => self.markcompact[index as usize].assume_init_mut(),
+                AllocatorSelector::None => panic!("Allocator mapping is not initialized"),
             }
-            AllocatorSelector::LargeObject(index) => {
-                self.large_object[index as usize].assume_init_mut()
-            }
-            AllocatorSelector::Malloc(index) => self.malloc[index as usize].assume_init_mut(),
-            AllocatorSelector::Immix(index) => self.immix[index as usize].assume_init_mut(),
-            AllocatorSelector::FreeList(index) => self.free_list[index as usize].assume_init_mut(),
-            AllocatorSelector::MarkCompact(index) => {
-                self.markcompact[index as usize].assume_init_mut()
-            }
-            AllocatorSelector::None => panic!("Allocator mapping is not initialized"),
         }
     }
 
     /// # Safety
     /// The selector needs to be valid, and points to an allocator that has been initialized.
-    pub unsafe fn get_typed_allocator_mut<T: Allocator<VM>>(
+    pub fn get_typed_allocator_mut<T: HasAllocatorArray<VM>>(
         &mut self,
         selector: AllocatorSelector,
     ) -> &mut T {
-        self.get_allocator_mut(selector).downcast_mut().unwrap()
+        let index = T::get_index(selector).expect("Selector does not match allocator type");
+        assert!(self.is_initialized::<T>(index), "Allocator not initialized");
+        unsafe { T::get_array_mut(self)[index].assume_init_mut() }
     }
 
     pub fn new(
@@ -111,6 +185,7 @@ impl<VM: VMBinding> Allocators<VM> {
             immix: [const { MaybeUninit::uninit() }; MAX_IMMIX_ALLOCATORS],
             free_list: [const { MaybeUninit::uninit() }; MAX_FREE_LIST_ALLOCATORS],
             markcompact: [const { MaybeUninit::uninit() }; MAX_MARK_COMPACT_ALLOCATORS],
+            initialized_bitmap: 0,
         };
         let context = Arc::new(AllocatorContext::new(mmtk));
 
@@ -122,6 +197,7 @@ impl<VM: VMBinding> Allocators<VM> {
                         space,
                         context.clone(),
                     ));
+                    ret.set_initialized::<BumpAllocator<VM>>(index as usize);
                 }
                 AllocatorSelector::LargeObject(index) => {
                     ret.large_object[index as usize].write(LargeObjectAllocator::new(
@@ -129,6 +205,7 @@ impl<VM: VMBinding> Allocators<VM> {
                         space.downcast_ref::<LargeObjectSpace<VM>>().unwrap(),
                         context.clone(),
                     ));
+                    ret.set_initialized::<LargeObjectAllocator<VM>>(index as usize);
                 }
                 AllocatorSelector::Malloc(index) => {
                     ret.malloc[index as usize].write(MallocAllocator::new(
@@ -136,6 +213,7 @@ impl<VM: VMBinding> Allocators<VM> {
                         space.downcast_ref::<MallocSpace<VM>>().unwrap(),
                         context.clone(),
                     ));
+                    ret.set_initialized::<MallocAllocator<VM>>(index as usize);
                 }
                 AllocatorSelector::Immix(index) => {
                     ret.immix[index as usize].write(ImmixAllocator::new(
@@ -144,6 +222,7 @@ impl<VM: VMBinding> Allocators<VM> {
                         context.clone(),
                         false,
                     ));
+                    ret.set_initialized::<ImmixAllocator<VM>>(index as usize);
                 }
                 AllocatorSelector::FreeList(index) => {
                     ret.free_list[index as usize].write(FreeListAllocator::new(
@@ -151,6 +230,7 @@ impl<VM: VMBinding> Allocators<VM> {
                         space.downcast_ref::<MarkSweepSpace<VM>>().unwrap(),
                         context.clone(),
                     ));
+                    ret.set_initialized::<FreeListAllocator<VM>>(index as usize);
                 }
                 AllocatorSelector::MarkCompact(index) => {
                     ret.markcompact[index as usize].write(MarkCompactAllocator::new(
@@ -158,6 +238,7 @@ impl<VM: VMBinding> Allocators<VM> {
                         space,
                         context.clone(),
                     ));
+                    ret.set_initialized::<MarkCompactAllocator<VM>>(index as usize);
                 }
                 AllocatorSelector::None => panic!("Allocator mapping is not initialized"),
             }
@@ -183,21 +264,29 @@ impl<VM: VMBinding> Allocators<VM> {
 #[repr(C, u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub enum AllocatorSelector {
-    /// Represents a [`crate::util::alloc::bumpallocator::BumpAllocator`].
     BumpPointer(u8),
-    /// Represents a [`crate::util::alloc::large_object_allocator::LargeObjectAllocator`].
     LargeObject(u8),
-    /// Represents a [`crate::util::alloc::malloc_allocator::MallocAllocator`].
     Malloc(u8),
-    /// Represents a [`crate::util::alloc::immix_allocator::ImmixAllocator`].
     Immix(u8),
-    /// Represents a [`crate::util::alloc::markcompact_allocator::MarkCompactAllocator`].
     MarkCompact(u8),
-    /// Represents a [`crate::util::alloc::free_list_allocator::FreeListAllocator`].
     FreeList(u8),
-    /// No allocator found.
     #[default]
     None,
+}
+
+impl AllocatorSelector {
+    pub fn get_bit_offset(self) -> usize {
+        match self {
+            AllocatorSelector::BumpPointer(i) => i as usize,
+            AllocatorSelector::LargeObject(i) => MAX_BUMP_ALLOCATORS + i as usize,
+            AllocatorSelector::Malloc(i) => MAX_BUMP_ALLOCATORS + MAX_LARGE_OBJECT_ALLOCATORS + i as usize,
+            AllocatorSelector::Immix(i) => MAX_BUMP_ALLOCATORS + MAX_LARGE_OBJECT_ALLOCATORS + MAX_MALLOC_ALLOCATORS + i as usize,
+            AllocatorSelector::FreeList(i) => MAX_BUMP_ALLOCATORS + MAX_LARGE_OBJECT_ALLOCATORS + MAX_MALLOC_ALLOCATORS + MAX_IMMIX_ALLOCATORS + i as usize,
+            AllocatorSelector::MarkCompact(i) => MAX_BUMP_ALLOCATORS + MAX_LARGE_OBJECT_ALLOCATORS + MAX_MALLOC_ALLOCATORS + MAX_IMMIX_ALLOCATORS + MAX_FREE_LIST_ALLOCATORS + i as usize,
+            AllocatorSelector::None => panic!("Cannot get bit offset for None"),
+        }
+    }
+
 }
 
 /// This type describes allocator information. It is used to

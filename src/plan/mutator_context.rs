@@ -5,7 +5,7 @@ use crate::plan::global::Plan;
 use crate::plan::AllocationSemantics;
 use crate::policy::space::Space;
 use crate::util::alloc::allocator::AllocationOptions;
-use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
+use crate::util::alloc::allocators::{AllocatorSelector, Allocators, HasAllocatorArray};
 use crate::util::alloc::Allocator;
 use crate::util::{Address, ObjectReference};
 use crate::util::{VMMutatorThread, VMWorkerThread};
@@ -269,7 +269,7 @@ impl<VM: VMBinding> Mutator<VM> {
     /// Inform each allocator about destroying. Call allocator-specific on destroy methods.
     pub fn on_destroy(&mut self) {
         for selector in self.get_all_allocator_selectors() {
-            unsafe { self.allocators.get_allocator_mut(selector) }.on_mutator_destroy();
+            self.allocators.get_allocator_mut(selector).on_mutator_destroy();
         }
     }
 
@@ -278,7 +278,7 @@ impl<VM: VMBinding> Mutator<VM> {
         let selector = self.config.allocator_mapping[semantic];
         // SAFETY: The allocator mapping is guaranteed to point to an initialized allocator
         // because create_allocator_mapping and create_space_mapping are kept in sync during initialization.
-        unsafe { self.allocators.get_allocator_mut(selector) }
+        self.allocators.get_allocator_mut(selector)
     }
 
     /// Get the allocator for the selector.
@@ -286,7 +286,7 @@ impl<VM: VMBinding> Mutator<VM> {
     /// # Safety
     /// The selector needs to be valid, and points to an allocator that has been initialized.
     /// [`crate::memory_manager::get_allocator_mapping`] can be used to get a selector.
-    pub unsafe fn allocator(&self, selector: AllocatorSelector) -> &dyn Allocator<VM> {
+    pub fn allocator(&self, selector: AllocatorSelector) -> &dyn Allocator<VM> {
         self.allocators.get_allocator(selector)
     }
 
@@ -295,7 +295,7 @@ impl<VM: VMBinding> Mutator<VM> {
     /// # Safety
     /// The selector needs to be valid, and points to an allocator that has been initialized.
     /// [`crate::memory_manager::get_allocator_mapping`] can be used to get a selector.
-    pub unsafe fn allocator_mut(&mut self, selector: AllocatorSelector) -> &mut dyn Allocator<VM> {
+    pub fn allocator_mut(&mut self, selector: AllocatorSelector) -> &mut dyn Allocator<VM> {
         self.allocators.get_allocator_mut(selector)
     }
 
@@ -304,7 +304,7 @@ impl<VM: VMBinding> Mutator<VM> {
     /// # Safety
     /// The selector needs to be valid, and points to an allocator that has been initialized.
     /// [`crate::memory_manager::get_allocator_mapping`] can be used to get a selector.
-    pub unsafe fn allocator_impl<T: Allocator<VM>>(&self, selector: AllocatorSelector) -> &T {
+    pub fn allocator_impl<T: Allocator<VM> + HasAllocatorArray<VM>>(&self, selector: AllocatorSelector) -> &T {
         self.allocators.get_typed_allocator(selector)
     }
 
@@ -313,7 +313,7 @@ impl<VM: VMBinding> Mutator<VM> {
     /// # Safety
     /// The selector needs to be valid, and points to an allocator that has been initialized.
     /// [`crate::memory_manager::get_allocator_mapping`] can be used to get a selector.
-    pub unsafe fn allocator_impl_mut<T: Allocator<VM>>(
+    pub fn allocator_impl_mut<T: Allocator<VM> + HasAllocatorArray<VM>>(
         &mut self,
         selector: AllocatorSelector,
     ) -> &mut T {
@@ -324,7 +324,7 @@ impl<VM: VMBinding> Mutator<VM> {
     ///
     /// # Safety
     /// The semantic needs to match the allocator type.
-    pub unsafe fn allocator_impl_for_semantic<T: Allocator<VM>>(
+    pub fn allocator_impl_for_semantic<T: Allocator<VM> + HasAllocatorArray<VM>>(
         &self,
         semantic: AllocationSemantics,
     ) -> &T {
@@ -335,7 +335,7 @@ impl<VM: VMBinding> Mutator<VM> {
     ///
     /// # Safety
     /// The semantic needs to match the allocator type.
-    pub unsafe fn allocator_impl_mut_for_semantic<T: Allocator<VM>>(
+    pub fn allocator_impl_mut_for_semantic<T: Allocator<VM> + HasAllocatorArray<VM>>(
         &mut self,
         semantic: AllocationSemantics,
     ) -> &mut T {
@@ -346,14 +346,14 @@ impl<VM: VMBinding> Mutator<VM> {
     #[cfg(feature = "marksweep_as_nonmoving")]
     pub fn non_moving_allocator_mut(&mut self) -> &mut crate::util::alloc::FreeListAllocator<VM> {
         // SAFETY: The feature flag ensures that NonMoving maps to FreeListAllocator.
-        unsafe { self.allocator_impl_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(AllocationSemantics::NonMoving) }
+        self.allocator_impl_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(AllocationSemantics::NonMoving)
     }
 
     /// Get the mutable immix allocator for non-moving objects.
     #[cfg(not(any(feature = "marksweep_as_nonmoving", feature = "immortal_as_nonmoving")))]
     pub fn non_moving_allocator_mut(&mut self) -> &mut crate::util::alloc::ImmixAllocator<VM> {
         // SAFETY: The feature flag ensures that NonMoving maps to ImmixAllocator.
-        unsafe { self.allocator_impl_mut_for_semantic::<crate::util::alloc::ImmixAllocator<VM>>(AllocationSemantics::NonMoving) }
+        self.allocator_impl_mut_for_semantic::<crate::util::alloc::ImmixAllocator<VM>>(AllocationSemantics::NonMoving)
     }
 
     /// Return the base offset from a mutator pointer to the allocator specified by the selector.

@@ -16,13 +16,9 @@ use crate::MMTK;
 
 pub fn genimmix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWorkerThread) {
     // reset nursery allocator
-    let bump_allocator = unsafe {
-        mutator
-            .allocators
-            .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
-    }
-    .downcast_mut::<BumpAllocator<VM>>()
-    .unwrap();
+    let bump_allocator = mutator.allocators.get_typed_allocator_mut::<BumpAllocator<VM>>(
+        mutator.config.allocator_mapping[AllocationSemantics::Default]
+    );
     bump_allocator.reset();
 
     common_release_func(mutator, tls);

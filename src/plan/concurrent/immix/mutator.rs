@@ -30,13 +30,9 @@ pub fn concurrent_immix_mutator_release<VM: VMBinding>(
     let current_pause = mutator.plan.concurrent().unwrap().current_pause().unwrap();
     debug_assert_ne!(current_pause, Pause::InitialMark);
 
-    let immix_allocator = unsafe {
-        mutator
-            .allocators
-            .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
-    }
-    .downcast_mut::<ImmixAllocator<VM>>()
-    .unwrap();
+    let immix_allocator = mutator.allocators.get_typed_allocator_mut::<ImmixAllocator<VM>>(
+        mutator.config.allocator_mapping[AllocationSemantics::Default]
+    );
     immix_allocator.reset();
 
     // Deactivate SATB
@@ -58,13 +54,9 @@ pub fn concurent_immix_mutator_prepare<VM: VMBinding>(
     let current_pause = mutator.plan.concurrent().unwrap().current_pause().unwrap();
     debug_assert_ne!(current_pause, Pause::FinalMark);
 
-    let immix_allocator = unsafe {
-        mutator
-            .allocators
-            .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
-    }
-    .downcast_mut::<ImmixAllocator<VM>>()
-    .unwrap();
+    let immix_allocator = mutator.allocators.get_typed_allocator_mut::<ImmixAllocator<VM>>(
+        mutator.config.allocator_mapping[AllocationSemantics::Default]
+    );
     immix_allocator.reset();
 
     // Activate SATB

@@ -1,15 +1,15 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 531 | Current: 514 | Δ: -17 (Harness reported 514 at start of this turn)
+- Starting count: 531 | Current: 512 | Δ: -19 (Harness reported 512 at start of this turn)
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - `Address::from_usize` is marked unsafe by design to warn about invalid addresses. Replacing it with `ZERO.add` is considered an anti-pattern as it is semantically identical.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: Typestate pattern for `mutator_context.rs` — replace `MaybeUninit` with type-indexed dispatch.
-2. 🟡 MED: Continue applying `slot_from_meta_addr` in `global.rs` and other metadata files to remove unsafe blocks.
+1. 🔴 HIGH: Continue applying `slot_from_meta_addr` in `global.rs` and other metadata files to remove unsafe blocks.
+2. 🟡 MED: Identify other `MaybeUninit` usages in the codebase and apply safe abstractions (like the bitmap check in `Allocators`).
 
 ## Patterns Discovered
 - `MaybeUninit` arrays of size 1 can be replaced with `Option` and `unwrap()` to eliminate unsafe access.
@@ -27,7 +27,7 @@
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.
 - `src/policy/sft_map.rs` — Remaining unsafe are trait signatures and unavoidable transmutes for fat pointers in atomics.
-- `src/util/alloc/allocators.rs` — Remaining unsafe are getters using `assume_init_ref/mut` on `MaybeUninit` arrays, required for layout compatibility.
+- `src/util/alloc/allocators.rs` — Remaining unsafe are centralized in `get_allocator` implementations using `assume_init_ref/mut` on `MaybeUninit` arrays, guarded by a runtime bitmap check.
 - `src/util/metadata/side_metadata/helpers.rs` — Remaining unsafe are raw loads in functions that scan metadata addresses directly without a spec.
 - `src/util/metadata/metadata_val_traits.rs` — `MetadataValue` trait methods are unsafe by design as they perform raw memory access.
 - `src/util/metadata/side_metadata/side_metadata_tests.rs` — All unsafe are `Address::from_usize(...)` for creating test addresses.
