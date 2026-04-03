@@ -72,6 +72,7 @@
 - Antigravity verified all remaining unsafe locations listed in the harness and confirmed they are irreducible or well-encapsulated. No new reductions were possible without violating safety principles or creating unsound wrappers. The project remains in Phase 3.
 - Antigravity verified again in the current step that all remaining unsafe blocks listed in the harness are irreducible or well-encapsulated. The project remains in a steady state for Phase 3.
 - Antigravity performed another holistic review in the current step and confirmed that remaining unsafe blocks in `malloc/mod.rs`, `slot.rs`, `side_metadata/global.rs`, `global.rs`, and `sft_map.rs` are irreducible or locally optimal as documented. The project remains in Phase 3.
+- Antigravity analyzed `sft_map.rs` and found that changing `SFTWrapper` to hold a raw pointer would eliminate 1 unsafe block but require adding `unsafe impl Sync`, resulting in a neutral delta.
 
 
 
