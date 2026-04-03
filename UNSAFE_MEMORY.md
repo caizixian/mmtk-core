@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 76 | Δ: -275
+- Starting count: 351 | Current: 74 | Δ: -277
 - Phase: 3 (Irreducible Documentation)
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -42,8 +42,8 @@
 - `docs/dummyvm/src/api.rs` — Reduced unsafe by using `Option<&mut T>` and `Option<Box<T>>` in FFI signatures. Remaining are `CStr::from_ptr`. [Phase 3 confirmed]
 - `src/util/malloc/malloc_ms_util.rs` — Irreducible due to raw pointer manipulation in allocator. Verified safety comments. Combined near-contiguous unsafe blocks to reduce count. [Phase 3 confirmed]
 - `src/util/address.rs` — Core address type. Operations are inherently unsafe. Audited safety comments. [Phase 3 confirmed]
-- `src/mmtk.rs` — Uses `InitializeOnce` for `SFT_MAP` (irreducible for performance). `StwProtected` uses `UnsafeCell` to avoid locking overhead; safety relies on external invariant (world stopped) guaranteed by `StwProof` token. [Phase 3 confirmed]
-- `src/util/rust_util/mod.rs` — Implements `InitializeOnce`. Irreducible for performance and because `get_mut` requires unsafe casting that triggers `invalid_reference_casting` error in Rust 1.92+ if attempted with `OnceLock`. Added safety comments to document unsafe operations. [Phase 3 confirmed]
+- `src/mmtk.rs` — Uses `InitializeOnce` for `SFT_MAP` (irreducible for performance). `get_sft_map_mut` uses `get_ptr` and dereferences it unsafely under protection of `StwProof`. `StwProtected` uses `UnsafeCell` to avoid locking overhead. [Phase 3 confirmed]
+- `src/util/rust_util/mod.rs` — Implements `InitializeOnce`. Removed unsafe `get_mut` and added safe `get_ptr` to defer unsafety to call sites with proof tokens. Remaining unsafe are in initialization and `get_ref`. [Phase 3 confirmed]
 - `src/util/malloc/mod.rs` — Irreducible due to raw pointer manipulation in allocator. Audited safety comments. [Phase 3 confirmed]
 - `src/policy/sft_map.rs` — Transmutes between fat pointers (`&dyn SFT`) and double-word integers are irreducible due to lack of safe fat pointer atomics in Rust. [Phase 3 confirmed]
 - `src/util/raw_memory_freelist.rs` — Remaining unsafe are `from_raw_parts` to create slice views of raw memory. [Phase 3 confirmed]

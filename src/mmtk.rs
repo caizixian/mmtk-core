@@ -58,7 +58,8 @@ pub static SFT_MAP: InitializeOnce<Box<dyn SFTMap + Sync>> = InitializeOnce::new
 /// Get the SFT map mutably. This requires a proof that the world is stopped or we are in initialization.
 pub fn get_sft_map_mut(_proof: &StwProof) -> &mut dyn SFTMap {
     // SAFETY: We have a proof that the world is stopped or we have exclusive access.
-    unsafe { SFT_MAP.get_mut() }.as_mut()
+    // The pointer returned by `get_ptr` is valid because `SFT_MAP` is initialized before use.
+    unsafe { &mut *SFT_MAP.get_ptr() }.as_mut()
 }
 
 /// MMTk builder. This is used to set options and other settings before actually creating an MMTk instance.
