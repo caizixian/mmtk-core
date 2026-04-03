@@ -913,6 +913,7 @@ impl SideMetadataSpec {
                     .map(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
                     .map_err(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
                 } else {
+                    // SAFETY: `meta_addr` is a valid address in mapped side metadata, and is properly aligned for `T`.
                     unsafe {
                         T::compare_exchange(
                             meta_addr,
@@ -946,6 +947,7 @@ impl SideMetadataSpec {
         let lshift = meta_byte_lshift(self, data_addr);
         let mask = meta_byte_mask(self) << lshift;
 
+        // SAFETY: `meta_addr` is a valid address in mapped side metadata, and is properly aligned for `u8`.
         let old_raw_byte = unsafe {
             <u8 as MetadataValue>::fetch_update(
                 meta_addr,
@@ -988,6 +990,7 @@ impl SideMetadataSpec {
                     ))
                     .unwrap()
                 } else {
+                    // SAFETY: `meta_addr` is a valid address in mapped side metadata, and is properly aligned for `T`.
                     unsafe { T::fetch_add(meta_addr, val, order) }
                 }
             },
@@ -1022,6 +1025,7 @@ impl SideMetadataSpec {
                     ))
                     .unwrap()
                 } else {
+                    // SAFETY: `meta_addr` is a valid address in mapped side metadata, and is properly aligned for `T`.
                     unsafe { T::fetch_sub(meta_addr, val, order) }
                 }
             },
