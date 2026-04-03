@@ -104,7 +104,7 @@ impl Block {
     }
 
     pub fn store_free_list(&self, free_list: Address) {
-        unsafe { Block::FREE_LIST_TABLE.store::<usize>(self.start(), free_list.as_usize()) }
+        Block::FREE_LIST_TABLE.store_atomic::<usize>(self.start(), free_list.as_usize(), Ordering::SeqCst);
     }
 
     #[cfg(feature = "malloc_native_mimalloc")]
@@ -114,7 +114,7 @@ impl Block {
 
     #[cfg(feature = "malloc_native_mimalloc")]
     pub fn store_local_free_list(&self, local_free: Address) {
-        unsafe { Block::LOCAL_FREE_LIST_TABLE.store::<usize>(self.start(), local_free.as_usize()) }
+        Block::LOCAL_FREE_LIST_TABLE.store_atomic::<usize>(self.start(), local_free.as_usize(), Ordering::SeqCst);
     }
 
     #[cfg(feature = "malloc_native_mimalloc")]
@@ -128,9 +128,7 @@ impl Block {
 
     #[cfg(feature = "malloc_native_mimalloc")]
     pub fn store_thread_free_list(&self, thread_free: Address) {
-        unsafe {
-            Block::THREAD_FREE_LIST_TABLE.store::<usize>(self.start(), thread_free.as_usize())
-        }
+        Block::THREAD_FREE_LIST_TABLE.store_atomic::<usize>(self.start(), thread_free.as_usize(), Ordering::SeqCst);
     }
 
     #[cfg(feature = "malloc_native_mimalloc")]
@@ -157,34 +155,24 @@ impl Block {
     }
 
     pub fn store_next_block(&self, next: Block) {
-        unsafe {
-            Block::NEXT_BLOCK_TABLE.store::<usize>(self.start(), next.start().as_usize());
-        }
+        Block::NEXT_BLOCK_TABLE.store_atomic::<usize>(self.start(), next.start().as_usize(), Ordering::SeqCst);
     }
 
     pub fn clear_next_block(&self) {
-        unsafe {
-            Block::NEXT_BLOCK_TABLE.store::<usize>(self.start(), 0);
-        }
+        Block::NEXT_BLOCK_TABLE.store_atomic::<usize>(self.start(), 0, Ordering::SeqCst);
     }
 
     pub fn store_prev_block(&self, prev: Block) {
-        unsafe {
-            Block::PREV_BLOCK_TABLE.store::<usize>(self.start(), prev.start().as_usize());
-        }
+        Block::PREV_BLOCK_TABLE.store_atomic::<usize>(self.start(), prev.start().as_usize(), Ordering::SeqCst);
     }
 
     pub fn clear_prev_block(&self) {
-        unsafe {
-            Block::PREV_BLOCK_TABLE.store::<usize>(self.start(), 0);
-        }
+        Block::PREV_BLOCK_TABLE.store_atomic::<usize>(self.start(), 0, Ordering::SeqCst);
     }
 
     pub fn store_block_list(&self, block_list: &BlockList) {
         let block_list_usize: usize = block_list as *const BlockList as usize;
-        unsafe {
-            Block::BLOCK_LIST_TABLE.store::<usize>(self.start(), block_list_usize);
-        }
+        Block::BLOCK_LIST_TABLE.store_atomic::<usize>(self.start(), block_list_usize, Ordering::SeqCst);
     }
 
     pub fn load_block_list(&self) -> *mut BlockList {
@@ -199,12 +187,12 @@ impl Block {
 
     pub fn store_block_cell_size(&self, size: usize) {
         debug_assert_ne!(size, 0);
-        unsafe { Block::SIZE_TABLE.store::<usize>(self.start(), size) }
+        Block::SIZE_TABLE.store_atomic::<usize>(self.start(), size, Ordering::SeqCst);
     }
 
     pub fn store_tls(&self, tls: VMThread) {
         let tls_usize: usize = tls.0.to_address().as_usize();
-        unsafe { Block::TLS_TABLE.store(self.start(), tls_usize) }
+        Block::TLS_TABLE.store_atomic::<usize>(self.start(), tls_usize, Ordering::SeqCst);
     }
 
     pub fn load_tls(&self) -> VMThread {

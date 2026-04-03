@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 583 | Δ: -139
-- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout, util/copy, util/metadata/side_metadata (side_metadata_tests.rs load/store to load_atomic/store_atomic, global.rs load to load_atomic in search), util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util (InitializeOnce Sync bound), policy/sft_map (SFTMap Sync)
+- Starting count: 722 | Current: 574 | Δ: -148
+- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout, util/copy, util/metadata/side_metadata (side_metadata_tests.rs load/store to load_atomic/store_atomic, global.rs load to load_atomic in search), util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util (InitializeOnce Sync bound), policy/sft_map (SFTMap Sync), policy/marksweepspace/native_ms/block.rs (store to store_atomic)
 
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -34,6 +34,7 @@
 - Raw memory allocation in tests → `TestBuffer<T>` safe wrapper with `Drop` for automatic cleanup.
 - `from_raw_address_unchecked` → `from_raw_address().unwrap()` to replace UB with panic.
 - `SideMetadataSpec::load` → `load_atomic` with `Ordering::Relaxed` for safe side metadata reads where single-threaded or relaxed consistency is sufficient.
+- `SideMetadataSpec::store` → `store_atomic` with `Ordering::SeqCst` (or `Relaxed` if safe) for safe side metadata writes.
 - `*mut T` → `&'a T` in test fixtures/mock types where lifetimes can be tracked, eliminating unsafe raw pointer dereferences (requires manual PartialEq/Eq/Hash for pointer equality).
 - `SimpleSlot` → `&Atomic<T>` in tests for direct access without raw pointers.
 
