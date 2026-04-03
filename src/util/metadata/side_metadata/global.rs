@@ -1826,7 +1826,7 @@ mod tests {
                 #[test]
                 fn [<$tname _compare_exchange_fail>]() {
                     test_side_metadata($log_bits, |spec, data_addr, meta_addr| {
-                        let max_value: $type = max_value($log_bits) as _;
+
                         // Set the metadata byte(s) to all 1s
                         spec.slot_from_meta_addr::<$type>(meta_addr).store(<$type>::MAX);
                         // Store 1 to the side metadata
