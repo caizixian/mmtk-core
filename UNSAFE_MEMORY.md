@@ -10,7 +10,8 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/util/metadata/side_metadata/global.rs:550` — investigate if `std::ptr::copy` can be replaced with a safe wrapper or if it is irreducible — expected Δ: 0
+1. 🟡 MED: `src/mmtk.rs:239` — investigate if `Arc` or another abstraction can be used to avoid the static plan hack — expected Δ: 1
+2. 🟢 LOW: `src/util/metadata/side_metadata/global.rs:550` — investigate if `std::ptr::copy` can be replaced with a safe wrapper or if it is irreducible — expected Δ: 0
 
 
 ## Patterns Discovered
@@ -32,6 +33,7 @@
 - Using `MetadataSlot::load_val` and `store_val` in tests to avoid raw pointer dereferences when testing side metadata.
 - **New**: Investigation confirmed that `bytemuck` cannot be used for fat pointer transmutes in `sft_map.rs` due to unstable layout and lack of `Pod` implementation.
 - **New**: Replaced unsafe non-atomic `load` with safe `load_atomic` in `scan_non_zero_values_simple` in `side_metadata/global.rs`.
+- **New**: Added safe test wrappers for unsafe methods in tests to eliminate unsafe blocks in macro expansions in `side_metadata/global.rs`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/heap/blockpageresource.rs` — Completely safe after removing `unsafe impl Sync` and adding `Send` bound to `Region` trait. [Phase 3 confirmed]
