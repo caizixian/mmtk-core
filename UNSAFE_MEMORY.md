@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 195 | Δ: -156
+- Starting count: 351 | Current: 191 | Δ: -160
 - Phase: 3 (Irreducible Documentation)
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -15,7 +15,8 @@
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
 - `MetadataSlot` wraps `Address` but methods remain unsafe due to raw memory access. Moving unsafe to constructor increases count at call sites.
-- **New**: Centralized unsafe raw pointer dereferences in `MetadataSlot` by introducing a helper `get_ref<T>` method, reducing unsafe blocks in load methods.
+- Centralized unsafe raw pointer dereferences in `MetadataSlot` by introducing a helper `get_ref<T>` method, reducing unsafe blocks in load methods.
+- **New**: `VMMap` trait methods were made safe as implementations (`Map32` and `Map64`) are internally synchronized with `Mutex`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are irreducible function signatures and raw memory copy. [Phase 2 confirmed]
@@ -32,7 +33,8 @@
 - `src/policy/marksweepspace/native_ms/block.rs` — Partially reduced. Remaining unsafe are heap writes during sweep. [Phase 3 under evaluation]
 - `src/util/raw_memory_freelist.rs` — Remaining unsafe are `from_raw_parts` to create slice views of raw memory. [Phase 3 confirmed]
 - `src/util/metadata/global.rs` — Unsafe fns for load/store are necessary as they are non-atomic. [Phase 3 confirmed]
-- `src/util/heap/pageresource.rs` — Documented irreducible unsafe calls to VMMap with SAFETY comments. [Phase 3 confirmed]
+- `src/util/heap/pageresource.rs` — Completely safe after removing unnecessary unsafe blocks. [Phase 3 confirmed]
+- `src/util/heap/layout/map.rs` — Completely safe after removing unsafe from trait definition. [Phase 3 confirmed]
 - `src/util/metadata/log_bit.rs` — Completely safe after replacing unsafe optimization with safe fallback. [Phase 3 confirmed]
 - `src/plan/concurrent/concurrent_marking_work.rs` — Irreducible due to overlapping borrows and API constraints. [Phase 3 confirmed]
 - `src/util/test_util/mock_vm.rs` — Irreducible due to lifetime hacks needed for mocking in tests. [Phase 3 confirmed]

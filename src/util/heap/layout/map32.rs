@@ -99,7 +99,7 @@ impl VMMap for Map32 {
         }
     }
 
-    unsafe fn allocate_contiguous_chunks(
+    fn allocate_contiguous_chunks(
         &self,
         descriptor: SpaceDescriptor,
         chunks: usize,
@@ -191,7 +191,7 @@ impl VMMap for Map32 {
         }
     }
 
-    unsafe fn free_contiguous_chunks(&self, start: Address) -> usize {
+    fn free_contiguous_chunks(&self, start: Address) -> usize {
         debug!("free_contiguous_chunks: {}", start);
         let mut inner = self.inner.lock().unwrap();
         debug_assert!(start == conversions::chunk_align_down(start));
