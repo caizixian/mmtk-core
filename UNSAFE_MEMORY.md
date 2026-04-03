@@ -11,8 +11,10 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/util/metadata/side_metadata/global.rs` — Audit remaining production unsafe blocks to see if any can be further encapsulated, or confirm they are all irreducible.
-2. 🟡 MED: `src/util/memory.rs` — Re-evaluate if FFI wrappers can be made safer or if unsafe is strictly necessary at all call sites.
+1. 🟡 MED: `src/util/metadata/side_metadata/global.rs:643` — Audit remaining production unsafe blocks for safety comments to move to Phase 3 confirmed.
+2. 🟡 MED: `src/util/address.rs:231` — Audit core address type for safety comments to move to Phase 3 confirmed.
+3. 🟡 MED: `src/mmtk.rs:61` — Audit `SFT_MAP` access and static plan references for safety comments to move to Phase 3 confirmed.
+
 
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
@@ -41,7 +43,7 @@
 - `src/util/malloc/malloc_ms_util.rs` — Irreducible due to raw pointer manipulation in allocator. Verified safety comments. [Phase 3 confirmed]
 - `src/util/address.rs` — Core address type. Operations are inherently unsafe. Audited safety comments. [Phase 2 confirmed]
 - `src/mmtk.rs` — Uses `InitializeOnce` for `SFT_MAP`. Irreducible for performance. [Phase 2 confirmed]
-- `src/util/rust_util/mod.rs` — Implements `InitializeOnce`. Irreducible for performance and because `get_mut` requires unsafe casting that triggers `invalid_reference_casting` error in Rust 1.92+ if attempted with `OnceLock`. [Phase 2 confirmed]
+- `src/util/rust_util/mod.rs` — Implements `InitializeOnce`. Irreducible for performance and because `get_mut` requires unsafe casting that triggers `invalid_reference_casting` error in Rust 1.92+ if attempted with `OnceLock`. Added safety comments to document unsafe operations. [Phase 3 confirmed]
 - `src/util/malloc/mod.rs` — Irreducible due to raw pointer manipulation in allocator. Audited safety comments. [Phase 2 confirmed]
 - `src/policy/sft_map.rs` — Transmutes are irreducible due to fat pointer provenance. [Phase 2 confirmed]
 - `src/policy/marksweepspace/native_ms/block.rs` — Refactored sweep to use safe iterator. Remaining unsafe is encapsulated in BlockCell::store_link. Audited safety comments. [Phase 3 confirmed]

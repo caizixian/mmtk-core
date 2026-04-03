@@ -1,15 +1,17 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: <file being analyzed>
-- Strategy: <what you're attempting>
+- File: `src/util/rust_util/mod.rs`
+- Strategy: Phase 3 - Irreducible Documentation
 
 ## Findings
-- Line X: <unsafe type> — <eliminable? why/why not>
-- Line Y: <unsafe type> — <eliminable? why/why not>
+- Line 73: `unsafe` block lacks justification.
+- Line 82: `unsafe` block lacks justification.
+- Line 95: `unsafe` block lacks justification.
+- Line 106: `unsafe impl` lacks justification.
 
 ## Attempted Changes
-- <what you tried, what happened>
+- Adding `// SAFETY:` comments to document the safety invariants for these irreducible unsafe blocks.
 
 ## Blockers / Insights for Next Step
-- <what prevented completion, what the next step should know>
+- None.
