@@ -1,13 +1,16 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- None
+- File: `src/util/alloc/allocators.rs`
+- Strategy: Eliminate `MaybeUninit::uninit().assume_init()` if possible.
 
 ## Findings
-- None
+- Successfully replaced `unsafe { MaybeUninit::uninit().assume_init() }` with `[const { MaybeUninit::uninit() }; N]` for arrays in `Allocators::new`.
+- This eliminated 6 unsafe blocks.
+- Remaining unsafe in this file are getters that are likely irreducible without changing layout.
 
 ## Attempted Changes
-- None
+- Replaced lines 108-113 in `src/util/alloc/allocators.rs`.
 
 ## Blockers / Insights for Next Step
-- None
+- None. Ready for next item in queue.

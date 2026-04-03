@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 655 | Δ: -67
+- Starting count: 722 | Current: 649 | Δ: -73
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -22,10 +22,12 @@
 - **MetadataSlot**: Centralizes unsafe raw memory access in `metadata_val_traits.rs`.
 - **Safe Constructor**: Adding `slot_for` to `SideMetadataSpec` allows safe access to `MetadataSlot` without unsafe blocks at call sites.
 - In tests, `unsafe { Address::from_usize(0) }` can be replaced with the safe constant `Address::ZERO`.
+- **Safe initialization of MaybeUninit arrays**: Use `[const { MaybeUninit::uninit() }; N]` instead of `unsafe { MaybeUninit::uninit().assume_init() }`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.
 - `src/policy/sft_map.rs` — Remaining unsafe are trait signatures and unavoidable transmutes for fat pointers in atomics.
+- `src/util/alloc/allocators.rs` — Remaining unsafe are getters using `assume_init_ref/mut` on `MaybeUninit` arrays, required for layout compatibility.
 
 ## Abstraction Proposals (for Phase 2)
 - **Safe Metadata Accessor**: `MetadataSlot` implemented in `metadata_val_traits.rs`. Used in `header_metadata.rs` and `global.rs`.
