@@ -1,16 +1,15 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: `src/util/raw_memory_freelist.rs` and `src/policy/sft_map.rs`
-- Strategy: Investigate if unsafe blocks can be eliminated or if they are already well-encapsulated.
+- File: `src/util/metadata/side_metadata/global.rs` and `src/vm/slot.rs`
+- Strategy: Verification of remaining unsafe blocks under strategy escalation.
 
 ## Findings
-- `src/util/raw_memory_freelist.rs`: The unsafe blocks are in `get_slice` and `get_slice_mut` which call `std::slice::from_raw_parts`. These are private methods used by the safe `FreeList` trait implementation. This is a good example of a safe abstraction where unsafe is centralized.
-- `src/policy/sft_map.rs`: The unsafe block in `get_sft_wrapper` is for lifetime extension (`&'a T` to `&'static T`), justified by the invariant that spaces live forever. The unsafe block in `SFTRefStorage::load` dereferences a leaked wrapper pointer. These are also part of a safe abstraction (`SFTRefStorage` provides a safe API).
+- `src/util/metadata/side_metadata/global.rs`: Lines 22, 27, 32 are in `MetadataSlot` and are internal helpers that cast addresses to references. They are centralized unsafe blocks. Line 550 is a raw memory copy in `SideMetadataSpec::bcopy_metadata_contiguous`. These are irreducible without massive architectural changes or performance loss.
+- `src/vm/slot.rs`: Line 177 is `SimpleSlot::as_atomic` which casts an address to a reference. Line 289 is `MemorySlice::copy` which uses `std::ptr::copy`. Both are irreducible raw memory operations.
 
 ## Attempted Changes
-- None. Confirmed that these files are already using appropriate safe abstractions or the unsafe is irreducible.
+- None. Confirmed that remaining unsafe blocks are irreducible.
 
 ## Blockers / Insights for Next Step
-- All remaining unsafe in the codebase appears to be irreducible or well-encapsulated in safe abstractions.
-- Moving to Phase 3 (Irreducible Documentation).
+- All files with unsafe are already marked as `[Phase 3 confirmed]` in `UNSAFE_MEMORY.md`. I agree with this conclusion. The project is effectively at a state where remaining unsafe is irreducible.
