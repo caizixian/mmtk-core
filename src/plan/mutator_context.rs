@@ -33,12 +33,7 @@ pub(crate) fn unreachable_prepare_func<VM: VMBinding>(
 pub(crate) fn common_prepare_func<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
     // Prepare the free list allocator used for non moving
     #[cfg(feature = "marksweep_as_nonmoving")]
-    unsafe {
-        mutator.allocator_impl_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(
-            AllocationSemantics::NonMoving,
-        )
-    }
-    .prepare();
+    mutator.non_moving_allocator_mut().prepare();
 }
 
 /// A place-holder implementation for `MutatorConfig::release_func` that should not be called.
@@ -56,16 +51,12 @@ pub(crate) fn common_release_func<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls
     cfg_if::cfg_if! {
         if #[cfg(feature = "marksweep_as_nonmoving")] {
             // Release the free list allocator used for non moving
-            unsafe { mutator.allocator_impl_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(
-                AllocationSemantics::NonMoving,
-            )}.release();
+            mutator.non_moving_allocator_mut().release();
         } else if #[cfg(feature = "immortal_as_nonmoving")] {
             // Do nothig for the bump pointer allocator
         } else {
             // Reset the Immix allocator
-            unsafe { mutator.allocator_impl_mut_for_semantic::<crate::util::alloc::ImmixAllocator<VM>>(
-                AllocationSemantics::NonMoving,
-            )}.reset();
+            mutator.non_moving_allocator_mut().reset();
         }
     }
 }
@@ -356,6 +347,20 @@ impl<VM: VMBinding> Mutator<VM> {
         semantic: AllocationSemantics,
     ) -> &mut T {
         self.allocator_impl_mut::<T>(self.config.allocator_mapping[semantic])
+    }
+
+    /// Get the mutable free list allocator for non-moving objects.
+    #[cfg(feature = "marksweep_as_nonmoving")]
+    pub fn non_moving_allocator_mut(&mut self) -> &mut crate::util::alloc::FreeListAllocator<VM> {
+        // SAFETY: The feature flag ensures that NonMoving maps to FreeListAllocator.
+        unsafe { self.allocator_impl_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(AllocationSemantics::NonMoving) }
+    }
+
+    /// Get the mutable immix allocator for non-moving objects.
+    #[cfg(not(any(feature = "marksweep_as_nonmoving", feature = "immortal_as_nonmoving")))]
+    pub fn non_moving_allocator_mut(&mut self) -> &mut crate::util::alloc::ImmixAllocator<VM> {
+        // SAFETY: The feature flag ensures that NonMoving maps to ImmixAllocator.
+        unsafe { self.allocator_impl_mut_for_semantic::<crate::util::alloc::ImmixAllocator<VM>>(AllocationSemantics::NonMoving) }
     }
 
     /// Return the base offset from a mutator pointer to the allocator specified by the selector.
