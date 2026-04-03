@@ -10,7 +10,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: Audit remaining files in 'Files NOT to Revisit' for missing safety comments (checked global.rs, metadata_val_traits.rs, mmtk.rs, sft_map.rs, malloc_ms_util.rs, rust_util/mod.rs, slot.rs, raw_memory_freelist.rs, memory.rs, allocator.rs, api.rs, concurrent_marking_work.rs, erase_vm.rs, slot_logger.rs).
+1. 🟢 LOW: Audit remaining files in 'Files NOT to Revisit' for missing safety comments (checked global.rs, metadata_val_traits.rs, mmtk.rs, sft_map.rs, malloc_ms_util.rs, rust_util/mod.rs, slot.rs, raw_memory_freelist.rs, memory.rs, allocator.rs, api.rs, concurrent_marking_work.rs, erase_vm.rs, slot_logger.rs, address.rs, malloc/mod.rs, native_ms/block.rs, mock_vm.rs, malloc_ms/global.rs).
 
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
@@ -30,20 +30,20 @@
 - `src/util/memory.rs` — Wrappers around libc calls. Standard FFI wrappers. Verified safety comments. [Phase 3 confirmed]
 - `docs/dummyvm/src/api.rs` — Reduced unsafe by using `Option<&mut T>` and `Option<Box<T>>` in FFI signatures. Remaining are `CStr::from_ptr`. [Phase 3 confirmed]
 - `src/util/malloc/malloc_ms_util.rs` — Irreducible due to raw pointer manipulation in allocator. Verified safety comments. [Phase 3 confirmed]
-- `src/util/address.rs` — Core address type. Operations are inherently unsafe. [Phase 2 confirmed]
+- `src/util/address.rs` — Core address type. Operations are inherently unsafe. Audited safety comments. [Phase 2 confirmed]
 - `src/mmtk.rs` — Uses `InitializeOnce` for `SFT_MAP`. Irreducible for performance. [Phase 2 confirmed]
 - `src/util/rust_util/mod.rs` — Implements `InitializeOnce`. Irreducible for performance. [Phase 2 confirmed]
-- `src/util/malloc/mod.rs` — Irreducible due to raw pointer manipulation in allocator. [Phase 2 confirmed]
+- `src/util/malloc/mod.rs` — Irreducible due to raw pointer manipulation in allocator. Audited safety comments. [Phase 2 confirmed]
 - `src/policy/sft_map.rs` — Transmutes are irreducible due to fat pointer provenance. [Phase 2 confirmed]
-- `src/policy/marksweepspace/native_ms/block.rs` — Refactored sweep to use safe iterator. Remaining unsafe is encapsulated in BlockCell::store_link. [Phase 3 confirmed]
+- `src/policy/marksweepspace/native_ms/block.rs` — Refactored sweep to use safe iterator. Remaining unsafe is encapsulated in BlockCell::store_link. Audited safety comments. [Phase 3 confirmed]
 - `src/util/raw_memory_freelist.rs` — Remaining unsafe are `from_raw_parts` to create slice views of raw memory. [Phase 3 confirmed]
 - `src/util/metadata/global.rs` — Unsafe fns for load/store are necessary as they are non-atomic. [Phase 3 confirmed]
 - `src/util/heap/pageresource.rs` — Completely safe after removing unnecessary unsafe blocks. [Phase 3 confirmed]
 - `src/util/heap/layout/map.rs` — Completely safe after removing unsafe from trait definition. [Phase 3 confirmed]
 - `src/util/metadata/log_bit.rs` — Completely safe after replacing unsafe optimization with safe fallback. [Phase 3 confirmed]
 - `src/plan/concurrent/concurrent_marking_work.rs` — Irreducible due to overlapping borrows and API constraints. [Phase 3 confirmed]
-- `src/util/test_util/mock_vm.rs` — Irreducible due to lifetime hacks needed for mocking in tests. [Phase 3 confirmed]
-- `src/policy/marksweepspace/malloc_ms/global.rs` — Irreducible due to passing space reference to work packets (Codebase Invariant). [Phase 3 confirmed]
+- `src/util/test_util/mock_vm.rs` — Irreducible due to lifetime hacks needed for mocking in tests. Audited safety comments. [Phase 3 confirmed]
+- `src/policy/marksweepspace/malloc_ms/global.rs` — Irreducible due to passing space reference to work packets (Codebase Invariant). Audited safety comments. [Phase 3 confirmed]
 - `src/util/heap/layout/mmapper/csm/mod.rs` — Irreducible due to calling unsafe `dzmmap` for memory mapping. [Phase 3 confirmed]
 - `src/plan/concurrent/mod.rs` — Completely safe after removing unsafe impls for bytemuck traits. [Phase 3 confirmed]
 - `src/vm/tests/mock_tests/mock_test_vm_layout_compressed_pointer.rs` — Completely safe after removing unnecessary unsafe blocks. [Phase 3 confirmed]

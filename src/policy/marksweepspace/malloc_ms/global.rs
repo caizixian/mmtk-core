@@ -548,6 +548,10 @@ impl<VM: VMBinding> MallocSpace<VM> {
 
     pub fn release(&mut self) {
         use crate::scheduler::WorkBucketStage;
+        // SAFETY: We cast `&mut self` to `&'static Self` to pass it to work packets.
+        // This is safe because the work packets are executed during the GC release phase,
+        // and they will not outlive the space itself. This is a standard pattern in MMTk
+        // to bypass borrow checker for work packets.
         let space = unsafe { &*(self as *const Self) };
         let work_packets = self.chunk_map.generate_tasks(|chunk| {
             Box::new(MSSweepChunk {
