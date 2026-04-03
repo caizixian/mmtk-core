@@ -1,21 +1,17 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: src/util/raw_memory_freelist.rs
-- Strategy: Investigate if the single unsafe block in `grow_list_by_blocks` can be removed or refactored.
+- Holistic review of remaining unsafe locations under strategy escalation.
 
 ## Findings
-- Line 146: `unsafe { std::slice::from_raw_parts_mut(...) }` — This creates a `&'static mut [i32]` from a raw pointer to dynamically mapped memory.
-- Eliminable? No. To remove this, we would need to use raw pointer arithmetic in `get_entry` and `set_entry`. However, `Address::load` and `Address::store` are unsafe functions, so calling them would require unsafe blocks in both `get_entry` and `set_entry`. This would increase the total unsafe block count from 1 to 2. The current approach of creating a slice once and using safe indexing is optimal for minimizing unsafe block count.
+- `src/util/malloc/mod.rs`: The 4 unsafe blocks are thin wrappers around C `malloc`, `calloc`, `realloc`, and `free`. They are already isolated in safe functions and properly documented. Irreducible without replacing the allocator.
+- `src/vm/slot.rs`: The unsafe block in `SimpleSlot::as_atomic` is a raw pointer cast necessary for atomic operations on the slot. The unsafe block in `MemorySlice::copy` is a raw memory copy. Both are fundamental and irreducible for count reduction without introducing overhead or unsafe at call sites.
+- `src/util/metadata/side_metadata/global.rs`: Unsafe blocks are in `MetadataSlot` helpers (dereferencing address) and `bcopy_metadata_contiguous` (raw memory copy). Centralized in helpers or necessary for performance.
+- `src/util/metadata/global.rs`: `load` and `store` are unsafe fns that delegate to other unsafe fns. Irreducible as they are non-atomic and require caller to ensure safety.
+- `src/policy/sft_map.rs`: Lifetime extension in `get_sft_wrapper` and raw pointer deref in `SFTRefStorage::load` are necessary for lock-free access and justified by spaces living forever.
 
-## Target 2
-- File: src/util/alloc/allocator.rs
-- Strategy: Investigate if the unsafe block in `fill_alignment_gap` can be removed.
-
-## Findings
-- Line 184: `unsafe { std::ptr::write_bytes(...) }` — This fills a memory region with a value.
-- Eliminable? No. To remove this and use safe methods like `slice::fill`, we would first need to create a slice from raw pointers using `std::slice::from_raw_parts_mut`, which is also unsafe. Thus, it would not reduce the unsafe block count. `std::ptr::write_bytes` is the standard and most direct way to perform this operation on raw memory.
+## Attempted Changes
+- None. Confirmed that remaining unsafe blocks are irreducible or locally optimal.
 
 ## Blockers / Insights for Next Step
-- Confirmed that the codebase is indeed in Phase 3 (Steady State) as documented in `UNSAFE_MEMORY.md`. The remaining unsafe blocks in the audited files are irreducible or already represent the local minimum for unsafe block count.
-
+- The codebase is in Phase 3 (Steady State). All remaining unsafe blocks are irreducible or well-encapsulated. No further reductions are possible without violating performance constraints or safety principles.
