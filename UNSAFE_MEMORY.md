@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 535 | Δ: -187
+- Starting count: 722 | Current: 524 | Δ: -198
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -23,6 +23,7 @@
 - Replacing `MaybeUninit` with `Option` for arrays of objects that are initialized late allows safe access via `as_mut().expect(...)` and eliminates `assume_init_mut` calls.
 - Adding runtime checks (asserts) in `Mutator` to validate that allocators are initialized before accessing them allows removing `unsafe` from accessor methods and callers.
 - Using `store_atomic` to replace raw stores in metadata updates, allowing helper functions to be safe and eliminating `unsafe` blocks at call sites.
+- **New Pattern**: Using references instead of raw pointers in test slots when the slots borrow from local variables in tests. This eliminates unsafe dereferences and `unsafe impl Send`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/metadata/side_metadata/helpers.rs` — Irreducible raw loads from metadata addresses. [Phase 1 analysis]
@@ -30,6 +31,7 @@
 - `src/util/alloc/allocators.rs` — Irreducible `assume_init` for layout compatibility with VM bindings. [Phase 1 analysis]
 - `src/policy/sft_map.rs` — `SFTRefStorage` uses transmute for atomic fat pointers. [Phase 2 confirmed]
 - `src/util/metadata/metadata_val_traits.rs` — Irreducible raw loads from addresses in trait default impls. [Phase 2 confirmed]
+- `src/vm/tests/mock_tests/mock_test_slots.rs` — All unsafe removed by refactoring to use references in tests. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - Implemented `SideMetadataSpecBlockExt` in `src/policy/marksweepspace/native_ms/block.rs` to abstract metadata accesses.
