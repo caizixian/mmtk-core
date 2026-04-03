@@ -39,6 +39,8 @@ Reusable refactoring patterns (recipe format):
 - `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are irreducible function signatures and raw memory copy. [Phase 2 confirmed]
 - `src/policy/marksweepspace/malloc_ms/global.rs` — Remaining unsafe are irreducible FFI and lifetime extension. [Phase 2 confirmed]
 - `src/policy/copyspace.rs` — Remaining unsafe are irreducible FFI and lifetime extension. [Phase 2 confirmed]
+- `src/scheduler/gc_work.rs` — Unsafe for global plan access, extending lifetime of worker, and unsafe trait impl. [Phase 2 confirmed]
+
 
 ## Abstraction Proposals (for Phase 2)
 ### Bitmask for initialized allocators in `Allocators`
