@@ -10,7 +10,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-- (Empty) All prioritized items have been investigated or completed. We are likely in Phase 3 (Irreducible Documentation).
+1. 🟢 LOW: `src/util/memory.rs:251` — document `libc::mmap` call with detailed SAFETY comment — expected Δ: 0
 
 
 ## Patterns Discovered
