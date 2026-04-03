@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 213 | Δ: -138
+- Starting count: 351 | Current: 212 | Δ: -139
 - Phase: 3
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -11,7 +11,7 @@ Architectural insights that affect ALL future safety decisions:
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/plan/global.rs:110-120` — Use `StwProof` to encapsulate `SFT_MAP` access — expected Δ: -1
+1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs:60-70` — Investigate if raw loads can use MetadataSlot — expected Δ: -2
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):

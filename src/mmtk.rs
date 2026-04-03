@@ -55,6 +55,12 @@ use crate::util::rust_util::InitializeOnce;
 // A global space function table that allows efficient dispatch space specific code for addresses in our heap.
 pub static SFT_MAP: InitializeOnce<Box<dyn SFTMap>> = InitializeOnce::new();
 
+/// Get the SFT map mutably. This requires a proof that the world is stopped or we are in initialization.
+pub fn get_sft_map_mut(_proof: &StwProof) -> &mut dyn SFTMap {
+    // SAFETY: We have a proof that the world is stopped or we have exclusive access.
+    unsafe { SFT_MAP.get_mut() }.as_mut()
+}
+
 /// MMTk builder. This is used to set options and other settings before actually creating an MMTk instance.
 pub struct MMTKBuilder {
     /// The options for this instance.
@@ -171,6 +177,7 @@ impl<VM: VMBinding> MMTK<VM> {
         // So we do not save it in MMTK. This may change in the future.
         let mut heap = HeapMeta::new();
 
+        let proof = StwProof(());
         let mut plan = crate::plan::create_plan(
             *options.plan,
             CreateGeneralPlanArgs {
@@ -183,6 +190,7 @@ impl<VM: VMBinding> MMTK<VM> {
                 stats: &stats,
                 heap: &mut heap,
             },
+            &proof,
         );
 
         // We haven't finished creating MMTk. No one is using the GC trigger.

@@ -2,7 +2,7 @@
 
 use super::PlanConstraints;
 use crate::global_state::GlobalState;
-use crate::mmtk::MMTK;
+use crate::mmtk::{MMTK, StwProof};
 use crate::plan::gc_work::{ClearCommonPlanUnlogBits, SetCommonPlanUnlogBits};
 use crate::plan::tracing::ObjectQueue;
 use crate::plan::Mutator;
@@ -72,6 +72,7 @@ pub fn create_mutator<VM: VMBinding>(
 pub fn create_plan<VM: VMBinding>(
     plan: PlanSelector,
     args: CreateGeneralPlanArgs<VM>,
+    _proof: &StwProof,
 ) -> Box<dyn Plan<VM = VM>> {
     let plan = match plan {
         PlanSelector::NoGC => {
@@ -111,7 +112,7 @@ pub fn create_plan<VM: VMBinding>(
     // We have created Plan in the heap, and we won't explicitly move it.
     // Each space now has a fixed address for its lifetime. It is safe now to initialize SFT.
     let sft_map: &mut dyn crate::policy::sft_map::SFTMap =
-        unsafe { crate::mmtk::SFT_MAP.get_mut() }.as_mut();
+        crate::mmtk::get_sft_map_mut(_proof);
     plan.for_each_space(&mut |s| {
         sft_map.notify_space_creation(s.as_sft());
         s.initialize_sft(sft_map);
