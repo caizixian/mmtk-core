@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 493 | Current: 479 (est) | Δ: -14
+- Starting count: 493 | Current: 476 | Δ: -17
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -25,6 +25,7 @@
 - **slot_from_meta_addr**: Added to `SideMetadataSpec` to return a `MetadataSlot` from a metadata address, allowing safe operations in `zero_meta_bits` and `set_meta_bits`.
 - **Proof Token for Safe Functions**: Changing signatures of `unsafe fn` to take `&StwProof` can make them safe if the only safety invariant is no concurrent access.
 - **StwProof in Tests**: Using `StwProof` in tests to remove redundant unsafe blocks around `load` and `store`.
+- **OnceLock for late init**: Replacing `MaybeUninit` with `OnceLock` for late-initialized global or shared state (e.g., `GCTrigger::plan`).
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.
