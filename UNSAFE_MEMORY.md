@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 182 | Δ: -169
+- Starting count: 351 | Current: 178 | Δ: -173
 - Phase: 3 (Irreducible Documentation)
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -40,8 +40,9 @@
 - `src/plan/concurrent/concurrent_marking_work.rs` — Irreducible due to overlapping borrows and API constraints. [Phase 3 confirmed]
 - `src/util/test_util/mock_vm.rs` — Irreducible due to lifetime hacks needed for mocking in tests. [Phase 3 confirmed]
 - `src/policy/marksweepspace/malloc_ms/global.rs` — Irreducible due to passing space reference to work packets (Codebase Invariant). [Phase 3 confirmed]
-- `src/policy/vmspace.rs` — Irreducible due to direct manipulation of SFT map. [Phase 3 confirmed]
+- `src/policy/vmspace.rs` — Completely safe after removing unnecessary unsafe blocks. [Phase 3 confirmed]
 - `src/util/alloc/allocator.rs` — Irreducible due to raw memory write in `fill_alignment_gap`. Added safety comment. [Phase 3 confirmed]
 - `src/util/erase_vm.rs` — Irreducible due to type erasure macro storing reference as usize. [Phase 3 confirmed]
 - `src/util/heap/layout/mmapper/csm/mod.rs` — Irreducible due to calling unsafe `dzmmap` for memory mapping. [Phase 3 confirmed]
 - `src/plan/concurrent/mod.rs` — Completely safe after removing unsafe impls for bytemuck traits. [Phase 3 confirmed]
+- `src/vm/tests/mock_tests/mock_test_vm_layout_compressed_pointer.rs` — Completely safe after removing unnecessary unsafe blocks. [Phase 3 confirmed]

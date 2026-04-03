@@ -27,8 +27,8 @@ fn test_vm_layout_compressed_pointer() {
             };
             let layout = VMLayout {
                 log_address_space: 35,
-                heap_start: chunk_align_down(unsafe { Address::from_usize(start) }),
-                heap_end: chunk_align_up(unsafe { Address::from_usize(end) }),
+                heap_start: chunk_align_down(Address::from_usize(start)),
+                heap_end: chunk_align_up(Address::from_usize(end)),
                 log_space_extent: 31,
                 force_use_contiguous_spaces: false,
             };
