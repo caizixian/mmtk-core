@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 493 | Current: 486 (est) | Δ: -7
+- Starting count: 493 | Current: 483 (est) | Δ: -10
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -24,6 +24,7 @@
 - **StwProof**: Token to prove world is stopped, allowing safe non-atomic access to metadata. Used to make `SideMetadataSpec::load` and `store` safe.
 - **slot_from_meta_addr**: Added to `SideMetadataSpec` to return a `MetadataSlot` from a metadata address, allowing safe operations in `zero_meta_bits` and `set_meta_bits`.
 - **Proof Token for Safe Functions**: Changing signatures of `unsafe fn` to take `&StwProof` can make them safe if the only safety invariant is no concurrent access.
+- **StwProof in Tests**: Using `StwProof` in tests to remove redundant unsafe blocks around `load` and `store`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.
