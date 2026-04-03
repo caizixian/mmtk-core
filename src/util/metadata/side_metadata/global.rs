@@ -916,15 +916,12 @@ impl SideMetadataSpec {
                     .map_err(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
                 } else {
                     // SAFETY: `meta_addr` is a valid address in mapped side metadata, and is properly aligned for `T`.
-                    unsafe {
-                        T::compare_exchange(
-                            meta_addr,
-                            old_metadata,
-                            new_metadata,
-                            success_order,
-                            failure_order,
-                        )
-                    }
+                    MetadataSlot(meta_addr).compare_exchange_val(
+                        old_metadata,
+                        new_metadata,
+                        success_order,
+                        failure_order,
+                    )
                 }
             },
             |_res| {
@@ -950,9 +947,8 @@ impl SideMetadataSpec {
         let mask = meta_byte_mask(self) << lshift;
 
         // SAFETY: `meta_addr` is a valid address in mapped side metadata, and is properly aligned for `u8`.
-        let old_raw_byte = unsafe {
-            <u8 as MetadataValue>::fetch_update(
-                meta_addr,
+        let old_raw_byte = MetadataSlot(meta_addr)
+            .fetch_update_val(
                 set_order,
                 fetch_order,
                 |raw_byte: u8| {
@@ -962,8 +958,7 @@ impl SideMetadataSpec {
                     Some(new_raw_byte)
                 },
             )
-        }
-        .unwrap();
+            .unwrap();
         (old_raw_byte & mask) >> lshift
     }
 
@@ -993,7 +988,7 @@ impl SideMetadataSpec {
                     .unwrap()
                 } else {
                     // SAFETY: `meta_addr` is a valid address in mapped side metadata, and is properly aligned for `T`.
-                    unsafe { T::fetch_add(meta_addr, val, order) }
+                    MetadataSlot(meta_addr).fetch_add_val(val, order)
                 }
             },
             |_old_val| {
@@ -1028,7 +1023,7 @@ impl SideMetadataSpec {
                     .unwrap()
                 } else {
                     // SAFETY: `meta_addr` is a valid address in mapped side metadata, and is properly aligned for `T`.
-                    unsafe { T::fetch_sub(meta_addr, val, order) }
+                    MetadataSlot(meta_addr).fetch_sub_val(val, order)
                 }
             },
             |_old_val| {
@@ -1057,12 +1052,11 @@ impl SideMetadataSpec {
                     let mask = meta_byte_mask(self) << lshift;
                     // We do not need to use fetch_ops_on_bits(), we can just set irrelavent bits to 1, and do fetch_and
                     let rhs = (val.to_u8().unwrap() << lshift) | !mask;
-                    let old_raw_byte =
-                        unsafe { <u8 as MetadataValue>::fetch_and(meta_addr, rhs, order) };
+                    let old_raw_byte = MetadataSlot(meta_addr).fetch_and_val(rhs, order);
                     let old_val = (old_raw_byte & mask) >> lshift;
                     FromPrimitive::from_u8(old_val).unwrap()
                 } else {
-                    unsafe { T::fetch_and(meta_addr, val, order) }
+                    MetadataSlot(meta_addr).fetch_and_val(val, order)
                 }
             },
             |_old_val| {
@@ -1091,12 +1085,11 @@ impl SideMetadataSpec {
                     let mask = meta_byte_mask(self) << lshift;
                     // We do not need to use fetch_ops_on_bits(), we can just set irrelavent bits to 0, and do fetch_or
                     let rhs = (val.to_u8().unwrap() << lshift) & mask;
-                    let old_raw_byte =
-                        unsafe { <u8 as MetadataValue>::fetch_or(meta_addr, rhs, order) };
+                    let old_raw_byte = MetadataSlot(meta_addr).fetch_or_val(rhs, order);
                     let old_val = (old_raw_byte & mask) >> lshift;
                     FromPrimitive::from_u8(old_val).unwrap()
                 } else {
-                    unsafe { T::fetch_or(meta_addr, val, order) }
+                    MetadataSlot(meta_addr).fetch_or_val(val, order)
                 }
             },
             |_old_val| {
@@ -1125,9 +1118,8 @@ impl SideMetadataSpec {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
 
-                    unsafe {
-                        <u8 as MetadataValue>::fetch_update(
-                            meta_addr,
+                    MetadataSlot(meta_addr)
+                        .fetch_update_val(
                             set_order,
                             fetch_order,
                             |raw_byte: u8| {
@@ -1138,11 +1130,10 @@ impl SideMetadataSpec {
                                 })
                             },
                         )
-                    }
-                    .map(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
-                    .map_err(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
+                        .map(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
+                        .map_err(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
                 } else {
-                    unsafe { T::fetch_update(meta_addr, set_order, fetch_order, f) }
+                    MetadataSlot(meta_addr).fetch_update_val(set_order, fetch_order, f)
                 }
             },
             |_result| {

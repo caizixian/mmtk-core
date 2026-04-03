@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 162 | Δ: -189
-- Phase: 3 (Irreducible Documentation)
+- Starting count: 351 | Current: 152 | Δ: -199
+- Phase: 2 (Safe Abstractions)
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Work packets hold raw pointers to plans or spaces to bypass borrow checker and lifetimes.
@@ -23,6 +23,7 @@
 - Centralized unsafe raw pointer dereferences in `SimpleSlot` by introducing a helper `as_atomic` method, reducing unsafe blocks in `load` and `store`.
 - **New**: Removed `impl Slot for Address` and changed `MemorySlice for Range<Address>` to use `SimpleSlot`, eliminating 2 unsafe blocks and aligning with the intent of using `SimpleSlot` directly.
 - **New**: Centralized unsafe raw pointer dereferences in `MetadataSlot` by introducing a helper `get_mut_ref` method, and refactored `load_val` to use `get_ref`, eliminating 3 unsafe blocks at call sites (net reduction of 2).
+- **New**: Used existing `MetadataSlot` abstraction to eliminate 10 unsafe blocks in `global.rs` by replacing direct calls to `MetadataValue` trait methods on `Address` with calls to `MetadataSlot` methods.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are irreducible function signatures and raw memory copy. Audited safety comments. [Phase 2 confirmed]
