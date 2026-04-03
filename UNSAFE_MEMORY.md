@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 691 | Δ: -31
+- Starting count: 722 | Current: 666 | Δ: -56
 - Phase: 1
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -9,7 +9,7 @@
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
 1. 🔴 HIGH: `src/util/metadata/header_metadata.rs` — Tests refactored to use slices. Production code still needs Phase 2 abstraction for safe metadata access.
-2. 🟡 MED: `src/util/metadata/side_metadata/global.rs` — Analyze for local removals or move to Phase 2.
+2. 🟡 MED: `src/util/metadata/side_metadata/global.rs` — Refactored `SideMetadataOffset` to enum removing 10 unsafe blocks. Remaining unsafe needs Phase 2 abstraction.
 
 ## Patterns Discovered
 - `MaybeUninit` arrays of size 1 can be replaced with `Option` and `unwrap()` to eliminate unsafe access.
@@ -17,6 +17,7 @@
 - `unsafe impl Sync` for types containing only atomics or Sync types can often be removed as the compiler can auto-derive Sync.
 - `get_unchecked` on `Vec` can be replaced with standard indexing `[]` if we are okay with bounds checks (or if bounds are already checked).
 - Using safe slices `&mut [T]` instead of raw pointers `*mut T` in tests allows using safe indexing and removes unsafe dereferences.
+- **Refactoring unions to enums** can eliminate unsafe field accesses if layout compatibility is not strictly required or if the overhead is acceptable.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.
