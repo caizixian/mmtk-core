@@ -5,13 +5,9 @@
 - Strategy: Phase 3 (Irreducible Documentation)
 
 ## Findings
-- Audited `src/vm/slot.rs` and confirmed unsafe is irreducible.
-- Audited `src/util/memory.rs` and confirmed all unsafe blocks have proper safety comments.
-- Audited `src/util/malloc/mod.rs` and confirmed all unsafe blocks have proper safety comments.
-- Audited `src/policy/marksweepspace/malloc_ms/global.rs` and confirmed unsafe is irreducible (Codebase Invariant).
-- Audited `src/util/test_util/mock_vm.rs` and confirmed unsafe is irreducible (lifetime hacks for tests).
-- Found remaining files with unsafe: `src/scheduler/affinity.rs` (FFI), `src/util/alloc/free_list_allocator.rs` (Safe), and some test files.
-- Confirmed all remaining unsafe is irreducible or well-encapsulated.
+- Verified that all files with unsafe listed in the harness are also listed in the "Files NOT to Revisit" section of `UNSAFE_MEMORY.md` with `[Phase 3 confirmed]`.
+- Confirmed that the remaining unsafe blocks are core low-level operations (like raw memory access in `Address`, FFI calls in `memory.rs`, and lifetime extension in `sft_map.rs`) that are necessary and well-encapsulated or justified.
+- Concluded that the project is in a steady state for Phase 3 and no further reductions are feasible without major architectural changes that would violate performance or safety invariants.
 
 ## Attempted Changes
 - None (just documentation).
