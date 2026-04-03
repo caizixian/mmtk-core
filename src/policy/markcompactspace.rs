@@ -11,6 +11,7 @@ use crate::util::constants::LOG_BYTES_IN_WORD;
 use crate::util::copy::CopySemantics;
 use crate::util::heap::{MonotonePageResource, PageResource};
 use crate::util::metadata::{extract_side_metadata, vo_bit};
+use crate::util::metadata::side_metadata::MetadataSlot;
 use crate::util::object_enum::{self, ObjectEnumerator};
 use crate::util::{Address, ObjectReference};
 use crate::{vm::*, ObjectQueue};
@@ -208,8 +209,9 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
 
     /// Get header forwarding pointer for an object
     fn get_header_forwarding_pointer(object: ObjectReference) -> Option<ObjectReference> {
-        let addr = unsafe { Self::header_forwarding_pointer_address(object).load::<Address>() };
-        ObjectReference::from_raw_address(addr)
+        let addr = MetadataSlot(Self::header_forwarding_pointer_address(object))
+            .load_usize_non_atomic();
+        ObjectReference::from_raw_address(Address::from_usize(addr))
     }
 
     /// Store header forwarding pointer for an object
@@ -217,10 +219,8 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
         object: ObjectReference,
         forwarding_pointer: ObjectReference,
     ) {
-        unsafe {
-            Self::header_forwarding_pointer_address(object)
-                .store::<ObjectReference>(forwarding_pointer);
-        }
+        MetadataSlot(Self::header_forwarding_pointer_address(object))
+            .store_val::<usize>(forwarding_pointer.to_raw_address().as_usize());
     }
 
     // Clear header forwarding pointer for an object

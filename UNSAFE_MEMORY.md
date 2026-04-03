@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 402 | Δ: -320
+- Starting count: 722 | Current: 399 | Δ: -323
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/policy/markcompactspace.rs:211` — Investigate if raw load of forwarding pointer can be made safe or encapsulated. — expected Δ: 1
+1. 🔴 HIGH: `src/util/alloc/allocators.rs` — Re-evaluate `assume_init` in Phase 2 to see if it can be avoided or encapsulated. — expected Δ: 1
 
 ## Patterns Discovered
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
@@ -66,3 +66,4 @@
 - `src/plan/barriers.rs` — Reduced unsafe block in line 198. Remaining unsafe (if any) are likely irreducible. [Phase 2 confirmed]
 - `src/util/int_array_freelist.rs` — All unsafe removed by refactoring to use Arc<RwLock>. [Phase 2 confirmed]
 - `src/policy/immix/line.rs` — All unsafe removed by using atomic operations. [Phase 2 confirmed]
+- `src/scheduler/affinity.rs` — Irreducible FFI interaction for thread affinity. [Phase 2 confirmed]
