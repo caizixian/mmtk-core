@@ -36,7 +36,7 @@ impl VMLocalPinningBitSpec {
 
     /// Check if an object is pinned.
     pub fn is_object_pinned<VM: VMBinding>(&self, object: ObjectReference) -> bool {
-        if unsafe { self.load::<VM, u8>(object, None) == 1 } {
+        if self.load_atomic::<VM, u8>(object, None, Ordering::SeqCst) == 1 {
             return true;
         }
 
