@@ -1,18 +1,17 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: `src/policy/marksweepspace/native_ms/block.rs`
-- Strategy: Replace non-atomic `load`/`store` on `SideMetadataSpec` with `load_atomic`/`store_atomic` with `SeqCst` ordering to remove unsafe blocks.
+- File: `src/util/heap/layout/map32.rs`
+- Strategy: Replace `UnsafeCell<Map32Inner>` with `Mutex<Map32Inner>` to eliminate unsafe interior mutability and raw pointer dereferences.
 
 ## Findings
-- Lines 69, 73, 81, 85: These methods in `SideMetadataSpecBlockExt` use `load` and `store` which are unsafe.
-- `SideMetadataSpec` has `load_atomic` and `store_atomic` which are safe.
-- According to `UNSAFE_MEMORY.md` patterns, we can use `store_atomic` to replace raw stores in metadata updates.
-- Line 208: `store_block_list` also uses `store`. Can be replaced with `store_atomic`.
+- `Map32` uses `UnsafeCell<Map32Inner>` and a separate `Mutex<()>` for synchronization in some methods, but allows unsafe access via `Deref` and `mut_self`.
+- This leads to unsafe trait impls for `Send` and `Sync` and several unsafe blocks for pointer dereferencing.
+- Replacing `UnsafeCell` with `Mutex` will allow removing these unsafe operations and trait impls.
+- `IntArrayFreeList` is `Send`, so `Map32Inner` is `Send`, making `Mutex<Map32Inner>` both `Send` and `Sync` automatically.
 
 ## Attempted Changes
-- Replaced non-atomic `load` and `store` with `load_atomic` and `store_atomic` using `Ordering::SeqCst` in `SideMetadataSpecBlockExt` and `store_block_list`.
-- Removed 5 unsafe blocks.
+- None yet. Plan to replace `UnsafeCell` with `Mutex` and update all call sites.
 
 ## Blockers / Insights for Next Step
-- Need to run `cargo check` and `cargo test` to verify.
+- None anticipated. Need to verify that performance is not adversely affected, but these operations are likely not on the hot path.
