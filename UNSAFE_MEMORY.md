@@ -3,6 +3,7 @@
 ## Progress
 - Starting count: 351 | Current: 55 | Δ: -296
 - Phase: 3 (Irreducible Documentation)
+- Antigravity narrowed the unsafe block in `src/util/malloc/malloc_ms_util.rs` by using safe `calloc` wrapper and pulling safe operations out.
 - Antigravity reduced the unsafe count by 2 in `src/util/malloc/malloc_ms_util.rs` by using safe wrappers `crate::util::malloc::calloc` and `free` instead of direct FFI calls.
 - Status: Confirmed all remaining unsafe is irreducible or well-encapsulated. Moving to Phase 3. Verified again under strategy escalation (Step 10 of zero reductions). Re-verified and confirmed by multiple agents, including Antigravity.
 - Verified again under strategy escalation (10 steps of zero reductions) and confirmed all files with unsafe are listed in "Files NOT to Revisit" and their justifications are valid. Antigravity also specifically verified that `src/util/metadata/side_metadata/global.rs`, `src/util/metadata/global.rs`, and `src/util/address.rs` have proper `// SAFETY:` comments for their remaining unsafe blocks.
@@ -60,7 +61,7 @@
 - `SFTRefStorage::load` returns a reference lock-free and thus requires leaked or static data to be sound without hazard pointers or Arc overhead.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: None — all remaining unsafe is irreducible — expected Δ: 0
+1. 🟡 MED: `src/util/raw_memory_freelist.rs` — replace `get_slice` and `get_slice_mut` with direct pointer access in `get_entry` and `set_entry` to avoid creating slice views of the entire mapped region — expected Δ: 0
 
 ## Patterns Discovered
 - Refactored `SFTWrapper` to hold a reference instead of a raw pointer, eliminating `unsafe impl Send` and `Sync` for the wrapper and reducing unsafe count.
