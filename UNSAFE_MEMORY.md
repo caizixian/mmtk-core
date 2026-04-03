@@ -11,7 +11,7 @@ Architectural insights that affect ALL future safety decisions:
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs:61` — Add `// SAFETY:` comments for unsafe blocks in MetadataSlot and SideMetadataSpec — expected Δ: 0
+1. 🔴 HIGH: `src/util/metadata/metadata_val_traits.rs` — Audit for potential use of `StwProof` to enforce concurrency safety on trait methods — expected Δ: 0
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):

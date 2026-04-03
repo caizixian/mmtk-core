@@ -549,7 +549,10 @@ impl SideMetadataSpec {
                 BitByteRange::Bytes {
                     start: dst_start,
                     end: dst_end,
-                } => unsafe {
+                } => 
+                    // SAFETY: `src_start` and `dst_start` are valid addresses in mapped side metadata.
+                    // The range length `size` is calculated from a valid data address range.
+                    unsafe {
                     let byte_offset = dst_start - dst_meta_start_addr;
                     let src_start = src_meta_start_addr + byte_offset;
                     let size = dst_end - dst_start;
