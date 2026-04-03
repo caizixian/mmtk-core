@@ -36,6 +36,7 @@
 - Combined near-contiguous unsafe blocks in `malloc_ms_util.rs` (`offset_free` and `offset_malloc_usable_size`) to reduce the total count of unsafe blocks by 2.
 - Making `set` and `zero` in `memory.rs` unsafe would require adding unsafe blocks to 8 call sites, increasing the total count.
 - **New**: Eliminated 2 unsafe blocks in `src/util/metadata/side_metadata/global.rs` tests by using safe `load_atomic` and `store_atomic` instead of unsafe `load` and `store`.
+- **New**: Confirmed that making helper methods like `MetadataSlot::get_ref` `unsafe fn` would increase the count of unsafe blocks at call sites because the callers (like `Slot::load`) are often safe trait methods. Centralizing the unsafe block inside the helper is preferred to keep the count low.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/heap/blockpageresource.rs` — Completely safe after removing `unsafe impl Sync` and adding `Send` bound to `Region` trait. [Phase 3 confirmed]
