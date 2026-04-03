@@ -82,6 +82,13 @@ impl HeaderMetadataSpec {
         header + self.byte_offset()
     }
 
+    /// Get a `MetadataSlot` for the given header address.
+    pub fn slot_for<T: MetadataValue>(&self, header: Address) -> MetadataSlot<T> {
+        // SAFETY: `meta_addr` computes a valid metadata address for the given header.
+        // The caller must ensure the header address is valid.
+        unsafe { MetadataSlot::new_unchecked(self.meta_addr(header)) }
+    }
+
     // Some common methods for header metadata that is smaller than 1 byte.
 
     /// Get the bit shift (the bit distance from the lowest bit to the bits location defined in the spec),
@@ -152,24 +159,20 @@ impl HeaderMetadataSpec {
 
         // metadata smaller than 8-bits is special in that more than one metadata value may be included in one AtomicU8 operation, and extra shift and mask is required
         let res: T = if self.num_of_bits < 8 {
-            let byte_val = unsafe {
-                let slot = MetadataSlot::<u8>::new_unchecked(self.meta_addr(header));
-                if let Some(order) = atomic_ordering {
-                    slot.load_atomic(order)
-                } else {
-                    slot.load()
-                }
+            let slot = self.slot_for::<u8>(header);
+            let byte_val = if let Some(order) = atomic_ordering {
+                slot.load_atomic(order)
+            } else {
+                slot.load()
             };
 
             FromPrimitive::from_u8(self.get_bits_from_u8(byte_val)).unwrap()
         } else {
-            unsafe {
-                let slot = MetadataSlot::<T>::new_unchecked(self.meta_addr(header));
-                if let Some(order) = atomic_ordering {
-                    slot.load_atomic(order)
-                } else {
-                    slot.load()
-                }
+            let slot = self.slot_for::<T>(header);
+            if let Some(order) = atomic_ordering {
+                slot.load_atomic(order)
+            } else {
+                slot.load()
             }
         };
 
@@ -224,43 +227,35 @@ impl HeaderMetadataSpec {
         // metadata smaller than 8-bits is special in that more than one metadata value may be included in one AtomicU8 operation, and extra shift and mask, and compare_exchange is required
         if self.num_of_bits < 8 {
             let val_u8 = val.to_u8().unwrap();
-            let byte_addr = self.meta_addr(header);
+            let slot = self.slot_for::<u8>(header);
             if let Some(order) = atomic_ordering {
-                let _ = unsafe {
-                    MetadataSlot::<u8>::new_unchecked(byte_addr).fetch_update(order, order, |old_val: u8| {
-                        Some(self.set_bits_to_u8(old_val, val_u8))
-                    })
-                };
+                let _ = slot.fetch_update(order, order, |old_val: u8| {
+                    Some(self.set_bits_to_u8(old_val, val_u8))
+                });
             } else {
-                unsafe {
-                    let slot = MetadataSlot::<u8>::new_unchecked(byte_addr);
-                    let old_byte_val = slot.load();
-                    let new_byte_val = self.set_bits_to_u8(old_byte_val, val_u8);
-                    slot.store(new_byte_val);
-                }
+                let old_byte_val = slot.load();
+                let new_byte_val = self.set_bits_to_u8(old_byte_val, val_u8);
+                slot.store(new_byte_val);
             }
         } else {
-            let addr = self.meta_addr(header);
-            unsafe {
-                let slot = MetadataSlot::<T>::new_unchecked(addr);
-                if let Some(order) = atomic_ordering {
-                    // if the optional mask is provided (e.g. for forwarding pointer), we need to use compare_exchange
-                    if let Some(mask) = optional_mask {
-                        let _ = slot.fetch_update(order, order, |old_val: T| {
-                            Some(old_val.bitand(mask.inv()).bitor(val.bitand(mask)))
-                        });
-                    } else {
-                        slot.store_atomic(val, order);
-                    }
+            let slot = self.slot_for::<T>(header);
+            if let Some(order) = atomic_ordering {
+                // if the optional mask is provided (e.g. for forwarding pointer), we need to use compare_exchange
+                if let Some(mask) = optional_mask {
+                    let _ = slot.fetch_update(order, order, |old_val: T| {
+                        Some(old_val.bitand(mask.inv()).bitor(val.bitand(mask)))
+                    });
                 } else {
-                    let val = if let Some(mask) = optional_mask {
-                        let old_val = slot.load();
-                        old_val.bitand(mask.inv()).bitor(val.bitand(mask))
-                    } else {
-                        val
-                    };
-                    slot.store(val);
+                    slot.store_atomic(val, order);
                 }
+            } else {
+                let val = if let Some(mask) = optional_mask {
+                    let old_val = slot.load();
+                    old_val.bitand(mask.inv()).bitor(val.bitand(mask))
+                } else {
+                    val
+                };
+                slot.store(val);
             }
         }
     }
@@ -281,27 +276,24 @@ impl HeaderMetadataSpec {
         self.assert_spec::<T>();
         // metadata smaller than 8-bits is special in that more than one metadata value may be included in one AtomicU8 operation, and extra shift and mask is required
         if self.num_of_bits < 8 {
-            let byte_addr = self.meta_addr(header);
-            unsafe {
-                let slot = MetadataSlot::<u8>::new_unchecked(byte_addr);
-                let real_old_byte = slot.load_atomic(success_order);
-                let expected_old_byte =
-                    self.set_bits_to_u8(real_old_byte, old_metadata.to_u8().unwrap());
-                let expected_new_byte =
-                    self.set_bits_to_u8(expected_old_byte, new_metadata.to_u8().unwrap());
-                slot.compare_exchange(
-                        expected_old_byte,
-                        expected_new_byte,
-                        success_order,
-                        failure_order,
-                    )
-                    .map(|x| FromPrimitive::from_u8(x).unwrap())
-                    .map_err(|x| FromPrimitive::from_u8(x).unwrap())
-            }
+            let slot = self.slot_for::<u8>(header);
+            let real_old_byte = slot.load_atomic(success_order);
+            let expected_old_byte =
+                self.set_bits_to_u8(real_old_byte, old_metadata.to_u8().unwrap());
+            let expected_new_byte =
+                self.set_bits_to_u8(expected_old_byte, new_metadata.to_u8().unwrap());
+            slot.compare_exchange(
+                    expected_old_byte,
+                    expected_new_byte,
+                    success_order,
+                    failure_order,
+                )
+                .map(|x| FromPrimitive::from_u8(x).unwrap())
+                .map_err(|x| FromPrimitive::from_u8(x).unwrap())
         } else {
-            let addr = self.meta_addr(header);
+            let slot = self.slot_for::<T>(header);
             let (old_metadata, new_metadata) = if let Some(mask) = optional_mask {
-                let old_byte = unsafe { MetadataSlot::<T>::new_unchecked(addr).load_atomic(success_order) };
+                let old_byte = slot.load_atomic(success_order);
                 let expected_new_byte = old_byte.bitand(mask.inv()).bitor(new_metadata);
                 let expected_old_byte = old_byte.bitand(mask.inv()).bitor(old_metadata);
                 (expected_old_byte, expected_new_byte)
@@ -309,14 +301,12 @@ impl HeaderMetadataSpec {
                 (old_metadata, new_metadata)
             };
 
-            unsafe {
-                MetadataSlot::<T>::new_unchecked(addr).compare_exchange(
-                    old_metadata,
-                    new_metadata,
-                    success_order,
-                    failure_order,
-                )
-            }
+            slot.compare_exchange(
+                old_metadata,
+                new_metadata,
+                success_order,
+                failure_order,
+            )
         }
     }
 
@@ -357,7 +347,7 @@ impl HeaderMetadataSpec {
             }))
             .unwrap()
         } else {
-            unsafe { MetadataSlot::<T>::new_unchecked(self.meta_addr(header)).fetch_add(val, order) }
+            self.slot_for::<T>(header).fetch_add(val, order)
         }
     }
 
@@ -371,7 +361,7 @@ impl HeaderMetadataSpec {
             }))
             .unwrap()
         } else {
-            unsafe { MetadataSlot::<T>::new_unchecked(self.meta_addr(header)).fetch_sub(val, order) }
+            self.slot_for::<T>(header).fetch_sub(val, order)
         }
     }
 
@@ -383,12 +373,11 @@ impl HeaderMetadataSpec {
             let (lshift, mask) = self.get_shift_and_mask_for_bits();
             let new_val = (val.to_u8().unwrap() << lshift) | !mask;
             // We do not need to use fetch_ops_on_bits(), we can just set irrelavent bits to 1, and do fetch_and
-            let old_raw_byte =
-                unsafe { MetadataSlot::<u8>::new_unchecked(self.meta_addr(header)).fetch_and(new_val, order) };
+            let old_raw_byte = self.slot_for::<u8>(header).fetch_and(new_val, order);
             let old_val = self.get_bits_from_u8(old_raw_byte);
             FromPrimitive::from_u8(old_val).unwrap()
         } else {
-            unsafe { MetadataSlot::<T>::new_unchecked(self.meta_addr(header)).fetch_and(val, order) }
+            self.slot_for::<T>(header).fetch_and(val, order)
         }
     }
 
@@ -400,12 +389,11 @@ impl HeaderMetadataSpec {
             let (lshift, mask) = self.get_shift_and_mask_for_bits();
             let new_val = (val.to_u8().unwrap() << lshift) & mask;
             // We do not need to use fetch_ops_on_bits(), we can just set irrelavent bits to 0, and do fetch_or
-            let old_raw_byte =
-                unsafe { MetadataSlot::<u8>::new_unchecked(self.meta_addr(header)).fetch_or(new_val, order) };
+            let old_raw_byte = self.slot_for::<u8>(header).fetch_or(new_val, order);
             let old_val = self.get_bits_from_u8(old_raw_byte);
             FromPrimitive::from_u8(old_val).unwrap()
         } else {
-            unsafe { MetadataSlot::<T>::new_unchecked(self.meta_addr(header)).fetch_or(val, order) }
+            self.slot_for::<T>(header).fetch_or(val, order)
         }
     }
 
@@ -421,24 +409,21 @@ impl HeaderMetadataSpec {
         #[cfg(debug_assertions)]
         self.assert_spec::<T>();
         if self.num_of_bits < 8 {
-            let byte_addr = self.meta_addr(header);
-            unsafe {
-                MetadataSlot::<u8>::new_unchecked(byte_addr).fetch_update(
-                    set_order,
-                    fetch_order,
-                    |raw_byte: u8| {
-                        let old_metadata = self.get_bits_from_u8(raw_byte);
-                        f(FromPrimitive::from_u8(old_metadata).unwrap()).map(|new_val| {
-                            let new_metadata = self.truncate_bits_in_u8(new_val.to_u8().unwrap());
-                            self.set_bits_to_u8(raw_byte, new_metadata)
-                        })
-                    },
-                )
-            }
+            self.slot_for::<u8>(header).fetch_update(
+                set_order,
+                fetch_order,
+                |raw_byte: u8| {
+                    let old_metadata = self.get_bits_from_u8(raw_byte);
+                    f(FromPrimitive::from_u8(old_metadata).unwrap()).map(|new_val| {
+                        let new_metadata = self.truncate_bits_in_u8(new_val.to_u8().unwrap());
+                        self.set_bits_to_u8(raw_byte, new_metadata)
+                    })
+                },
+            )
             .map(|raw_byte| FromPrimitive::from_u8(self.get_bits_from_u8(raw_byte)).unwrap())
             .map_err(|raw_byte| FromPrimitive::from_u8(self.get_bits_from_u8(raw_byte)).unwrap())
         } else {
-            unsafe { MetadataSlot::<T>::new_unchecked(self.meta_addr(header)).fetch_update(set_order, fetch_order, f) }
+            self.slot_for::<T>(header).fetch_update(set_order, fetch_order, f)
         }
     }
 }
