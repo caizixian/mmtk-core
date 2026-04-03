@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 706 | Δ: -16
-- Completed subsystems: util/alloc (partial), policy/sft_map (partial), policy/marksweepspace (block.rs cleanup), util/heap/layout (vm_layout.rs static mut)
+- Starting count: 722 | Current: 700 | Δ: -22
+- Completed subsystems: util/alloc (partial), policy/sft_map (partial), policy/marksweepspace (block.rs cleanup), util/heap/layout (vm_layout.rs static mut), util/copy (array initialization)
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - "Work packets are single-use — Option::take() is safe for extracting owned data"
