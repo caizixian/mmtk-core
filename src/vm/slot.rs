@@ -198,11 +198,13 @@ impl Slot for SimpleSlot {
 /// `SimpleSlot`.
 impl Slot for Address {
     fn load(&self) -> Option<ObjectReference> {
+        // SAFETY: The caller must ensure that `self` is a valid and properly aligned address for loading an `Address`.
         let addr = unsafe { Address::load(*self) };
         ObjectReference::from_raw_address(addr)
     }
 
     fn store(&self, object: ObjectReference) {
+        // SAFETY: The caller must ensure that `self` is a valid and properly aligned address for storing an `Address`.
         unsafe { Address::store(*self, object) }
     }
 }

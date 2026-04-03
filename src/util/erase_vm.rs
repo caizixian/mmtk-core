@@ -21,6 +21,9 @@ macro_rules! define_erased_vm_mut_ref {
                 Self(worker_as_usize, PhantomData)
             }
             pub fn into_mut<VM: VMBinding>(self) -> &'a mut $orig_type {
+                // SAFETY: The stored usize was created from a valid reference to `$orig_type`.
+                // The lifetime 'a ensures the reference is still valid.
+                // We assume that there is only one VM type in the process, so casting back with any `VM` is safe.
                 unsafe {
                     &mut *(std::ptr::with_exposed_provenance(self.0) as *const $orig_type
                         as *mut $orig_type)

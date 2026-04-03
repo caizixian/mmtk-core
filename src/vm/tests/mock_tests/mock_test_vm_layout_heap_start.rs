@@ -13,8 +13,10 @@ fn test_vm_layout_heap_start() {
             let default = VMLayout::default();
 
             // Test with an start address that is different to the default heap start
+            // SAFETY: These are specific addresses used for testing layout calculations and are not dereferenced.
             #[cfg(target_pointer_width = "32")]
             let heap_start = unsafe { Address::from_usize(0x7000_0000) };
+            // SAFETY: These are specific addresses used for testing layout calculations and are not dereferenced.
             #[cfg(target_pointer_width = "64")]
             let heap_start = unsafe { Address::from_usize(0x0000_0400_0000_0000usize) };
             #[cfg(target_pointer_width = "64")]

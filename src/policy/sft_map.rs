@@ -132,6 +132,7 @@ impl SFTRefStorage {
     }
 
     pub fn new(sft: &(dyn SFT + Sync + 'static)) -> Self {
+        // SAFETY: The size of `SFTRawPointer` and `AtomicDoubleWord` are checked to be equal in `pre_use_check`.
         let val: DoubleWord = unsafe { std::mem::transmute(sft) };
         Self(AtomicDoubleWord::new(val))
     }
@@ -144,6 +145,7 @@ impl SFTRefStorage {
         // However, pointer provenance API only works for ptr-sized intergers, and
         // here we are transmuting from a double-word sized integer to a fat pointer.
         // We still need to use transmute here.
+        // SAFETY: The value was stored by `store` which transmutes a valid `&dyn SFT`.
         #[allow(unknown_lints)]
         #[allow(integer_to_ptr_transmutes)]
         unsafe {
@@ -153,6 +155,7 @@ impl SFTRefStorage {
 
     // Store a raw SFT pointer with the release ordering.
     pub fn store(&self, sft: &(dyn SFT + Sync + 'static)) {
+        // SAFETY: The size of `SFTRawPointer` and `AtomicDoubleWord` are checked to be equal in `pre_use_check`.
         let val: DoubleWord = unsafe { std::mem::transmute(sft) };
         self.0.store(val, Ordering::Release)
     }
