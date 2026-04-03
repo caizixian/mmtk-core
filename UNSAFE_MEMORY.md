@@ -40,8 +40,10 @@
 - `*mut T` → `&'a T` in test fixtures/mock types where lifetimes can be tracked, eliminating unsafe raw pointer dereferences (requires manual PartialEq/Eq/Hash for pointer equality).
 - `as_ref::<AtomicU8>()` → `MetadataValue::fetch_and` / `fetch_or` / `load_atomic` / `store_atomic` — use standard trait abstractions instead of raw pointer casts.
 - `*mut T = val` in tests → `MetadataValue::store(meta_addr, val)` — use abstractions instead of raw pointers in tests.
+- `trait Trait: Send` trait inheritance to make `dyn Trait` automatically `Send`, enabling safe auto-`Send` for types containing `Box<dyn Trait>` and removing `unsafe impl Send`.
 
 ## Refactoring Ideas
+- Remove `unsafe impl Send for MMTK` in `src/mmtk.rs` now that `Plan` trait inherits `Send`.
 - Scan for other usages of non-atomic SideMetadataSpec::load that can be replaced with load_atomic(Ordering::Relaxed) to remove unsafe blocks.
 - Investigate `Mutator::allocator_impl_mut_for_semantic` in `src/plan/mutator_context.rs` to see if downcasting of raw trait objects can be made safer or abstracted.
 
