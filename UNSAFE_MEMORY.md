@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 184 | Δ: -167
+- Starting count: 351 | Current: 182 | Δ: -169
 - Phase: 3 (Irreducible Documentation)
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/vm/slot.rs:179` — investigate if slot operations can use a safe wrapper to reduce unsafe dereferences — expected Δ: 2
+1. 🟢 LOW: Final review of all irreducible unsafe blocks to ensure they have proper // SAFETY: comments.
 
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
