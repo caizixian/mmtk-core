@@ -10,7 +10,7 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/alloc/allocators.rs` — Re-evaluate `assume_init` in Phase 2 to see if it can be avoided or encapsulated. — expected Δ: 1
+1. 🔴 HIGH: `src/util/rust_util/zeroed_alloc.rs` — Check if `new_zeroed_vec` can use a safe alternative from `bytemuck` or if it's irreducible for performance. — expected Δ: 1
 
 ## Patterns Discovered
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
@@ -28,19 +28,19 @@
 - Using references instead of raw pointers in test slots when the slots borrow from local variables in tests. This eliminates unsafe dereferences and `unsafe impl Send`.
 - Replacing non-atomic `load`/`store` on `SideMetadataSpec` with `load_atomic`/`store_atomic` (with `Relaxed` or `SeqCst`) to remove `unsafe` blocks at call sites.
 - Replacing `UnsafeCell` with `Mutex` for global state that is accessed via shared references, eliminating unsafe mutable access.
-- **New Pattern**: Extending `MetadataSlot` with generic methods for `MetadataValue` allows centralizing unsafe operations on types larger than `u8` (like `u16`, `u32`, `usize`) and removing unsafe blocks at call sites in `header_metadata.rs` and `global.rs`.
-- **New Pattern**: Removing raw pointers from work packets and using `mmtk.get_plan_mut()` eliminates the need for `unsafe impl Send` and raw pointer casts when the work packet only needs to call trait methods on the plan.
-- **New Pattern**: Introduce `FreeListCell` abstraction to encapsulate raw memory operations on free list cells.
-- **New Pattern**: Refactor `GCTrigger` to use `OnceLock` instead of `MaybeUninit` to remove `unsafe` in `plan()` and avoid `&mut` cast in `MMTK::new`.
-- **New Pattern**: Adding a safe `get_plan_mut_safe` to `MMTK` taking `&mut self` allows removing `unsafe` blocks when exclusive access to `MMTK` is available (e.g., in `set_vm_space`).
-- **New Pattern**: Replacing unsafe non-atomic `load` on `MetadataSpec` with safe `load_atomic` with `Relaxed` ordering when logic allows (e.g. monotonic transitions).
-- **New Pattern**: Using safe wrappers in `Mutator` (like `allocator_impl_mut_for_semantic`) in plan-specific mutators to eliminate direct unsafe calls to `allocators.get_allocator_mut`.
-- **New Pattern**: Refactor `IntArrayFreeList` to use `Arc<RwLock<Vec<i32>>>` to eliminate `NonNull` and associated `unsafe` blocks, sharing the table safely between parent and children.
+- Extending `MetadataSlot` with generic methods for `MetadataValue` allows centralizing unsafe operations on types larger than `u8` (like `u16`, `u32`, `usize`) and removing unsafe blocks at call sites in `header_metadata.rs` and `global.rs`.
+- Removing raw pointers from work packets and using `mmtk.get_plan_mut()` eliminates the need for `unsafe impl Send` and raw pointer casts when the work packet only needs to call trait methods on the plan.
+- Introduce `FreeListCell` abstraction to encapsulate raw memory operations on free list cells.
+- Refactor `GCTrigger` to use `OnceLock` instead of `MaybeUninit` to remove `unsafe` in `plan()` and avoid `&mut` cast in `MMTK::new`.
+- Adding a safe `get_plan_mut_safe` to `MMTK` taking `&mut self` allows removing `unsafe` blocks when exclusive access to `MMTK` is available (e.g., in `set_vm_space`).
+- Replacing unsafe non-atomic `load` on `MetadataSpec` with safe `load_atomic` with `Relaxed` ordering when logic allows (e.g. monotonic transitions).
+- Using safe wrappers in `Mutator` (like `allocator_impl_mut_for_semantic`) in plan-specific mutators to eliminate direct unsafe calls to `allocators.get_allocator_mut`.
+- Refactor `IntArrayFreeList` to use `Arc<RwLock<Vec<i32>>>` to eliminate `NonNull` and associated `unsafe` blocks, sharing the table safely between parent and children.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/metadata/side_metadata/helpers.rs` — All unsafe removed by using `MetadataSlot`. [Phase 2 confirmed]
-- `src/util/metadata/header_metadata.rs` — Irreducible raw loads from header addresses. Also refactored test macro to use Vec. [Phase 2 confirmed]
-- `src/util/alloc/allocators.rs` — Irreducible `assume_init` for layout compatibility with VM bindings. [Phase 1 analysis]
+- `src/util/metadata/header_metadata.rs` — Irreducible raw loads from header addresses. Also refactored test macro to use safe wrappers. [Phase 2 confirmed]
+- `src/util/alloc/allocators.rs` — Irreducible `assume_init` for layout compatibility with VM bindings. [Phase 2 confirmed]
 - `src/policy/sft_map.rs` — `SFTRefStorage` uses transmute for atomic fat pointers. [Phase 2 confirmed]
 - `src/util/metadata/metadata_val_traits.rs` — Irreducible raw loads from addresses in trait default impls. [Phase 2 confirmed]
 - `src/vm/tests/mock_tests/mock_test_slots.rs` — All unsafe removed by refactoring to use references in tests. [Phase 2 confirmed]
@@ -67,3 +67,4 @@
 - `src/util/int_array_freelist.rs` — All unsafe removed by refactoring to use Arc<RwLock>. [Phase 2 confirmed]
 - `src/policy/immix/line.rs` — All unsafe removed by using atomic operations. [Phase 2 confirmed]
 - `src/scheduler/affinity.rs` — Irreducible FFI interaction for thread affinity. [Phase 2 confirmed]
+- `src/scheduler/worker.rs` — Remaining unsafe are `Send`/`Sync` impls. Function body unsafe removed. [Phase 2 confirmed]

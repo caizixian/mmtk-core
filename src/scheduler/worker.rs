@@ -251,7 +251,7 @@ impl<VM: VMBinding> GCWorker<VM> {
             // Workaround a problem where bpftrace script cannot see the work packet names,
             // by force loading from the packet name.
             // See the "Known issues" section in `tools/tracing/timeline/README.md`
-            std::hint::black_box(unsafe { *(typename.as_ptr()) });
+            std::hint::black_box(typename.as_bytes().first().copied().unwrap_or(0));
 
             probe!(mmtk, work, typename.as_ptr(), typename.len());
             work.do_work_with_stat(&mut self, mmtk);
