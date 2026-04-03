@@ -15,6 +15,7 @@
 - Antigravity verified again in the current step and confirmed that remaining unsafe blocks in `src/policy/sft_map.rs` and `src/mmtk.rs` are irreducible as documented.
 - Antigravity verified all remaining unsafe locations under strategy escalation and confirmed that they are irreducible or well-encapsulated. The project is in Phase 3.
 - Antigravity verified again under strategy escalation in the current step and confirmed that all remaining unsafe blocks are irreducible or well-encapsulated. The codebase remains in a steady state for Phase 3.
+- Antigravity added a missing `// SAFETY:` comment in `src/util/address.rs` for `from_raw_address_unchecked`.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Work packets hold raw pointers to plans or spaces to bypass borrow checker and lifetimes.
@@ -60,7 +61,7 @@
 - `src/util/memory.rs` — Wrappers around libc calls. Standard FFI wrappers. Verified safety comments. Eliminated unsafe in tests using `test_dzmmap`. Combined 3 unsafe blocks in `mmap_fixed` into 1. [Phase 3 confirmed]
 - `docs/dummyvm/src/api.rs` — Reduced unsafe by using `Option<&mut T>` and `Option<Box<T>>` in FFI signatures. Remaining are `CStr::from_ptr`. [Phase 3 confirmed]
 - `src/util/malloc/malloc_ms_util.rs` — Irreducible due to raw pointer manipulation in allocator. Verified safety comments. Combined near-contiguous unsafe blocks to reduce count. [Phase 3 confirmed]
-- `src/util/address.rs` — Core address type. Operations are inherently unsafe. Audited safety comments. [Phase 3 confirmed]
+- `src/util/address.rs` — Core address type. Operations are inherently unsafe. Audited safety comments. Added missing safety comment for `from_raw_address_unchecked`. [Phase 3 confirmed]
 - `src/mmtk.rs` — Uses `InitializeOnce` for `SFT_MAP` (irreducible for performance). `get_sft_map_mut` uses `get_ptr` and dereferences it unsafely under protection of `StwProof`. `StwProtected` uses `UnsafeCell` to avoid locking overhead. [Phase 3 confirmed]
 - `src/util/rust_util/mod.rs` — Implements `InitializeOnce`. Removed unsafe `get_mut` and added safe `get_ptr` to defer unsafety to call sites with proof tokens. Remaining unsafe are in initialization and `get_ref`. [Phase 3 confirmed]
 - `src/util/malloc/mod.rs` — Irreducible due to raw pointer manipulation in allocator. Audited safety comments. [Phase 3 confirmed]

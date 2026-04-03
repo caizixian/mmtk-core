@@ -606,6 +606,7 @@ impl ObjectReference {
             addr.is_aligned_to(Self::ALIGNMENT),
             "ObjectReference is required to be word aligned.  addr: {addr}"
         );
+        // SAFETY: The caller must guarantee that `addr` is not zero.
         ObjectReference(NonZeroUsize::new_unchecked(addr.0))
     }
 
