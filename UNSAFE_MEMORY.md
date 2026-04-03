@@ -1,14 +1,14 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 531 | Current: 519 | Δ: -12
+- Starting count: 531 | Current: 512 | Δ: -19
 - Phase: 1
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - `Address::from_usize` is marked unsafe by design to warn about invalid addresses. Replacing it with `ZERO.add` is considered an anti-pattern as it is semantically identical.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: Analyze `src/vm/tests/mock_tests/mock_test_slots.rs` for reducible unsafe usage in tests.
+1. 🔴 HIGH: Analyze `src/util/metadata/side_metadata/global.rs` for using `MetadataSlot` to reduce unsafe.
 
 ## Patterns Discovered
 - `MaybeUninit` arrays of size 1 can be replaced with `Option` and `unwrap()` to eliminate unsafe access.
