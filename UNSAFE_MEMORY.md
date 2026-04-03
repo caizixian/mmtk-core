@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 710 | Δ: -12
-- Completed subsystems: util/alloc (partial), policy/sft_map (Sync impls removed, get_unchecked replaced in cold paths)
+- Starting count: 722 | Current: 708 | Δ: -14
+- Completed subsystems: util/alloc (partial), policy/sft_map (partial), policy/marksweepspace (block.rs cleanup)
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - "Work packets are single-use — Option::take() is safe for extracting owned data"
@@ -25,8 +25,8 @@
 - `unsafe impl Sync` removal for types that only contain thread-safe fields (auto-Sync).
 
 ## Refactoring Ideas
-- `src/policy/sft_map.rs`: Replaced `get_unchecked` with `[]` in `update`, `clear`, and `get_unchecked` methods.
-- `src/policy/marksweepspace/native_ms/block.rs`: Analyze 24 unsafe blocks for potential safety improvements.
+- `src/policy/marksweepspace/native_ms/block.rs`: Analyzed. Remaining 22 are mostly side metadata access (RawHeapAccess).
+- `src/util/metadata/side_metadata/helpers.rs`: Analyze 34 unsafe blocks for potential safety improvements.
 
 ## Files NOT to Revisit
 - `src/util/memory.rs` — FFI calls to libc (mmap, munmap, etc.).
