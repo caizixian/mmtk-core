@@ -1,15 +1,15 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: Holistic review of remaining unsafe locations in `sft_map.rs`, `slot.rs`, `raw_memory_freelist.rs`, and `block.rs`.
+- File: Holistic review of remaining unsafe locations in `malloc_ms_util.rs`, `address.rs`, `side_metadata/global.rs`, `slot.rs`, and `allocator.rs`.
 - Strategy: Verify if any remaining unsafe can be reduced or abstracted.
 
 ## Findings
-- Reviewed `src/policy/sft_map.rs`: Lifetime extension in `get_sft_wrapper` is necessary to return `&'static` references to spaces, which are known to live forever in this context. Removing this would require pervasive changes or moving unsafe to callers.
-- Reviewed `src/vm/slot.rs`: `SimpleSlot::as_atomic` uses raw pointer dereference to provide atomic access to the slot. This is encapsulated within the safe `load` and `store` methods of the `Slot` trait. Making the constructor unsafe would increase unsafe count at call sites. `MemorySlice::copy` uses `std::ptr::copy` for raw memory copy, which is irreducible.
-- Reviewed `src/util/raw_memory_freelist.rs`: The unsafe block in `grow_list_by_blocks` uses `slice::from_raw_parts_mut` to create a slice view of raw memory. This is necessary to access the free list entries stored in the mapped memory and is well-encapsulated.
-- Reviewed `src/policy/marksweepspace/native_ms/block.rs`: `BlockCell::store_link` uses `Address::store` to write the next link in the free list. This is a raw memory write and is inherently unsafe, but it is encapsulated within the `BlockCell` abstraction.
-- Confirmed that all files with unsafe listed in the harness are in "Files NOT to Revisit" in `UNSAFE_MEMORY.md` with valid justifications.
+- Reviewed `src/util/malloc/malloc_ms_util.rs`: The unsafe blocks are for FFI calls (`posix_memalign`, `malloc_usable_size`) or raw pointer dereferences (`read_unaligned`, `write_unaligned`) for allocation headers. These are irreducible without a custom safe allocator abstraction.
+- Reviewed `src/util/address.rs`: All listed unsafe locations are `unsafe fn` signatures for core address primitives. Removing `unsafe` from these is dangerous as they allow arbitrary memory access.
+- Reviewed `src/util/metadata/side_metadata/global.rs`: Line 549 is a raw memory copy (`std::ptr::copy`) inside a closure. This is irreducible as creating slices would also require unsafe. `load` and `store` are `unsafe fn` signatures.
+- Reviewed `src/vm/slot.rs`: `SimpleSlot::as_atomic` and `MemorySlice::copy` are irreducible as confirmed by previous steps.
+- Reviewed `src/util/alloc/allocator.rs`: `fill_alignment_gap` uses `std::ptr::write_bytes` to fill raw memory, which is irreducible.
 
 ## Attempted Changes
 - None. Confirmed that remaining unsafe is irreducible or well-encapsulated.
