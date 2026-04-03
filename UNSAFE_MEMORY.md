@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 493 | Current: 414 | Δ: -79
+- Starting count: 493 | Current: 413 | Δ: -80
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -37,6 +37,7 @@
 - **Removing unnecessary unsafe from functions**: Functions marked `unsafe` that contain no unsafe operations and rely on safe abstractions can be made safe (applied to `FreeListPageResource`).
 - **Passing &mut BlockList to attempt_release**: Eliminates unsafe raw pointer dereference by passing the list reference from the caller instead of loading it from metadata.
 - **Capability Token for Iterators**: Requiring `StwProof` in `ObjectIterator::new` when `ATOMIC_LOAD_VO_BIT` is false enforces safety at compile time and removes unsafe blocks from `next()`.
+- **Replacing get_unchecked with get_checked**: In `SFTProcessEdges::trace_object`, replaced `get_unchecked` with `get_checked` on `SFT_MAP` to remove an unsafe block, as the function is marked as unused/deprecated.
 
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
