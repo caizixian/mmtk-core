@@ -6,9 +6,8 @@
 use super::MapState;
 use crate::util::heap::layout::mmapper::csm::{ChunkRange, MapStateStorage};
 use crate::util::heap::layout::vm_layout::*;
-use crate::util::rust_util::atomic_box::OnceOptionBox;
+use std::sync::OnceLock;
 use crate::util::rust_util::rev_group::RevisitableGroupByForIterator;
-use crate::util::rust_util::zeroed_alloc::new_zeroed_vec;
 use crate::util::Address;
 use atomic::{Atomic, Ordering};
 use std::fmt;
@@ -60,7 +59,7 @@ type Slab = [Atomic<MapState>; MMAP_CHUNKS_PER_SLAB];
 /// user intends to write into one of its `MapState`.
 pub struct TwoLevelStateStorage {
     /// Slabs
-    slabs: Vec<OnceOptionBox<Slab>>,
+    slabs: Vec<OnceLock<Box<Slab>>>,
 }
 
 
@@ -161,7 +160,7 @@ impl MapStateStorage for TwoLevelStateStorage {
 impl TwoLevelStateStorage {
     pub fn new() -> Self {
         Self {
-            slabs: new_zeroed_vec(MAX_SLABS),
+            slabs: (0..MAX_SLABS).map(|_| OnceLock::new()).collect(),
         }
     }
 
@@ -172,8 +171,7 @@ impl TwoLevelStateStorage {
     fn slab_table(&self, addr: Address) -> Option<&Slab> {
         let index: usize = Self::slab_index(addr);
         let slot = self.slabs.get(index)?;
-        // Note: We don't need acquire here.  See `get_or_allocate_slab_table`.
-        slot.get(Ordering::Relaxed)
+        slot.get().map(|b| b.as_ref())
     }
 
     fn get_or_allocate_slab_table(&self, addr: Address) -> &Slab {
@@ -181,10 +179,7 @@ impl TwoLevelStateStorage {
         let Some(slot) = self.slabs.get(index) else {
             panic!("Cannot allocate slab for address: {addr}");
         };
-        // Note: We set both order_load and order_store to `Relaxed` because we never populate the
-        // content of the slab before making the `OnceOptionBox` point to the new slab. For this
-        // reason, the release-acquire relation is not needed here.
-        slot.get_or_init(Ordering::Relaxed, Ordering::Relaxed, Self::new_slab)
+        slot.get_or_init(|| Box::new(Self::new_slab())).as_ref()
     }
 
     fn slab_index(addr: Address) -> usize {

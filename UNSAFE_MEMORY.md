@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 211 | Δ: -140
+- Starting count: 351 | Current: 203 | Δ: -148
 - Phase: 3
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -11,7 +11,7 @@ Architectural insights that affect ALL future safety decisions:
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/rust_util/atomic_box.rs:38-72` — Investigate if `OnceOptionBox` can be replaced by `OnceLock` or a safer alternative if space overhead is acceptable — expected Δ: -5
+1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs` — Audit remaining 74 unsafe blocks to see if any can be encapsulated or if they are truly irreducible — expected Δ: 0-5
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
@@ -40,7 +40,7 @@ Reusable refactoring patterns (recipe format):
 - `src/util/malloc/malloc_ms_util.rs` — Irreducible FFI and raw pointer manipulation. Added safe `free` wrapper. Documented with SAFETY comments in Phase 3. [Phase 3 confirmed]
 - `src/util/address.rs` — Primitives for address operations. [Phase 2 confirmed]
 - `src/util/metadata/side_metadata/side_metadata_tests.rs` — Tests use unsafe to check address iteration. [Phase 2 confirmed]
-- `src/util/rust_util/atomic_box.rs` — Custom lock-free lazily initialized box. [Phase 2 confirmed]
+- `src/util/rust_util/atomic_box.rs` — Removed. Replaced by `OnceLock` in `two_level_storage.rs`. [Phase 3 confirmed]
 - `src/util/rust_util/mod.rs` — `InitializeOnce` is irreducible for performance. [Phase 2 confirmed]
 - `src/policy/marksweepspace/native_ms/block.rs` — Raw memory accesses for free list. [Phase 2 confirmed]
 - `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are irreducible function signatures and raw memory copy. [Phase 2 confirmed]
