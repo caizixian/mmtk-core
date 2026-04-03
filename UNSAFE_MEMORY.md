@@ -1,14 +1,15 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 547 | Current: 546 | Δ: -1
+- Starting count: 547 | Current: 541 | Δ: -6
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - `Address::from_usize` is marked unsafe by design to warn about invalid addresses. Replacing it with `ZERO.add` is considered an anti-pattern as it is semantically identical.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: Analyze remaining unsafe in `src/plan/mutator_context.rs` and see if more call sites can use `non_moving_allocator_mut` or if other safe wrappers can be created.
+1. 🔴 HIGH: Analyze `src/util/address.rs` to see if some unsafe functions can be made safe or if usages can be replaced.
+2. 🟡 MED: Analyze `src/policy/sft_map.rs` to see if unsafe trait impls or methods can be reduced.
 
 ## Patterns Discovered
 - `MaybeUninit` arrays of size 1 can be replaced with `Option` and `unwrap()` to eliminate unsafe access.
@@ -27,6 +28,7 @@
 - **Replacing raw pointers with Address**: In types like test slots, replacing `*mut Atomic<T>` with `Address` eliminates the need for `unsafe impl Send` while preserving functionality via `to_mut_ptr()`.
 - **Refactoring to use slot_for for Metadata**: Using `slot_for(...).load()` and `slot_for(...).store(...)` on `SideMetadataSpec` can eliminate unsafe blocks for direct metadata access in production code.
 - **Safe Wrappers for Allocator Access**: Added `non_moving_allocator_mut` to `Mutator` to reduce unsafe blocks at call sites in `mutator_context.rs`.
+- **Safe Wrappers for Allocator Access by Semantic**: Added `get_allocator_for_semantic_mut` to `Mutator` to eliminate unsafe blocks in allocation methods.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.
