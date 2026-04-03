@@ -91,73 +91,58 @@ pub(crate) fn create_sft_map() -> Box<dyn SFTMap + Sync> {
     }
 }
 
-/// The raw pointer for SFT. We expect a space to provide this to SFT map.
-pub(crate) type SFTRawPointer = *const (dyn SFT + Sync + 'static);
+pub(crate) struct SFTWrapper(pub *const (dyn SFT + Sync));
 
-/// We store raw pointer as a double word using atomics.
-/// We use portable_atomic. It provides non locking atomic operations where possible,
-/// and use a locking operation as the fallback.
-/// Rust only provides AtomicU128 for some platforms, and do not provide the type
-/// on x86_64-linux, as some earlier x86_64 CPUs do not have 128 bits atomic instructions.
-/// The crate portable_atomic works around the problem with a runtime detection to
-/// see if 128 bits atomic instructions are available.
-#[cfg(target_pointer_width = "64")]
-type AtomicDoubleWord = portable_atomic::AtomicU128;
-#[cfg(target_pointer_width = "64")]
-type DoubleWord = u128;
-#[cfg(target_pointer_width = "32")]
-type AtomicDoubleWord = portable_atomic::AtomicU64;
-#[cfg(target_pointer_width = "32")]
-type DoubleWord = u64;
+unsafe impl Send for SFTWrapper {}
+unsafe impl Sync for SFTWrapper {}
 
-/// The type we store SFT raw pointer as. It basically just double word sized atomic integer.
+use std::sync::OnceLock;
+use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::atomic::AtomicPtr;
+
+static SFT_WRAPPERS: OnceLock<Mutex<HashMap<usize, &'static SFTWrapper>>> = OnceLock::new();
+
+fn get_sft_wrapper(sft: &(dyn SFT + Sync + 'static)) -> &'static SFTWrapper {
+    let addr = sft as *const _ as *const () as usize;
+    let mutex = SFT_WRAPPERS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = mutex.lock().unwrap();
+    if let Some(wrapper) = map.get(&addr) {
+        return wrapper;
+    }
+    let wrapper = Box::leak(Box::new(SFTWrapper(sft as *const _)));
+    map.insert(addr, wrapper);
+    wrapper
+}
+
+/// The type we store SFT raw pointer as. It basically just thin pointer sized atomic pointer.
 /// This type provides an abstraction so we can access SFT easily.
 #[repr(transparent)]
-pub(crate) struct SFTRefStorage(AtomicDoubleWord);
+pub(crate) struct SFTRefStorage(AtomicPtr<SFTWrapper>);
 
 impl SFTRefStorage {
     /// A check at boot time to ensure `SFTRefStorage` is correct.
     pub fn pre_use_check() {
-        // If we do not have lock free operations, warn the users.
-        if !AtomicDoubleWord::is_lock_free() {
-            warn!(
-                "SFT access word is not lock free on this platform. This will slow down SFT map."
-            );
-        }
-        // Our storage type needs to be the same width as the dyn pointer type.
-        assert_eq!(
-            std::mem::size_of::<AtomicDoubleWord>(),
-            std::mem::size_of::<SFTRawPointer>()
-        );
+        // AtomicPtr is always lock free.
     }
 
     pub fn new(sft: &(dyn SFT + Sync + 'static)) -> Self {
-        // SAFETY: The size of `SFTRawPointer` and `AtomicDoubleWord` are checked to be equal in `pre_use_check`.
-        let val: DoubleWord = unsafe { std::mem::transmute(sft) };
-        Self(AtomicDoubleWord::new(val))
+        let wrapper = get_sft_wrapper(sft);
+        Self(AtomicPtr::new(wrapper as *const _ as *mut _))
     }
 
     // Load with the acquire ordering.
     pub fn load(&self) -> &dyn SFT {
-        let val = self.0.load(Ordering::Acquire);
-        // Provenance-related APIs were stabilized in Rust 1.84.
-        // Rust 1.91 introduced the warn-by-default lint `integer_to_ptr_transmutes`.
-        // However, pointer provenance API only works for ptr-sized intergers, and
-        // here we are transmuting from a double-word sized integer to a fat pointer.
-        // We still need to use transmute here.
-        // SAFETY: The value was stored by `store` which transmutes a valid `&dyn SFT`.
-        #[allow(unknown_lints)]
-        #[allow(integer_to_ptr_transmutes)]
-        unsafe {
-            std::mem::transmute(val)
-        }
+        let ptr = self.0.load(Ordering::Acquire);
+        // SAFETY: The pointer was stored by `store` or `new` which obtain a valid `&'static SFTWrapper` from `get_sft_wrapper`.
+        // The wrapper is leaked and lives forever. The contained raw pointer points to a space that lives forever.
+        unsafe { &*(*ptr).0 }
     }
 
     // Store a raw SFT pointer with the release ordering.
     pub fn store(&self, sft: &(dyn SFT + Sync + 'static)) {
-        // SAFETY: The size of `SFTRawPointer` and `AtomicDoubleWord` are checked to be equal in `pre_use_check`.
-        let val: DoubleWord = unsafe { std::mem::transmute(sft) };
-        self.0.store(val, Ordering::Release)
+        let wrapper = get_sft_wrapper(sft);
+        self.0.store(wrapper as *const _ as *mut _, Ordering::Release)
     }
 }
 
