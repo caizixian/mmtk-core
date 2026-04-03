@@ -45,6 +45,7 @@ impl Region for Block {
     }
 
     fn start(&self) -> Address {
+        // SAFETY: The block was created from a valid aligned address, so `self.0` is a valid address.
         unsafe { Address::from_usize(self.0.get()) }
     }
 }
@@ -101,6 +102,7 @@ impl Block {
         crate::util::metadata::side_metadata::spec_defs::MS_BLOCK_TLS;
 
     pub fn load_free_list(&self) -> Address {
+        // SAFETY: The metadata table is expected to contain valid addresses or zero.
         unsafe { Address::from_usize(Block::FREE_LIST_TABLE.slot_for::<usize>(self.start()).load()) }
     }
 
@@ -110,6 +112,7 @@ impl Block {
 
     #[cfg(feature = "malloc_native_mimalloc")]
     pub fn load_local_free_list(&self) -> Address {
+        // SAFETY: The metadata table is expected to contain valid addresses or zero.
         unsafe { Address::from_usize(Block::LOCAL_FREE_LIST_TABLE.slot_for::<usize>(self.start()).load()) }
     }
 
@@ -120,6 +123,7 @@ impl Block {
 
     #[cfg(feature = "malloc_native_mimalloc")]
     pub fn load_thread_free_list(&self) -> Address {
+        // SAFETY: The metadata table is expected to contain valid addresses or zero.
         unsafe {
             Address::from_usize(
                 Block::THREAD_FREE_LIST_TABLE.load_atomic::<usize>(self.start(), Ordering::SeqCst),
@@ -198,6 +202,7 @@ impl Block {
 
     pub fn load_tls(&self) -> VMThread {
         let tls = Block::TLS_TABLE.load_atomic::<usize>(self.start(), Ordering::SeqCst);
+        // SAFETY: The metadata table is expected to contain valid addresses or zero for TLS.
         VMThread(OpaquePointer::from_address(unsafe {
             Address::from_usize(tls)
         }))
@@ -205,6 +210,8 @@ impl Block {
 
     fn write_free_list_link(&self, cell: Address, next: Address) {
         debug_assert!(cell >= self.start() && cell < self.start() + Block::BYTES);
+        // SAFETY: `cell` is within the block's address range and is a valid location for a free list link.
+        // This is called during sweep or when the block is owned exclusively.
         unsafe { cell.store::<Address>(next); }
     }
 
@@ -284,6 +291,9 @@ impl Block {
             // The invariants we checked earlier ensures that we can use cell and object reference interchangably
             // We may not really have an object in this cell, but if we do, this object reference is correct.
             // About unsafe: We know `cell` is non-zero here.
+            // SAFETY: In `simple_sweep`, we assume cell address === object reference.
+            // We only use this to check the mark bit, which reads header metadata.
+            // The header metadata is mapped for all valid objects.
             let potential_object = unsafe { ObjectReference::from_raw_address_unchecked(cell) };
 
             if !VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
@@ -322,8 +332,9 @@ impl Block {
 
         while cell + cell_size <= self.end() {
             // possible object ref
+            // SAFETY: We know cursor plus an offset cannot be 0.
+            // We only use this to check the mark bit, which reads header metadata.
             let potential_object_ref = unsafe {
-                // We know cursor plus an offset cannot be 0.
                 ObjectReference::from_raw_address_unchecked(
                     cursor + VM::VMObjectModel::OBJECT_REF_OFFSET_LOWER_BOUND,
                 )

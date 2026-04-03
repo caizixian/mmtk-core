@@ -35,6 +35,8 @@ impl<T> OnceOptionBox<T> {
     /// Get a reference to the content of this box, or `None` if not yet initialized.
     pub fn get(&self, order: Ordering) -> Option<&T> {
         let ptr = self.inner.load(order);
+        // SAFETY: If `ptr` is not null, it points to a valid `T` allocated by `Box::new`
+        // and owned by this `OnceOptionBox`.
         unsafe { ptr.as_ref() }
     }
 
@@ -65,10 +67,13 @@ impl<T> OnceOptionBox<T> {
         match cas_result {
             Ok(old_inner) => {
                 debug_assert_eq!(old_inner, std::ptr::null_mut());
+                // SAFETY: `new_inner` was created from a `Box` and is valid.
                 unsafe { new_inner.as_ref().unwrap() }
             }
             Err(old_inner) => {
+                // SAFETY: We failed to store `new_inner`, so we take ownership back to drop it.
                 drop(unsafe { Box::from_raw(new_inner) });
+                // SAFETY: `old_inner` was successfully stored by another thread and is valid.
                 unsafe { old_inner.as_ref().unwrap() }
             }
         }
@@ -79,11 +84,14 @@ impl<T> Drop for OnceOptionBox<T> {
     fn drop(&mut self) {
         let ptr = *self.inner.get_mut();
         if !ptr.is_null() {
+            // SAFETY: The pointer was allocated by `Box::new` and we are dropping it.
             drop(unsafe { Box::from_raw(ptr) });
         }
     }
 }
 
+// SAFETY: `OnceOptionBox` contains only an `AtomicPtr`. A zeroed `AtomicPtr` represents
+// a null pointer, which is the valid representation of an empty `OnceOptionBox`.
 unsafe impl<T> Zeroable for OnceOptionBox<T> {}
 
 #[cfg(test)]

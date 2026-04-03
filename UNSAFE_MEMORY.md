@@ -8,7 +8,7 @@
 - `Address::from_usize` is marked unsafe by design to warn about invalid addresses. Replacing it with `ZERO.add` is considered an anti-pattern as it is semantically identical.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: Start Phase 3: Document remaining unsafe blocks in `src/util/rust_util/mod.rs` and `src/policy/marksweepspace/native_ms/block.rs` with `// SAFETY:` comments or justifications.
+1. 🔴 HIGH: Identify more files with irreducible unsafe blocks and document them with `// SAFETY:` comments (Phase 3).
 2. 🟡 MED: Identify other `MaybeUninit` usages in the codebase and apply safe abstractions if possible without performance regression.
 
 ## Patterns Discovered
@@ -60,3 +60,4 @@
 - `src/util/metadata/safe_access.rs` — Abstraction boundary for `MetadataSlot`.
 - `src/util/rust_util/mod.rs` — `InitializeOnce` provides zero-overhead reads for `SFT_MAP` in release builds, requiring unsafe; `libc::gettid()` is FFI.
 - `src/util/malloc/malloc_ms_util.rs` — FFI calls to C allocator and raw pointer operations for alignment.
+- `src/util/rust_util/atomic_box.rs` — `OnceOptionBox` is a safe lock-free abstraction; unsafe blocks are for atomic pointer manipulation and are documented.

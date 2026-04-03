@@ -71,6 +71,8 @@ impl<T> InitializeOnce<T> {
     /// initialization is done (`Once` returns).
     pub fn initialize_once(&self, init_fn: &'static dyn Fn() -> T) {
         self.once.call_once(|| {
+            // SAFETY: `call_once` guarantees exclusive access. The value is uninitialized
+            // and we are initializing it here.
             unsafe { &mut *self.v.get() }.write(init_fn());
         });
         debug_assert!(self.once.is_completed());
@@ -80,6 +82,8 @@ impl<T> InitializeOnce<T> {
     pub fn get_ref(&self) -> &T {
         // We only assert in debug builds.
         debug_assert!(self.once.is_completed());
+        // SAFETY: The value has been initialized as checked by `is_completed()` in debug builds,
+        // or guaranteed by the caller in release builds.
         unsafe { (*self.v.get()).assume_init_ref() }
     }
 
@@ -93,6 +97,8 @@ impl<T> InitializeOnce<T> {
     pub unsafe fn get_mut(&self) -> &mut T {
         // We only assert in debug builds.
         debug_assert!(self.once.is_completed());
+        // SAFETY: The caller must ensure exclusive access and no races.
+        // The value has been initialized.
         unsafe { (*self.v.get()).assume_init_mut() }
     }
 }
@@ -104,6 +110,9 @@ impl<T> std::ops::Deref for InitializeOnce<T> {
     }
 }
 
+// SAFETY: `InitializeOnce` is safe to share between threads because initialization
+// is guarded by `Once` and subsequent accesses are read-only (except for `get_mut`
+// which is unsafe and requires the caller to ensure safety).
 unsafe impl<T> Sync for InitializeOnce<T> {}
 
 /// Create a formatted string that makes the best effort idenfying the current process and thread.
@@ -112,6 +121,7 @@ pub fn debug_process_thread_id() -> String {
     #[cfg(target_os = "linux")]
     {
         // `gettid()` is Linux-specific.
+        // SAFETY: `gettid` is a pure system call that does not affect memory safety.
         let tid = unsafe { libc::gettid() };
         format!("PID: {}, TID: {}", pid, tid)
     }
