@@ -152,12 +152,12 @@ pub trait ObjectModel<VM: VMBinding> {
     ///
     /// # Safety
     /// This is a non-atomic load, thus not thread-safe.
-    unsafe fn load_metadata<T: MetadataValue>(
+    fn load_metadata<T: MetadataValue>(
         metadata_spec: &HeaderMetadataSpec,
         object: ObjectReference,
         mask: Option<T>,
     ) -> T {
-        metadata_spec.load::<T>(object.to_header::<VM>(), mask)
+        metadata_spec.load_atomic::<T>(object.to_header::<VM>(), mask, Ordering::Relaxed)
     }
 
     /// A function to atomically load the specified per-object metadata's content.
@@ -191,13 +191,13 @@ pub trait ObjectModel<VM: VMBinding> {
     ///
     /// # Safety
     /// This is a non-atomic store, thus not thread-safe.
-    unsafe fn store_metadata<T: MetadataValue>(
+    fn store_metadata<T: MetadataValue>(
         metadata_spec: &HeaderMetadataSpec,
         object: ObjectReference,
         val: T,
         mask: Option<T>,
     ) {
-        metadata_spec.store::<T>(object.to_header::<VM>(), val, mask)
+        metadata_spec.store_atomic::<T>(object.to_header::<VM>(), val, mask, Ordering::Relaxed)
     }
 
     /// A function to atomically store a value to the specified per-object metadata.

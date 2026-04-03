@@ -127,8 +127,8 @@ impl HeaderMetadataSpec {
     ///
     /// # Safety
     /// This is a non-atomic load, thus not thread-safe.
-    pub unsafe fn load<T: MetadataValue>(&self, header: Address, optional_mask: Option<T>) -> T {
-        self.load_inner::<T>(header, optional_mask, None)
+    pub fn load<T: MetadataValue>(&self, header: Address, optional_mask: Option<T>) -> T {
+        self.load_inner::<T>(header, optional_mask, Some(Ordering::Relaxed))
     }
 
     /// This function provides a default implementation for the `load_metadata_atomic` method from the `ObjectModel` trait.
@@ -183,13 +183,13 @@ impl HeaderMetadataSpec {
     ///
     /// # Safety
     /// This is a non-atomic store, thus not thread-safe.
-    pub unsafe fn store<T: MetadataValue>(
+    pub fn store<T: MetadataValue>(
         &self,
         header: Address,
         val: T,
         optional_mask: Option<T>,
     ) {
-        self.store_inner::<T>(header, val, optional_mask, None)
+        self.store_inner::<T>(header, val, optional_mask, Some(Ordering::Relaxed))
     }
 
     /// This function provides a default implementation for the `store_metadata_atomic` method from the `ObjectModel` trait.
@@ -443,11 +443,11 @@ mod tests {
     use crate::util::address::Address;
 
     fn safe_load<T: MetadataValue>(spec: &HeaderMetadataSpec, header: Address, mask: Option<T>) -> T {
-        unsafe { spec.load(header, mask) }
+        spec.load(header, mask)
     }
 
     fn safe_store<T: MetadataValue>(spec: &HeaderMetadataSpec, header: Address, val: T, mask: Option<T>) {
-        unsafe { spec.store(header, val, mask) }
+        spec.store(header, val, mask)
     }
 
     #[test]
