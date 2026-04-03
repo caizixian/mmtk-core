@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 666 | Δ: -56
+- Starting count: 722 | Current: 664 | Δ: -58
 - Phase: 1
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -18,6 +18,7 @@
 - `get_unchecked` on `Vec` can be replaced with standard indexing `[]` if we are okay with bounds checks (or if bounds are already checked).
 - Using safe slices `&mut [T]` instead of raw pointers `*mut T` in tests allows using safe indexing and removes unsafe dereferences.
 - **Refactoring unions to enums** can eliminate unsafe field accesses if layout compatibility is not strictly required or if the overhead is acceptable.
+- `NonZeroUsize::new_unchecked` can be replaced with `NonZeroUsize::new().expect()` if the value is known to be non-zero.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.
