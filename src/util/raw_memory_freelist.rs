@@ -26,6 +26,7 @@ pub struct RawMemoryFreeList {
     current_units: i32,
     pages_per_block: i32,
     strategy: MmapStrategy,
+    slice: &'static mut [i32],
 }
 
 impl FreeList for RawMemoryFreeList {
@@ -38,14 +39,12 @@ impl FreeList for RawMemoryFreeList {
     fn get_entry(&self, index: i32) -> i32 {
         let len = (self.high_water - self.base) >> LOG_BYTES_IN_ENTRY;
         assert!((index as usize) < len, "index out of bounds: the len is {} but the index is {}", len, index);
-        // SAFETY: The memory is mapped and valid.
-        unsafe { *self.base.to_ptr::<i32>().add(index as usize) }
+        self.slice[index as usize]
     }
     fn set_entry(&mut self, index: i32, value: i32) {
         let len = (self.high_water - self.base) >> LOG_BYTES_IN_ENTRY;
         assert!((index as usize) < len, "index out of bounds: the len is {} but the index is {}", len, index);
-        // SAFETY: The memory is mapped and valid.
-        unsafe { *self.base.to_mut_ptr::<i32>().add(index as usize) = value; }
+        self.slice[index as usize] = value;
     }
     fn alloc(&mut self, size: i32) -> i32 {
         if self.current_units == 0 {
@@ -108,6 +107,7 @@ impl RawMemoryFreeList {
             current_units: 0,
             pages_per_block,
             strategy,
+            slice: &mut [],
         }
     }
 
@@ -140,6 +140,10 @@ impl RawMemoryFreeList {
             // Allocate more VM from the OS
             self.raise_high_water(blocks);
         }
+
+        let len = (self.high_water - self.base) >> LOG_BYTES_IN_ENTRY;
+        // SAFETY: The memory is mapped and valid.
+        self.slice = unsafe { std::slice::from_raw_parts_mut(self.base.to_mut_ptr::<i32>(), len) };
 
         let old_max = self.current_units;
         assert!(

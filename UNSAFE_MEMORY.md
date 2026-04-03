@@ -1,8 +1,9 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 55 | Δ: -296
+- Starting count: 351 | Current: 54 | Δ: -297
 - Phase: 3 (Irreducible Documentation)
+- Antigravity reduced the unsafe count by 1 in `src/util/raw_memory_freelist.rs` by storing a slice in the struct and using it for safe access in `get_entry` and `set_entry`, removing 2 unsafe blocks and adding 1.
 - Antigravity replaced `get_slice` and `get_slice_mut` in `src/util/raw_memory_freelist.rs` with direct pointer access and bounds checks, maintaining unsafe count at 55 (Δ: 0) but improving safety by avoiding large slice creation.
 - Antigravity narrowed the unsafe block in `src/util/malloc/malloc_ms_util.rs` by using safe `calloc` wrapper and pulling safe operations out.
 - Antigravity reduced the unsafe count by 2 in `src/util/malloc/malloc_ms_util.rs` by using safe wrappers `crate::util::malloc::calloc` and `free` instead of direct FFI calls.
@@ -108,7 +109,7 @@
 - `src/util/rust_util/mod.rs` — Implements `InitializeOnce`. Removed unsafe `get_mut` and added safe `get_ptr` to defer unsafety to call sites with proof tokens. Remaining unsafe are in initialization and `get_ref`. [Phase 3 confirmed]
 - `src/util/malloc/mod.rs` — Irreducible due to raw pointer manipulation in allocator. Audited safety comments. [Phase 3 confirmed]
 - `src/policy/sft_map.rs` — Lifetime extension in `get_sft_wrapper` is necessary to return `&'static` from a short-lived reference, justified by spaces living forever. [Phase 3 confirmed]
-- `src/util/raw_memory_freelist.rs` — Remaining unsafe are from_raw_parts to create slice views of raw memory. Attempted to refactor to use pointer arithmetic but found it would not reduce the count. [Phase 3 confirmed]
+- `src/util/raw_memory_freelist.rs` — Remaining unsafe is a single `from_raw_parts_mut` call in `grow_list_by_blocks` to create a slice view of raw memory. [Phase 3 confirmed]
 - `src/util/metadata/global.rs` — Unsafe fns for load/store are necessary as they are non-atomic. [Phase 3 confirmed]
 - `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are in `MetadataSlot` helpers, memory copy, and tests calling unsafe functions. [Phase 3 confirmed]
 - `src/util/heap/pageresource.rs` — Completely safe after removing unnecessary unsafe blocks. [Phase 3 confirmed]

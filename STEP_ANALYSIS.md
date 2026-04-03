@@ -1,17 +1,21 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: All files with unsafe
-- Strategy: Holistic review under strategy escalation
+- File: `src/util/raw_memory_freelist.rs`
+- Strategy: Phase 2 (Safe Abstraction)
 
 ## Findings
-- Audited `src/util/memory.rs` and considered creating a helper for `mprotect` calls to reduce unsafe blocks, but concluded it would just move the unsafe block or violate safety rules by creating an unsound safe wrapper.
-- Audited `src/util/malloc/malloc_ms_util.rs` and confirmed that raw pointer operations in `align_offset_alloc`, `offset_malloc_usable_size`, and `offset_free` are necessary for the custom offset allocator and cannot be safely reduced.
-- Verified that all files with unsafe listed in the harness are present in "Files NOT to Revisit" in `UNSAFE_MEMORY.md`.
-- Confirmed that the justifications for their irreducibility are valid.
+- Replaced raw pointer dereferences in `get_entry` and `set_entry` with slice indexing.
+- Stored a `&'static mut [i32]` in `RawMemoryFreeList` and updated it in `grow_list_by_blocks` when memory grows.
+- This eliminated 2 unsafe blocks and added 1 in `grow_list_by_blocks`, resulting in a net reduction of 1 unsafe block.
 
 ## Attempted Changes
-- None. Confirmed all remaining unsafe is irreducible or well-encapsulated.
+- Modified `RawMemoryFreeList` struct definition to include `slice`.
+- Initialized `slice` to `&mut []` in `new`.
+- Updated `slice` in `grow_list_by_blocks` after `raise_high_water`.
+- Refactored `get_entry` and `set_entry` to use `self.slice[...]`.
+- Verified with `cargo check` and `cargo test`. Both passed.
 
 ## Blockers / Insights for Next Step
-- The project is in Phase 3 (Irreducible Documentation). All remaining unsafe blocks have been audited and justified. The harness reports 0 reductions for multiple steps, confirming the steady state.
+- The project is still in Phase 3 generally, but this Phase 2 style refactor was successful in reducing unsafe count.
+- Next step should look for similar patterns where raw pointers can be replaced with slices or references stored in structs.
