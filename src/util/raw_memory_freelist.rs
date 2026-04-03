@@ -65,10 +65,15 @@ impl FreeList for RawMemoryFreeList {
 impl RawMemoryFreeList {
     fn get_slice(&self) -> &[i32] {
         let len = (self.high_water - self.base) >> LOG_BYTES_IN_ENTRY;
+        // SAFETY: The memory from `base` to `high_water` is mapped by this struct and is valid for reading.
+        // The length is correctly calculated based on the mapped region.
         unsafe { std::slice::from_raw_parts(self.base.to_ptr::<i32>(), len) }
     }
     fn get_slice_mut(&mut self) -> &mut [i32] {
         let len = (self.high_water - self.base) >> LOG_BYTES_IN_ENTRY;
+        // SAFETY: The memory from `base` to `high_water` is mapped by this struct and is valid for reading and writing.
+        // The length is correctly calculated based on the mapped region.
+        // `&mut self` ensures exclusive access.
         unsafe { std::slice::from_raw_parts_mut(self.base.to_mut_ptr::<i32>(), len) }
     }
     fn units_per_block(&self) -> i32 {

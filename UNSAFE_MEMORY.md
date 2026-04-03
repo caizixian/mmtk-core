@@ -11,7 +11,7 @@ Architectural insights that affect ALL future safety decisions:
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/raw_memory_freelist.rs:74` — Add `// SAFETY:` comments for `from_raw_parts` in `get_slice` and `get_slice_mut` — expected Δ: 0
+1. 🔴 HIGH: `src/util/memory.rs:248` — Add `// SAFETY:` comments for FFI calls to libc (mmap, madvise, etc.) — expected Δ: 0
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
@@ -58,7 +58,7 @@ Reusable refactoring patterns (recipe format):
 - `benches/regular_bench/bulk_meta/bzero_bset.rs` — Refactored to use safe Rust vectors and fill. [Phase 2 confirmed]
 - `benches/mock_bench/mmapper.rs` — No unsafe code found. [Phase 2 confirmed]
 - `src/util/opaque_pointer.rs` — Refactored to use usize, eliminating unsafe impl Send/Sync. [Phase 2 confirmed]
-- `src/util/raw_memory_freelist.rs` — Remaining unsafe are `from_raw_parts` to create slice views of raw memory. Irreducible without changing design. [Phase 3 pending documentation]
+- `src/util/raw_memory_freelist.rs` — Remaining unsafe are `from_raw_parts` to create slice views of raw memory. Documented in Phase 3. [Phase 3 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 ### StwProof for safe plan access
