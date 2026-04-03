@@ -100,7 +100,8 @@ impl Block {
         crate::util::metadata::side_metadata::spec_defs::MS_BLOCK_TLS;
 
     pub fn load_free_list(&self) -> Address {
-        unsafe { Address::from_usize(Block::FREE_LIST_TABLE.load::<usize>(self.start())) }
+        let val = Block::FREE_LIST_TABLE.load_atomic::<usize>(self.start(), Ordering::Relaxed);
+        unsafe { Address::from_usize(val) }
     }
 
     pub fn store_free_list(&self, free_list: Address) {
@@ -109,7 +110,8 @@ impl Block {
 
     #[cfg(feature = "malloc_native_mimalloc")]
     pub fn load_local_free_list(&self) -> Address {
-        unsafe { Address::from_usize(Block::LOCAL_FREE_LIST_TABLE.load::<usize>(self.start())) }
+        let val = Block::LOCAL_FREE_LIST_TABLE.load_atomic::<usize>(self.start(), Ordering::Relaxed);
+        unsafe { Address::from_usize(val) }
     }
 
     #[cfg(feature = "malloc_native_mimalloc")]
@@ -145,12 +147,12 @@ impl Block {
     }
 
     pub fn load_prev_block(&self) -> Option<Block> {
-        let prev = unsafe { Block::PREV_BLOCK_TABLE.load::<usize>(self.start()) };
+        let prev = Block::PREV_BLOCK_TABLE.load_atomic::<usize>(self.start(), Ordering::Relaxed);
         NonZeroUsize::new(prev).map(Block)
     }
 
     pub fn load_next_block(&self) -> Option<Block> {
-        let next = unsafe { Block::NEXT_BLOCK_TABLE.load::<usize>(self.start()) };
+        let next = Block::NEXT_BLOCK_TABLE.load_atomic::<usize>(self.start(), Ordering::Relaxed);
         NonZeroUsize::new(next).map(Block)
     }
 

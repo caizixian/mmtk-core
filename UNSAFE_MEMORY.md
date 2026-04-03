@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 528 | Δ: -194
-- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout/map32.rs (removed unnecessary unsafe block), util/heap/layout, util/copy, util/metadata/side_metadata, util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util, policy/sft_map (SFTMap update/eager_initialize take reference, remove unsafe in implementations), policy/marksweepspace/malloc_ms/global.rs (unnecessary SFT_MAP unsafe, safe page marks), policy/lockfreeimmortalspace.rs (unnecessary eager_initialize unsafe), mmtk.rs (removed unnecessary unsafe cast for GCTrigger mutation), policy/marksweepspace/malloc_ms/metadata.rs (safe page marks)
+- Starting count: 722 | Current: 526 | Δ: -196
+- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace (and native_ms/block.rs safe load_atomic), util/heap/layout/map32.rs (removed unnecessary unsafe block), util/heap/layout, util/copy, util/metadata/side_metadata, util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util, policy/sft_map (SFTMap update/eager_initialize take reference, remove unsafe in implementations), policy/marksweepspace/malloc_ms/global.rs (unnecessary SFT_MAP unsafe, safe page marks), policy/lockfreeimmortalspace.rs (unnecessary eager_initialize unsafe), mmtk.rs (removed unnecessary unsafe cast for GCTrigger mutation), policy/marksweepspace/malloc_ms/metadata.rs (safe page marks)
 
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -42,7 +42,7 @@
 - `*mut T = val` in tests → `MetadataValue::store(meta_addr, val)` — use abstractions instead of raw pointers in tests.
 
 ## Refactoring Ideas
-- `src/util/metadata/side_metadata/helpers.rs`: Check if `Address::load` calls can be replaced with `MetadataValue::load` or if they are irreducible `RawHeapAccess`.
+- Scan for other usages of non-atomic `SideMetadataSpec::load` that can be replaced with `load_atomic(Ordering::Relaxed)` to remove `unsafe` blocks.
 
 ## Files NOT to Revisit
 - `src/util/memory.rs` — FFI calls to libc (mmap, munmap, etc.).
@@ -50,3 +50,5 @@
 - `src/util/heap/layout/map64.rs` — Remaining unsafe are trait methods or `Address::from_usize` (anti-pattern to replace with `ZERO.add`).
 - `src/util/heap/freelistpageresource.rs`: Remove `unsafe impl Send` and `unsafe impl Sync` for `FreeListPageResource` now that `FreeList` trait is `Send`.
 - `src/util/heap/space_descriptor.rs` — `Zeroable` implementation is required for `new_zeroed_vec` in `map32.rs`. Remaining `unsafe` are `Address::from_usize` which are anti-patterns to replace.
+- `src/util/metadata/side_metadata/helpers.rs` — Remaining `unsafe` are reading raw bytes from side metadata memory (irreducible `RawHeapAccess`) or `Address::from_usize`.
+
