@@ -1,15 +1,17 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: src/util/raw_memory_freelist.rs
-- Strategy: Analyze if `from_raw_parts` can be encapsulated or replaced.
+- File: src/policy/sft_map.rs and src/mmtk.rs
+- Strategy: Analyze if remaining unsafe blocks can be reduced or abstracted.
 
 ## Findings
-- Line 70: `unsafe { std::slice::from_raw_parts(self.base.to_ptr::<i32>(), len) }` — Irreducible. Creates a slice from raw memory mapped by the struct. Necessary because the memory is dynamic and cannot be represented as a safe Rust reference without self-referential structs or complex lifetimes.
-- Line 77: `unsafe { std::slice::from_raw_parts_mut(self.base.to_mut_ptr::<i32>(), len) }` — Irreducible. Same as above.
+- src/policy/sft_map.rs Line 111: Irreducible. Lifetime extension for `'static` reference in global map.
+- src/policy/sft_map.rs Line 138: Irreducible. Dereferencing `AtomicPtr` to get `&dyn SFT`.
+- src/mmtk.rs Line 136: Irreducible. `unsafe impl Sync` for `StwProtected`.
+- src/mmtk.rs Line 149, 155: Irreducible. Dereferencing `UnsafeCell` pointer.
 
 ## Attempted Changes
-- None. Confirmed that these are irreducible after analysis.
+- None.
 
 ## Blockers / Insights for Next Step
-- The project is in Phase 3 (Irreducible Documentation). All remaining unsafe blocks are in files marked as "NOT to Revisit" and have been confirmed irreducible by multiple steps. Further reductions are unlikely without significant architectural changes that might conflict with performance or design goals (e.g., bypassing borrow checker for work packets).
+- All remaining unsafe blocks are in files marked as "NOT to Revisit" and have been confirmed irreducible. The project is in Phase 3.
