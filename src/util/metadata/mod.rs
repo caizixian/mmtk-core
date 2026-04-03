@@ -221,6 +221,7 @@
 mod global;
 pub mod header_metadata;
 mod metadata_val_traits;
+pub mod safe_access;
 pub mod side_metadata;
 pub mod vo_bit;
 pub use metadata_val_traits::*;

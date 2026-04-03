@@ -194,7 +194,7 @@ impl SideMetadataSpec {
     }
 
     /// Get a `MetadataSlot` for the given data address.
-    pub fn slot_for<T: MetadataValue>(&self, data_addr: Address) -> MetadataSlot<T> {
+    pub fn slot_for<T: MetadataValue>(&self, data_addr: Address) -> MetadataSlot<'_, T> {
         let meta_addr = address_to_meta_address(self, data_addr);
         // SAFETY: `address_to_meta_address` computes a valid metadata address for the given data address.
         // The caller must ensure the data address is within the heap range handled by this spec.
@@ -540,16 +540,15 @@ impl SideMetadataSpec {
             data_addr,
             None,
             || {
-                let meta_addr = address_to_meta_address(self, data_addr);
                 let bits_num_log = self.log_num_of_bits;
                 if bits_num_log < 3 {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
-                    let byte_val = meta_addr.load::<u8>();
+                    let byte_val = self.slot_for::<u8>(data_addr).load();
 
                     FromPrimitive::from_u8((byte_val & mask) >> lshift).unwrap()
                 } else {
-                    meta_addr.load::<T>()
+                    self.slot_for::<T>(data_addr).load()
                 }
             },
             |_v| {
@@ -572,17 +571,16 @@ impl SideMetadataSpec {
             data_addr,
             Some(metadata),
             || {
-                let meta_addr = address_to_meta_address(self, data_addr);
                 let bits_num_log = self.log_num_of_bits;
                 if bits_num_log < 3 {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
-                    let old_val = meta_addr.load::<u8>();
+                    let old_val = self.slot_for::<u8>(data_addr).load();
                     let new_val = (old_val & !mask) | (metadata.to_u8().unwrap() << lshift);
 
-                    meta_addr.store::<u8>(new_val);
+                    self.slot_for::<u8>(data_addr).store(new_val);
                 } else {
-                    meta_addr.store::<T>(metadata);
+                    self.slot_for::<T>(data_addr).store(metadata);
                 }
             },
             |_| {

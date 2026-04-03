@@ -83,7 +83,7 @@ impl HeaderMetadataSpec {
     }
 
     /// Get a `MetadataSlot` for the given header address.
-    pub fn slot_for<T: MetadataValue>(&self, header: Address) -> MetadataSlot<T> {
+    pub fn slot_for<T: MetadataValue>(&self, header: Address) -> MetadataSlot<'_, T> {
         // SAFETY: `meta_addr` computes a valid metadata address for the given header.
         // The caller must ensure the header address is valid.
         unsafe { MetadataSlot::new_unchecked(self.meta_addr(header)) }

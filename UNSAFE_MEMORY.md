@@ -2,13 +2,14 @@
 
 ## Progress
 - Starting count: 531 | Current: 512 | Δ: -19
-- Phase: 1
+- Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - `Address::from_usize` is marked unsafe by design to warn about invalid addresses. Replacing it with `ZERO.add` is considered an anti-pattern as it is semantically identical.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: Explore other files for Phase 1 reductions or Phase 2 abstractions.
+1. 🔴 HIGH: Use `StwProof` to make `SideMetadataSpec::load` and `store` safe (remove `unsafe` from signature).
+2. 🟡 MED: Explore other files for Phase 2 abstractions.
 
 ## Patterns Discovered
 - `MaybeUninit` arrays of size 1 can be replaced with `Option` and `unwrap()` to eliminate unsafe access.
@@ -18,22 +19,8 @@
 - Using safe slices `&mut [T]` instead of raw pointers `*mut T` in tests allows using safe indexing and removes unsafe dereferences.
 - **Refactoring unions to enums**: can eliminate unsafe field accesses if layout compatibility is not strictly required or if the overhead is acceptable.
 - `NonZeroUsize::new_unchecked` can be replaced with `NonZeroUsize::new().expect()` if the value is known to be non-zero.
-- **MetadataSlot**: Centralizes unsafe raw memory access in `metadata_val_traits.rs`.
+- **MetadataSlot**: Centralizes unsafe raw memory access in `safe_access.rs`.
 - **Safe Constructor**: Adding `slot_for` to `SideMetadataSpec` and `HeaderMetadataSpec` allows safe access to `MetadataSlot` without unsafe blocks at call sites.
-- In tests, `unsafe { Address::from_usize(0) }` can be replaced with the safe constant `Address::ZERO`.
-- **Safe initialization of MaybeUninit arrays**: Use `[const { MaybeUninit::uninit() }; N]` instead of `unsafe { MaybeUninit::uninit().assume_init() }`.
-- In tests, `SideMetadataSpec::load/store` can be replaced with `load_atomic/store_atomic` with `Ordering::Relaxed` to eliminate unsafe blocks, provided the test does not specifically require non-atomic operations.
-- **Refactoring to use MetadataSlot**: Using `self.slot_for` or `MetadataSlot` methods can eliminate unsafe blocks in `SideMetadataSpec` methods like `compare_exchange_atomic` and `fetch_update`.
-- **Replacing raw pointers with Address**: In types like test slots, replacing `*mut Atomic<T>` with `Address` eliminates the need for `unsafe impl Send` while preserving functionality via `to_mut_ptr()`.
-- **Refactoring to use slot_for for Metadata**: Using `slot_for(...).load()` and `slot_for(...).store(...)` on `SideMetadataSpec` can eliminate unsafe blocks for direct metadata access in production code.
-- **Replacing Address::zero()**: Replaced `unsafe { Address::zero() }` with `Address::ZERO` in `malloc_ms/global.rs`.
-- **Safe is_marked**: Replaced `is_marked_unsafe` with `is_marked(..., Ordering::Relaxed)` in `malloc_ms/global.rs` to eliminate unsafe blocks.
-- **Safe unset_mark_bit**: Made `unset_mark_bit` safe in `metadata.rs` by using `store_atomic` and updated call sites.
-- **Safe unset_vo_bit**: Used safe `unset_vo_bit` instead of `unset_vo_bit_unsafe` in `malloc_ms/global.rs`.
-- **Safe unset_page_mark**: Refactored `unset_page_mark` in `malloc_ms/global.rs` to use safe `is_page_marked` and `unset_page_mark` (using atomics) from `metadata.rs`, removing unsafe from the function and its call sites.
-- **Centralizing unsafe stores in loops**: In `block.rs`, centralized unsafe raw memory writes in `simple_sweep` and `naive_brute_force_sweep` into a safe helper `write_free_list_link` with `debug_assert!`.
-- **Passing mutable reference instead of calling mut_self**: In `map32.rs`, refactored `free_contiguous_chunks_no_lock` to take `&mut Map32Inner` to eliminate unsafe blocks calling `self.mut_self()`.
-- **Using MetadataSlot in vo_bit**: Used `VO_BIT_SIDE_METADATA_SPEC.slot_for` to eliminate unsafe blocks in `vo_bit/mod.rs`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.
@@ -52,4 +39,5 @@
 - `src/util/address.rs` — Primitives for raw memory access and address arithmetic.
 
 ## Abstraction Proposals (for Phase 2)
-- **Safe Metadata Accessor**: `MetadataSlot` implemented in `metadata_val_traits.rs`. Used in `header_metadata.rs` and `global.rs`.
+- **Safe Metadata Accessor**: `MetadataSlot` implemented in `safe_access.rs`. Used in `header_metadata.rs` and `global.rs`.
+- **StwProof**: Token to prove world is stopped, allowing safe non-atomic access to metadata.
