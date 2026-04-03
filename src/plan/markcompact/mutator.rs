@@ -49,13 +49,7 @@ pub fn create_markcompact_mutator<VM: VMBinding>(
 
 pub fn markcompact_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWorkerThread) {
     // reset the thread-local allocation bump pointer
-    let markcompact_allocator = unsafe {
-        mutator
-            .allocators
-            .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
-    }
-    .downcast_mut::<MarkCompactAllocator<VM>>()
-    .unwrap();
+    let markcompact_allocator = mutator.allocator_impl_mut_for_semantic::<MarkCompactAllocator<VM>>(AllocationSemantics::Default);
     markcompact_allocator.reset();
 
     common_release_func(mutator, tls);

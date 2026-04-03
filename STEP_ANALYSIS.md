@@ -1,15 +1,19 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: <file being analyzed>
-- Strategy: <what you're attempting>
+- File: `src/plan/markcompact/gc_work.rs`
+- Strategy: Remove raw pointer from work packet and use `get_plan_mut`
 
 ## Findings
-- Line X: <unsafe type> — <eliminable? why/why not>
-- Line Y: <unsafe type> — <eliminable? why/why not>
+- Line 35: `plan` is stored as `*const MarkCompact<VM>`.
+- Line 47: `plan` is cast to `*mut` and dereferenced.
+- Eliminable by removing `plan` from struct and using `mmtk.get_plan_mut()` and downcasting.
 
 ## Attempted Changes
-- <what you tried, what happened>
+- Removing `plan` field and `unsafe impl Send` from `UpdateReferences`.
+- Using `unsafe { mmtk.get_plan_mut() }.downcast_mut::<MarkCompact<VM>>().unwrap()` in `do_work`.
+- Updating `new` to take no arguments.
+- Will also need to update call site in `src/plan/markcompact/global.rs`.
 
 ## Blockers / Insights for Next Step
-- <what prevented completion, what the next step should know>
+- None so far.
