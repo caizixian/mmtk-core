@@ -69,7 +69,7 @@ impl<VM: VMBinding> GCTrigger<VM> {
     }
 
     /// Set the plan. This is called in `create_plan()` after we created a boxed plan.
-    pub fn set_plan(&mut self, plan: &'static dyn Plan<VM = VM>) {
+    pub fn set_plan(&self, plan: &'static dyn Plan<VM = VM>) {
         self.plan.set(plan).unwrap_or_else(|_| panic!("Plan already set"));
     }
 
