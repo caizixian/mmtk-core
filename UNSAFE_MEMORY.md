@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 667 | Δ: -55
+- Starting count: 722 | Current: 661 | Δ: -61
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -21,6 +21,7 @@
 - `NonZeroUsize::new_unchecked` can be replaced with `NonZeroUsize::new().expect()` if the value is known to be non-zero.
 - **MetadataSlot**: Centralizes unsafe raw memory access in `metadata_val_traits.rs`.
 - **Safe Constructor**: Adding `slot_for` to `SideMetadataSpec` allows safe access to `MetadataSlot` without unsafe blocks at call sites.
+- In tests, `unsafe { Address::from_usize(0) }` can be replaced with the safe constant `Address::ZERO`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.
