@@ -183,9 +183,9 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
         MonotonePageResource {
             common: CommonPageResource::new(false, true, vm_map),
             sync: Mutex::new(MonotonePageResourceSync {
-                cursor: unsafe { Address::zero() },
-                current_chunk: unsafe { Address::zero() },
-                sentinel: unsafe { Address::zero() },
+                cursor: Address::zero(),
+                current_chunk: Address::zero(),
+                sentinel: Address::zero(),
                 conditional: MonotonePageResourceConditional::Discontiguous,
             }),
             _p: PhantomData,
