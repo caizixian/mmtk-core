@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 658 | Δ: -64
-- Completed subsystems: util/alloc (partial), policy/sft_map (partial), policy/marksweepspace (block.rs cleanup), util/heap/layout (vm_layout.rs static mut, map32.rs Mutex, map64.rs RwLock), util/copy (MaybeUninit to Option in GCWorkerCopyContext), util/metadata/side_metadata (side_metadata_tests.rs Address::from_usize(0) cleanup), util/heap/gc_trigger.rs (OnceLock for plan), util/metadata/header_metadata.rs (TestBuffer wrapper for tests)
+- Starting count: 722 | Current: 643 | Δ: -79
+- Completed subsystems: util/alloc (partial), policy/sft_map (partial), policy/sft_map (partial), policy/marksweepspace (block.rs cleanup), util/heap/layout (vm_layout.rs static mut, map32.rs Mutex, map64.rs RwLock), util/copy (MaybeUninit to Option in GCWorkerCopyContext), util/metadata/side_metadata (side_metadata_tests.rs Address::from_usize(0) cleanup), util/heap/gc_trigger.rs (OnceLock for plan), util/metadata/header_metadata.rs (TestBuffer yield slice for tests)
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - "Work packets are single-use — Option::take() is safe for extracting owned data"
