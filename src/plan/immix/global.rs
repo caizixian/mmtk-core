@@ -121,6 +121,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     fn common(&self) -> &CommonPlan<VM> {
         &self.common
     }
+
+    fn get_immix_space(&self) -> Option<&crate::policy::immix::ImmixSpace<Self::VM>> {
+        Some(&self.immix_space)
+    }
 }
 
 impl<VM: VMBinding> Immix<VM> {

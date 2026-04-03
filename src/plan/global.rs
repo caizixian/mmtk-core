@@ -196,6 +196,11 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
         None
     }
 
+    /// Get the ImmixSpace if this plan is an Immix plan.
+    fn get_immix_space(&self) -> Option<&crate::policy::immix::ImmixSpace<Self::VM>> {
+        None
+    }
+
     /// Get the current run time options.
     fn options(&self) -> &Options {
         &self.base().options

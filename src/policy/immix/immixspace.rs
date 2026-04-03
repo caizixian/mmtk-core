@@ -446,18 +446,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
             // Prepare each block for GC
             let threshold = self.defrag.defrag_spill_threshold.load(Ordering::Acquire);
-            // # Safety: ImmixSpace reference is always valid within this collection cycle.
-            let space = unsafe { &*(self as *const Self) };
             let work_packets = self.chunk_map.generate_tasks(|chunk| {
-                Box::new(PrepareBlockState {
-                    space,
+                Box::new(PrepareBlockState::<VM> {
                     chunk,
-                    defrag_threshold: if space.in_defrag() {
+                    defrag_threshold: if self.in_defrag() {
                         Some(threshold)
                     } else {
                         None
                     },
                     unlog_bits_op,
+                    _phantom: std::marker::PhantomData,
                 })
             });
             self.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
@@ -543,18 +541,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Generate chunk sweep tasks
     fn generate_sweep_tasks(&self, unlog_bits_op: UnlogBitsOperation) -> Vec<Box<dyn GCWork<VM>>> {
         self.defrag.mark_histograms.lock().clear();
-        // # Safety: ImmixSpace reference is always valid within this collection cycle.
-        let space = unsafe { &*(self as *const Self) };
-        let epilogue = Arc::new(FlushPageResource {
-            space,
+        let epilogue = Arc::new(FlushPageResource::<VM> {
             counter: AtomicUsize::new(0),
+            _phantom: std::marker::PhantomData,
         });
         let tasks = self.chunk_map.generate_tasks(|chunk| {
-            Box::new(SweepChunk {
-                space,
+            Box::new(SweepChunk::<VM> {
                 chunk,
                 unlog_bits_op,
                 epilogue: epilogue.clone(),
+                _phantom: std::marker::PhantomData,
             })
         });
         epilogue.counter.store(tasks.len(), Ordering::SeqCst);
@@ -919,11 +915,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 /// A work packet to prepare each block for a major GC.
 /// Performs the action on a range of chunks.
 pub struct PrepareBlockState<VM: VMBinding> {
-    #[allow(dead_code)]
-    pub space: &'static ImmixSpace<VM>,
     pub chunk: Chunk,
     pub defrag_threshold: Option<usize>,
     pub unlog_bits_op: UnlogBitsOperation,
+    pub _phantom: std::marker::PhantomData<VM>,
 }
 
 impl<VM: VMBinding> PrepareBlockState<VM> {
@@ -939,6 +934,9 @@ impl<VM: VMBinding> PrepareBlockState<VM> {
 
 impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        let plan = mmtk.get_plan();
+        let space = plan.get_immix_space().expect("Expected Immix plan with ImmixSpace");
+
         // Clear object mark table for this chunk
         self.reset_object_mark();
         // Iterate over all blocks in this chunk
@@ -949,7 +947,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
                 continue;
             }
             // Check if this block needs to be defragmented.
-            let is_defrag_source = if !self.space.is_defrag_enabled() {
+            let is_defrag_source = if !space.is_defrag_enabled() {
                 // Do not set any block as defrag source if defrag is disabled.
                 false
             } else if *mmtk.options.immix_defrag_every_block {
@@ -976,26 +974,29 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
 
 /// Chunk sweeping work packet.
 struct SweepChunk<VM: VMBinding> {
-    space: &'static ImmixSpace<VM>,
     chunk: Chunk,
     unlog_bits_op: UnlogBitsOperation,
     /// A destructor invoked when all `SweepChunk` packets are finished.
     epilogue: Arc<FlushPageResource<VM>>,
+    pub _phantom: std::marker::PhantomData<VM>,
 }
 
 impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        assert!(self.space.chunk_map.get(self.chunk).unwrap().is_allocated());
+        let plan = mmtk.get_plan();
+        let space = plan.get_immix_space().expect("Expected Immix plan with ImmixSpace");
 
-        let mut histogram = self.space.defrag.new_histogram();
+        assert!(space.chunk_map.get(self.chunk).unwrap().is_allocated());
+
+        let mut histogram = space.defrag.new_histogram();
         let line_mark_state = if super::BLOCK_ONLY {
             None
         } else {
-            Some(self.space.line_mark_state.load(Ordering::Acquire))
+            Some(space.line_mark_state.load(Ordering::Acquire))
         };
         // Hints for clearing side forwarding bits.
         let is_moving_gc = mmtk.get_plan().current_gc_may_move_object();
-        let is_defrag_gc = self.space.defrag.in_defrag();
+        let is_defrag_gc = space.defrag.in_defrag();
         // number of allocated blocks.
         let mut allocated_blocks = 0;
         // Iterate over all allocated blocks in this chunk.
@@ -1028,7 +1029,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
                 }
             }
 
-            if !block.sweep(self.space, &mut histogram, line_mark_state) {
+            if !block.sweep(space, &mut histogram, line_mark_state) {
                 // Block is live. Increment the allocated block count.
                 allocated_blocks += 1;
             }
@@ -1036,30 +1037,30 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
         probe!(mmtk, sweep_chunk, allocated_blocks);
         // Set this chunk as free if there is not live blocks.
         if allocated_blocks == 0 {
-            self.space.chunk_map.set_allocated(self.chunk, false)
+            space.chunk_map.set_allocated(self.chunk, false)
         }
-        self.space.defrag.add_completed_mark_histogram(histogram);
+        space.defrag.add_completed_mark_histogram(histogram);
 
         self.unlog_bits_op
             .execute::<VM>(self.chunk.start(), Chunk::BYTES);
 
-        self.epilogue.finish_one_work_packet();
+        self.epilogue.finish_one_work_packet(space);
     }
 }
 
 /// Count number of remaining work pacets, and flush page resource if all packets are finished.
 struct FlushPageResource<VM: VMBinding> {
-    space: &'static ImmixSpace<VM>,
     counter: AtomicUsize,
+    pub _phantom: std::marker::PhantomData<VM>,
 }
 
 impl<VM: VMBinding> FlushPageResource<VM> {
     /// Called after a related work packet is finished.
-    fn finish_one_work_packet(&self) {
+    fn finish_one_work_packet(&self, space: &ImmixSpace<VM>) {
         if 1 == self.counter.fetch_sub(1, Ordering::SeqCst) {
             // We've finished releasing all the dead blocks to the BlockPageResource's thread-local queues.
             // Now flush the BlockPageResource.
-            self.space.flush_page_resource()
+            space.flush_page_resource()
         }
     }
 }

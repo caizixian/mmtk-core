@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 307 | Δ: -44
+- Starting count: 351 | Current: 305 | Δ: -46
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@ Architectural insights that affect ALL future safety decisions:
 - Static plan references are needed because plan types are generic and cannot be stored in global statics easily.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/policy/immix/immixspace.rs:450,547` — use plan downcasting or trait method to avoid casting `self` to pass to work packets — expected Δ: -2
+1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs:1-800` — consolidate raw pointer operations into MetadataSlot methods — expected Δ: -5
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
@@ -41,7 +41,6 @@ Reusable refactoring patterns (recipe format):
 - `src/policy/marksweepspace/malloc_ms/global.rs` — Remaining unsafe are irreducible FFI and lifetime extension. [Phase 2 confirmed]
 - `src/policy/copyspace.rs` — Remaining unsafe are irreducible FFI and lifetime extension. [Phase 2 confirmed]
 - `src/plan/global.rs` — Unsafe for SFT_MAP access and CommonPlan reference for work packet. [Phase 2 confirmed]
-- `src/policy/immix/immixspace.rs` — Unsafe for casting self to pass to work packets. [Phase 2 confirmed]
 - `src/util/alloc/allocator.rs` — Unsafe impl Sync for AllocationOptionsHolder and raw memory write in fill_alignment_gap. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
