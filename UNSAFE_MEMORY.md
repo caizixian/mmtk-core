@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 152 | Δ: -199
+- Starting count: 351 | Current: 132 | Δ: -219
 - Phase: 3 (Irreducible Documentation)
 - Note: The agent has confirmed that all files listed in the prompt have been analyzed and their unsafe usage is either irreducible or documented.
 
@@ -31,6 +31,7 @@
 - **New**: Refactored `MetadataValue` trait to take references instead of `Address`, eliminating unsafe blocks in trait implementations and narrowing unsafe scope at call sites in `MetadataSlot`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
+- `src/util/heap/blockpageresource.rs` — Completely safe after removing `unsafe impl Sync` and adding `Send` bound to `Region` trait. [Phase 3 confirmed]
 - `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are irreducible function signatures and raw memory copy. Audited safety comments. [Phase 2 confirmed]
 - `src/util/metadata/metadata_val_traits.rs` — Completely safe after refactoring trait to take references. [Phase 2 confirmed]
 - `src/util/memory.rs` — Wrappers around libc calls. Standard FFI wrappers. Verified safety comments. [Phase 3 confirmed]

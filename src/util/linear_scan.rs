@@ -86,7 +86,7 @@ impl<VM: VMBinding> LinearScanObjectSize for DefaultObjectSize<VM> {
 
 /// Region represents a memory region with a properly aligned address as its start and a fixed size for the region.
 /// Region provides a set of utility methods, along with a RegionIterator that linearly scans at the step of a region.
-pub trait Region: Copy + PartialEq + PartialOrd {
+pub trait Region: Copy + PartialEq + PartialOrd + Send {
     /// log2 of the size in bytes for the region.
     const LOG_BYTES: usize;
     /// The size in bytes for the region.

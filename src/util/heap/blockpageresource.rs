@@ -30,7 +30,7 @@ pub struct BlockPageResource<VM: VMBinding, B: Region + 'static> {
     sync: Mutex<()>,
 }
 
-unsafe impl<VM: VMBinding, B: Region + 'static> Sync for BlockPageResource<VM, B> {}
+
 
 impl<VM: VMBinding, B: Region> PageResource<VM> for BlockPageResource<VM, B> {
     fn common(&self) -> &CommonPageResource {
