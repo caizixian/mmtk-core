@@ -344,9 +344,9 @@ mod tests {
     #[test]
     fn address_range_iteration() {
         let src: Vec<usize> = (0..32).collect();
-        let src_slice = Address::from_ptr(&src[0])..Address::from_ptr(&src[0]) + src.len();
+        let src_slice = Address::from_ptr(&src[0])..Address::from_ptr(&src[0]) + (src.len() * std::mem::size_of::<usize>());
         for (i, v) in src_slice.iter_slots().enumerate() {
-            assert_eq!(i, unsafe { v.load::<usize>() })
+            assert_eq!(v, Address::from_ptr(&src[i]));
         }
     }
 

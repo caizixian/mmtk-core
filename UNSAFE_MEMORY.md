@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 341 | Δ: -381
+- Starting count: 722 | Current: 331 | Δ: -391
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,8 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: investigate `src/vm/slot.rs` tests to see if unsafe address iteration can be made safe. — expected Δ: 1
-2. 🟡 MED: Scan for other files with count < 6 that are not in "Files NOT to Revisit".
+1. 🟡 MED: Scan for other files with count < 6 that are not in "Files NOT to Revisit".
+2. 🟡 MED: Re-evaluate "Files NOT to Revisit" to see if new abstractions can help.
 
 ## Patterns Discovered
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
