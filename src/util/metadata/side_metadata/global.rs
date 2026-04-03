@@ -437,10 +437,12 @@ impl SideMetadataSpec {
                     // we are setting selected bits in one byte
                     let mask: u8 = !(u8::MAX.checked_shl(bit_end as u32).unwrap_or(0))
                         & (u8::MAX << bit_start); // Get a mask that the bits we need to set are 1, and the other bits are 0.
-                    let old_src = unsafe { <u8 as MetadataValue>::load_atomic(src, Ordering::Relaxed) };
-                    let old_dst = unsafe { <u8 as MetadataValue>::load_atomic(dst, Ordering::Relaxed) };
-                    let new = (old_src & mask) | (old_dst & !mask);
-                    unsafe { <u8 as MetadataValue>::store_atomic(dst, new, Ordering::Relaxed) };
+                    unsafe {
+                        let old_src = <u8 as MetadataValue>::load_atomic(src, Ordering::Relaxed);
+                        let old_dst = <u8 as MetadataValue>::load_atomic(dst, Ordering::Relaxed);
+                        let new = (old_src & mask) | (old_dst & !mask);
+                        <u8 as MetadataValue>::store_atomic(dst, new, Ordering::Relaxed);
+                    }
                     false
                 }
             }
