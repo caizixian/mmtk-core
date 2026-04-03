@@ -460,28 +460,21 @@ mod tests {
     use crate::util::address::Address;
 
     struct TestBuffer<T> {
-        ptr: *mut T,
-        layout: std::alloc::Layout,
+        vec: Vec<T>,
     }
 
-    impl<T> TestBuffer<T> {
+    impl<T: Default + Clone> TestBuffer<T> {
         fn new() -> Self {
-            let ty_size = std::mem::size_of::<T>();
-            let layout = std::alloc::Layout::from_size_align(ty_size * 3, ty_size).unwrap();
-            let ptr = unsafe { std::alloc::alloc_zeroed(layout) as *mut T };
-            Self { ptr, layout }
+            Self {
+                vec: vec![T::default(); 3],
+            }
         }
 
         fn address(&self) -> Address {
-            Address::from_ptr(unsafe { self.ptr.offset(1) })
+            Address::from_ptr(&self.vec[1])
         }
     }
 
-    impl<T> Drop for TestBuffer<T> {
-        fn drop(&mut self) {
-            unsafe { std::alloc::dealloc(self.ptr as *mut u8, self.layout) }
-        }
-    }
 
     #[test]
     fn test_valid_specs() {
@@ -706,12 +699,12 @@ mod tests {
                 fn [<with_ $type _obj>]<F>(f: F) where F: FnOnce(Address, &mut [$type]) + std::panic::UnwindSafe {
                     let mut buffer = TestBuffer::<$type>::new();
                     let obj = buffer.address();
-                    let slice = unsafe { std::slice::from_raw_parts_mut(buffer.ptr, 3) };
-                    f(obj, slice);
+                    f(obj, &mut buffer.vec[..]);
                 }
             }
         }
     }
+
 
     impl_with_object!(u8);
     impl_with_object!(u16);
