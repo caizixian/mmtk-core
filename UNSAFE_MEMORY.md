@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 330 | Δ: -21
+- Starting count: 351 | Current: 326 | Δ: -25
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,8 @@ Architectural insights that affect ALL future safety decisions:
 - Static plan references are needed because plan types are generic and cannot be stored in global statics easily.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/plan/mutator_context.rs:293-335` — Consider refactoring `get_allocator` to be safe or use a safe wrapper that doesn't require unsafe at call sites. — expected Δ: 4
-2. 🟡 MED: Scan for other files with count < 6 that are not in "Files NOT to Revisit".
+1. 🟡 MED: Scan for other files with count < 6 that are not in "Files NOT to Revisit".
+2. 🟢 LOW: Consider using a library like `core_affinity` to remove remaining unsafe in `src/scheduler/affinity.rs` in the future.
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
@@ -19,6 +19,7 @@ Reusable refactoring patterns (recipe format):
 - Safe wrappers in `Mutator` (like `get_allocator_mut_safe`) can encapsulate `unsafe` array access by checking initialization against `space_mapping`.
 - Extending `MetadataSlot` with generic methods for `MetadataValue` allows centralizing unsafe operations on types larger than `u8`.
 - Using safe wrappers in `Mutator` (like `allocator_impl_mut_for_semantic`) in plan-specific mutators to eliminate direct unsafe calls to `allocators.get_allocator_mut`.
+- Replacing platform-specific FFI calls with safe standard library equivalents (e.g. `std::thread::available_parallelism` instead of `sched_getaffinity`).
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/policy/sft_map.rs` — `SFTRefStorage` uses transmute for atomic fat pointers. [Phase 2 confirmed]
