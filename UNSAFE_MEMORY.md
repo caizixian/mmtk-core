@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 258 | Δ: -93
+- Starting count: 351 | Current: 257 | Δ: -94
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -27,7 +27,7 @@ Reusable refactoring patterns (recipe format):
 - Replacing custom lock-free queues with `crossbeam::queue::ArrayQueue` and using `Mutex` for thread-local access can eliminate unsafe code in queue implementations.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
-- `src/plan/concurrent/concurrent_marking_work.rs` — `ConcurrentTraceObjects` uses raw pointer to bypass borrow checker for work packet. [Phase 2 confirmed]
+- `src/plan/concurrent/concurrent_marking_work.rs` — Eliminated raw pointer from `ConcurrentTraceObjects` by using a temporary tracer type. Localized unsafe in the tracer. [Phase 2 confirmed]
 - `src/util/metadata/metadata_val_traits.rs` — Irreducible raw loads from addresses in trait default impls. [Phase 2 confirmed]
 - `src/util/memory.rs` — Contains wrappers for FFI calls. [Phase 2 confirmed]
 - `docs/dummyvm/src/api.rs` — Irreducible FFI boundaries in dummy VM. [Phase 2 confirmed]

@@ -24,7 +24,25 @@ pub struct ConcurrentTraceObjects<
     objects: Option<Vec<ObjectReference>>,
     // recursively generated objects
     next_objects: VectorQueue<ObjectReference>,
+}
+
+pub struct ConcurrentTraceObjectsTracer<'a, VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind> {
+    parent: &'a mut ConcurrentTraceObjects<VM, P, KIND>,
     worker: *mut GCWorker<VM>,
+}
+
+impl<'a, VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind> ObjectQueue for ConcurrentTraceObjectsTracer<'a, VM, P, KIND> {
+    fn enqueue(&mut self, object: ObjectReference) {
+        debug_assert!(
+            object.to_raw_address().is_mapped(),
+            "Invalid obj {:?}: address is not mapped",
+            object
+        );
+        // SAFETY: The worker pointer is valid because it was passed from do_work or trace_object
+        // on the same thread and is only used during the call.
+        let worker = unsafe { &mut *self.worker };
+        self.parent.scan_and_enqueue(object, worker);
+    }
 }
 
 impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
@@ -39,44 +57,38 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
             plan,
             objects: Some(objects),
             next_objects: VectorQueue::default(),
-            worker: std::ptr::null_mut(),
         }
     }
 
-    pub fn worker(&self) -> &'static mut GCWorker<VM> {
-        debug_assert_ne!(self.worker, std::ptr::null_mut());
-        unsafe { &mut *self.worker }
-    }
-
     #[cold]
-    fn flush(&mut self) {
+    fn flush(&mut self, worker: &mut GCWorker<VM>) {
         if !self.next_objects.is_empty() {
             let objects = self.next_objects.take();
-            let worker = self.worker();
             let w = Self::new(objects, worker.mmtk);
             worker.add_work(WorkBucketStage::Concurrent, w);
         }
     }
 
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        let new_object = self
-            .plan
-            .trace_object::<Self, KIND>(self, object, self.worker());
+    fn trace_object(&mut self, object: ObjectReference, worker: &mut GCWorker<VM>) -> ObjectReference {
+        let plan = self.plan; // Copy reference to avoid borrow conflict
+        let mut tracer = ConcurrentTraceObjectsTracer { parent: self, worker: worker as *mut _ };
+        let new_object = plan
+            .trace_object::<ConcurrentTraceObjectsTracer<'_, VM, P, KIND>, KIND>(&mut tracer, object, worker);
         // No copying should happen.
         debug_assert_eq!(object, new_object);
         object
     }
 
-    fn trace_objects(&mut self, objects: &[ObjectReference]) {
+    fn trace_objects(&mut self, objects: &[ObjectReference], worker: &mut GCWorker<VM>) {
         for o in objects.iter() {
-            self.trace_object(*o);
+            self.trace_object(*o, worker);
         }
     }
 
-    fn scan_and_enqueue(&mut self, object: ObjectReference) {
+    fn scan_and_enqueue(&mut self, object: ObjectReference, worker: &mut GCWorker<VM>) {
         crate::plan::tracing::SlotIterator::<VM>::iterate_fields(
             object,
-            self.worker().tls.0,
+            worker.tls.0,
             |s| {
                 let Some(t) = s.load() else {
                     return;
@@ -84,7 +96,7 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
 
                 self.next_objects.push(t);
                 if self.next_objects.len() > Self::SATB_BUFFER_SIZE {
-                    self.flush();
+                    self.flush(worker);
                 }
             },
         );
@@ -93,34 +105,15 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
 }
 
 impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
-    ObjectQueue for ConcurrentTraceObjects<VM, P, KIND>
-{
-    fn enqueue(&mut self, object: ObjectReference) {
-        debug_assert!(
-            object.to_raw_address().is_mapped(),
-            "Invalid obj {:?}: address is not mapped",
-            object
-        );
-        self.scan_and_enqueue(object);
-    }
-}
-
-unsafe impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
-    Send for ConcurrentTraceObjects<VM, P, KIND>
-{
-}
-
-impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
     GCWork<VM> for ConcurrentTraceObjects<VM, P, KIND>
 {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        self.worker = worker;
         let mut num_objects = 0;
         let mut num_next_objects = 0;
         let mut iterations = 0;
         // mark objects
         if let Some(objects) = self.objects.take() {
-            self.trace_objects(&objects);
+            self.trace_objects(&objects, worker);
             num_objects = objects.len();
         }
         let pause_opt = self.plan.current_pause();
@@ -131,7 +124,7 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
                     break;
                 }
                 let next_objects = self.next_objects.take();
-                self.trace_objects(&next_objects);
+                self.trace_objects(&next_objects, worker);
                 num_next_objects += next_objects.len();
                 iterations += 1;
             }
@@ -143,7 +136,7 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
             num_next_objects,
             iterations
         );
-        self.flush();
+        self.flush(worker);
     }
 }
 
