@@ -55,6 +55,41 @@ impl BlockMayHaveObjects for Block {
     }
 }
 
+trait SideMetadataSpecBlockExt {
+    fn load_address(&self, block: Block) -> Address;
+    fn store_address(&self, block: Block, value: Address);
+    fn load_address_atomic(&self, block: Block, order: Ordering) -> Address;
+    fn load_usize(&self, block: Block) -> usize;
+    fn store_usize(&self, block: Block, value: usize);
+    fn load_usize_atomic(&self, block: Block, order: Ordering) -> usize;
+}
+
+impl SideMetadataSpecBlockExt for SideMetadataSpec {
+    fn load_address(&self, block: Block) -> Address {
+        unsafe { Address::from_usize(self.load::<usize>(block.start())) }
+    }
+    
+    fn store_address(&self, block: Block, value: Address) {
+        unsafe { self.store::<usize>(block.start(), value.as_usize()) }
+    }
+    
+    fn load_address_atomic(&self, block: Block, order: Ordering) -> Address {
+        Address::from_usize(self.load_atomic::<usize>(block.start(), order))
+    }
+    
+    fn load_usize(&self, block: Block) -> usize {
+        unsafe { self.load::<usize>(block.start()) }
+    }
+    
+    fn store_usize(&self, block: Block, value: usize) {
+        unsafe { self.store::<usize>(block.start(), value) }
+    }
+    
+    fn load_usize_atomic(&self, block: Block, order: Ordering) -> usize {
+        self.load_atomic::<usize>(block.start(), order)
+    }
+}
+
 impl Block {
     /// Log pages in block
     pub const LOG_PAGES: usize = Self::LOG_BYTES - LOG_BYTES_IN_PAGE as usize;
@@ -101,37 +136,31 @@ impl Block {
         crate::util::metadata::side_metadata::spec_defs::MS_BLOCK_TLS;
 
     pub fn load_free_list(&self) -> Address {
-        unsafe { Address::from_usize(Block::FREE_LIST_TABLE.load::<usize>(self.start())) }
+        Block::FREE_LIST_TABLE.load_address(*self)
     }
 
     pub fn store_free_list(&self, free_list: Address) {
-        unsafe { Block::FREE_LIST_TABLE.store::<usize>(self.start(), free_list.as_usize()) }
+        Block::FREE_LIST_TABLE.store_address(*self, free_list)
     }
 
     #[cfg(feature = "malloc_native_mimalloc")]
     pub fn load_local_free_list(&self) -> Address {
-        unsafe { Address::from_usize(Block::LOCAL_FREE_LIST_TABLE.load::<usize>(self.start())) }
+        Block::LOCAL_FREE_LIST_TABLE.load_address(*self)
     }
 
     #[cfg(feature = "malloc_native_mimalloc")]
     pub fn store_local_free_list(&self, local_free: Address) {
-        unsafe { Block::LOCAL_FREE_LIST_TABLE.store::<usize>(self.start(), local_free.as_usize()) }
+        Block::LOCAL_FREE_LIST_TABLE.store_address(*self, local_free)
     }
 
     #[cfg(feature = "malloc_native_mimalloc")]
     pub fn load_thread_free_list(&self) -> Address {
-        unsafe {
-            Address::from_usize(
-                Block::THREAD_FREE_LIST_TABLE.load_atomic::<usize>(self.start(), Ordering::SeqCst),
-            )
-        }
+        Block::THREAD_FREE_LIST_TABLE.load_address_atomic(*self, Ordering::SeqCst)
     }
 
     #[cfg(feature = "malloc_native_mimalloc")]
     pub fn store_thread_free_list(&self, thread_free: Address) {
-        unsafe {
-            Block::THREAD_FREE_LIST_TABLE.store::<usize>(self.start(), thread_free.as_usize())
-        }
+        Block::THREAD_FREE_LIST_TABLE.store_address(*self, thread_free)
     }
 
     #[cfg(feature = "malloc_native_mimalloc")]
@@ -148,37 +177,29 @@ impl Block {
     }
 
     pub fn load_prev_block(&self) -> Option<Block> {
-        let prev = unsafe { Block::PREV_BLOCK_TABLE.load::<usize>(self.start()) };
+        let prev = Block::PREV_BLOCK_TABLE.load_usize(*self);
         NonZeroUsize::new(prev).map(Block)
     }
 
     pub fn load_next_block(&self) -> Option<Block> {
-        let next = unsafe { Block::NEXT_BLOCK_TABLE.load::<usize>(self.start()) };
+        let next = Block::NEXT_BLOCK_TABLE.load_usize(*self);
         NonZeroUsize::new(next).map(Block)
     }
 
     pub fn store_next_block(&self, next: Block) {
-        unsafe {
-            Block::NEXT_BLOCK_TABLE.store::<usize>(self.start(), next.start().as_usize());
-        }
+        Block::NEXT_BLOCK_TABLE.store_address(*self, next.start())
     }
 
     pub fn clear_next_block(&self) {
-        unsafe {
-            Block::NEXT_BLOCK_TABLE.store::<usize>(self.start(), 0);
-        }
+        Block::NEXT_BLOCK_TABLE.store_usize(*self, 0)
     }
 
     pub fn store_prev_block(&self, prev: Block) {
-        unsafe {
-            Block::PREV_BLOCK_TABLE.store::<usize>(self.start(), prev.start().as_usize());
-        }
+        Block::PREV_BLOCK_TABLE.store_address(*self, prev.start())
     }
 
     pub fn clear_prev_block(&self) {
-        unsafe {
-            Block::PREV_BLOCK_TABLE.store::<usize>(self.start(), 0);
-        }
+        Block::PREV_BLOCK_TABLE.store_usize(*self, 0)
     }
 
     pub fn store_block_list(&self, block_list: &BlockList) {
@@ -200,12 +221,12 @@ impl Block {
 
     pub fn store_block_cell_size(&self, size: usize) {
         debug_assert_ne!(size, 0);
-        unsafe { Block::SIZE_TABLE.store::<usize>(self.start(), size) }
+        Block::SIZE_TABLE.store_usize(*self, size)
     }
 
     pub fn store_tls(&self, tls: VMThread) {
         let tls_usize: usize = tls.0.to_address().as_usize();
-        unsafe { Block::TLS_TABLE.store(self.start(), tls_usize) }
+        Block::TLS_TABLE.store_usize(*self, tls_usize)
     }
 
     pub fn load_tls(&self) -> VMThread {
