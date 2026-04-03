@@ -10,7 +10,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: Audit remaining files in 'Files NOT to Revisit' (checked global.rs, metadata_val_traits.rs, mmtk.rs, sft_map.rs, malloc_ms_util.rs, rust_util/mod.rs, slot.rs, raw_memory_freelist.rs).
+1. 🟢 LOW: Audit remaining files in 'Files NOT to Revisit' (checked global.rs, metadata_val_traits.rs, mmtk.rs, sft_map.rs, malloc_ms_util.rs, rust_util/mod.rs, slot.rs, raw_memory_freelist.rs, memory.rs, allocator.rs, api.rs).
 
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.

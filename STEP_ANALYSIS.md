@@ -1,19 +1,17 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: src/vm/slot.rs, src/util/raw_memory_freelist.rs
-- Strategy: Audit and analyze for potential abstractions
+- File: src/util/memory.rs, src/util/alloc/allocator.rs, docs/dummyvm/src/api.rs
+- Strategy: Audit remaining files in 'Files NOT to Revisit'
 
 ## Findings
-- `src/vm/slot.rs`:
-  - `MemorySlice::copy` uses `std::ptr::copy` which is unsafe. However, the trait defines it as safe. Making it `unsafe fn` in the trait would require adding unsafe blocks at call sites, increasing the total unsafe count.
-  - `SimpleSlot::as_atomic` centralizes unsafe dereference. Inlining it would increase count.
-- `src/util/raw_memory_freelist.rs`:
-  - `get_slice` and `get_slice_mut` use `from_raw_parts` to create slice views of raw memory. This is necessary because the memory is mapped dynamically and we cannot easily use lifetimes without affecting usability in global contexts.
+- `src/util/memory.rs`: Unsafe blocks are direct calls to `libc` memory management functions (`mmap`, `munmap`, `mprotect`, `madvise`, `prctl`). These are inherently unsafe and necessary for FFI. The module provides safe wrappers where possible.
+- `src/util/alloc/allocator.rs`: Unsafe block in `fill_alignment_gap` uses `std::ptr::write_bytes` to fill alignment gaps. This is necessary for performance and low-level memory initialization.
+- `docs/dummyvm/src/api.rs`: Unsafe blocks use `CStr::from_ptr` to convert raw C strings from FFI into Rust strings. This is inherently unsafe but necessary for FFI boundary.
 
 ## Attempted Changes
 - None (Analysis only).
 
 ## Blockers / Insights for Next Step
-- The project is in Phase 3 (Irreducible Documentation). Most remaining unsafe blocks are justified by performance or FFI constraints.
-- Documenting the audit of `slot.rs` and `raw_memory_freelist.rs` in `UNSAFE_MEMORY.md`.
+- The project is in Phase 3 (Irreducible Documentation). All files containing unsafe code are now listed in 'Files NOT to Revisit' or analyzed as irreducible.
+- Next step should continue auditing the remaining files in the list to ensure all unsafe blocks are justified and documented.
