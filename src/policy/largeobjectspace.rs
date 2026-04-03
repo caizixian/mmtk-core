@@ -163,7 +163,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
                 // Find the exact address that has vo bit set
                 for offset in 0..vo_bit::VO_BIT_WORD_TO_REGION {
                     let addr = cur_page + offset;
-                    if unsafe { vo_bit::is_vo_addr(addr) } {
+                    if vo_bit::is_vo_addr(addr) {
                         return vo_bit::is_internal_ptr_from_vo_bit::<VM>(addr, ptr);
                     }
                 }

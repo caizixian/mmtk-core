@@ -10,7 +10,7 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/vo_bit/mod.rs` — Investigate unsafe operations for VO bit. — expected Δ: ?
+1. 🔴 HIGH: `src/util/malloc/malloc_ms_util.rs` — Investigate unsafe operations in malloc_ms_util. — expected Δ: ?
 
 ## Patterns Discovered
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.

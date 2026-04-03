@@ -90,8 +90,8 @@ pub(super) unsafe fn unset_offset_malloc_bit_unsafe(address: Address) {
     OFFSET_MALLOC_METADATA_SPEC.store::<u8>(address, 0);
 }
 
-pub unsafe fn unset_vo_bit_unsafe(object: ObjectReference) {
-    vo_bit::unset_vo_bit_unsafe(object);
+pub fn unset_vo_bit_relaxed(object: ObjectReference) {
+    vo_bit::unset_vo_bit_relaxed(object);
 }
 
 #[allow(unused)]
