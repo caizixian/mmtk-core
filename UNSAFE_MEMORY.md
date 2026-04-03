@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 479 | Δ: -243
+- Starting count: 722 | Current: 473 | Δ: -249
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,11 +10,12 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/vm/slot.rs:180-206` — Investigate if `SimpleSlot` operations can be made safe or if it's a safe abstraction. — expected Δ: ?
-2. 🟡 MED: `src/util/metadata/header_metadata.rs` — Re-evaluate if `MetadataSlot` can be used to reduce unsafe blocks. [Phase 1 analysis] — expected Δ: ?
+1. 🔴 HIGH: `src/util/metadata/side_metadata/helpers.rs` — Use `MetadataSlot` to reduce unsafe blocks for raw loads. — expected Δ: 7
+2. 🟡 MED: `src/util/metadata/header_metadata.rs` — Check if remaining unsafe blocks can be reduced further. — expected Δ: ?
 
 ## Patterns Discovered
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
+- Making `MetadataSlot` `pub(crate)` and adding `load_non_atomic` and `store_non_atomic` allows reusing it across modules (e.g., in `header_metadata.rs`).
 - `unsafe { MaybeUninit::uninit().assume_init() }` → `[MaybeUninit::uninit()]` when array size is 1. Works for initializing arrays of `MaybeUninit` safely.
 - For arrays of size N where type is not Copy: `[const { MaybeUninit::uninit() }; N]` is safe.
 - Using `Address(x)` directly in tests within the same module/submodule to avoid `unsafe` blocks for `Address::from_usize`.
@@ -30,8 +31,8 @@
 - **New Pattern**: Replacing `UnsafeCell` with `Mutex` for global state that is accessed via shared references, eliminating unsafe mutable access.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
-- `src/util/metadata/side_metadata/helpers.rs` — Irreducible raw loads from metadata addresses. [Phase 1 analysis]
-- `src/util/metadata/header_metadata.rs` — Irreducible raw loads from header addresses. [Phase 1 analysis]
+- `src/util/metadata/side_metadata/helpers.rs` — Irreducible raw loads from metadata addresses. [Phase 1 analysis] (Re-evaluating in Phase 2 for MetadataSlot)
+- `src/util/metadata/header_metadata.rs` — Irreducible raw loads from header addresses. [Phase 1 analysis] (Re-evaluated in Phase 2, used MetadataSlot for some reductions)
 - `src/util/alloc/allocators.rs` — Irreducible `assume_init` for layout compatibility with VM bindings. [Phase 1 analysis]
 - `src/policy/sft_map.rs` — `SFTRefStorage` uses transmute for atomic fat pointers. [Phase 2 confirmed]
 - `src/util/metadata/metadata_val_traits.rs` — Irreducible raw loads from addresses in trait default impls. [Phase 2 confirmed]
@@ -47,6 +48,7 @@
 - `docs/dummyvm/src/api.rs` — Irreducible FFI boundaries in dummy VM implementation. [Phase 2 confirmed]
 - `src/util/memory.rs` — Contains wrappers for FFI calls. The unsafe blocks are the FFI calls themselves. [Phase 2 confirmed]
 - `src/util/address.rs` — Primitives for address operations. Unsafe signatures are necessary. [Phase 2 confirmed]
+- `src/vm/slot.rs` — `SimpleSlot` is a safe abstraction. Unsafe operations inside it are irreducible without viral lifetimes. Tests use unsafe to check address iteration. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - Implemented `SideMetadataSpecBlockExt` in `src/policy/marksweepspace/native_ms/block.rs` to abstract metadata accesses.

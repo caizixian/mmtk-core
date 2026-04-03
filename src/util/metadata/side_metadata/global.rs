@@ -14,33 +14,33 @@ use std::io::Result;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 #[derive(Clone, Copy)]
-struct MetadataSlot(Address);
+pub(crate) struct MetadataSlot(pub(crate) Address);
 
 impl MetadataSlot {
-    fn fetch_and(&self, mask: u8, order: Ordering) -> u8 {
+    pub(crate) fn fetch_and(&self, mask: u8, order: Ordering) -> u8 {
         unsafe { self.0.as_ref::<AtomicU8>() }.fetch_and(mask, order)
     }
 
-    fn fetch_or(&self, mask: u8, order: Ordering) -> u8 {
+    pub(crate) fn fetch_or(&self, mask: u8, order: Ordering) -> u8 {
         unsafe { self.0.as_ref::<AtomicU8>() }.fetch_or(mask, order)
     }
 
-    fn load(&self, order: Ordering) -> u8 {
+    pub(crate) fn load(&self, order: Ordering) -> u8 {
         unsafe { self.0.as_ref::<AtomicU8>() }.load(order)
     }
 
-    fn store(&self, val: u8, order: Ordering) {
+    pub(crate) fn store(&self, val: u8, order: Ordering) {
         unsafe { self.0.as_ref::<AtomicU8>() }.store(val, order)
     }
 
-    fn fetch_update<F>(&self, set_order: Ordering, fetch_order: Ordering, f: F) -> std::result::Result<u8, u8>
+    pub(crate) fn fetch_update<F>(&self, set_order: Ordering, fetch_order: Ordering, f: F) -> std::result::Result<u8, u8>
     where
         F: FnMut(u8) -> Option<u8>,
     {
         unsafe { <u8 as MetadataValue>::fetch_update(self.0, set_order, fetch_order, f) }
     }
 
-    fn compare_exchange(
+    pub(crate) fn compare_exchange(
         &self,
         old: u8,
         new: u8,
@@ -48,6 +48,14 @@ impl MetadataSlot {
         failure: Ordering,
     ) -> std::result::Result<u8, u8> {
         unsafe { self.0.compare_exchange::<AtomicU8>(old, new, success, failure) }
+    }
+
+    pub(crate) fn load_non_atomic(&self) -> u8 {
+        unsafe { self.0.load::<u8>() }
+    }
+
+    pub(crate) fn store_non_atomic(&self, val: u8) {
+        unsafe { self.0.store::<u8>(val) }
     }
 }
 
