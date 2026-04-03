@@ -195,7 +195,7 @@ pub(crate) fn get_object_ref_for_vo_addr(vo_addr: Address) -> ObjectReference {
     // VO bit should be set on the address.
     debug_assert!(vo_addr.is_aligned_to(ObjectReference::ALIGNMENT));
     debug_assert!(is_vo_addr(vo_addr));
-    unsafe { ObjectReference::from_raw_address_unchecked(vo_addr) }
+    ObjectReference::from_raw_address(vo_addr).unwrap()
 }
 
 /// Check if the address could be an internal pointer in the object.

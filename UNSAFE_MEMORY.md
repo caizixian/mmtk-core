@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 348 | Δ: -374
+- Starting count: 722 | Current: 347 | Δ: -375
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,8 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/util/erase_vm.rs:24-27` — Check if type erasure can be done safely or if it's irreducible. — expected Δ: 1
+1. 🔴 HIGH: `src/util/metadata/vo_bit/mod.rs:184` — Check if `find_prev_non_zero_value` can be made safe or wrapped. — expected Δ: 1
+2. 🔴 HIGH: `src/util/metadata/vo_bit/mod.rs:172` — Check if `load_raw_word` can be made safe or wrapped. — expected Δ: 1
 
 ## Patterns Discovered
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
@@ -68,3 +69,4 @@
 - `src/policy/immix/line.rs` — All unsafe removed by using atomic operations. [Phase 2 confirmed]
 - `src/scheduler/affinity.rs` — Irreducible FFI interaction for thread affinity. [Phase 2 confirmed]
 - `src/scheduler/worker.rs` — Remaining unsafe are `Send`/`Sync` impls. Function body unsafe removed. [Phase 2 confirmed]
+- `src/util/erase_vm.rs` — Type erasure for non-'static references is irreducible without unsafe. [Phase 2 confirmed]
