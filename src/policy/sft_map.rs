@@ -91,10 +91,7 @@ pub(crate) fn create_sft_map() -> Box<dyn SFTMap + Sync> {
     }
 }
 
-pub(crate) struct SFTWrapper(pub *const (dyn SFT + Sync));
-
-unsafe impl Send for SFTWrapper {}
-unsafe impl Sync for SFTWrapper {}
+pub(crate) struct SFTWrapper(pub &'static (dyn SFT + Sync));
 
 use std::sync::OnceLock;
 use std::sync::Mutex;
@@ -110,7 +107,9 @@ fn get_sft_wrapper(sft: &(dyn SFT + Sync + 'static)) -> &'static SFTWrapper {
     if let Some(wrapper) = map.get(&addr) {
         return wrapper;
     }
-    let wrapper = Box::leak(Box::new(SFTWrapper(sft as *const _)));
+    // SAFETY: We know that `sft` points to a space that lives forever.
+    let sft_static: &'static (dyn SFT + Sync) = unsafe { &*(sft as *const (dyn SFT + Sync)) };
+    let wrapper = Box::leak(Box::new(SFTWrapper(sft_static)));
     map.insert(addr, wrapper);
     wrapper
 }
@@ -135,8 +134,8 @@ impl SFTRefStorage {
     pub fn load(&self) -> &dyn SFT {
         let ptr = self.0.load(Ordering::Acquire);
         // SAFETY: The pointer was stored by `store` or `new` which obtain a valid `&'static SFTWrapper` from `get_sft_wrapper`.
-        // The wrapper is leaked and lives forever. The contained raw pointer points to a space that lives forever.
-        unsafe { &*(*ptr).0 }
+        // The wrapper is leaked and lives forever. The contained reference points to a space that lives forever.
+        unsafe { (*ptr).0 }
     }
 
     // Store a raw SFT pointer with the release ordering.

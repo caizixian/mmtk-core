@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 71 | Δ: -280
+- Starting count: 351 | Current: 70 | Δ: -281
 - Phase: 3 (Irreducible Documentation)
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,9 +10,10 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/policy/sft_map.rs` — Investigate using thin pointers to `SFTWrapper` to eliminate transmutes of fat pointers — expected Δ: 0-3
+1. 🟡 MED: `src/util/metadata/side_metadata/global.rs:550` — Investigate if raw memory copy in `bcopy_metadata_contiguous` can be made safer — expected Δ: 0-1
 
 ## Patterns Discovered
+- Refactored `SFTWrapper` to hold a reference instead of a raw pointer, eliminating `unsafe impl Send` and `Sync` for the wrapper and reducing unsafe count.
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
 - `MetadataSlot` wraps `Address` but methods remain unsafe due to raw memory access. Moving unsafe to constructor increases count at call sites.
 - Centralized unsafe raw pointer dereferences in `MetadataSlot` by introducing a helper `get_ref<T>` method, reducing unsafe blocks in load methods.
