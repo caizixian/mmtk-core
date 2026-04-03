@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 433 | Δ: -289
+- Starting count: 722 | Current: 407 | Δ: -315
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/int_array_freelist.rs:12-70` — Refactor to use `Arc<RwLock<Vec<i32>>>` (or similar) to eliminate `NonNull` and associated `unsafe` blocks. — expected Δ: 4
+1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs:21-111` — Use `MetadataSlot` or similar abstraction to encapsulate raw memory operations on metadata addresses. — expected Δ: 10
 
 ## Patterns Discovered
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
@@ -35,6 +35,7 @@
 - **New Pattern**: Adding a safe `get_plan_mut_safe` to `MMTK` taking `&mut self` allows removing `unsafe` blocks when exclusive access to `MMTK` is available (e.g., in `set_vm_space`).
 - **New Pattern**: Replacing unsafe non-atomic `load` on `MetadataSpec` with safe `load_atomic` with `Relaxed` ordering when logic allows (e.g. monotonic transitions).
 - **New Pattern**: Using safe wrappers in `Mutator` (like `allocator_impl_mut_for_semantic`) in plan-specific mutators to eliminate direct unsafe calls to `allocators.get_allocator_mut`.
+- **New Pattern**: Refactor `IntArrayFreeList` to use `Arc<RwLock<Vec<i32>>>` to eliminate `NonNull` and associated `unsafe` blocks, sharing the table safely between parent and children.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/metadata/side_metadata/helpers.rs` — All unsafe removed by using `MetadataSlot`. [Phase 2 confirmed]
@@ -63,3 +64,4 @@
 - `src/memory_manager.rs` — All unsafe removed (used `get_plan_mut_safe`). [Phase 2 confirmed]
 - `src/scheduler/gc_work.rs` — `get_plan_mut` calls are irreducible without major refactor to thread proof tokens or change trait signatures. [Phase 2 confirmed]
 - `src/plan/barriers.rs` — Reduced unsafe block in line 198. Remaining unsafe (if any) are likely irreducible. [Phase 2 confirmed]
+- `src/util/int_array_freelist.rs` — All unsafe removed by refactoring to use Arc<RwLock>. [Phase 2 confirmed]
