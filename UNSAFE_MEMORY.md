@@ -31,7 +31,7 @@
 - `SFTRefStorage::load` returns a reference lock-free and thus requires leaked or static data to be sound without hazard pointers or Arc overhead.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/raw_memory_freelist.rs:1-100` — Audit remaining unsafe blocks (slice from raw parts) to see if they can be encapsulated or if bytemuck can be used after initial reference creation. — expected Δ: 0
+1. 🔴 HIGH: `src/util/heap/layout/mmapper/csm/mod.rs:204` — Verify safety comments for unsafe `dzmmap` call. — expected Δ: 0
 
 ## Patterns Discovered
 - Refactored `SFTWrapper` to hold a reference instead of a raw pointer, eliminating `unsafe impl Send` and `Sync` for the wrapper and reducing unsafe count.
