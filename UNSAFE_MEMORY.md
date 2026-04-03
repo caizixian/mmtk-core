@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 541 | Δ: -181
-- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout, util/copy, util/metadata/side_metadata, util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util, policy/sft_map (SFTMap update/eager_initialize take reference, remove unsafe in implementations)
+- Starting count: 722 | Current: 539 | Δ: -183
+- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout, util/copy, util/metadata/side_metadata, util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util, policy/sft_map (SFTMap update/eager_initialize take reference, remove unsafe in implementations), policy/marksweepspace/malloc_ms/global.rs (unnecessary SFT_MAP unsafe)
 
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -42,7 +42,6 @@
 
 ## Refactoring Ideas
 - `src/policy/lockfreeimmortalspace.rs`: Remove unnecessary `unsafe` block at call site of `sft_map.eager_initialize` (line 130).
-- `src/policy/marksweepspace/malloc_ms/global.rs`: Remove unnecessary `unsafe` blocks at call sites of `SFT_MAP.update` and `SFT_MAP.clear` (lines 395, 608).
 - `src/util/heap/layout/map32.rs`: Remove unnecessary `unsafe` block at call site of `SFT_MAP.clear` (line 257).
 
 ## Files NOT to Revisit
