@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 618 | Δ: -104
-- Completed subsystems: util/alloc/allocator.rs (RefCell to AtomicU8 for AllocationOptionsHolder), util/alloc (partial), policy/sft_map (partial), policy/marksweepspace (block.rs cleanup), util/heap/layout (vm_layout.rs static mut, map32.rs Mutex, map64.rs RwLock), util/copy (MaybeUninit to Option in GCWorkerCopyContext), util/metadata/side_metadata (side_metadata_tests.rs Address::from_usize(0) and zero_meta_bits vector cleanup, global.rs SideMetadataOffset union to enum), util/heap/gc_trigger.rs (OnceLock for plan), util/metadata/header_metadata.rs (Vec for TestBuffer in tests), util/heap/blockpageresource.rs (push on unique BlockQueue)
+- Starting count: 722 | Current: 615 | Δ: -107
+- Completed subsystems: util/alloc/allocator.rs (RefCell to AtomicU8 for AllocationOptionsHolder), util/alloc (partial), policy/sft_map (partial), policy/marksweepspace (block.rs cleanup), util/heap/layout (vm_layout.rs static mut, map32.rs Mutex, map64.rs RwLock), util/copy (MaybeUninit to Option in GCWorkerCopyContext), util/metadata/side_metadata (side_metadata_tests.rs Address::from_usize(0) and zero_meta_bits vector cleanup, global.rs SideMetadataOffset union to enum), util/heap/gc_trigger.rs (OnceLock for plan), util/metadata/header_metadata.rs (Vec for TestBuffer in tests), util/heap/blockpageresource.rs (push on unique BlockQueue), scheduler/gc_work.rs (Prepare/Release unsafe Send removal)
 
 
 ## Codebase Invariants (PROTECTED — do not prune)
