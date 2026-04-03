@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 270 | Δ: -81
+- Starting count: 351 | Current: 269 | Δ: -82
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@ Architectural insights that affect ALL future safety decisions:
 - Static plan references are needed because plan types are generic and cannot be stored in global statics easily.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs:825` — add `load_raw_word_atomic` and use it in `vo_bit::get_raw_vo_bit_word` to eliminate unsafe block — expected Δ: -1
+1. 🔴 HIGH: `src/util/test_util/mock_vm.rs:375-376` — Investigate if `MockVM` can be made `Send` and `Sync` by adding bounds to `MockAny` or `MockMethod` instead of `unsafe impl` — expected Δ: -2
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):

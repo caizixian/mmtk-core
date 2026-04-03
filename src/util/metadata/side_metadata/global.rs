@@ -837,6 +837,22 @@ impl SideMetadataSpec {
         )
     }
 
+    /// Load the raw word that includes the side metadata byte mapped to the data address atomically.
+    pub fn load_raw_word_atomic(&self, data_addr: Address, order: Ordering) -> usize {
+        use crate::util::constants::*;
+        debug_assert!(self.log_num_of_bits < (LOG_BITS_IN_BYTE + LOG_BYTES_IN_ADDRESS) as usize);
+        self.side_metadata_access::<false, usize, _, _, _>(
+            data_addr,
+            None,
+            || {
+                let meta_addr = address_to_meta_address(self, data_addr);
+                let aligned_meta_addr = meta_addr.align_down(BYTES_IN_ADDRESS);
+                MetadataSlot(aligned_meta_addr).load_usize_atomic(order)
+            },
+            |_| {},
+        )
+    }
+
     /// Stores the new value into the side metadata for the gien address if the current value is the same as the old value.
     /// This method has similar semantics to `compare_exchange` in Rust atomics.
     /// The return value is a result indicating whether the new value was written and containing the previous value.

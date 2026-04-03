@@ -169,7 +169,7 @@ pub(crate) const VO_BIT_WORD_TO_REGION: usize = 1
 
 /// Bulk check if a VO bit word. Return true if there is any bit set in the word.
 pub(crate) fn get_raw_vo_bit_word(addr: Address) -> usize {
-    unsafe { VO_BIT_SIDE_METADATA_SPEC.load_raw_word(addr) }
+    VO_BIT_SIDE_METADATA_SPEC.load_raw_word_atomic(addr, Ordering::Relaxed)
 }
 
 /// Find the base reference to the object from a potential internal pointer.
