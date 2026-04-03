@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 239 | Δ: -112
+- Starting count: 351 | Current: 236 | Δ: -115
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -53,6 +53,7 @@ Reusable refactoring patterns (recipe format):
 - `src/util/int_array_freelist.rs` — No unsafe code found. [Phase 2 confirmed]
 - `src/util/heap/layout/mmapper/csm/two_level_storage.rs` — No unsafe code found after removing redundant unsafe impls. [Phase2 confirmed]
 - `src/vm/slot.rs` — SimpleSlot is a safe abstraction. Investigation showed that using references adds lifetime burden and moves unsafe to construction. [Phase 2 confirmed]
+- `src/vm/tests/mock_tests/mock_test_conservatism.rs` — No unsafe code found. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 ### StwProof for safe plan access
