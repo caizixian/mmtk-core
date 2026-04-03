@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 493 | Current: 422 | Δ: -71
+- Starting count: 493 | Current: 417 | Δ: -76
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,6 +10,7 @@
 ## Work Queue (NEXT STEP: pick the first actionable item)
 1. 🔴 HIGH: Continue applying `slot_from_meta_addr` in `global.rs` and other metadata files to remove unsafe blocks.
 2. 🟡 MED: Identify other `MaybeUninit` usages in the codebase and apply safe abstractions.
+3. 🟢 LOW: Check if other files have unnecessary `unsafe` on functions that can be made safe.
 
 ## Patterns Discovered
 - `MaybeUninit` arrays of size 1 can be replaced with `Option` and `unwrap()` to eliminate unsafe access.
@@ -33,6 +34,7 @@
 - **Replacing Address::zero() with Address::ZERO**: Eliminated 1 unsafe block in `free_list_allocator.rs`.
 - **Address comparison in tests**: Instead of loading values from addresses yielded by an iterator in tests (which requires unsafe), compare the addresses directly with the expected addresses of valid objects.
 - **Eliminating unsafe casts in constructors**: If a type uses `OnceLock` for late initialization, its setter can take `&self` instead of `&mut self`, avoiding the need to cast `Arc` to `&mut` in constructors when the object is shared but not yet fully initialized in the type system's view.
+- **Removing unnecessary unsafe from functions**: Functions marked `unsafe` that contain no unsafe operations and rely on safe abstractions can be made safe (applied to `FreeListPageResource`).
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.
@@ -49,6 +51,7 @@
 - `src/util/address.rs` — Primitives for raw memory access and address arithmetic.
 - `src/util/metadata/vo_bit/mod.rs` — Remaining unsafe is `from_raw_address_unchecked` in `get_object_ref_for_vo_addr` which is irreducible.
 - `src/util/heap/layout/map64.rs` — Remaining unsafe are trait signatures and unavoidable `from_usize` calls for reading high water mark.
+- `src/util/metadata/safe_access.rs` — Abstraction boundary for `MetadataSlot`.
 
 ## Abstraction Proposals (for Phase 2)
 - **Safe Metadata Accessor**: `MetadataSlot` implemented in `safe_access.rs`. Used in `header_metadata.rs` and `global.rs`.
