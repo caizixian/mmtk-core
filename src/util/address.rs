@@ -152,27 +152,24 @@ impl Address {
     }
 
     /// creates a null Address (0)
-    /// # Safety
-    /// It is unsafe and the user needs to be aware that they are creating an invalid address.
+    ///
     /// The zero address should only be used as unininitialized or sentinel values in performance critical code (where you dont want to use `Option<Address>`).
-    pub const unsafe fn zero() -> Address {
+    pub const fn zero() -> Address {
         Address(0)
     }
 
     /// creates an Address of (usize::MAX)
-    /// # Safety
-    /// It is unsafe and the user needs to be aware that they are creating an invalid address.
+    ///
     /// The max address should only be used as unininitialized or sentinel values in performance critical code (where you dont want to use `Option<Address>`).
-    pub unsafe fn max() -> Address {
+    pub const fn max() -> Address {
         Address(usize::MAX)
     }
 
     /// creates an arbitrary Address
-    /// # Safety
-    /// It is unsafe and the user needs to be aware that they may create an invalid address.
+    ///
     /// This creates arbitrary addresses which may not be valid. This should only be used for hard-coded addresses. Any other uses of this function could be
     /// replaced with more proper alternatives.
-    pub const unsafe fn from_usize(raw: usize) -> Address {
+    pub const fn from_usize(raw: usize) -> Address {
         Address(raw)
     }
 

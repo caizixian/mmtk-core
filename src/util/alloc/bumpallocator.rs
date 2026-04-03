@@ -66,7 +66,7 @@ impl<VM: VMBinding> BumpAllocator<VM> {
     }
 
     pub(crate) fn reset(&mut self) {
-        let zero = unsafe { Address::zero() };
+        let zero = Address::zero();
         self.bump_pointer.reset(zero, zero);
     }
 
@@ -225,7 +225,7 @@ impl<VM: VMBinding> BumpAllocator<VM> {
                 // manipulating the limit as below.
                 // The assumption here is that we use an address range such that
                 // cursor > block_size always.
-                self.set_limit(acquired_start, unsafe { Address::from_usize(block_size) });
+                self.set_limit(acquired_start, Address::from_usize(block_size));
                 // Note that we have just acquired a new block so we know that we don't have to go
                 // through the entire allocation sequence again, we can directly call the slow path
                 // allocation.

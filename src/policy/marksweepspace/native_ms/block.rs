@@ -45,7 +45,7 @@ impl Region for Block {
     }
 
     fn start(&self) -> Address {
-        unsafe { Address::from_usize(self.0.get()) }
+        Address::from_usize(self.0.get())
     }
 }
 
@@ -210,9 +210,7 @@ impl Block {
 
     pub fn load_tls(&self) -> VMThread {
         let tls = Block::TLS_TABLE.load_atomic::<usize>(self.start(), Ordering::SeqCst);
-        VMThread(OpaquePointer::from_address(unsafe {
-            Address::from_usize(tls)
-        }))
+        VMThread(OpaquePointer::from_address(Address::from_usize(tls)))
     }
 
     pub fn has_free_cells(&self) -> bool {
@@ -287,7 +285,7 @@ impl Block {
         let cell_size = self.load_block_cell_size();
         debug_assert_ne!(cell_size, 0);
         let mut cell = self.start();
-        let mut last = unsafe { Address::zero() };
+        let mut last = Address::zero();
         while cell + cell_size <= self.start() + Block::BYTES {
             // The invariants we checked earlier ensures that we can use cell and object reference interchangably
             // We may not really have an object in this cell, but if we do, this object reference is correct.

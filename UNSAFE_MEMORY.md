@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 691 | Δ: -31
+- Starting count: 722 | Current: 676 | Δ: -46
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -9,8 +9,9 @@
 - `SFTMap::get_unchecked` is now safe and uses bounds checks (or is guaranteed within bounds for `SFTSpaceMap`).
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/address.rs:158` — Audit why `zero` and `max` are unsafe and if they can be made safe. — expected Δ: 2
-2. 🟡 MED: `src/util/address.rs:175` — Audit `from_usize` and see if it can be restricted or made safer. — expected Δ: 2
+1. 🔴 HIGH: `src/util/api_util.rs:23` — Remove unnecessary unsafe block around `Address::from_usize`. — expected Δ: 1
+2. 🔴 HIGH: `src/util/conversions.rs:42` — Remove unnecessary unsafe block around `Address::from_usize`. — expected Δ: 1
+3. 🔴 HIGH: `src/util/heap/layout/vm_layout.rs:135-151` — Remove unnecessary unsafe blocks around `Address::from_usize`. — expected Δ: 4
 
 ## Patterns Discovered
 - `unsafe { MaybeUninit::uninit().assume_init() }` → `[MaybeUninit::uninit()]` when array size is 1. Works for initializing arrays of `MaybeUninit` safely.
