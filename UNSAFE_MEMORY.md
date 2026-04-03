@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 571 | Δ: -151
+- Starting count: 722 | Current: 566 | Δ: -156
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/util/linear_scan.rs:193-194, 214, 237, 250` — Remove unnecessary unsafe blocks for `Address::from_usize`.
+1. 🔴 HIGH: `src/util/copy/mod.rs:56-60` — Replace `MaybeUninit` with `Option` for copy context arrays to eliminate `assume_init_mut` calls. — expected Δ: -12
 
 ## Patterns Discovered
 - `unsafe { MaybeUninit::uninit().assume_init() }` → `[MaybeUninit::uninit()]` when array size is 1. Works for initializing arrays of `MaybeUninit` safely.
