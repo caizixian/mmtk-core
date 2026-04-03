@@ -26,8 +26,8 @@ pub fn is_marked<VM: VMBinding>(object: ObjectReference, ordering: Ordering) -> 
     VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(object, None, ordering) == 1
 }
 
-pub unsafe fn is_marked_unsafe<VM: VMBinding>(object: ObjectReference) -> bool {
-    VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load::<VM, u8>(object, None) == 1
+pub fn is_marked_unsafe<VM: VMBinding>(object: ObjectReference) -> bool {
+    VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(object, None, Ordering::Relaxed) == 1
 }
 
 /// Set the page mark from 0 to 1. Return true if we set it successfully in this call.
@@ -44,10 +44,6 @@ pub(super) fn is_page_marked(page_addr: Address) -> bool {
     ACTIVE_PAGE_METADATA_SPEC.load_atomic::<u8>(page_addr, Ordering::SeqCst) == 1
 }
 
-#[allow(unused)]
-pub(super) unsafe fn is_page_marked_unsafe(page_addr: Address) -> bool {
-    ACTIVE_PAGE_METADATA_SPEC.load::<u8>(page_addr) == 1
-}
 
 pub fn set_vo_bit(object: ObjectReference) {
     vo_bit::set_vo_bit(object);
@@ -85,24 +81,16 @@ pub(super) fn unset_offset_malloc_bit(address: Address) {
     OFFSET_MALLOC_METADATA_SPEC.store_atomic::<u8>(address, 0, Ordering::SeqCst);
 }
 
-/// Unset the offset bit for the allocation. The argument address should be the allocation address (object start)
-pub(super) unsafe fn unset_offset_malloc_bit_unsafe(address: Address) {
-    OFFSET_MALLOC_METADATA_SPEC.store::<u8>(address, 0);
-}
+
 
 pub fn unset_vo_bit_relaxed(object: ObjectReference) {
     vo_bit::unset_vo_bit_relaxed(object);
 }
 
-#[allow(unused)]
-pub unsafe fn unset_mark_bit<VM: VMBinding>(object: ObjectReference) {
-    VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.store::<VM, u8>(object, 0, None);
+pub fn unset_mark_bit<VM: VMBinding>(object: ObjectReference) {
+    VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.store_atomic::<VM, u8>(object, 0, None, Ordering::SeqCst);
 }
 
-#[allow(unused)]
-pub(super) unsafe fn unset_page_mark_unsafe(page_addr: Address) {
-    ACTIVE_PAGE_METADATA_SPEC.store::<u8>(page_addr, 0)
-}
 
 /// Load u128 bits of side metadata
 ///

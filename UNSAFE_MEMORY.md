@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 346 | Δ: -376
+- Starting count: 722 | Current: 341 | Δ: -381
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,8 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/policy/marksweepspace/malloc_ms/metadata.rs:29-111` — Check if `is_marked_unsafe` and other unsafe functions can be made safe or if unsafe can be encapsulated. — expected Δ: 1
+1. 🔴 HIGH: investigate `src/vm/slot.rs` tests to see if unsafe address iteration can be made safe. — expected Δ: 1
+2. 🟡 MED: Scan for other files with count < 6 that are not in "Files NOT to Revisit".
 
 ## Patterns Discovered
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
@@ -36,6 +37,7 @@
 - Replacing unsafe non-atomic `load` on `MetadataSpec` with safe `load_atomic` with `Relaxed` ordering when logic allows (e.g. monotonic transitions).
 - Using safe wrappers in `Mutator` (like `allocator_impl_mut_for_semantic`) in plan-specific mutators to eliminate direct unsafe calls to `allocators.get_allocator_mut`.
 - Refactor `IntArrayFreeList` to use `Arc<RwLock<Vec<i32>>>` to eliminate `NonNull` and associated `unsafe` blocks, sharing the table safely between parent and children.
+- Removing unused unsafe functions in `malloc_ms/metadata.rs` and making others safe by using atomic operations.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/metadata/side_metadata/helpers.rs` — All unsafe removed by using `MetadataSlot`. [Phase 2 confirmed]

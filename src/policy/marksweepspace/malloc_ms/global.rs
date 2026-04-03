@@ -842,7 +842,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
             if live {
                 // Live object. Unset mark bit.
                 // We should be the only thread that access this chunk, it is okay to use non-atomic store.
-                unsafe { unset_mark_bit::<VM>(object) };
+                unset_mark_bit::<VM>(object);
 
                 #[cfg(debug_assertions)]
                 {
