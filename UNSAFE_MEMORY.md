@@ -2,7 +2,7 @@
 
 ## Progress
 - Starting count: 722 | Current: 583 | Δ: -139
-- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout, util/copy, util/metadata/side_metadata (side_metadata_tests.rs load/store to load_atomic/store_atomic, global.rs load to load_atomic in search), util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs
+- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout, util/copy, util/metadata/side_metadata (side_metadata_tests.rs load/store to load_atomic/store_atomic, global.rs load to load_atomic in search), util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util (InitializeOnce Sync bound), policy/sft_map (SFTMap Sync)
 
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -27,6 +27,8 @@
 - `get_unchecked(i)` → `[i]` — works in non-hot paths where bounds are guaranteed or panic is acceptable.
 - `*const T` → `&T` in trait signatures where ownership is not required and lifetimes are valid.
 - `unsafe impl Sync` removal for types that only contain thread-safe fields (auto-Sync).
+- `InitializeOnce<T>` bound tightening: `unsafe impl<T: Sync> Sync for InitializeOnce<T>` to prevent unsound sharing of non-Sync types.
+- `SFTMap: Sync` trait bound to enforce thread-safety for SFT implementations.
 - `static mut` → `OnceLock` for write-once globals.
 - `MaybeUninit` → `OnceLock` for late-initialized fields (e.g. `GCTrigger::plan`).
 - Raw memory allocation in tests → `TestBuffer<T>` safe wrapper with `Drop` for automatic cleanup.
@@ -40,6 +42,7 @@
 - `src/util/metadata/metadata_val_traits.rs`: Analyze 20 unsafe blocks (mostly trait methods for load/store).
 - `src/util/metadata/side_metadata/global.rs`: Analyze remaining unsafe blocks (74 count). Done load to load_atomic in search functions.
 - `src/policy/sft_map.rs`: Analyze remaining unsafe (20 count) for potential safe abstractions in SFT map access.
+- `src/plan/global.rs`: Remove `unsafe { crate::mmtk::SFT_MAP.get_mut() }` at line 114 by changing `notify_space_creation` to `&self` in `SFTMap` trait and using `Deref` on `SFT_MAP`.
 
 ## Files NOT to Revisit
 - `src/util/memory.rs` — FFI calls to libc (mmap, munmap, etc.).

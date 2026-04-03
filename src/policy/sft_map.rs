@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 
 /// SFTMap manages the SFT table, and mapping between addresses with indices in the table. The trait allows
 /// us to have multiple implementations of the SFT table.
-pub trait SFTMap {
+pub trait SFTMap: Sync {
     /// Check if the address has an SFT entry in the map (including an empty SFT entry). This is mostly a bound check
     /// to make sure that we won't have an index-out-of-bound error. For the sake of performance, the implementation
     /// of other methods in this trait (such as get_unchecked(), update() and clear()) does not need to do this check implicitly.
@@ -333,13 +333,11 @@ mod dense_chunk_map {
     /// library malloc may allocate into, so we cannot use the space map. And using a sparse chunk map
     /// will be costly in terms of memory. In this case, the dense chunk map is a good solution.
     pub struct SFTDenseChunkMap {
-        /// The dense table, one entry per space. We use side metadata to store the space index for each chunk.
-        /// 0 is EMPTY_SPACE_SFT.
         sft: Vec<SFTRefStorage>,
-        /// A map from space name (assuming they are unique) to their index. We use this to know whether we have
-        /// pushed &dyn SFT for a space, and to know its index.
         index_map: HashMap<String, usize>,
     }
+
+    unsafe impl Sync for SFTDenseChunkMap {}
 
 
 

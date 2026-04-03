@@ -105,7 +105,7 @@ impl<T> std::ops::Deref for InitializeOnce<T> {
     }
 }
 
-unsafe impl<T> Sync for InitializeOnce<T> {}
+unsafe impl<T: Sync> Sync for InitializeOnce<T> {}
 
 /// Create a formatted string that makes the best effort idenfying the current process and thread.
 pub fn debug_process_thread_id() -> String {
