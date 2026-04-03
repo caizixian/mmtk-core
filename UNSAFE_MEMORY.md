@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 574 | Δ: -148
-- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout, util/copy, util/metadata/side_metadata (side_metadata_tests.rs load/store to load_atomic/store_atomic, global.rs load to load_atomic in search), util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util (InitializeOnce Sync bound), policy/sft_map (SFTMap Sync), policy/marksweepspace/native_ms/block.rs (store to store_atomic)
+- Starting count: 722 | Current: 573 | Δ: -149
+- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout, util/copy, util/metadata/side_metadata (side_metadata_tests.rs load/store to load_atomic/store_atomic, global.rs load to load_atomic in search), util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util (InitializeOnce Sync bound), policy/sft_map (SFTMap Sync, SFTDenseChunkMap auto-Sync), policy/marksweepspace/native_ms/block.rs (store to store_atomic)
 
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -16,7 +16,7 @@
 - Why: Assumes allocator is initialized for performance.
 
 ### policy/sft_map (src/policy/sft_map.rs)
-- ~21 unsafe — SFT map access and trait impl.
+- ~20 unsafe — SFT map access and trait impl.
 - Why: FFI/Performance hot paths (transmute for fat pointers, slice access).
 
 ## Patterns Discovered

@@ -337,7 +337,6 @@ mod dense_chunk_map {
         index_map: HashMap<String, usize>,
     }
 
-    unsafe impl Sync for SFTDenseChunkMap {}
 
 
 
