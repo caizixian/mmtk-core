@@ -22,6 +22,7 @@
 - Antigravity verified again under strategy escalation and confirmed that remaining unsafe blocks in `src/vm/slot.rs`, `src/mmtk.rs`, `src/util/raw_memory_freelist.rs`, and `src/policy/sft_map.rs` are irreducible or well-encapsulated.
 - Antigravity removed 4 unused unsafe functions in `src/util/metadata/side_metadata/global.rs` (`set_zero`, `set_raw_byte_atomic`, `load_raw_byte`, `load_raw_word`), reducing the count by 4.
 - Antigravity verified again in the current step that remaining unsafe blocks in `src/util/malloc/malloc_ms_util.rs` and `src/util/metadata/side_metadata/global.rs` are irreducible or well-encapsulated.
+- Antigravity verified safety comments for unsafe `dzmmap` call in `src/util/heap/layout/mmapper/csm/mod.rs:204` and confirmed it is irreducible.
 
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -31,7 +32,7 @@
 - `SFTRefStorage::load` returns a reference lock-free and thus requires leaked or static data to be sound without hazard pointers or Arc overhead.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/heap/layout/mmapper/csm/mod.rs:204` — Verify safety comments for unsafe `dzmmap` call. — expected Δ: 0
+1. 🔴 HIGH: `src/mmtk.rs:149` — Verify safety comments for unsafe dereference in `StwProtected`. — expected Δ: 0
 
 ## Patterns Discovered
 - Refactored `SFTWrapper` to hold a reference instead of a raw pointer, eliminating `unsafe impl Send` and `Sync` for the wrapper and reducing unsafe count.
