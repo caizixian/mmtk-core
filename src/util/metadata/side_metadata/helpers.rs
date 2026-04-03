@@ -61,7 +61,7 @@ pub(super) fn contiguous_meta_address_to_address(
     let data_addr = (data_addr_intermediate << metadata_spec.log_bytes_in_region)
         + ((bit as usize) << data_addr_bit_shift);
 
-    unsafe { Address::from_usize(data_addr) }
+    Address::from_usize(data_addr)
 }
 
 /// Align an pair of a metadata address and a metadata bit offset to the start of this metadata value.
@@ -433,14 +433,14 @@ mod tests {
     }
 
     const TEST_ADDRESS_8B_REGION: [Address; 8] = [
-        unsafe { Address::from_usize(0x8000_0000) },
-        unsafe { Address::from_usize(0x8000_0008) },
-        unsafe { Address::from_usize(0x8000_0010) },
-        unsafe { Address::from_usize(0x8000_0018) },
-        unsafe { Address::from_usize(0x8000_0020) },
-        unsafe { Address::from_usize(0x8001_0000) },
-        unsafe { Address::from_usize(0x8001_0008) },
-        unsafe { Address::from_usize(0xd000_0000) },
+        Address::from_usize(0x8000_0000),
+        Address::from_usize(0x8000_0008),
+        Address::from_usize(0x8000_0010),
+        Address::from_usize(0x8000_0018),
+        Address::from_usize(0x8000_0020),
+        Address::from_usize(0x8001_0000),
+        Address::from_usize(0x8001_0008),
+        Address::from_usize(0xd000_0000),
     ];
 
     #[test]
@@ -496,14 +496,14 @@ mod tests {
     }
 
     const TEST_ADDRESS_4KB_REGION: [Address; 8] = [
-        unsafe { Address::from_usize(0x8000_0000) },
-        unsafe { Address::from_usize(0x8000_1000) },
-        unsafe { Address::from_usize(0x8000_2000) },
-        unsafe { Address::from_usize(0x8000_3000) },
-        unsafe { Address::from_usize(0x8000_4000) },
-        unsafe { Address::from_usize(0x8001_0000) },
-        unsafe { Address::from_usize(0x8001_1000) },
-        unsafe { Address::from_usize(0xd000_0000) },
+        Address::from_usize(0x8000_0000),
+        Address::from_usize(0x8000_1000),
+        Address::from_usize(0x8000_2000),
+        Address::from_usize(0x8000_3000),
+        Address::from_usize(0x8000_4000),
+        Address::from_usize(0x8001_0000),
+        Address::from_usize(0x8001_1000),
+        Address::from_usize(0xd000_0000),
     ];
 
     #[test]

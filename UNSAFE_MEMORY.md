@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 665 | Δ: -57
+- Starting count: 722 | Current: 641 | Δ: -81
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -12,8 +12,8 @@
 1. 🔴 HIGH: `src/util/heap/monotonepageresource.rs:186-188` — Remove unnecessary unsafe blocks.
 2. 🔴 HIGH: `src/util/heap/space_descriptor.rs:101, 111` — Remove unnecessary unsafe blocks.
 3. 🔴 HIGH: `src/util/metadata/side_metadata/constants.rs:27` — Remove unnecessary unsafe block.
-4. 🔴 HIGH: `src/util/metadata/side_metadata/helpers.rs:64` — Remove unnecessary unsafe block.
-5. 🔴 HIGH: `src/util/metadata/side_metadata/sanity.rs:382` — Remove unnecessary unsafe block.
+4. 🔴 HIGH: `src/util/metadata/side_metadata/sanity.rs:382` — Remove unnecessary unsafe block.
+5. 🔴 HIGH: `src/util/metadata/side_metadata/side_metadata_tests.rs:42-164` — Remove unnecessary unsafe blocks around Address::from_usize.
 
 ## Patterns Discovered
 - `unsafe { MaybeUninit::uninit().assume_init() }` → `[MaybeUninit::uninit()]` when array size is 1. Works for initializing arrays of `MaybeUninit` safely.
