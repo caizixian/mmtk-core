@@ -225,13 +225,12 @@ impl Block {
     }
 
     /// Release this block if it is unmarked. Return true if the block is released.
-    pub fn attempt_release<VM: VMBinding>(self, space: &MarkSweepSpace<VM>) -> bool {
+    pub fn attempt_release<VM: VMBinding>(self, space: &MarkSweepSpace<VM>, block_list: &mut BlockList) -> bool {
         match self.get_state() {
             // We should not have unallocated blocks in a block list
             BlockState::Unallocated => unreachable!(),
             BlockState::Unmarked => {
-                let block_list = self.load_block_list();
-                unsafe { &mut *block_list }.remove(self);
+                block_list.remove(self);
                 space.release_block(self);
                 true
             }

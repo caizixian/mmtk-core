@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 493 | Current: 416 | Δ: -77
+- Starting count: 493 | Current: 415 | Δ: -78
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -35,6 +35,8 @@
 - **Address comparison in tests**: Instead of loading values from addresses yielded by an iterator in tests (which requires unsafe), compare the addresses directly with the expected addresses of valid objects.
 - **Eliminating unsafe casts in constructors**: If a type uses `OnceLock` for late initialization, its setter can take `&self` instead of `&mut self`, avoiding the need to cast `Arc` to `&mut` in constructors when the object is shared but not yet fully initialized in the type system's view.
 - **Removing unnecessary unsafe from functions**: Functions marked `unsafe` that contain no unsafe operations and rely on safe abstractions can be made safe (applied to `FreeListPageResource`).
+- **Passing &mut BlockList to attempt_release**: Eliminates unsafe raw pointer dereference by passing the list reference from the caller instead of loading it from metadata.
+
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.
