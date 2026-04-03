@@ -8,7 +8,7 @@
 - `Address::from_usize` is marked unsafe by design to warn about invalid addresses. Replacing it with `ZERO.add` is considered an anti-pattern as it is semantically identical.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: Analyze `src/util/heap/layout/map32.rs` for reducible unsafe usage in `Map32` implementation (e.g. `mut_self`).
+1. 🔴 HIGH: Analyze `src/plan/mutator_context.rs` for reducible unsafe usage in allocator access.
 
 ## Patterns Discovered
 - `MaybeUninit` arrays of size 1 can be replaced with `Option` and `unwrap()` to eliminate unsafe access.
@@ -32,6 +32,7 @@
 - **Safe unset_vo_bit**: Used safe `unset_vo_bit` instead of `unset_vo_bit_unsafe` in `malloc_ms/global.rs`.
 - **Safe unset_page_mark**: Refactored `unset_page_mark` in `malloc_ms/global.rs` to use safe `is_page_marked` and `unset_page_mark` (using atomics) from `metadata.rs`, removing unsafe from the function and its call sites.
 - **Centralizing unsafe stores in loops**: In `block.rs`, centralized unsafe raw memory writes in `simple_sweep` and `naive_brute_force_sweep` into a safe helper `write_free_list_link` with `debug_assert!`.
+- **Passing mutable reference instead of calling mut_self**: In `map32.rs`, refactored `free_contiguous_chunks_no_lock` to take `&mut Map32Inner` to eliminate unsafe blocks calling `self.mut_self()`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.
@@ -42,6 +43,7 @@
 - `src/util/metadata/metadata_val_traits.rs` — `MetadataValue` trait methods are unsafe by design as they perform raw memory access.
 - `src/util/metadata/side_metadata/side_metadata_tests.rs` — All unsafe are `Address::from_usize(...)` for creating test addresses.
 - `src/policy/marksweepspace/native_ms/block.rs` — Remaining unsafe are `Address::from_usize`, `ObjectReference::from_raw_address_unchecked`, and raw pointer dereferencing for `BlockList`.
+- `src/util/heap/layout/map32.rs` — Remaining unsafe are `mut_self` calls claimed to be safe due to single-threaded boot time or exclusive ranges.
 
 ## Abstraction Proposals (for Phase 2)
 - **Safe Metadata Accessor**: `MetadataSlot` implemented in `metadata_val_traits.rs`. Used in `header_metadata.rs` and `global.rs`.

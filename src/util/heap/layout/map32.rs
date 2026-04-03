@@ -136,7 +136,7 @@ impl VMMap for Map32 {
         debug_assert!(start == conversions::chunk_align_down(start));
         let chunk = start.chunk_index();
         if chunk == 0 || self.next_link[chunk] == 0 {
-            unsafe { Address::zero() }
+            Address::ZERO
         } else {
             let a = self.next_link[chunk];
             conversions::chunk_index_to_address(a as _)
@@ -169,22 +169,22 @@ impl VMMap for Map32 {
             let chunk = any_chunk.chunk_index();
             while self_mut.next_link[chunk] != 0 {
                 let x = self_mut.next_link[chunk];
-                self.free_contiguous_chunks_no_lock(x);
+                self.free_contiguous_chunks_no_lock(self_mut, x);
             }
             while self_mut.prev_link[chunk] != 0 {
                 let x = self_mut.prev_link[chunk];
-                self.free_contiguous_chunks_no_lock(x);
+                self.free_contiguous_chunks_no_lock(self_mut, x);
             }
-            self.free_contiguous_chunks_no_lock(chunk as _);
+            self.free_contiguous_chunks_no_lock(self_mut, chunk as _);
         }
     }
 
     unsafe fn free_contiguous_chunks(&self, start: Address) -> usize {
         debug!("free_contiguous_chunks: {}", start);
-        let (_sync, _) = self.mut_self_with_sync();
+        let (_sync, self_mut) = self.mut_self_with_sync();
         debug_assert!(start == conversions::chunk_align_down(start));
         let chunk = start.chunk_index();
-        self.free_contiguous_chunks_no_lock(chunk as _)
+        self.free_contiguous_chunks_no_lock(self_mut, chunk as _)
     }
 
     fn finalize_static_space_map(
@@ -275,29 +275,29 @@ impl Map32 {
         (guard, unsafe { self.mut_self() })
     }
 
-    fn free_contiguous_chunks_no_lock(&self, chunk: i32) -> usize {
-        unsafe {
-            let chunks = self.mut_self().region_map.free(chunk, false);
-            self.mut_self().total_available_discontiguous_chunks += chunks as usize;
-            let next = self.next_link[chunk as usize];
-            let prev = self.prev_link[chunk as usize];
-            if next != 0 {
-                self.mut_self().prev_link[next as usize] = prev
-            };
-            if prev != 0 {
-                self.mut_self().next_link[prev as usize] = next
-            };
-            self.mut_self().prev_link[chunk as usize] = 0;
-            self.mut_self().next_link[chunk as usize] = 0;
-            for offset in 0..chunks {
-                let index = (chunk + offset) as usize;
-                let chunk_start = conversions::chunk_index_to_address(index);
-                debug!("Clear descriptor for Chunk {}", chunk_start);
-                self.mut_self().descriptor_map[index] = SpaceDescriptor::UNINITIALIZED;
-                SFT_MAP.clear(chunk_start);
-            }
-            chunks as _
+    fn free_contiguous_chunks_no_lock(&self, self_mut: &mut Map32Inner, chunk: i32) -> usize {
+        let chunks = self_mut.region_map.free(chunk, false);
+        self_mut.total_available_discontiguous_chunks += chunks as usize;
+        let next = self_mut.next_link[chunk as usize];
+        let prev = self_mut.prev_link[chunk as usize];
+        if next != 0 {
+            self_mut.prev_link[next as usize] = prev
+        };
+        if prev != 0 {
+            self_mut.next_link[prev as usize] = next
+        };
+        self_mut.prev_link[chunk as usize] = 0;
+        self_mut.next_link[chunk as usize] = 0;
+        for offset in 0..chunks {
+            let index = (chunk + offset) as usize;
+            let chunk_start = conversions::chunk_index_to_address(index);
+            debug!("Clear descriptor for Chunk {}", chunk_start);
+            self_mut.descriptor_map[index] = SpaceDescriptor::UNINITIALIZED;
+            // SAFETY: SFT_MAP.clear is unsafe as it updates global SFT map.
+            // We are holding the lock on Map32, which guarantees exclusive access to these chunks.
+            unsafe { SFT_MAP.clear(chunk_start); }
         }
+        chunks as _
     }
 
     fn get_discontig_freelist_pr_ordinal(&self) -> usize {
