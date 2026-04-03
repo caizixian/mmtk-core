@@ -10,7 +10,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/scheduler/affinity.rs:49-56` — refactor `MaybeUninit` usage and document FFI calls — expected Δ: 0
+1. 🟡 MED: `src/policy/marksweepspace/native_ms/block.rs:257-390` — investigate if raw pointer manipulation can be centralized or abstracted (Re-evaluate from NOT to Revisit) — expected Δ: 1
 
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.

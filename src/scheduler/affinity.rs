@@ -46,9 +46,12 @@ fn bind_current_thread_to_core(cpu: CoreId) {
 /// Bind the current thread to the specified core.
 fn bind_current_thread_to_cpuset(cpuset: &[CoreId]) {
     use std::mem::MaybeUninit;
+    // SAFETY: We are calling libc FFI functions to set thread affinity.
+    // The `cpu_set_t` is initialized by `CPU_ZERO` before use.
     unsafe {
-        let mut cs = MaybeUninit::zeroed().assume_init();
-        CPU_ZERO(&mut cs);
+        let mut cs = MaybeUninit::<cpu_set_t>::uninit();
+        CPU_ZERO(&mut *cs.as_mut_ptr());
+        let mut cs = cs.assume_init();
         for cpu in cpuset {
             CPU_SET(*cpu as usize, &mut cs);
         }
