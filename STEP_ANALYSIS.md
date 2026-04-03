@@ -8,6 +8,8 @@
 - `src/mmtk.rs`: `StwProtected` uses `UnsafeCell` to avoid locking overhead. The abstraction is safe because mutation requires `StwProof`. Dereferencing raw pointer in `get` and `get_mut` is necessary.
 - `src/util/metadata/side_metadata/global.rs`: `MetadataSlot` methods `get_ref` and `get_mut_ref` use unsafe to cast address to reference. Centralizing unsafe here keeps count low at call sites.
 - `src/vm/slot.rs`: `SimpleSlot::as_atomic` and `MemorySlice::copy` use unsafe for raw pointer cast and memory copy. Irreducible.
+- `src/util/address.rs`: Low-level memory operations (`load`, `store`, etc.) are inherently unsafe and well-documented with safety invariants.
+- `src/util/test_util/mock_vm.rs`: `lifetime!` macro uses `transmute` to remove lifetimes for mocking purposes, which is justified in test utilities.
 - Confirmed that all remaining unsafe blocks are irreducible or properly encapsulated behind safe abstractions as documented in `UNSAFE_MEMORY.md`.
 
 ## Attempted Changes
@@ -18,4 +20,3 @@
 ## Blockers / Insights for Next Step
 - The project is in Phase 3 (Irreducible Documentation).
 - No further reductions are expected without changing the scope or accepting performance penalties.
-
