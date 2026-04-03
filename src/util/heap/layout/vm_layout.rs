@@ -132,8 +132,8 @@ impl VMLayout {
     pub const fn new_32bit() -> Self {
         let layout32 = Self {
             log_address_space: 32,
-            heap_start: chunk_align_down(unsafe { Address::from_usize(0x8000_0000) }),
-            heap_end: chunk_align_up(unsafe { Address::from_usize(0xd000_0000) }),
+            heap_start: chunk_align_down(Address::from_usize(0x8000_0000)),
+            heap_end: chunk_align_up(Address::from_usize(0xd000_0000)),
             log_space_extent: 31,
             force_use_contiguous_spaces: false,
         };
@@ -145,10 +145,8 @@ impl VMLayout {
     pub const fn new_64bit() -> Self {
         let layout64 = Self {
             log_address_space: 47,
-            heap_start: chunk_align_down(unsafe {
-                Address::from_usize(0x0000_0200_0000_0000usize)
-            }),
-            heap_end: chunk_align_up(unsafe { Address::from_usize(0x0000_2200_0000_0000usize) }),
+            heap_start: chunk_align_down(Address::from_usize(0x0000_0200_0000_0000usize)),
+            heap_end: chunk_align_up(Address::from_usize(0x0000_2200_0000_0000usize)),
             log_space_extent: 41,
             force_use_contiguous_spaces: true,
         };

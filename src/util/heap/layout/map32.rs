@@ -136,7 +136,7 @@ impl VMMap for Map32 {
         debug_assert!(start == conversions::chunk_align_down(start));
         let chunk = start.chunk_index();
         if chunk == 0 || self.next_link[chunk] == 0 {
-            unsafe { Address::zero() }
+            Address::zero()
         } else {
             let a = self.next_link[chunk];
             conversions::chunk_index_to_address(a as _)

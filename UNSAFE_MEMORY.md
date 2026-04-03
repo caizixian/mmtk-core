@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 676 | Δ: -46
+- Starting count: 722 | Current: 665 | Δ: -57
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -9,9 +9,11 @@
 - `SFTMap::get_unchecked` is now safe and uses bounds checks (or is guaranteed within bounds for `SFTSpaceMap`).
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/api_util.rs:23` — Remove unnecessary unsafe block around `Address::from_usize`. — expected Δ: 1
-2. 🔴 HIGH: `src/util/conversions.rs:42` — Remove unnecessary unsafe block around `Address::from_usize`. — expected Δ: 1
-3. 🔴 HIGH: `src/util/heap/layout/vm_layout.rs:135-151` — Remove unnecessary unsafe blocks around `Address::from_usize`. — expected Δ: 4
+1. 🔴 HIGH: `src/util/heap/monotonepageresource.rs:186-188` — Remove unnecessary unsafe blocks.
+2. 🔴 HIGH: `src/util/heap/space_descriptor.rs:101, 111` — Remove unnecessary unsafe blocks.
+3. 🔴 HIGH: `src/util/metadata/side_metadata/constants.rs:27` — Remove unnecessary unsafe block.
+4. 🔴 HIGH: `src/util/metadata/side_metadata/helpers.rs:64` — Remove unnecessary unsafe block.
+5. 🔴 HIGH: `src/util/metadata/side_metadata/sanity.rs:382` — Remove unnecessary unsafe block.
 
 ## Patterns Discovered
 - `unsafe { MaybeUninit::uninit().assume_init() }` → `[MaybeUninit::uninit()]` when array size is 1. Works for initializing arrays of `MaybeUninit` safely.
