@@ -16,6 +16,12 @@ impl StwProof {
     pub unsafe fn new() -> Self {
         StwProof(())
     }
+
+    /// Create a new `StwProof` for tests.
+    #[cfg(test)]
+    pub fn new_for_tests() -> Self {
+        StwProof(())
+    }
 }
 
 /// A safe wrapper around a metadata address.
