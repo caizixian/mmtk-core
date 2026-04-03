@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 323 | Δ: -28
+- Starting count: 351 | Current: 322 | Δ: -29
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,8 @@ Architectural insights that affect ALL future safety decisions:
 - Static plan references are needed because plan types are generic and cannot be stored in global statics easily.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/object_forwarding.rs:170-180` — Replace `ObjectReference::from_raw_address_unchecked` with `from_raw_address(...).unwrap()` — expected Δ: -1
-2. 🟡 MED: Scan for other files with count < 6 that are not in "Files NOT to Revisit".
+1. 🔴 HIGH: `src/util/alloc/allocators.rs:46` — Add bitmask to track initialized allocators to make `get_allocator` safe — expected Δ: -4
+2. 🟡 MED: `src/plan/mutator_context.rs:293` — Remove unsafe blocks once `get_allocator` is safe — expected Δ: -4
 3. 🟢 LOW: Consider using a library like `core_affinity` to remove remaining unsafe in `src/scheduler/affinity.rs` in the future.
 
 ## Patterns Discovered
@@ -43,4 +43,8 @@ Reusable refactoring patterns (recipe format):
 - `src/policy/copyspace.rs` — Remaining unsafe are irreducible FFI and lifetime extension. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
-### None at this moment.
+### Bitmask for initialized allocators in `Allocators`
+- Target files: `src/util/alloc/allocators.rs`, `src/plan/mutator_context.rs`
+- Expected Δ: -4
+- Design sketch: Add a `u16` field to `Allocators` to track which allocators are initialized in `new`. Provide safe `get_allocator` methods that return `Option` or panic on uninitialized access but are safe from UB.
+- Status: proposed
