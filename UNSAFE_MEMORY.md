@@ -40,6 +40,9 @@ Reusable refactoring patterns (recipe format):
 - `src/policy/marksweepspace/malloc_ms/global.rs` — Remaining unsafe are irreducible FFI and lifetime extension. [Phase 2 confirmed]
 - `src/policy/copyspace.rs` — Remaining unsafe are irreducible FFI and lifetime extension. [Phase 2 confirmed]
 - `src/scheduler/gc_work.rs` — Unsafe for global plan access, extending lifetime of worker, and unsafe trait impl. [Phase 2 confirmed]
+- `src/plan/global.rs` — Unsafe for SFT_MAP access and CommonPlan reference for work packet. [Phase 2 confirmed]
+- `src/policy/immix/immixspace.rs` — Unsafe for casting self to pass to work packets. [Phase 2 confirmed]
+- `src/util/alloc/allocator.rs` — Unsafe impl Sync for AllocationOptionsHolder and raw memory write in fill_alignment_gap. [Phase 2 confirmed]
 
 
 ## Abstraction Proposals (for Phase 2)
