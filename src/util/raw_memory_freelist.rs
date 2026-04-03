@@ -36,21 +36,10 @@ impl FreeList for RawMemoryFreeList {
         self.heads
     }
     fn get_entry(&self, index: i32) -> i32 {
-        let offset = (index << LOG_BYTES_IN_ENTRY) as usize;
-        debug_assert!(self.base + offset >= self.base && self.base + offset < self.high_water);
-        unsafe { (self.base + offset).load() }
+        self.get_slice()[index as usize]
     }
     fn set_entry(&mut self, index: i32, value: i32) {
-        let offset = (index << LOG_BYTES_IN_ENTRY) as usize;
-        debug_assert!(
-            self.base + offset >= self.base && self.base + offset < self.high_water,
-            "base={:?} offset={:?} index={:?} high_water={:?}",
-            self.base,
-            offset,
-            self.base + offset,
-            self.high_water
-        );
-        unsafe { (self.base + offset).store(value) }
+        self.get_slice_mut()[index as usize] = value;
     }
     fn alloc(&mut self, size: i32) -> i32 {
         if self.current_units == 0 {
@@ -74,6 +63,14 @@ impl FreeList for RawMemoryFreeList {
 }
 
 impl RawMemoryFreeList {
+    fn get_slice(&self) -> &[i32] {
+        let len = (self.high_water - self.base) >> LOG_BYTES_IN_ENTRY;
+        unsafe { std::slice::from_raw_parts(self.base.to_ptr::<i32>(), len) }
+    }
+    fn get_slice_mut(&mut self) -> &mut [i32] {
+        let len = (self.high_water - self.base) >> LOG_BYTES_IN_ENTRY;
+        unsafe { std::slice::from_raw_parts_mut(self.base.to_mut_ptr::<i32>(), len) }
+    }
     fn units_per_block(&self) -> i32 {
         (conversions::pages_to_bytes(self.pages_per_block as _) >> LOG_BYTES_IN_UNIT) as _
     }

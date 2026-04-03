@@ -2,7 +2,7 @@
 
 ## Progress
 - Starting count: 351 | Current: 221 | Δ: -130
-- Phase: 2
+- Phase: 3
 
 ## Codebase Invariants (PROTECTED — do not prune)
 Architectural insights that affect ALL future safety decisions:
@@ -11,7 +11,7 @@ Architectural insights that affect ALL future safety decisions:
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/side_metadata/helpers.rs:533` — Investigate if `std::ptr::copy` can be replaced with safe slice copy — expected Δ: 1
+1. 🔴 HIGH: `src/util/raw_memory_freelist.rs:74` — Add `// SAFETY:` comments for `from_raw_parts` in `get_slice` and `get_slice_mut` — expected Δ: 0
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
@@ -58,6 +58,7 @@ Reusable refactoring patterns (recipe format):
 - `benches/regular_bench/bulk_meta/bzero_bset.rs` — Refactored to use safe Rust vectors and fill. [Phase 2 confirmed]
 - `benches/mock_bench/mmapper.rs` — No unsafe code found. [Phase 2 confirmed]
 - `src/util/opaque_pointer.rs` — Refactored to use usize, eliminating unsafe impl Send/Sync. [Phase 2 confirmed]
+- `src/util/raw_memory_freelist.rs` — Remaining unsafe are `from_raw_parts` to create slice views of raw memory. Irreducible without changing design. [Phase 3 pending documentation]
 
 ## Abstraction Proposals (for Phase 2)
 ### StwProof for safe plan access
