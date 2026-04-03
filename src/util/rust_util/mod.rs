@@ -3,7 +3,6 @@
 //! to provide.
 
 pub mod rev_group;
-pub mod zeroed_alloc;
 
 /// Const function for min value of two usize numbers.
 pub const fn min_of_usize(a: usize, b: usize) -> usize {

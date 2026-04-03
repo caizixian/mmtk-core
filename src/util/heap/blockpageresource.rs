@@ -8,7 +8,6 @@ use crate::util::heap::pageresource::CommonPageResource;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::linear_scan::Region;
 use crate::util::opaque_pointer::*;
-use crate::util::rust_util::zeroed_alloc::new_zeroed_vec;
 use crate::vm::*;
 use atomic::Ordering;
 use spin::RwLock;
@@ -197,8 +196,7 @@ struct BlockQueue<B: Region> {
 impl<B: Region> BlockQueue<B> {
     /// Create an array
     fn new() -> Self {
-        let zeroed_vec = new_zeroed_vec(Self::CAPACITY);
-        let data = zeroed_vec.into_boxed_slice();
+        let data = vec![const { MaybeUninit::uninit() }; Self::CAPACITY].into_boxed_slice();
         Self {
             cursor: AtomicUsize::new(0),
             data,
