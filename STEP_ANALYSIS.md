@@ -1,15 +1,17 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: <file being analyzed>
-- Strategy: <what you're attempting>
+- File: src/util/rust_util/mod.rs, src/util/heap/layout/mmapper/csm/mod.rs
+- Strategy: Audit and analyze for reduction or documentation.
 
 ## Findings
-- Line X: <unsafe type> — <eliminable? why/why not>
-- Line Y: <unsafe type> — <eliminable? why/why not>
+- `src/util/rust_util/mod.rs`: `InitializeOnce` uses unsafe to provide unchecked read access. It is used for `SFT_MAP` which is a hot path. Replacing with `OnceLock` would eliminate 5 unsafe locations but might introduce overhead.
+- `src/util/heap/layout/mmapper/csm/mod.rs`: Found unsafe call to `dzmmap` at line 204. It has a proper SAFETY comment.
 
 ## Attempted Changes
-- <what you tried, what happened>
+- None (analysis and audit only).
 
 ## Blockers / Insights for Next Step
-- <what prevented completion, what the next step should know>
+- The codebase is in a state where most remaining unsafe is considered irreducible or already encapsulated.
+- Added a work queue item to investigate `InitializeOnce` replacement if the user agrees to benchmark.
+
