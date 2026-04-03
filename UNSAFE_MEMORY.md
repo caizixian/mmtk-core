@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 615 | Δ: -107
-- Completed subsystems: util/alloc/allocator.rs (RefCell to AtomicU8 for AllocationOptionsHolder), util/alloc (partial), policy/sft_map (partial), policy/marksweepspace (block.rs cleanup), util/heap/layout (vm_layout.rs static mut, map32.rs Mutex, map64.rs RwLock), util/copy (MaybeUninit to Option in GCWorkerCopyContext), util/metadata/side_metadata (side_metadata_tests.rs Address::from_usize(0) and zero_meta_bits vector cleanup, global.rs SideMetadataOffset union to enum), util/heap/gc_trigger.rs (OnceLock for plan), util/metadata/header_metadata.rs (Vec for TestBuffer in tests), util/heap/blockpageresource.rs (push on unique BlockQueue), scheduler/gc_work.rs (Prepare/Release unsafe Send removal)
+- Starting count: 722 | Current: 612 | Δ: -110
+- Completed subsystems: util/alloc/allocator.rs (RefCell to AtomicU8 for AllocationOptionsHolder), util/alloc (partial), policy/sft_map (partial), policy/marksweepspace (block.rs cleanup), util/heap/layout (vm_layout.rs static mut, map32.rs Mutex, map64.rs RwLock), util/copy (MaybeUninit to Option in GCWorkerCopyContext), util/metadata/side_metadata (side_metadata_tests.rs Address::from_usize(0) and zero_meta_bits vector cleanup, global.rs SideMetadataOffset union to enum), util/heap/gc_trigger.rs (OnceLock for plan), util/metadata/header_metadata.rs (Vec for TestBuffer in tests), util/heap/blockpageresource.rs (push on unique BlockQueue), scheduler/gc_work.rs (Prepare/Release unsafe Send removal), util/metadata/vo_bit (Relaxed load and safe ObjectReference creation), util/linear_scan (unnecessary unsafe removal)
 
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -30,6 +30,8 @@
 - `static mut` → `OnceLock` for write-once globals.
 - `MaybeUninit` → `OnceLock` for late-initialized fields (e.g. `GCTrigger::plan`).
 - Raw memory allocation in tests → `TestBuffer<T>` safe wrapper with `Drop` for automatic cleanup.
+- `from_raw_address_unchecked` → `from_raw_address().unwrap()` to replace UB with panic.
+- `SideMetadataSpec::load` → `load_atomic` with `Ordering::Relaxed` for safe side metadata reads where single-threaded or relaxed consistency is sufficient.
 
 ## Refactoring Ideas
 - `src/util/metadata/side_metadata/helpers.rs`: Analyze remaining unsafe blocks (mostly tests/Address::from_usize and load/store).

@@ -122,7 +122,7 @@ pub(crate) fn is_vo_bit_set_for_addr(address: Address) -> Option<ObjectReference
 /// # Safety
 ///
 /// This is unsafe: check the comment on `side_metadata::load`
-pub(crate) unsafe fn is_vo_bit_set_unsafe(address: Address) -> Option<ObjectReference> {
+pub(crate) fn is_vo_bit_set_unsafe(address: Address) -> Option<ObjectReference> {
     is_vo_bit_set_inner::<false>(address)
 }
 
@@ -140,7 +140,7 @@ fn is_vo_bit_set_inner<const ATOMIC: bool>(addr: Address) -> Option<ObjectRefere
     let vo_bit = if ATOMIC {
         VO_BIT_SIDE_METADATA_SPEC.load_atomic::<u8>(addr, Ordering::SeqCst)
     } else {
-        unsafe { VO_BIT_SIDE_METADATA_SPEC.load::<u8>(addr) }
+        VO_BIT_SIDE_METADATA_SPEC.load_atomic::<u8>(addr, Ordering::Relaxed)
     };
 
     (vo_bit == 1).then(|| get_object_ref_for_vo_addr(addr))
@@ -204,7 +204,7 @@ pub(crate) fn get_object_ref_for_vo_addr(vo_addr: Address) -> ObjectReference {
     // VO bit should be set on the address.
     debug_assert!(vo_addr.is_aligned_to(ObjectReference::ALIGNMENT));
     debug_assert!(unsafe { is_vo_addr(vo_addr) });
-    unsafe { ObjectReference::from_raw_address_unchecked(vo_addr) }
+    ObjectReference::from_raw_address(vo_addr).unwrap()
 }
 
 /// Check if the address could be an internal pointer in the object.

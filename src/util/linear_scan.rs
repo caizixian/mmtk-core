@@ -54,7 +54,7 @@ impl<VM: VMBinding, S: LinearScanObjectSize, const ATOMIC_LOAD_VO_BIT: bool> std
             let is_object = if ATOMIC_LOAD_VO_BIT {
                 vo_bit::is_vo_bit_set_for_addr(self.cursor)
             } else {
-                unsafe { vo_bit::is_vo_bit_set_unsafe(self.cursor) }
+                vo_bit::is_vo_bit_set_unsafe(self.cursor)
             };
 
             if let Some(object) = is_object {
