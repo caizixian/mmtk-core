@@ -700,8 +700,7 @@ impl SideMetadataSpec {
                     data_addr,
                     Some(1u8),
                     || {
-                        let meta_addr = address_to_meta_address(self, data_addr);
-                        u8::store_atomic(meta_addr, 0xffu8, order);
+                        self.slot_for::<u8>(data_addr).store_atomic(0xffu8, order);
                     },
                     |_| {}
                 )
@@ -716,14 +715,13 @@ impl SideMetadataSpec {
     ///
     /// 1. Concurrent access to this operation is undefined behaviour.
     /// 2. Interleaving Non-atomic and atomic operations is undefined behaviour.
-    pub unsafe fn load_raw_byte(&self, data_addr: Address) -> u8 {
+    pub fn load_raw_byte(&self, data_addr: Address, _proof: &StwProof) -> u8 {
         debug_assert!(self.log_num_of_bits < 3);
         self.side_metadata_access::<false, u8, _, _, _>(
             data_addr,
             None,
             || {
-                let meta_addr = address_to_meta_address(self, data_addr);
-                meta_addr.load::<u8>()
+                self.slot_for::<u8>(data_addr).load()
             },
             |_| {},
         )
@@ -736,7 +734,7 @@ impl SideMetadataSpec {
     ///
     /// 1. Concurrent access to this operation is undefined behaviour.
     /// 2. Interleaving Non-atomic and atomic operations is undefined behaviour.
-    pub unsafe fn load_raw_word(&self, data_addr: Address) -> usize {
+    pub fn load_raw_word(&self, data_addr: Address, _proof: &StwProof) -> usize {
         use crate::util::constants::*;
         debug_assert!(self.log_num_of_bits < (LOG_BITS_IN_BYTE + LOG_BYTES_IN_ADDRESS) as usize);
         self.side_metadata_access::<false, usize, _, _, _>(
@@ -745,7 +743,7 @@ impl SideMetadataSpec {
             || {
                 let meta_addr = address_to_meta_address(self, data_addr);
                 let aligned_meta_addr = meta_addr.align_down(BYTES_IN_ADDRESS);
-                aligned_meta_addr.load::<usize>()
+                self.slot_from_meta_addr::<usize>(aligned_meta_addr).load()
             },
             |_| {},
         )
