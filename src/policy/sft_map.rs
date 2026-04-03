@@ -24,7 +24,7 @@ pub trait SFTMap: Sync {
     /// # Safety
     /// The address must have a valid SFT entry in the map. Usually we know this if the address is from an object reference, or from our space address range.
     /// Otherwise, the caller should check with `has_sft_entry()` before calling this method, or use `get_checked()`.
-    unsafe fn get_unchecked(&self, address: Address) -> &dyn SFT;
+    fn get_unchecked(&self, address: Address) -> &dyn SFT;
 
     /// Get SFT for the address. The address can be arbitrary. For out-of-bound access, an empty SFT will be returned.
     /// We only provide the checked version for `get()`, as it may be used to query arbitrary objects and addresses. Other methods like `update/clear/etc` are
@@ -194,13 +194,13 @@ mod space_map {
             if self.has_sft_entry(address) {
                 // We should be able to map the entire address range to indices in the table.
                 debug_assert!(Self::addr_to_index(address) < self.sft.len());
-                unsafe { self.get_unchecked(address) }
+                self.get_unchecked(address)
             } else {
                 &EMPTY_SPACE_SFT
             }
         }
 
-        unsafe fn get_unchecked(&self, address: Address) -> &dyn SFT {
+        fn get_unchecked(&self, address: Address) -> &dyn SFT {
             let cell = &self.sft[Self::addr_to_index(address)];
             cell.load()
         }
@@ -357,13 +357,13 @@ mod dense_chunk_map {
 
         fn get_checked(&self, address: Address) -> &dyn SFT {
             if self.has_sft_entry(address) {
-                unsafe { self.get_unchecked(address) }
+                self.get_unchecked(address)
             } else {
                 &EMPTY_SPACE_SFT
             }
         }
 
-        unsafe fn get_unchecked(&self, address: Address) -> &dyn SFT {
+        fn get_unchecked(&self, address: Address) -> &dyn SFT {
             let cell = &self.sft[Self::addr_to_index(address) as usize];
             cell.load()
         }
@@ -475,13 +475,13 @@ mod sparse_chunk_map {
 
         fn get_checked(&self, address: Address) -> &dyn SFT {
             if self.has_sft_entry(address) {
-                unsafe { self.get_unchecked(address) }
+                self.get_unchecked(address)
             } else {
                 &EMPTY_SPACE_SFT
             }
         }
 
-        unsafe fn get_unchecked(&self, address: Address) -> &dyn SFT {
+        fn get_unchecked(&self, address: Address) -> &dyn SFT {
             let cell = &self.sft[address.chunk_index()];
             cell.load()
         }

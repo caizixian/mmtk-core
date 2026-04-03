@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 568 | Δ: -154
-- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout, util/copy, util/metadata/side_metadata (side_metadata_tests.rs load/store to load_atomic/store_atomic, global.rs load to load_atomic in search), util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util (InitializeOnce Sync bound), policy/sft_map (SFTMap Sync, SFTDenseChunkMap auto-Sync), policy/marksweepspace/malloc_ms/global.rs (is_marked_unsafe to is_marked Relaxed), policy/marksweepspace/malloc_ms/metadata.rs (remove is_marked_unsafe, is_offset_malloc Relaxed load)
+- Starting count: 722 | Current: 557 | Δ: -165
+- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout, util/copy, util/metadata/side_metadata (side_metadata_tests.rs load/store to load_atomic/store_atomic, global.rs load to load_atomic in search), util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util (InitializeOnce Sync bound), policy/sft_map (SFTMap get_unchecked safe, SFTMap Sync, SFTDenseChunkMap auto-Sync), policy/marksweepspace/malloc_ms/global.rs (is_marked_unsafe to is_marked Relaxed), policy/marksweepspace/malloc_ms/metadata.rs (remove is_marked_unsafe, is_offset_malloc Relaxed load)
 
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -16,8 +16,8 @@
 - Why: Assumes allocator is initialized for performance.
 
 ### policy/sft_map (src/policy/sft_map.rs)
-- ~20 unsafe — SFT map access and trait impl.
-- Why: FFI/Performance hot paths (transmute for fat pointers, slice access).
+- ~17 unsafe — transmute for fat pointers, side metadata store_atomic.
+- Why: FFI/Performance hot paths (transmute for fat pointers, side metadata access). `get_unchecked` is now safe as implementations use standard indexing.
 
 ## Patterns Discovered
 - `union` to `enum` for types that can be either A or B (e.g. `SideMetadataOffset`). Eliminates `unsafe` for field access and allows safe `PartialEq`/`Eq`/`Hash` derivation.
@@ -25,6 +25,7 @@
 - `UnsafeCell::get_mut()` / `AtomicXxx::get_mut()` when uniqueness is guaranteed (e.g. local variables or `&mut self` methods) to bypass `unsafe` and atomic operations entirely.
 - `MaybeUninit::uninit().assume_init()` for arrays → `[const { MaybeUninit::uninit() }; N]` — works when type is `MaybeUninit`.
 - `get_unchecked(i)` → `[i]` — works in non-hot paths where bounds are guaranteed or panic is acceptable.
+- `unsafe fn` in trait → safe `fn` when all implementations are safe (e.g. use standard indexing instead of raw pointers). Removes `unsafe` blocks at call sites.
 - `*const T` → `&T` in trait signatures where ownership is not required and lifetimes are valid.
 - `unsafe impl Sync` removal for types that only contain thread-safe fields (auto-Sync).
 - `InitializeOnce<T>` bound tightening: `unsafe impl<T: Sync> Sync for InitializeOnce<T>` to prevent unsound sharing of non-Sync types.
