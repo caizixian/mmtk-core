@@ -545,16 +545,16 @@ mod tests {
             log_bytes_in_region: 3,
         };
 
-        const ADDR_1000: Address = unsafe { Address::from_usize(0x1000) };
-        const ADDR_1001: Address = unsafe { Address::from_usize(0x1001) };
-        const ADDR_1002: Address = unsafe { Address::from_usize(0x1002) };
-        const ADDR_1003: Address = unsafe { Address::from_usize(0x1003) };
-        const ADDR_1004: Address = unsafe { Address::from_usize(0x1004) };
-        const ADDR_1005: Address = unsafe { Address::from_usize(0x1005) };
-        const ADDR_1006: Address = unsafe { Address::from_usize(0x1006) };
-        const ADDR_1007: Address = unsafe { Address::from_usize(0x1007) };
-        const ADDR_1008: Address = unsafe { Address::from_usize(0x1008) };
-        const ADDR_1009: Address = unsafe { Address::from_usize(0x1009) };
+        const ADDR_1000: Address = Address::from_usize(0x1000);
+        const ADDR_1001: Address = Address::from_usize(0x1001);
+        const ADDR_1002: Address = Address::from_usize(0x1002);
+        const ADDR_1003: Address = Address::from_usize(0x1003);
+        const ADDR_1004: Address = Address::from_usize(0x1004);
+        const ADDR_1005: Address = Address::from_usize(0x1005);
+        const ADDR_1006: Address = Address::from_usize(0x1006);
+        const ADDR_1007: Address = Address::from_usize(0x1007);
+        const ADDR_1008: Address = Address::from_usize(0x1008);
+        const ADDR_1009: Address = Address::from_usize(0x1009);
 
         let metadata_2bits = create_spec(1);
         assert_eq!(
