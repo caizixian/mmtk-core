@@ -42,46 +42,37 @@ pub fn unlikely(b: bool) -> bool {
     b
 }
 
-use std::cell::UnsafeCell;
-use std::mem::MaybeUninit;
-use std::sync::Once;
+use std::sync::OnceLock;
 
 /// InitializeOnce creates an uninitialized value that needs to be manually initialized later. InitializeOnce
 /// guarantees the value is only initialized once. This type is used to allow more efficient reads.
 /// Unlike the `lazy_static!` which checks whether the static is initialized
 /// in every read, InitializeOnce has no extra check for reads.
+/// 
+/// NOTE: This implementation now uses `OnceLock` internally, which may add a small overhead
+/// on reads compared to the original implementation, but eliminates unsafe code.
 pub struct InitializeOnce<T: 'static> {
-    v: UnsafeCell<MaybeUninit<T>>,
-    /// This is used to guarantee `init_fn` is only called once.
-    once: Once,
+    lock: OnceLock<T>,
 }
 
 impl<T> InitializeOnce<T> {
     pub const fn new() -> Self {
         InitializeOnce {
-            v: UnsafeCell::new(MaybeUninit::uninit()),
-            once: Once::new(),
+            lock: OnceLock::new(),
         }
     }
 
     /// Initialize the value. This should be called before ever using the struct.
     /// If this method is called by multiple threads, the first thread will
     /// initialize the value, and the other threads will be blocked until the
-    /// initialization is done (`Once` returns).
+    /// initialization is done.
     pub fn initialize_once(&self, init_fn: &'static dyn Fn() -> T) {
-        self.once.call_once(|| {
-            // SAFETY: `Once` guarantees this runs only once and exclusively.
-            unsafe { &mut *self.v.get() }.write(init_fn());
-        });
-        debug_assert!(self.once.is_completed());
+        self.lock.get_or_init(|| init_fn());
     }
 
     /// Get the value. This should only be used after initialize_once()
     pub fn get_ref(&self) -> &T {
-        // We only assert in debug builds.
-        debug_assert!(self.once.is_completed());
-        // SAFETY: The value is guaranteed to be initialized by `initialize_once` before this call.
-        unsafe { (*self.v.get()).assume_init_ref() }
+        self.lock.get().expect("InitializeOnce not initialized")
     }
 
     /// Get a raw pointer to the value.
@@ -89,7 +80,7 @@ impl<T> InitializeOnce<T> {
     /// This is a safe function because it just returns a pointer.
     /// The caller must ensure safety when dereferencing the pointer.
     pub fn get_ptr(&self) -> *mut T {
-        self.v.get() as *mut T
+        self.lock.get().expect("InitializeOnce not initialized") as *const T as *mut T
     }
 }
 
@@ -99,10 +90,6 @@ impl<T> std::ops::Deref for InitializeOnce<T> {
         self.get_ref()
     }
 }
-
-// SAFETY: `InitializeOnce` only allows initialization once via `Once`, and further access is read-only via `get_ref`.
-// `get_mut` is unsafe and requires the caller to ensure safety.
-unsafe impl<T: Sync> Sync for InitializeOnce<T> {}
 
 /// Create a formatted string that makes the best effort idenfying the current process and thread.
 pub fn debug_process_thread_id() -> String {

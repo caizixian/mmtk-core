@@ -2,7 +2,7 @@
 use crate::global_state::{GcStatus, GlobalState};
 use crate::plan::CreateGeneralPlanArgs;
 use crate::plan::Plan;
-use crate::policy::sft_map::{create_sft_map, SFTMap};
+use crate::policy::sft_map::SFTMap;
 use crate::scheduler::GCWorkScheduler;
 
 #[cfg(feature = "vo_bit")]
@@ -53,13 +53,16 @@ lazy_static! {
 use crate::util::rust_util::InitializeOnce;
 
 // A global space function table that allows efficient dispatch space specific code for addresses in our heap.
-pub static SFT_MAP: InitializeOnce<Box<dyn SFTMap + Sync>> = InitializeOnce::new();
+pub static SFT_MAP: InitializeOnce<StwProtected<Box<dyn SFTMap + Send + Sync>>> = InitializeOnce::new();
+
+fn create_protected_sft_map() -> StwProtected<Box<dyn SFTMap + Send + Sync>> {
+    StwProtected::new(crate::policy::sft_map::create_sft_map())
+}
 
 /// Get the SFT map mutably. This requires a proof that the world is stopped or we are in initialization.
-pub fn get_sft_map_mut(_proof: &StwProof) -> &mut dyn SFTMap {
-    // SAFETY: We have a proof that the world is stopped or we have exclusive access.
-    // The pointer returned by `get_ptr` is valid because `SFT_MAP` is initialized before use.
-    unsafe { &mut *SFT_MAP.get_ptr() }.as_mut()
+pub fn get_sft_map_mut(proof: &StwProof) -> &mut dyn SFTMap {
+    // SFT_MAP is initialized before use.
+    SFT_MAP.get_mut(proof).as_mut()
 }
 
 /// MMTk builder. This is used to set options and other settings before actually creating an MMTk instance.
@@ -157,6 +160,13 @@ impl<T> StwProtected<T> {
     }
 }
 
+impl<T> std::ops::Deref for StwProtected<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        self.get()
+    }
+}
+
 /// An MMTk instance. MMTk allows multiple instances to run independently, and each instance gives users a separate heap.
 /// *Note that multi-instances is not fully supported yet*
 pub struct MMTK<VM: VMBinding> {
@@ -191,7 +201,7 @@ impl<VM: VMBinding> MMTK<VM> {
         // Initialize SFT first in case we need to use this in the constructor.
         // The first call will initialize SFT map. Other calls will be blocked until SFT map is initialized.
         crate::policy::sft_map::SFTRefStorage::pre_use_check();
-        SFT_MAP.initialize_once(&create_sft_map);
+        SFT_MAP.initialize_once(&create_protected_sft_map);
 
         let num_workers = if cfg!(feature = "single_worker") {
             1

@@ -1,9 +1,9 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 70 | Δ: -281
-- Phase: 3 (Irreducible Documentation)
-- Status: Confirmed all remaining 70 unsafe locations are irreducible or justified.
+- Starting count: 351 | Current: 66 | Δ: -285
+- Phase: 2 (Safe Abstractions)
+- Status: Refactored `InitializeOnce` to use `OnceLock` and combined with `StwProtected` to eliminate unsafe in `mmtk.rs` and `rust_util/mod.rs`.
 
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -12,7 +12,8 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-All remaining unsafe blocks have been analyzed and categorized as irreducible or justified in the current architecture. No actionable items remain for local refactoring.
+1. 🟡 MED: `src/util/metadata/side_metadata/global.rs` — Investigate if `MetadataSlot` helpers can be made safe by guaranteeing validity at creation time.
+2. 🟡 MED: `src/util/address.rs` — Document safety invariants for core address operations.
 
 
 ## Patterns Discovered
