@@ -246,8 +246,13 @@ fn mmap_fixed(
     let ptr = start.to_mut_ptr();
     let prot = strategy.prot.into_native_flags();
     wrap_libc_call(
-        // SAFETY: The caller must ensure that the arguments are valid. If flags include MAP_FIXED,
-        // it may overwrite existing mappings.
+        // SAFETY: This calls the operating system's `mmap` to create a memory mapping.
+        // The caller must ensure that:
+        // 1. `start` is a valid, page-aligned address if `MAP_FIXED` or `MAP_FIXED_NOREPLACE` is used.
+        // 2. `size` is a multiple of the system page size.
+        // 3. If `MAP_FIXED` is used (which is the case on macOS as `MAP_FIXED_NOREPLACE` is unavailable),
+        //    the caller must ensure that the address range does not overlap with existing mappings,
+        //    as `mmap` will silently overwrite them.
         &|| unsafe { libc::mmap(start.to_mut_ptr(), size, prot, flags, -1, 0) },
         ptr,
     )?;
