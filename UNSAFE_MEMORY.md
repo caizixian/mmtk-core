@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 304 | Δ: -47
+- Starting count: 351 | Current: 302 | Δ: -49
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,8 @@ Architectural insights that affect ALL future safety decisions:
 - Static plan references are needed because plan types are generic and cannot be stored in global statics easily.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/mmtk.rs:191` — investigate if we can remove fake static reference for plan — expected Δ: -1
+1. 🔴 HIGH: `src/util/metadata/pin_bit.rs:39` — investigate if we can use safe atomic load for pin bit — expected Δ: -1
+2. 🟡 MED: `src/vm/object_model.rs:160` — investigate if we can use safe atomic load for metadata spec — expected Δ: -1
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
