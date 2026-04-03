@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 502 | Δ: -220
+- Starting count: 722 | Current: 501 | Δ: -221
 - Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace (and native_ms/block.rs safe load_atomic), util/heap/layout/map32.rs (removed unnecessary unsafe block), util/heap/layout, util/copy, util/metadata/side_metadata, util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit (made unset_vo_bit_unsafe and is_vo_addr safe with Relaxed atomics, removed unnecessary unsafe block), util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util, policy/sft_map (SFTMap update/eager_initialize take reference, remove unsafe in implementations), policy/marksweepspace/malloc_ms/global.rs (unnecessary SFT_MAP unsafe, safe page marks, removed dead bulk sweep code), policy/lockfreeimmortalspace.rs (unnecessary eager_initialize unsafe), mmtk.rs (removed unnecessary unsafe cast for GCTrigger mutation, removed unnecessary unsafe impl Send), policy/marksweepspace/malloc_ms/metadata.rs (safe page marks, removed unused load128), util/metadata/side_metadata/global.rs (combined unsafe blocks in bcopy_metadata_contiguous), util/heap/monotonepageresource.rs (made reset/release_pages safe), policy/copyspace.rs (removed unnecessary unsafe), plan/barriers.rs (safe load_atomic), util/test_util/fixtures.rs (refactored MMTKFixture to use &mut MMTK, removed unsafe impl Send for MutatorFixture, removed unsound blanket unsafe impl Sync for Fixture), docs/dummyvm/src/lib.rs (replaced from_raw_address_unchecked with safe alternative)
 
 
@@ -42,6 +42,7 @@
 - `as_ref::<AtomicU8>()` → `MetadataValue::fetch_and` / `fetch_or` / `load_atomic` / `store_atomic` — use standard trait abstractions instead of raw pointer casts.
 - `*mut T = val` in tests → `MetadataValue::store(meta_addr, val)` — use abstractions instead of raw pointers in tests.
 - `trait Trait: Send` trait inheritance to make `dyn Trait` automatically `Send`, enabling safe auto-`Send` for types containing `Box<dyn Trait>` and removing `unsafe impl Send`.
+- Use `Option::take` to consume a reference in a one-shot work packet, avoiding `unsafe` cast from `&mut self` to raw pointer and back to reference.
 
 ## Refactoring Ideas
 - Remove `unsafe impl Send for MMTK` in `src/mmtk.rs` now that `Plan` trait inherits `Send`.
