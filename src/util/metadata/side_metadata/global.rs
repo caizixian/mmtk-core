@@ -223,7 +223,7 @@ impl SideMetadataSpec {
                     // Get a mask that the bits we need to zero are set to zero, and the other bits are 1.
                     let mask: u8 =
                         u8::MAX.checked_shl(bit_end as u32).unwrap_or(0) | !(u8::MAX << bit_start);
-                    unsafe { addr.as_ref::<AtomicU8>() }.fetch_and(mask, Ordering::SeqCst);
+                    unsafe { MetadataSlot::<u8>::new_unchecked(addr) }.fetch_and(mask, Ordering::SeqCst);
                     false
                 }
             }
@@ -260,7 +260,7 @@ impl SideMetadataSpec {
                     // Get a mask that the bits we need to set are 1, and the other bits are 0.
                     let mask: u8 = !(u8::MAX.checked_shl(bit_end as u32).unwrap_or(0))
                         & (u8::MAX << bit_start);
-                    unsafe { addr.as_ref::<AtomicU8>() }.fetch_or(mask, Ordering::SeqCst);
+                    unsafe { MetadataSlot::<u8>::new_unchecked(addr) }.fetch_or(mask, Ordering::SeqCst);
                     false
                 }
             }
@@ -861,7 +861,7 @@ impl SideMetadataSpec {
                     ))
                     .unwrap()
                 } else {
-                    unsafe { T::fetch_add(meta_addr, val, order) }
+                    self.slot_for::<T>(data_addr).fetch_add(val, order)
                 }
             },
             |_old_val| {
@@ -895,7 +895,7 @@ impl SideMetadataSpec {
                     ))
                     .unwrap()
                 } else {
-                    unsafe { T::fetch_sub(meta_addr, val, order) }
+                    self.slot_for::<T>(data_addr).fetch_sub(val, order)
                 }
             },
             |_old_val| {
@@ -918,18 +918,16 @@ impl SideMetadataSpec {
             data_addr,
             Some(val),
             || {
-                let meta_addr = address_to_meta_address(self, data_addr);
                 if self.log_num_of_bits < 3 {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
                     // We do not need to use fetch_ops_on_bits(), we can just set irrelavent bits to 1, and do fetch_and
                     let rhs = (val.to_u8().unwrap() << lshift) | !mask;
-                    let old_raw_byte =
-                        unsafe { <u8 as MetadataValue>::fetch_and(meta_addr, rhs, order) };
+                    let old_raw_byte = self.slot_for::<u8>(data_addr).fetch_and(rhs, order);
                     let old_val = (old_raw_byte & mask) >> lshift;
                     FromPrimitive::from_u8(old_val).unwrap()
                 } else {
-                    unsafe { T::fetch_and(meta_addr, val, order) }
+                    self.slot_for::<T>(data_addr).fetch_and(val, order)
                 }
             },
             |_old_val| {
@@ -952,18 +950,16 @@ impl SideMetadataSpec {
             data_addr,
             Some(val),
             || {
-                let meta_addr = address_to_meta_address(self, data_addr);
                 if self.log_num_of_bits < 3 {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
                     // We do not need to use fetch_ops_on_bits(), we can just set irrelavent bits to 0, and do fetch_or
                     let rhs = (val.to_u8().unwrap() << lshift) & mask;
-                    let old_raw_byte =
-                        unsafe { <u8 as MetadataValue>::fetch_or(meta_addr, rhs, order) };
+                    let old_raw_byte = self.slot_for::<u8>(data_addr).fetch_or(rhs, order);
                     let old_val = (old_raw_byte & mask) >> lshift;
                     FromPrimitive::from_u8(old_val).unwrap()
                 } else {
-                    unsafe { T::fetch_or(meta_addr, val, order) }
+                    self.slot_for::<T>(data_addr).fetch_or(val, order)
                 }
             },
             |_old_val| {

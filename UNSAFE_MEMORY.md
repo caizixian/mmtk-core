@@ -1,15 +1,15 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 661 | Δ: -61
+- Starting count: 722 | Current: 655 | Δ: -67
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - `Address::from_usize` is marked unsafe by design to warn about invalid addresses. Replacing it with `ZERO.add` is considered an anti-pattern as it is semantically identical.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs` — Continue refactoring to use `MetadataSlot` or analyze remaining irreducible unsafe.
-2. 🟡 MED: `src/util/metadata/side_metadata/helpers.rs` — Refactor to use `MetadataSlot` where applicable.
+1. 🔴 HIGH: `src/util/metadata/side_metadata/helpers.rs` — Refactor to use `MetadataSlot` where applicable.
+2. 🟡 MED: `src/util/metadata/side_metadata/global.rs` — Analyze remaining irreducible unsafe or document them.
 
 ## Patterns Discovered
 - `MaybeUninit` arrays of size 1 can be replaced with `Option` and `unwrap()` to eliminate unsafe access.
