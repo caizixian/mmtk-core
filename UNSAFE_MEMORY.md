@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 493 | Current: 476 | Δ: -17
+- Starting count: 493 | Current: 469 | Δ: -24
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -26,6 +26,7 @@
 - **Proof Token for Safe Functions**: Changing signatures of `unsafe fn` to take `&StwProof` can make them safe if the only safety invariant is no concurrent access.
 - **StwProof in Tests**: Using `StwProof` in tests to remove redundant unsafe blocks around `load` and `store`.
 - **OnceLock for late init**: Replacing `MaybeUninit` with `OnceLock` for late-initialized global or shared state (e.g., `GCTrigger::plan`).
+- **Atomics for Interior Mutability**: Replacing `UnsafeCell` and manual locking/unsafe with atomic types (`AtomicUsize`, `AtomicBool`) can eliminate `mut_self` patterns and reduce unsafe blocks (applied to `Map64`).
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.
@@ -41,6 +42,7 @@
 - `src/util/memory.rs` — Calls to `libc` functions (`mmap`, `mprotect`, etc.) and safe wrappers around them.
 - `src/util/address.rs` — Primitives for raw memory access and address arithmetic.
 - `src/util/metadata/vo_bit/mod.rs` — Remaining unsafe is `from_raw_address_unchecked` in `get_object_ref_for_vo_addr` which is irreducible.
+- `src/util/heap/layout/map64.rs` — Remaining unsafe are trait signatures and unavoidable `from_usize` calls for reading high water mark.
 
 ## Abstraction Proposals (for Phase 2)
 - **Safe Metadata Accessor**: `MetadataSlot` implemented in `safe_access.rs`. Used in `header_metadata.rs` and `global.rs`.

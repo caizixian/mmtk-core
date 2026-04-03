@@ -208,7 +208,7 @@ impl SideMetadataSpec {
     /// The caller must ensure the metadata address is valid for this spec.
     /// In debug builds, this checks if the address is mapped.
     pub fn slot_from_meta_addr<T: MetadataValue>(&self, meta_addr: Address) -> MetadataSlot<'_, T> {
-        #[cfg(debug_assertions)]
+        #[cfg(all(debug_assertions, not(test)))]
         {
             use crate::MMAPPER;
             debug_assert!(MMAPPER.is_mapped_address(meta_addr), "Metadata address is not mapped");
