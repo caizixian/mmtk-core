@@ -171,18 +171,21 @@ impl SimpleSlot {
     pub fn as_address(&self) -> Address {
         self.slot_addr
     }
+
+    fn as_atomic(&self) -> &Atomic<Address> {
+        // SAFETY: The caller must ensure that `self.slot_addr` is a valid and properly aligned address for `Atomic<Address>`.
+        unsafe { &*(self.slot_addr.to_ptr::<Atomic<Address>>()) }
+    }
 }
 
 impl Slot for SimpleSlot {
     fn load(&self) -> Option<ObjectReference> {
-        // SAFETY: The caller must ensure that `self.slot_addr` is a valid and properly aligned address for `Atomic<Address>`.
-        let addr = unsafe { (*self.slot_addr.to_ptr::<Atomic<Address>>()).load(atomic::Ordering::Relaxed) };
+        let addr = self.as_atomic().load(atomic::Ordering::Relaxed);
         ObjectReference::from_raw_address(addr)
     }
 
     fn store(&self, object: ObjectReference) {
-        // SAFETY: The caller must ensure that `self.slot_addr` is a valid and properly aligned address for `Atomic<Address>`.
-        unsafe { (*self.slot_addr.to_ptr::<Atomic<Address>>()).store(object.to_raw_address(), atomic::Ordering::Relaxed) }
+        self.as_atomic().store(object.to_raw_address(), atomic::Ordering::Relaxed)
     }
 }
 

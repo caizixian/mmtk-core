@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 167 | Δ: -184
+- Starting count: 351 | Current: 166 | Δ: -185
 - Phase: 3 (Irreducible Documentation)
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/vm/slot.rs:170-210` — Investigate if we can use a safe wrapper for `Atomic<Address>` to eliminate unsafe in `SimpleSlot` — expected Δ: -2
+1. 🔴 HIGH: `src/util/metadata/global.rs:50-120` — Investigate if we can use a helper method abstraction to centralize unsafe dereferences, similar to `SimpleSlot` and `MetadataSlot`.
 
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
@@ -19,7 +19,8 @@
 - `VMMap` trait methods were made safe as implementations (`Map32` and `Map64`) are internally synchronized with `Mutex`.
 - `BlockCell` and `CellIter` abstractions in `block.rs` eliminate unsafe writes during sweep by encapsulating raw writes and ensuring valid iteration.
 - `SlotLogger` was refactored to use `Mutex` instead of `RwLock`, making it automatically `Sync` and eliminating `unsafe impl Sync`.
-- **New**: FFI functions transferring ownership can use `Option<Box<T>>` instead of `*mut T` to eliminate `Box::from_raw` and `Box::into_raw` unsafe blocks, provided `T` is `Sized`.
+- FFI functions transferring ownership can use `Option<Box<T>>` instead of `*mut T` to eliminate `Box::from_raw` and `Box::into_raw` unsafe blocks, provided `T` is `Sized`.
+- **New**: Centralized unsafe raw pointer dereferences in `SimpleSlot` by introducing a helper `as_atomic` method, reducing unsafe blocks in `load` and `store`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are irreducible function signatures and raw memory copy. [Phase 2 confirmed]
@@ -30,7 +31,7 @@
 - `src/util/address.rs` — Core address type. Operations are inherently unsafe. [Phase 2 confirmed]
 - `src/mmtk.rs` — Uses `InitializeOnce` for `SFT_MAP`. Irreducible for performance. [Phase 2 confirmed]
 - `src/util/rust_util/mod.rs` — Implements `InitializeOnce`. Irreducible for performance. [Phase 2 confirmed]
-- `src/vm/slot.rs` — Refactored SimpleSlot to use Address instead of raw pointer. Remaining unsafe are dereferences in load/store. [Phase 3 confirmed]
+- `src/vm/slot.rs` — Refactored SimpleSlot to use `as_atomic` helper. Remaining unsafe are in `Slot for Address` and raw memory copy. [Phase 3 confirmed]
 - `src/util/malloc/mod.rs` — Irreducible due to raw pointer manipulation in allocator. [Phase 2 confirmed]
 - `src/policy/sft_map.rs` — Transmutes are irreducible due to fat pointer provenance. [Phase 2 confirmed]
 - `src/policy/marksweepspace/native_ms/block.rs` — Refactored sweep to use safe iterator. Remaining unsafe is encapsulated in BlockCell::store_link. [Phase 3 confirmed]
