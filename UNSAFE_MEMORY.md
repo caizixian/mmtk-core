@@ -8,8 +8,7 @@
 - `Address::from_usize` is marked unsafe by design to warn about invalid addresses. Replacing it with `ZERO.add` is considered an anti-pattern as it is semantically identical.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: Analyze `src/scheduler/gc_work.rs` for applying Typestate pattern to remove unsafe plan casts.
-2. 🟡 MED: Explore other files for Phase 1 reductions.
+1. 🟡 MED: Explore other files for Phase 1 reductions or Phase 2 abstractions.
 
 ## Patterns Discovered
 - `MaybeUninit` arrays of size 1 can be replaced with `Option` and `unwrap()` to eliminate unsafe access.
@@ -48,6 +47,9 @@
 - `src/util/heap/layout/map32.rs` — Remaining unsafe are `mut_self` calls claimed to be safe due to single-threaded boot time or exclusive ranges.
 - `src/plan/mutator_context.rs` — Remaining unsafe are allocator accesses relying on `Allocators` unsafe methods, required for layout compatibility.
 - `src/util/heap/blockpageresource.rs` — Custom lock-free queue (`BlockQueue`) using `UnsafeCell` and `MaybeUninit`.
+- `src/scheduler/gc_work.rs` — Plan casts in `Prepare`/`Release` require raw pointers to avoid UB lint when casting to `&mut`.
+- `src/util/memory.rs` — Calls to `libc` functions (`mmap`, `mprotect`, etc.) and safe wrappers around them.
+- `src/util/address.rs` — Primitives for raw memory access and address arithmetic.
 
 ## Abstraction Proposals (for Phase 2)
 - **Safe Metadata Accessor**: `MetadataSlot` implemented in `metadata_val_traits.rs`. Used in `header_metadata.rs` and `global.rs`.
