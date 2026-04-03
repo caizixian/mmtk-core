@@ -27,6 +27,11 @@ impl MetadataSlot {
         unsafe { self.0.as_ref::<T>() }
     }
 
+    fn get_mut_ref<T>(&self) -> &mut T {
+        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T`.
+        unsafe { self.0.as_mut_ref::<T>() }
+    }
+
     pub(crate) fn fetch_and(&self, mask: u8, order: Ordering) -> u8 {
         self.as_atomic_u8().fetch_and(mask, order)
     }
@@ -72,13 +77,11 @@ impl MetadataSlot {
         self.get_ref::<std::sync::atomic::AtomicUsize>().load(order)
     }
     pub(crate) fn store_non_atomic(&self, val: u8) {
-        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `u8`.
-        unsafe { self.0.store::<u8>(val) }
+        *self.get_mut_ref::<u8>() = val;
     }
 
     pub(crate) fn load_val<T: MetadataValue>(&self) -> T {
-        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T`.
-        unsafe { T::load(self.0) }
+        *self.get_ref::<T>()
     }
 
     pub(crate) fn load_atomic_val<T: MetadataValue>(&self, order: Ordering) -> T {
@@ -87,8 +90,7 @@ impl MetadataSlot {
     }
 
     pub(crate) fn store_val<T: MetadataValue>(&self, val: T) {
-        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T`.
-        unsafe { T::store(self.0, val) }
+        *self.get_mut_ref::<T>() = val;
     }
 
     pub(crate) fn store_atomic_val<T: MetadataValue>(&self, val: T, order: Ordering) {

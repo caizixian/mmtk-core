@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 164 | Δ: -187
+- Starting count: 351 | Current: 162 | Δ: -189
 - Phase: 3 (Irreducible Documentation)
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -22,6 +22,7 @@
 - FFI functions transferring ownership can use `Option<Box<T>>` instead of `*mut T` to eliminate `Box::from_raw` and `Box::into_raw` unsafe blocks, provided `T` is `Sized`.
 - Centralized unsafe raw pointer dereferences in `SimpleSlot` by introducing a helper `as_atomic` method, reducing unsafe blocks in `load` and `store`.
 - **New**: Removed `impl Slot for Address` and changed `MemorySlice for Range<Address>` to use `SimpleSlot`, eliminating 2 unsafe blocks and aligning with the intent of using `SimpleSlot` directly.
+- **New**: Centralized unsafe raw pointer dereferences in `MetadataSlot` by introducing a helper `get_mut_ref` method, and refactored `load_val` to use `get_ref`, eliminating 3 unsafe blocks at call sites (net reduction of 2).
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are irreducible function signatures and raw memory copy. Audited safety comments. [Phase 2 confirmed]
