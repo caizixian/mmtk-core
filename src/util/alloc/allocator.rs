@@ -6,8 +6,8 @@ use crate::util::heap::gc_trigger::GCTrigger;
 use crate::util::options::Options;
 use crate::MMTK;
 
-use std::cell::RefCell;
 use std::sync::atomic::Ordering;
+use std::sync::Mutex;
 use std::sync::Arc;
 
 use crate::policy::space::Space;
@@ -96,37 +96,29 @@ impl AllocationOptions {
 /// that's still too slow, we should consider changing the API to make the allocation options a
 /// persistent per-mutator value, and allow the VM binding set its value via a new API function.
 struct AllocationOptionsHolder {
-    alloc_options: RefCell<AllocationOptions>,
+    alloc_options: Mutex<AllocationOptions>,
 }
 
-/// Strictly speaking, `AllocationOptionsHolder` isn't `Sync`.  Two threads cannot set or clear the
-/// same `AllocationOptionsHolder` at the same time.  However, both `Mutator` and `GCWorker` are
-/// `Send`, and both of which own `Allocators` and require its field `Arc<AllocationContext>` to be
-/// `Send`, which requires `AllocationContext` to be `Sync`, which requires
-/// `AllocationOptionsHolder` to be `Sync`.  (Note that `Arc<T>` can be cloned and given to another
-/// thread, and Rust expects `T` to be `Sync`, too.  But we never share `AllocationContext` between
-/// threads, but only between multiple `Allocator` instances within the same `Allocators` instance.
-/// Rust can't figure this out.)
-unsafe impl Sync for AllocationOptionsHolder {}
+// AllocationOptionsHolder is now safely Sync because it uses Mutex.
 
 impl AllocationOptionsHolder {
     pub fn new(alloc_options: AllocationOptions) -> Self {
         Self {
-            alloc_options: RefCell::new(alloc_options),
+            alloc_options: Mutex::new(alloc_options),
         }
     }
     pub fn set_alloc_options(&self, options: AllocationOptions) {
-        let mut alloc_options = self.alloc_options.borrow_mut();
+        let mut alloc_options = self.alloc_options.lock().unwrap();
         *alloc_options = options;
     }
 
     pub fn clear_alloc_options(&self) {
-        let mut alloc_options = self.alloc_options.borrow_mut();
+        let mut alloc_options = self.alloc_options.lock().unwrap();
         *alloc_options = AllocationOptions::default();
     }
 
     pub fn get_alloc_options(&self) -> AllocationOptions {
-        let alloc_options = self.alloc_options.borrow();
+        let alloc_options = self.alloc_options.lock().unwrap();
         *alloc_options
     }
 }

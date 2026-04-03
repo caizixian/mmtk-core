@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 214 | Δ: -137
+- Starting count: 351 | Current: 213 | Δ: -138
 - Phase: 3
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -11,7 +11,7 @@ Architectural insights that affect ALL future safety decisions:
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/metadata_val_traits.rs` — Audit for potential use of `StwProof` to enforce concurrency safety on trait methods — expected Δ: 0
+1. 🔴 HIGH: `src/plan/global.rs:110-120` — Use `StwProof` to encapsulate `SFT_MAP` access — expected Δ: -1
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
@@ -46,7 +46,7 @@ Reusable refactoring patterns (recipe format):
 - `src/policy/marksweepspace/malloc_ms/global.rs` — Remaining unsafe are irreducible FFI and lifetime extension. [Phase 2 confirmed]
 - `src/policy/copyspace.rs` — Remaining unsafe are irreducible FFI and lifetime extension. [Phase 2 confirmed]
 - `src/plan/global.rs` — Unsafe for SFT_MAP access and CommonPlan reference for work packet. [Phase 2 confirmed]
-- `src/util/alloc/allocator.rs` — Unsafe impl Sync for AllocationOptionsHolder and raw memory write in fill_alignment_gap. [Phase 2 confirmed]
+- `src/util/alloc/allocator.rs` — Raw memory write in `fill_alignment_gap`. [Phase 2 confirmed]
 - `src/util/malloc/mod.rs` — Irreducible FFI wrappers. [Phase 2 confirmed]
 - `src/mmtk.rs` — Irreducible UnsafeCell access and circular initialization. [Phase 2 confirmed]
 - `src/policy/sft_map.rs` — Transmutes are irreducible due to fat pointer provenance. [Phase 2 confirmed]
