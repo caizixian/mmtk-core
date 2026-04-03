@@ -248,13 +248,17 @@ impl Block {
     }
 
     /// Release this block if it is unmarked. Return true if the block is released.
-    pub fn attempt_release<VM: VMBinding>(self, inner: &super::MarkSweepSpaceInner<VM>) -> bool {
+    pub fn attempt_release<VM: VMBinding>(self, block_list: &mut BlockList, inner: &super::MarkSweepSpaceInner<VM>) -> bool {
         match self.get_state() {
             // We should not have unallocated blocks in a block list
             BlockState::Unallocated => unreachable!(),
             BlockState::Unmarked => {
-                let block_list = self.load_block_list();
-                unsafe { &mut *block_list }.remove(self);
+                #[cfg(debug_assertions)]
+                {
+                    let loaded_block_list = self.load_block_list();
+                    debug_assert_eq!(loaded_block_list, block_list as *mut BlockList, "BlockList mismatch for block {:?}", self);
+                }
+                block_list.remove(self);
                 inner.release_block(self);
                 true
             }
@@ -264,6 +268,7 @@ impl Block {
             }
         }
     }
+
 
     /// Sweep the block. This is done either lazily in the allocation phase, or eagerly at the end of a GC.
     pub fn sweep<VM: VMBinding>(&self) {

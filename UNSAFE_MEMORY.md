@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 196 | Δ: -155
+- Starting count: 351 | Current: 195 | Δ: -156
 - Phase: 3 (Irreducible Documentation)
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/policy/marksweepspace/native_ms/block.rs:257-390` — investigate if raw pointer manipulation can be centralized or abstracted (Re-evaluate from NOT to Revisit) — expected Δ: 1
+1. 🟡 MED: `src/policy/marksweepspace/native_ms/block.rs:320,390` — investigate if heap writes during sweep can use a safe wrapper — expected Δ: 2
 
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
@@ -29,7 +29,7 @@
 - `src/vm/slot.rs` — Refactored SimpleSlot to use Address instead of raw pointer. Remaining unsafe are dereferences in load/store. [Phase 3 confirmed]
 - `src/util/malloc/mod.rs` — Irreducible due to raw pointer manipulation in allocator. [Phase 2 confirmed]
 - `src/policy/sft_map.rs` — Transmutes are irreducible due to fat pointer provenance. [Phase 2 confirmed]
-- `src/policy/marksweepspace/native_ms/block.rs` — Irreducible due to raw pointer manipulation. [Phase 2 confirmed]
+- `src/policy/marksweepspace/native_ms/block.rs` — Partially reduced. Remaining unsafe are heap writes during sweep. [Phase 3 under evaluation]
 - `src/util/raw_memory_freelist.rs` — Remaining unsafe are `from_raw_parts` to create slice views of raw memory. [Phase 3 confirmed]
 - `src/util/metadata/global.rs` — Unsafe fns for load/store are necessary as they are non-atomic. [Phase 3 confirmed]
 - `src/util/heap/pageresource.rs` — Documented irreducible unsafe calls to VMMap with SAFETY comments. [Phase 3 confirmed]
