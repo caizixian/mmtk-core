@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 571 | Δ: -151
-- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout, util/copy, util/metadata/side_metadata (side_metadata_tests.rs load/store to load_atomic/store_atomic, global.rs load to load_atomic in search), util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util (InitializeOnce Sync bound), policy/sft_map (SFTMap Sync, SFTDenseChunkMap auto-Sync), policy/marksweepspace/malloc_ms/global.rs (is_marked_unsafe to is_marked Relaxed)
+- Starting count: 722 | Current: 570 | Δ: -152
+- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout, util/copy, util/metadata/side_metadata (side_metadata_tests.rs load/store to load_atomic/store_atomic, global.rs load to load_atomic in search), util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util (InitializeOnce Sync bound), policy/sft_map (SFTMap Sync, SFTDenseChunkMap auto-Sync), policy/marksweepspace/malloc_ms/global.rs (is_marked_unsafe to is_marked Relaxed), policy/marksweepspace/malloc_ms/metadata.rs (remove is_marked_unsafe, is_offset_malloc Relaxed load)
 
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -39,7 +39,7 @@
 - `SimpleSlot` → `&Atomic<T>` in tests for direct access without raw pointers.
 
 ## Refactoring Ideas
-- `src/policy/marksweepspace/malloc_ms/metadata.rs`: Remove unused `is_marked_unsafe` (since we replaced its usages in `global.rs`).
+- `src/policy/marksweepspace/malloc_ms/metadata.rs`: Make `unset_offset_malloc_bit_unsafe` safe using `store_atomic`.
 - `src/util/metadata/side_metadata/helpers.rs`: Analyze remaining unsafe blocks (mostly tests/Address::from_usize and load/store).
 - `src/util/metadata/metadata_val_traits.rs`: Analyze 20 unsafe blocks (mostly trait methods for load/store).
 - `src/util/metadata/side_metadata/global.rs`: Analyze remaining unsafe blocks (74 count). Done load to load_atomic in search functions.

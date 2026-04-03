@@ -26,9 +26,6 @@ pub fn is_marked<VM: VMBinding>(object: ObjectReference, ordering: Ordering) -> 
     VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(object, None, ordering) == 1
 }
 
-pub unsafe fn is_marked_unsafe<VM: VMBinding>(object: ObjectReference) -> bool {
-    VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load::<VM, u8>(object, None) == 1
-}
 
 /// Set the page mark from 0 to 1. Return true if we set it successfully in this call.
 pub(super) fn compare_exchange_set_page_mark(page_addr: Address) -> bool {
@@ -69,7 +66,7 @@ pub(super) fn set_page_mark(page_addr: Address) {
 
 /// Is this allocation an offset malloc? The argument address should be the allocation address (object start)
 pub(super) fn is_offset_malloc(address: Address) -> bool {
-    unsafe { OFFSET_MALLOC_METADATA_SPEC.load::<u8>(address) == 1 }
+    OFFSET_MALLOC_METADATA_SPEC.load_atomic::<u8>(address, Ordering::Relaxed) == 1
 }
 
 /// Set the offset bit for the allocation. The argument address should be the allocation address (object start)
