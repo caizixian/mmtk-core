@@ -28,10 +28,11 @@
 - **New**: Removed `impl Slot for Address` and changed `MemorySlice for Range<Address>` to use `SimpleSlot`, eliminating 2 unsafe blocks and aligning with the intent of using `SimpleSlot` directly.
 - **New**: Centralized unsafe raw pointer dereferences in `MetadataSlot` by introducing a helper `get_mut_ref` method, and refactored `load_val` to use `get_ref`, eliminating 3 unsafe blocks at call sites (net reduction of 2).
 - **New**: Used existing `MetadataSlot` abstraction to eliminate 10 unsafe blocks in `global.rs` by replacing direct calls to `MetadataValue` trait methods on `Address` with calls to `MetadataSlot` methods.
+- **New**: Refactored `MetadataValue` trait to take references instead of `Address`, eliminating unsafe blocks in trait implementations and narrowing unsafe scope at call sites in `MetadataSlot`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are irreducible function signatures and raw memory copy. Audited safety comments. [Phase 2 confirmed]
-- `src/util/metadata/metadata_val_traits.rs` — Defines contract for loading metadata values. Inherently unsafe. Audited safety comments. [Phase 2 confirmed]
+- `src/util/metadata/metadata_val_traits.rs` — Completely safe after refactoring trait to take references. [Phase 2 confirmed]
 - `src/util/memory.rs` — Wrappers around libc calls. Standard FFI wrappers. Verified safety comments. [Phase 3 confirmed]
 - `docs/dummyvm/src/api.rs` — Reduced unsafe by using `Option<&mut T>` and `Option<Box<T>>` in FFI signatures. Remaining are `CStr::from_ptr`. [Phase 3 confirmed]
 - `src/util/malloc/malloc_ms_util.rs` — Irreducible due to raw pointer manipulation in allocator. Verified safety comments. [Phase 3 confirmed]
