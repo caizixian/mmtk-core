@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 557 | Δ: -165
-- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout, util/copy, util/metadata/side_metadata (side_metadata_tests.rs load/store to load_atomic/store_atomic, global.rs load to load_atomic in search), util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util (InitializeOnce Sync bound), policy/sft_map (SFTMap get_unchecked safe, SFTMap Sync, SFTDenseChunkMap auto-Sync), policy/marksweepspace/malloc_ms/global.rs (is_marked_unsafe to is_marked Relaxed), policy/marksweepspace/malloc_ms/metadata.rs (remove is_marked_unsafe, is_offset_malloc Relaxed load)
+- Starting count: 722 | Current: 548 | Δ: -174
+- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout, util/copy, util/metadata/side_metadata (side_metadata_tests.rs load/store to load_atomic/store_atomic, global.rs load to load_atomic in search), util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util (InitializeOnce Sync bound), policy/sft_map (SFTMap get_unchecked safe, SFTMap Sync, SFTDenseChunkMap auto-Sync, update/clear/eager_initialize safe), policy/marksweepspace/malloc_ms/global.rs (is_marked_unsafe to is_marked Relaxed), policy/marksweepspace/malloc_ms/metadata.rs (remove is_marked_unsafe, is_offset_malloc Relaxed load)
 
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -45,6 +45,7 @@
 - `src/util/metadata/side_metadata/global.rs`: Analyze remaining unsafe blocks (74 count). Done load to load_atomic in search functions.
 - `src/policy/sft_map.rs`: Analyze remaining unsafe (20 count) for potential safe abstractions in SFT map access.
 - `src/plan/global.rs`: Remove `unsafe { crate::mmtk::SFT_MAP.get_mut() }` at line 114 by changing `notify_space_creation` to `&self` in `SFTMap` trait and using `Deref` on `SFT_MAP`.
+- Remove unused `unsafe` blocks at call sites of `SFTMap::update` and `SFTMap::clear` in `src/policy/space.rs`, `src/policy/marksweepspace/malloc_ms/global.rs`, and `src/util/heap/layout/map32.rs`.
 
 ## Files NOT to Revisit
 - `src/util/memory.rs` — FFI calls to libc (mmap, munmap, etc.).
