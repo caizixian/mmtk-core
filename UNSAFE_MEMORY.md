@@ -3,6 +3,8 @@
 ## Progress
 - Starting count: 351 | Current: 70 | Δ: -281
 - Phase: 3 (Irreducible Documentation)
+- Status: Confirmed all remaining 70 unsafe locations are irreducible or justified.
+
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Work packets hold raw pointers to plans or spaces to bypass borrow checker and lifetimes.
