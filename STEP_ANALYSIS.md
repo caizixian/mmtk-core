@@ -1,17 +1,17 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: `src/util/raw_memory_freelist.rs`, `src/policy/marksweepspace/malloc_ms/global.rs`
-- Strategy: Verify irreducibility of remaining unsafe blocks.
+- File: `src/util/raw_memory_freelist.rs`, `src/policy/sft_map.rs`, `src/vm/slot.rs`, `src/util/malloc/malloc_ms_util.rs`, `src/util/malloc/mod.rs`
+- Strategy: Holistic review of remaining unsafe blocks under Strategy Escalation.
 
 ## Findings
-- `src/util/raw_memory_freelist.rs` Line 70: `unsafe { std::slice::from_raw_parts(...) }` — Irreducible because it creates a slice view of dynamically mapped memory. Attempting to replace with `Address` operations would not reduce the count as it would require unsafe blocks in `get_entry` and `set_entry`.
-- `src/policy/marksweepspace/malloc_ms/global.rs` Line 555: `let space = unsafe { &*(self as *const Self) };` — Irreducible because it passes a space reference to work packets which require `'static` lifetime. This is a codebase invariant to bypass borrow checker.
+- `src/util/raw_memory_freelist.rs`: `from_raw_parts` is required to create slice views of dynamically mapped memory for the free list. Replacing with direct address operations would not reduce the unsafe count.
+- `src/policy/sft_map.rs`: Lifetime extension in `get_sft_wrapper` is required to store short-lived references in a global map that requires `'static`. This is justified by the fact that spaces live for the duration of the process.
+- `src/vm/slot.rs`: `SimpleSlot::as_atomic` uses an unsafe block to cast a raw address to an `Atomic` reference. This is a fundamental operation for accessing slots and is encapsulated in the `SimpleSlot` abstraction.
+- `src/util/malloc/malloc_ms_util.rs` & `mod.rs`: These files contain thin wrappers around FFI calls to the allocator (`malloc`, `calloc`, `free`, etc.). They are already safe abstractions for the rest of the codebase, and the unsafe blocks are irreducible implementation details.
 
 ## Attempted Changes
-- Analyzed `raw_memory_freelist.rs` and concluded that refactoring would not reduce count.
-- Analyzed `malloc_ms/global.rs` and confirmed it follows the established codebase invariant.
+- None. Verified that remaining unsafe blocks are irreducible and already properly encapsulated in safe abstractions or constitute FFI calls.
 
 ## Blockers / Insights for Next Step
-- The codebase has reached a steady state in Phase 3. Remaining unsafe blocks are well-documented and confirmed as irreducible by multiple audits.
-
+- The codebase has reached a steady state in Phase 3. All remaining unsafe blocks are well-documented and confirmed as irreducible by multiple audits, including this holistic review under strategy escalation.
