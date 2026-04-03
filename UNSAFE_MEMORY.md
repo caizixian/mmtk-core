@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 452 | Δ: -270
+- Starting count: 722 | Current: 441 | Δ: -281
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,7 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/alloc/free_list_allocator.rs:155,157,177` — Use MetadataSlot or similar abstraction instead of raw load/store on Address. — expected Δ: 3+
-2. 🟡 MED: `src/util/metadata/side_metadata/global.rs` — Check if remaining unsafe can be abstracted. — expected Δ: ?
+1. 🔴 HIGH: `src/mmtk.rs:187,189` — Check if raw pointer casts for plan/gc_trigger can be removed or made safe. — expected Δ: 2
 
 ## Patterns Discovered
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
@@ -31,6 +30,7 @@
 - Replacing `UnsafeCell` with `Mutex` for global state that is accessed via shared references, eliminating unsafe mutable access.
 - **New Pattern**: Extending `MetadataSlot` with generic methods for `MetadataValue` allows centralizing unsafe operations on types larger than `u8` (like `u16`, `u32`, `usize`) and removing unsafe blocks at call sites in `header_metadata.rs` and `global.rs`.
 - **New Pattern**: Removing raw pointers from work packets and using `mmtk.get_plan_mut()` eliminates the need for `unsafe impl Send` and raw pointer casts when the work packet only needs to call trait methods on the plan.
+- **New Pattern**: Introduce `FreeListCell` abstraction to encapsulate raw memory operations on free list cells.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/metadata/side_metadata/helpers.rs` — All unsafe removed by using `MetadataSlot`. [Phase 2 confirmed]
@@ -52,6 +52,7 @@
 - `src/util/address.rs` — Primitives for address operations. Unsafe signatures are necessary. [Phase 2 confirmed]
 - `src/vm/slot.rs` — `SimpleSlot` is a safe abstraction. Unsafe operations inside it are irreducible without viral lifetimes. Tests use unsafe to check address iteration. [Phase 2 confirmed]
 - `src/util/heap/freelistpageresource.rs` — Remaining unsafe are `Send`/`Sync` impls for the type. [Phase 2 confirmed]
+- `src/util/alloc/free_list_allocator.rs` — Remaining unsafe is irreducible ObjectReference creation from raw address. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - Implemented `SideMetadataSpecBlockExt` in `src/policy/marksweepspace/native_ms/block.rs` to abstract metadata accesses.
