@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 493 | Current: 468 | Δ: -25
+- Starting count: 493 | Current: 466 | Δ: -27
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)

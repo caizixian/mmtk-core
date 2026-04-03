@@ -1207,13 +1207,12 @@ impl SideMetadataSpec {
     ) {
         let region_bytes = 1usize << self.log_bytes_in_region;
 
-        let proof = unsafe { StwProof::new() };
         let mut cursor = data_start_addr;
         while cursor < data_end_addr {
             debug_assert!(cursor.is_mapped());
 
             // If we find non-zero value, just call back.
-            if !self.load::<T>(cursor, &proof).is_zero() {
+            if !self.load_atomic::<T>(cursor, Ordering::Relaxed).is_zero() {
                 visit_data(cursor);
             }
             cursor += region_bytes;
@@ -1727,8 +1726,7 @@ mod tests {
                 || {
                     // Clear the metadata -- use u64 (max length we support)
                     assert!(log_bits <= 6);
-                    let meta_ptr: *mut u64 = meta_addr.to_mut_ptr();
-                    unsafe { *meta_ptr = 0 };
+                    spec.slot_from_meta_addr::<u64>(meta_addr).store(0);
 
                     sanity::reset();
                 },
