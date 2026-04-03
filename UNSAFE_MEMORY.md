@@ -43,6 +43,8 @@
 - Antigravity performed a holistic review of `raw_memory_freelist.rs`, `sft_map.rs`, `slot.rs`, and `malloc_ms/global.rs` under strategy escalation and confirmed all remaining unsafe blocks are irreducible or well-encapsulated as documented. The codebase remains in a steady state for Phase 3.
 - Antigravity performed another holistic review under strategy escalation (after 7 consecutive zero reduction steps) and confirmed that all remaining unsafe blocks provided in the harness are irreducible or well-encapsulated as documented. The codebase remains in a steady state for Phase 3.
 - Antigravity performed a holistic review under strategy escalation (after 9 consecutive zero reduction steps) and confirmed that all remaining unsafe blocks provided in the harness are irreducible or well-encapsulated as documented. The codebase remains in a steady state for Phase 3.
+- Antigravity performed another holistic review under strategy escalation (after 10 consecutive zero reduction steps) and confirmed that all remaining unsafe blocks provided in the harness are irreducible or well-encapsulated as documented. The codebase remains in a steady state for Phase 3.
+- Antigravity verified that all uses of `lifetime!` macro in `mock_vm.rs` are justified for casting references to `'static` for mocking purposes.
 
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -52,7 +54,7 @@
 - `SFTRefStorage::load` returns a reference lock-free and thus requires leaked or static data to be sound without hazard pointers or Arc overhead.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 LOW: `src/util/test_util/mock_vm.rs:46-55` — verify all uses of `lifetime!` macro are justified — expected Δ: 0
+1. 🟡 LOW: `src/vm/slot.rs:175-179` — verify safety comments for `SimpleSlot::as_atomic` — expected Δ: 0
 
 ## Patterns Discovered
 - Refactored `SFTWrapper` to hold a reference instead of a raw pointer, eliminating `unsafe impl Send` and `Sync` for the wrapper and reducing unsafe count.
