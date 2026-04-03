@@ -39,7 +39,7 @@ pub trait SFTMap {
     unsafe fn update(&self, space: SFTRawPointer, start: Address, bytes: usize);
 
     /// Notify the SFT map for space creation. `DenseChunkMap` needs to create an entry for the space.
-    fn notify_space_creation(&mut self, _space: SFTRawPointer) {}
+    fn notify_space_creation(&mut self, _space: &(dyn SFT + Sync + 'static)) {}
 
     /// Eagerly initialize the SFT table. For most implementations, it could be the same as update().
     /// However, we need this as a seprate method for SFTDenseChunkMap, as it needs to map side metadata first
@@ -373,10 +373,10 @@ mod dense_chunk_map {
             cell.load()
         }
 
-        fn notify_space_creation(&mut self, space: SFTRawPointer) {
+        fn notify_space_creation(&mut self, space: &(dyn SFT + Sync + 'static)) {
             // Insert the space into the SFT table, and the SFT map.
 
-            let space_name = unsafe { &*space }.name().to_string();
+            let space_name = space.name().to_string();
             // We shouldn't have this space in our map yet. Otherwise, this method is called multiple times for the same space.
             assert!(!self.index_map.contains_key(&space_name));
             // Index for the space
@@ -604,7 +604,7 @@ mod sparse_chunk_map {
                     new
                 );
             }
-            unsafe { self.sft.get_unchecked(chunk).store(sft) };
+            self.sft[chunk].store(sft);
         }
     }
 }
