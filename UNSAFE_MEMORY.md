@@ -41,7 +41,7 @@
 - `docs/dummyvm/src/api.rs` — Reduced unsafe by using `Option<&mut T>` and `Option<Box<T>>` in FFI signatures. Remaining are `CStr::from_ptr`. [Phase 3 confirmed]
 - `src/util/malloc/malloc_ms_util.rs` — Irreducible due to raw pointer manipulation in allocator. Verified safety comments. [Phase 3 confirmed]
 - `src/util/address.rs` — Core address type. Operations are inherently unsafe. Audited safety comments. [Phase 3 confirmed]
-- `src/mmtk.rs` — Uses `InitializeOnce` for `SFT_MAP`. Irreducible for performance. Audited safety comments for StwProtected. [Phase 3 confirmed]
+- `src/mmtk.rs` — Uses `InitializeOnce` for `SFT_MAP`. Irreducible for performance as `SFT_MAP` is accessed on hot paths (e.g., in `Address` methods like `is_live`). Audited safety comments for StwProtected. [Phase 3 confirmed]
 - `src/util/rust_util/mod.rs` — Implements `InitializeOnce`. Irreducible for performance and because `get_mut` requires unsafe casting that triggers `invalid_reference_casting` error in Rust 1.92+ if attempted with `OnceLock`. Added safety comments to document unsafe operations. [Phase 3 confirmed]
 - `src/util/malloc/mod.rs` — Irreducible due to raw pointer manipulation in allocator. Audited safety comments. [Phase 3 confirmed]
 - `src/policy/sft_map.rs` — Transmutes are irreducible due to fat pointer provenance. [Phase 3 confirmed]
