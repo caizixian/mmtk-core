@@ -3,7 +3,6 @@
 use atomic::Ordering;
 
 use super::BlockList;
-use super::MarkSweepSpace;
 use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::heap::chunk_map::*;
 use crate::util::linear_scan::Region;
@@ -231,23 +230,6 @@ impl Block {
         Self::MARK_TABLE.store_atomic::<u8>(self.start(), state, Ordering::SeqCst);
     }
 
-    /// Release this block if it is unmarked. Return true if the block is released.
-    pub fn attempt_release<VM: VMBinding>(self, space: &MarkSweepSpace<VM>) -> bool {
-        match self.get_state() {
-            // We should not have unallocated blocks in a block list
-            BlockState::Unallocated => unreachable!(),
-            BlockState::Unmarked => {
-                let block_list = self.load_block_list();
-                unsafe { &mut *block_list }.remove(self);
-                space.release_block(self);
-                true
-            }
-            BlockState::Marked => {
-                // The block is live.
-                false
-            }
-        }
-    }
 
     /// Sweep the block. This is done either lazily in the allocation phase, or eagerly at the end of a GC.
     pub fn sweep<VM: VMBinding>(&self) {
