@@ -354,8 +354,8 @@ impl<VM: VMBinding> CopySpaceCopyContext<VM> {
         }
     }
 
-    pub fn rebind(&mut self, space: &CopySpace<VM>) {
+    pub fn rebind(&mut self, space: &'static CopySpace<VM>) {
         self.copy_allocator
-            .rebind(unsafe { &*{ space as *const _ } });
+            .rebind(space);
     }
 }

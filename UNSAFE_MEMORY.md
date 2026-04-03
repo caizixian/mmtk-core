@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 236 | Δ: -115
+- Starting count: 351 | Current: 232 | Δ: -119
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -11,7 +11,7 @@ Architectural insights that affect ALL future safety decisions:
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/policy/copyspace.rs:367` — Investigate if unsafe in rebind can be removed — expected Δ: 1
+1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs` — Investigate if any unsafe can be reduced or abstracted — expected Δ: ?
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
@@ -28,6 +28,7 @@ Reusable refactoring patterns (recipe format):
 - Replacing custom lock-free queues with `crossbeam::queue::ArrayQueue` and using `Mutex` for thread-local access can eliminate unsafe code in queue implementations.
 - Using Generic Associated Types (GATs) in `ObjectTracerContext` to allow `TracerType` to borrow `GCWorker` without raw pointers.
 - Using `Box::leak` in test fixtures to avoid raw pointer management and lifetimes, making the fixture safe.
+- Changing `prepare_worker` in `Plan` trait to take `&'static self` can propagate the `'static` lifetime to `tospace()` and remove unsafe casts in `rebind`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/plan/concurrent/concurrent_marking_work.rs` — Eliminated raw pointer from `ConcurrentTraceObjects` by using a temporary tracer type. Localized unsafe in the tracer. [Phase 2 confirmed]

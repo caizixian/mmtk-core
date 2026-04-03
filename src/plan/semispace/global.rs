@@ -85,7 +85,7 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
         self.tospace_mut().set_copy_for_sft_trace(None);
     }
 
-    fn prepare_worker(&self, worker: &mut GCWorker<VM>) {
+    fn prepare_worker(&'static self, worker: &mut GCWorker<VM>) {
         worker.get_copy_context_mut().copy[0]
             .as_mut()
             .expect("Copy allocator not initialized")

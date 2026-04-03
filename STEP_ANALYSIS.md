@@ -1,15 +1,21 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: <file being analyzed>
-- Strategy: <what you're attempting>
+- File: `src/policy/copyspace.rs`
+- Strategy: Remove unsafe in `rebind` by changing `prepare_worker` in `Plan` trait to take `&'static self`.
 
 ## Findings
-- Line X: <unsafe type> — <eliminable? why/why not>
-- Line Y: <unsafe type> — <eliminable? why/why not>
+- `src/policy/copyspace.rs:357`: `CopySpaceCopyContext::rebind` takes `&CopySpace` and casts it to `&'static CopySpace` using unsafe to pass to `BumpAllocator::rebind`.
+- `BumpAllocator::rebind` requires `&'static dyn Space`.
+- `CopySpaceCopyContext::rebind` is called in `SemiSpace::prepare_worker` and `GenCopy::prepare_worker`.
+- In both cases, they pass `self.tospace()`, where `self` is `&self`.
+- `prepare_worker` is called in `src/scheduler/gc_work.rs` as `mmtk.get_plan().prepare_worker(worker)`.
+- `mmtk` is `&'static MMTK`, so `mmtk.get_plan()` returns `&'static dyn Plan`.
+- Thus, the receiver of `prepare_worker` is actually `'static`.
+- If we change `prepare_worker` in `Plan` trait to take `&'static self`, we can propagate the `'static` lifetime to `tospace()` and remove the unsafe in `rebind`.
 
 ## Attempted Changes
-- <what you tried, what happened>
+- None yet.
 
 ## Blockers / Insights for Next Step
-- <what prevented completion, what the next step should know>
+- Need to update `Plan` trait and all implementations of `prepare_worker`.
