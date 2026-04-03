@@ -290,7 +290,7 @@ impl<VM: VMBinding> Mutator<VM> {
             "Allocator not initialized for selector {:?}",
             selector
         );
-        unsafe { self.allocators.get_allocator(selector) }
+        self.allocators.get_allocator(selector)
     }
 
     /// Get the mutable allocator for the selector.
@@ -303,7 +303,7 @@ impl<VM: VMBinding> Mutator<VM> {
             "Allocator not initialized for selector {:?}",
             selector
         );
-        unsafe { self.allocators.get_allocator_mut(selector) }
+        self.allocators.get_allocator_mut(selector)
     }
 
     /// Get the allocator of a concrete type for the selector.
@@ -316,7 +316,7 @@ impl<VM: VMBinding> Mutator<VM> {
             "Allocator not initialized for selector {:?}",
             selector
         );
-        unsafe { self.allocators.get_typed_allocator(selector) }
+        self.allocators.get_typed_allocator(selector)
     }
 
     /// Get the mutable allocator of a concrete type for the selector.
@@ -332,7 +332,7 @@ impl<VM: VMBinding> Mutator<VM> {
             "Allocator not initialized for selector {:?}",
             selector
         );
-        unsafe { self.allocators.get_typed_allocator_mut(selector) }
+        self.allocators.get_typed_allocator_mut(selector)
     }
 
     /// Get the allocator of a concrete type for the semantic.

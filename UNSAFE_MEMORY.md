@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 322 | Δ: -29
+- Starting count: 351 | Current: 314 | Δ: -37
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,9 +10,8 @@ Architectural insights that affect ALL future safety decisions:
 - Static plan references are needed because plan types are generic and cannot be stored in global statics easily.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/alloc/allocators.rs:46` — Add bitmask to track initialized allocators to make `get_allocator` safe — expected Δ: -4
-2. 🟡 MED: `src/plan/mutator_context.rs:293` — Remove unsafe blocks once `get_allocator` is safe — expected Δ: -4
-3. 🟢 LOW: Consider using a library like `core_affinity` to remove remaining unsafe in `src/scheduler/affinity.rs` in the future.
+1. 🔴 HIGH: `src/util/heap/blockpageresource.rs:216` — Investigate replacing `MaybeUninit` with `Option` in `BlockQueue` — expected Δ: -2
+2. 🟢 LOW: Consider using a library like `core_affinity` to remove remaining unsafe in `src/scheduler/affinity.rs` in the future.
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
