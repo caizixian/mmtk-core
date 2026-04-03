@@ -75,8 +75,8 @@ pub(super) fn set_offset_malloc_bit(address: Address) {
 }
 
 /// Unset the offset bit for the allocation. The argument address should be the allocation address (object start)
-pub(super) unsafe fn unset_offset_malloc_bit_unsafe(address: Address) {
-    OFFSET_MALLOC_METADATA_SPEC.store::<u8>(address, 0);
+pub(super) fn unset_offset_malloc_bit(address: Address) {
+    OFFSET_MALLOC_METADATA_SPEC.store_atomic::<u8>(address, 0, Ordering::SeqCst);
 }
 
 pub unsafe fn unset_vo_bit_unsafe(object: ObjectReference) {

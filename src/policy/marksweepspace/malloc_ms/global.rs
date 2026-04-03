@@ -465,7 +465,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
         if offset_malloc_bit {
             trace!("Free memory {:x}", addr);
             offset_free(addr);
-            unsafe { unset_offset_malloc_bit_unsafe(addr) };
+            unset_offset_malloc_bit(addr);
         } else {
             let ptr = addr.to_mut_ptr();
             trace!("Free memory {:?}", ptr);
