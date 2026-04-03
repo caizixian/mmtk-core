@@ -1,7 +1,7 @@
 // Some tests are conditionally compiled. So not all the code in this module will be used. We simply allow dead code in this module.
 #![allow(dead_code)]
 
-use atomic_refcell::AtomicRefCell;
+
 use std::sync::Mutex;
 use std::sync::Once;
 
@@ -17,16 +17,14 @@ pub trait FixtureContent {
 }
 
 pub struct Fixture<T: FixtureContent> {
-    content: AtomicRefCell<Option<Box<T>>>,
+    content: Mutex<Option<Box<T>>>,
     once: Once,
 }
-
-unsafe impl<T: FixtureContent> Sync for Fixture<T> {}
 
 impl<T: FixtureContent> Fixture<T> {
     pub fn new() -> Self {
         Self {
-            content: AtomicRefCell::new(None),
+            content: Mutex::new(None),
             once: Once::new(),
         }
     }
@@ -34,20 +32,20 @@ impl<T: FixtureContent> Fixture<T> {
     pub fn with_fixture<F: Fn(&T)>(&self, func: F) {
         self.once.call_once(|| {
             let content = Box::new(T::create());
-            let mut borrow = self.content.borrow_mut();
+            let mut borrow = self.content.lock().unwrap();
             *borrow = Some(content);
         });
-        let borrow = self.content.borrow();
+        let borrow = self.content.lock().unwrap();
         func(borrow.as_ref().unwrap())
     }
 
     pub fn with_fixture_mut<F: Fn(&mut T)>(&self, func: F) {
         self.once.call_once(|| {
             let content = Box::new(T::create());
-            let mut borrow = self.content.borrow_mut();
+            let mut borrow = self.content.lock().unwrap();
             *borrow = Some(content);
         });
-        let mut borrow = self.content.borrow_mut();
+        let mut borrow = self.content.lock().unwrap();
         func(borrow.as_mut().unwrap())
     }
 }

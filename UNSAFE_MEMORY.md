@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 246 | Δ: -105
+- Starting count: 351 | Current: 245 | Δ: -106
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -11,7 +11,7 @@ Architectural insights that affect ALL future safety decisions:
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/test_util/fixtures.rs:24` — Investigate if `Fixture` can use `RwLock` instead of `AtomicRefCell` to eliminate `unsafe impl Sync` — expected Δ: 1
+1. 🔴 HIGH: `src/scheduler/worker.rs:106-107` — Investigate if `GCWorkerShared` can eliminate `unsafe impl Send` and `Sync` — expected Δ: 2
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
