@@ -95,9 +95,9 @@ pub(crate) fn unset_vo_bit_nocheck(object: ObjectReference) {
 /// # Safety
 ///
 /// This is unsafe: check the comment on `side_metadata::store`
-pub(crate) unsafe fn unset_vo_bit_unsafe(object: ObjectReference) {
+pub(crate) fn unset_vo_bit_unsafe(object: ObjectReference) {
     debug_assert!(is_vo_bit_set(object), "{:x}: VO bit not set", object);
-    VO_BIT_SIDE_METADATA_SPEC.store::<u8>(object.to_raw_address(), 0);
+    VO_BIT_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_raw_address(), 0, Ordering::Relaxed);
 }
 
 /// Check if the VO bit is set for an object.
@@ -203,7 +203,7 @@ pub(crate) fn find_object_from_internal_pointer<VM: VMBinding>(
 pub(crate) fn get_object_ref_for_vo_addr(vo_addr: Address) -> ObjectReference {
     // VO bit should be set on the address.
     debug_assert!(vo_addr.is_aligned_to(ObjectReference::ALIGNMENT));
-    debug_assert!(unsafe { is_vo_addr(vo_addr) });
+    debug_assert!(is_vo_addr(vo_addr));
     ObjectReference::from_raw_address(vo_addr).unwrap()
 }
 
@@ -231,6 +231,6 @@ pub(crate) fn is_internal_ptr_from_vo_bit<VM: VMBinding>(
 ///
 /// # Safety
 /// The caller needs to make sure that no one is modifying VO bit.
-pub(crate) unsafe fn is_vo_addr(addr: Address) -> bool {
-    VO_BIT_SIDE_METADATA_SPEC.load::<u8>(addr) != 0
+pub(crate) fn is_vo_addr(addr: Address) -> bool {
+    VO_BIT_SIDE_METADATA_SPEC.load_atomic::<u8>(addr, Ordering::Relaxed) != 0
 }
