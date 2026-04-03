@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 539 | Δ: -183
-- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout, util/copy, util/metadata/side_metadata, util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util, policy/sft_map (SFTMap update/eager_initialize take reference, remove unsafe in implementations), policy/marksweepspace/malloc_ms/global.rs (unnecessary SFT_MAP unsafe)
+- Starting count: 722 | Current: 538 | Δ: -184
+- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout, util/copy, util/metadata/side_metadata, util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util, policy/sft_map (SFTMap update/eager_initialize take reference, remove unsafe in implementations), policy/marksweepspace/malloc_ms/global.rs (unnecessary SFT_MAP unsafe), policy/lockfreeimmortalspace.rs (unnecessary eager_initialize unsafe)
 
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -41,8 +41,7 @@
 - `SimpleSlot` → `&Atomic<T>` in tests for direct access without raw pointers.
 
 ## Refactoring Ideas
-- `src/policy/lockfreeimmortalspace.rs`: Remove unnecessary `unsafe` block at call site of `sft_map.eager_initialize` (line 130).
-- `src/util/heap/layout/map32.rs`: Remove unnecessary `unsafe` block at call site of `SFT_MAP.clear` (line 257).
+- `src/util/heap/layout/map32.rs`: Remove unnecessary `unsafe` block at call site of `SFT_MAP.clear` (line 257) - confirmed by cargo check warning.
 
 ## Files NOT to Revisit
 - `src/util/memory.rs` — FFI calls to libc (mmap, munmap, etc.).
