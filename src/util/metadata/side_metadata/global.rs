@@ -17,32 +17,32 @@ use std::sync::atomic::{AtomicU8, Ordering};
 pub(crate) struct MetadataSlot(pub(crate) Address);
 
 impl MetadataSlot {
-    pub(crate) fn fetch_and(&self, mask: u8, order: Ordering) -> u8 {
+    fn as_atomic_u8(&self) -> &AtomicU8 {
         // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `AtomicU8`.
-        unsafe { self.0.as_ref::<AtomicU8>() }.fetch_and(mask, order)
+        unsafe { self.0.as_ref::<AtomicU8>() }
+    }
+
+    pub(crate) fn fetch_and(&self, mask: u8, order: Ordering) -> u8 {
+        self.as_atomic_u8().fetch_and(mask, order)
     }
 
     pub(crate) fn fetch_or(&self, mask: u8, order: Ordering) -> u8 {
-        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `AtomicU8`.
-        unsafe { self.0.as_ref::<AtomicU8>() }.fetch_or(mask, order)
+        self.as_atomic_u8().fetch_or(mask, order)
     }
 
     pub(crate) fn load(&self, order: Ordering) -> u8 {
-        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `AtomicU8`.
-        unsafe { self.0.as_ref::<AtomicU8>() }.load(order)
+        self.as_atomic_u8().load(order)
     }
 
     pub(crate) fn store(&self, val: u8, order: Ordering) {
-        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `AtomicU8`.
-        unsafe { self.0.as_ref::<AtomicU8>() }.store(val, order)
+        self.as_atomic_u8().store(val, order)
     }
 
     pub(crate) fn fetch_update<F>(&self, set_order: Ordering, fetch_order: Ordering, f: F) -> std::result::Result<u8, u8>
     where
         F: FnMut(u8) -> Option<u8>,
     {
-        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for the metadata value.
-        unsafe { <u8 as MetadataValue>::fetch_update(self.0, set_order, fetch_order, f) }
+        self.as_atomic_u8().fetch_update(set_order, fetch_order, f)
     }
 
     pub(crate) fn compare_exchange(
@@ -52,8 +52,7 @@ impl MetadataSlot {
         success: Ordering,
         failure: Ordering,
     ) -> std::result::Result<u8, u8> {
-        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `AtomicU8`.
-        unsafe { self.0.compare_exchange::<AtomicU8>(old, new, success, failure) }
+        self.as_atomic_u8().compare_exchange(old, new, success, failure)
     }
 
     pub(crate) fn load_non_atomic(&self) -> u8 {
