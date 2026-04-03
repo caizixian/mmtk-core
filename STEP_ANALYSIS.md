@@ -1,15 +1,16 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: <file being analyzed>
-- Strategy: <what you're attempting>
+- File: N/A (Holistic Audit)
+- Strategy: Audit remaining unsafe code and document irreducibility rationale.
 
 ## Findings
-- Line X: <unsafe type> — <eliminable? why/why not>
-- Line Y: <unsafe type> — <eliminable? why/why not>
+- `src/mmtk.rs`: `StwProtected` uses `UnsafeCell` to avoid locking overhead. Safety relies on `StwProof` token and external invariant that mutation only happens when the world is stopped. Irreducible for performance.
+- `src/policy/sft_map.rs`: `SFTRefStorage` uses `transmute` to store fat pointers (`&dyn SFT`) in double-word atomics. Irreducible due to lack of safe fat pointer atomics in Rust.
+- `src/util/rust_util/mod.rs`: `InitializeOnce` avoids overhead of `OnceLock` on hot paths. Irreducible for performance.
 
 ## Attempted Changes
-- <what you tried, what happened>
+- None. Documented findings.
 
 ## Blockers / Insights for Next Step
-- <what prevented completion, what the next step should know>
+- Confirmed that remaining unsafe blocks are likely irreducible with current architecture.
