@@ -41,7 +41,8 @@ impl<VM: VMBinding> GCWork<VM> for UpdateReferences<VM> {
         VM::VMScanning::prepare_for_roots_re_scanning();
         mmtk.state.prepare_for_stack_scanning();
         // Prepare common and base spaces for the 2nd round of transitive closure
-        let plan_mut = unsafe { mmtk.get_plan_mut() }.downcast_mut::<MarkCompact<VM>>().unwrap();
+        let proof = mmtk.get_stw_proof().expect("World is not stopped!");
+        let plan_mut = mmtk.get_plan_mut_with_proof(proof).downcast_mut::<MarkCompact<VM>>().unwrap();
         plan_mut.common.release(worker.tls, true);
         plan_mut.common.prepare(worker.tls, true);
         #[cfg(feature = "extreme_assertions")]

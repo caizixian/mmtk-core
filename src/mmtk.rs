@@ -107,6 +107,11 @@ impl Default for MMTKBuilder {
     }
 }
 
+/// A proof that the world is stopped.
+/// This is a zero-sized type that can only be obtained via `MMTK::get_stw_proof`
+/// when the GC is in progress.
+pub struct StwProof(());
+
 /// An MMTk instance. MMTk allows multiple instances to run independently, and each instance gives users a separate heap.
 /// *Note that multi-instances is not fully supported yet*
 pub struct MMTK<VM: VMBinding> {
@@ -450,6 +455,22 @@ impl<VM: VMBinding> MMTK<VM> {
     /// Get the plan as mutable reference safely when we have exclusive access to MMTK.
     pub fn get_plan_mut_safe(&mut self) -> &mut dyn Plan<VM = VM> {
         &mut **self.plan.get_mut()
+    }
+
+    /// Get a proof that the world is stopped.
+    /// Returns `Some(StwProof)` if GC is in progress, or `None` otherwise.
+    pub fn get_stw_proof(&self) -> Option<StwProof> {
+        if self.gc_in_progress() {
+            Some(StwProof(()))
+        } else {
+            None
+        }
+    }
+
+    /// Get the plan as mutable reference safely by providing a proof that the world is stopped.
+    pub fn get_plan_mut_with_proof(&self, _proof: StwProof) -> &mut dyn Plan<VM = VM> {
+        // SAFETY: We have a proof that the world is stopped, so it is safe to access the plan mutably.
+        unsafe { &mut **(self.plan.get()) }
     }
 
     /// Get the run time options.

@@ -54,7 +54,8 @@ impl<C: GCWorkContext> GCWork<C::VM> for Prepare<C> {
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
         trace!("Prepare Global");
         // We assume this is the only running work packet that accesses plan at the point of execution
-        let plan_mut = unsafe { mmtk.get_plan_mut() };
+        let proof = mmtk.get_stw_proof().expect("World is not stopped!");
+        let plan_mut = mmtk.get_plan_mut_with_proof(proof);
         plan_mut.prepare(worker.tls);
 
         if plan_mut.constraints().needs_prepare_mutator {
@@ -132,7 +133,8 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
         mmtk.gc_trigger.policy.on_gc_release(mmtk);
         // We assume this is the only running work packet that accesses plan at the point of execution
 
-        let plan_mut = unsafe { mmtk.get_plan_mut() };
+        let proof = mmtk.get_stw_proof().expect("World is not stopped!");
+        let plan_mut = mmtk.get_plan_mut_with_proof(proof);
         plan_mut.release(worker.tls);
 
         let release_mutator_packets = <C::VM as VMBinding>::VMActivePlan::mutators()

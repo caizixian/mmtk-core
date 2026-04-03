@@ -563,7 +563,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
         // All other workers are parked, so it is safe to access the Plan instance mutably.
         probe!(mmtk, plan_end_of_gc_begin);
-        let plan_mut: &mut dyn Plan<VM = VM> = unsafe { mmtk.get_plan_mut() };
+        let proof = mmtk.get_stw_proof().expect("World is not stopped!");
+        let plan_mut: &mut dyn Plan<VM = VM> = mmtk.get_plan_mut_with_proof(proof);
         plan_mut.end_of_gc(worker.tls);
         probe!(mmtk, plan_end_of_gc_end);
 
