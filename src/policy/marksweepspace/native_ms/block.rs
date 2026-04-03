@@ -102,8 +102,7 @@ impl Block {
         crate::util::metadata::side_metadata::spec_defs::MS_BLOCK_TLS;
 
     pub fn load_free_list(&self) -> Address {
-        // SAFETY: The metadata table is expected to contain valid addresses or zero.
-        unsafe { Address::from_usize(Block::FREE_LIST_TABLE.slot_for::<usize>(self.start()).load()) }
+        Block::FREE_LIST_TABLE.slot_for::<usize>(self.start()).load_address()
     }
 
     pub fn store_free_list(&self, free_list: Address) {
@@ -112,8 +111,7 @@ impl Block {
 
     #[cfg(feature = "malloc_native_mimalloc")]
     pub fn load_local_free_list(&self) -> Address {
-        // SAFETY: The metadata table is expected to contain valid addresses or zero.
-        unsafe { Address::from_usize(Block::LOCAL_FREE_LIST_TABLE.slot_for::<usize>(self.start()).load()) }
+        Block::LOCAL_FREE_LIST_TABLE.slot_for::<usize>(self.start()).load_address()
     }
 
     #[cfg(feature = "malloc_native_mimalloc")]
@@ -123,12 +121,7 @@ impl Block {
 
     #[cfg(feature = "malloc_native_mimalloc")]
     pub fn load_thread_free_list(&self) -> Address {
-        // SAFETY: The metadata table is expected to contain valid addresses or zero.
-        unsafe {
-            Address::from_usize(
-                Block::THREAD_FREE_LIST_TABLE.load_atomic::<usize>(self.start(), Ordering::SeqCst),
-            )
-        }
+        Block::THREAD_FREE_LIST_TABLE.slot_for::<usize>(self.start()).load_address_atomic(Ordering::SeqCst)
     }
 
     #[cfg(feature = "malloc_native_mimalloc")]

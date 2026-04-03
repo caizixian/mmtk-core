@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 493 | Current: 399 | Δ: -94
+- Starting count: 493 | Current: 398 | Δ: -95
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -12,6 +12,7 @@
 2. 🟡 MED: Identify other `MaybeUninit` usages in the codebase and apply safe abstractions if possible without performance regression.
 
 ## Patterns Discovered
+- **Centralizing Address Conversions**: Added `load_address` and `load_address_atomic` to `MetadataSlot<'_, usize>` to remove unsafe `Address::from_usize` at call sites.
 - `MaybeUninit` arrays of size 1 can be replaced with `Option` and `unwrap()` to eliminate unsafe access.
 - In tests, raw memory allocation with `alloc_zeroed` and `dealloc` can be replaced with safe `Vec` to eliminate unsafe blocks.
 - `unsafe impl Sync` for types containing only atomics or Sync types can often be removed as the compiler can auto-derive Sync.

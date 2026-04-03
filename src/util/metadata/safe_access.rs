@@ -110,3 +110,22 @@ impl<'a, T: MetadataValue> MetadataSlot<'a, T> {
         unsafe { T::fetch_update(self.addr, set_order, fetch_order, f) }
     }
 }
+
+impl<'a> MetadataSlot<'a, usize> {
+    /// Load the value as an Address.
+    pub fn load_address(&self) -> Address {
+        // SAFETY: The stored usize is expected to be a valid address or zero.
+        // Address::from_usize is unsafe to warn about invalid addresses.
+        // We encapsulate this safety concern here.
+        unsafe { Address::from_usize(self.load()) }
+    }
+
+    /// Atomic load the value as an Address.
+    pub fn load_address_atomic(&self, order: Ordering) -> Address {
+        // SAFETY: The stored usize is expected to be a valid address or zero.
+        // Address::from_usize is unsafe to warn about invalid addresses.
+        // We encapsulate this safety concern here.
+        unsafe { Address::from_usize(self.load_atomic(order)) }
+    }
+}
+
