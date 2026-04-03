@@ -73,39 +73,39 @@ pub fn create_plan<VM: VMBinding>(
     plan: PlanSelector,
     args: CreateGeneralPlanArgs<VM>,
     _proof: &StwProof,
-) -> Box<dyn Plan<VM = VM>> {
+) -> Box<dyn Plan<VM = VM> + Send + Sync> {
     let plan = match plan {
         PlanSelector::NoGC => {
-            Box::new(crate::plan::nogc::NoGC::new(args)) as Box<dyn Plan<VM = VM>>
+            Box::new(crate::plan::nogc::NoGC::new(args)) as Box<dyn Plan<VM = VM> + Send + Sync>
         }
         PlanSelector::SemiSpace => {
-            Box::new(crate::plan::semispace::SemiSpace::new(args)) as Box<dyn Plan<VM = VM>>
+            Box::new(crate::plan::semispace::SemiSpace::new(args)) as Box<dyn Plan<VM = VM> + Send + Sync>
         }
         PlanSelector::GenCopy => Box::new(crate::plan::generational::copying::GenCopy::new(args))
-            as Box<dyn Plan<VM = VM>>,
+            as Box<dyn Plan<VM = VM> + Send + Sync>,
         PlanSelector::GenImmix => Box::new(crate::plan::generational::immix::GenImmix::new(args))
-            as Box<dyn Plan<VM = VM>>,
+            as Box<dyn Plan<VM = VM> + Send + Sync>,
         PlanSelector::MarkSweep => {
-            Box::new(crate::plan::marksweep::MarkSweep::new(args)) as Box<dyn Plan<VM = VM>>
+            Box::new(crate::plan::marksweep::MarkSweep::new(args)) as Box<dyn Plan<VM = VM> + Send + Sync>
         }
         PlanSelector::Immix => {
-            Box::new(crate::plan::immix::Immix::new(args)) as Box<dyn Plan<VM = VM>>
+            Box::new(crate::plan::immix::Immix::new(args)) as Box<dyn Plan<VM = VM> + Send + Sync>
         }
         PlanSelector::PageProtect => {
-            Box::new(crate::plan::pageprotect::PageProtect::new(args)) as Box<dyn Plan<VM = VM>>
+            Box::new(crate::plan::pageprotect::PageProtect::new(args)) as Box<dyn Plan<VM = VM> + Send + Sync>
         }
         PlanSelector::MarkCompact => {
-            Box::new(crate::plan::markcompact::MarkCompact::new(args)) as Box<dyn Plan<VM = VM>>
+            Box::new(crate::plan::markcompact::MarkCompact::new(args)) as Box<dyn Plan<VM = VM> + Send + Sync>
         }
         PlanSelector::StickyImmix => {
-            Box::new(crate::plan::sticky::immix::StickyImmix::new(args)) as Box<dyn Plan<VM = VM>>
+            Box::new(crate::plan::sticky::immix::StickyImmix::new(args)) as Box<dyn Plan<VM = VM> + Send + Sync>
         }
         PlanSelector::ConcurrentImmix => {
             Box::new(crate::plan::concurrent::immix::ConcurrentImmix::new(args))
-                as Box<dyn Plan<VM = VM>>
+                as Box<dyn Plan<VM = VM> + Send + Sync>
         }
         PlanSelector::Compressor => {
-            Box::new(crate::plan::compressor::Compressor::new(args)) as Box<dyn Plan<VM = VM>>
+            Box::new(crate::plan::compressor::Compressor::new(args)) as Box<dyn Plan<VM = VM> + Send + Sync>
         }
     };
 

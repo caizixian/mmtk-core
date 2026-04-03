@@ -123,7 +123,7 @@ pub struct StwProof(());
 pub struct MMTK<VM: VMBinding> {
     pub(crate) options: Arc<Options>,
     pub(crate) state: Arc<GlobalState>,
-    pub(crate) plan: UnsafeCell<Box<dyn Plan<VM = VM>>>,
+    pub(crate) plan: UnsafeCell<Box<dyn Plan<VM = VM> + Send + Sync>>,
     pub(crate) reference_processors: ReferenceProcessors,
     pub(crate) finalizable_processor:
         Mutex<FinalizableProcessor<<VM::VMReferenceGlue as ReferenceGlue<VM>>::FinalizableType>>,
@@ -142,7 +142,6 @@ pub struct MMTK<VM: VMBinding> {
 }
 
 unsafe impl<VM: VMBinding> Sync for MMTK<VM> {}
-unsafe impl<VM: VMBinding> Send for MMTK<VM> {}
 
 impl<VM: VMBinding> MMTK<VM> {
     /// Create an MMTK instance. This is not public. Bindings should use [`MMTKBuilder::build`].
