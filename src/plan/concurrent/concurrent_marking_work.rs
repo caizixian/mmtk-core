@@ -206,8 +206,7 @@ unsafe impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, con
 impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
     ProcessRootSlots<VM, P, KIND>
 {
-    fn create_and_schedule_concurrent_trace_objects_work(&self, objects: Vec<ObjectReference>) {
-        let worker = self.worker();
+    fn create_and_schedule_concurrent_trace_objects_work(&self, objects: Vec<ObjectReference>, worker: &mut GCWorker<VM>) {
         let mmtk = self.mmtk();
         let w = ConcurrentTraceObjects::<VM, P, KIND>::new(objects.clone(), mmtk);
 
@@ -237,13 +236,13 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
         }
     }
 
-    fn flush(&mut self) {}
+    fn flush(&mut self, _worker: &mut GCWorker<Self::VM>) {}
 
-    fn trace_object(&mut self, _object: ObjectReference) -> ObjectReference {
+    fn trace_object(&mut self, _object: ObjectReference, _worker: &mut GCWorker<Self::VM>) -> ObjectReference {
         unreachable!()
     }
 
-    fn process_slots(&mut self) {
+    fn process_slots(&mut self, worker: &mut GCWorker<Self::VM>) {
         let pause = self
             .base
             .plan()
@@ -265,12 +264,12 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
                     if root_objects.len() == Self::CAPACITY {
                         let mut buffer = Vec::with_capacity(Self::CAPACITY);
                         std::mem::swap(&mut buffer, &mut root_objects);
-                        self.create_and_schedule_concurrent_trace_objects_work(buffer);
+                        self.create_and_schedule_concurrent_trace_objects_work(buffer, worker);
                     }
                 }
             }
             if !root_objects.is_empty() {
-                self.create_and_schedule_concurrent_trace_objects_work(root_objects);
+                self.create_and_schedule_concurrent_trace_objects_work(root_objects, worker);
             }
         }
     }

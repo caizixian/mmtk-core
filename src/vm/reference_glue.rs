@@ -1,6 +1,7 @@
 use crate::util::ObjectReference;
 use crate::util::VMWorkerThread;
 use crate::vm::VMBinding;
+use crate::scheduler::GCWorker;
 
 /// VM-specific methods for reference processing, including weak references, and finalizers.
 /// We handle weak references and finalizers differently:
@@ -65,7 +66,7 @@ pub trait Finalizable: std::fmt::Debug + Send {
     /// Keep the heap references in the finalizable object alive. For example, the reference itself needs to be traced. However,
     /// if the finalizable object includes other heap references, the implementation should trace them as well.
     /// Note that trace_object() may move objects so we need to write the new reference in case that it is moved.
-    fn keep_alive<E: ProcessEdgesWork>(&mut self, trace: &mut E);
+    fn keep_alive<E: ProcessEdgesWork>(&mut self, trace: &mut E, worker: &mut GCWorker<E::VM>);
 }
 
 /// This provides an implementation of `Finalizable` for `ObjectReference`. Most bindings
@@ -77,7 +78,7 @@ impl Finalizable for ObjectReference {
     fn set_reference(&mut self, object: ObjectReference) {
         *self = object;
     }
-    fn keep_alive<E: ProcessEdgesWork>(&mut self, trace: &mut E) {
-        *self = trace.trace_object(*self);
+    fn keep_alive<E: ProcessEdgesWork>(&mut self, trace: &mut E, worker: &mut GCWorker<E::VM>) {
+        *self = trace.trace_object(*self, worker);
     }
 }

@@ -245,13 +245,14 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
 pub(crate) struct ProcessEdgesWorkTracer<E: ProcessEdgesWork> {
     process_edges_work: E,
     stage: WorkBucketStage,
+    worker: *mut GCWorker<E::VM>,
 }
 
 impl<E: ProcessEdgesWork> ObjectTracer for ProcessEdgesWorkTracer<E> {
     /// Forward the `trace_object` call to the underlying `ProcessEdgesWork`,
     /// and flush as soon as the underlying buffer of `process_edges_work` is full.
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        let result = self.process_edges_work.trace_object(object);
+        let result = self.process_edges_work.trace_object(object, unsafe { &mut *self.worker });
         self.flush_if_full();
         result
     }
@@ -274,7 +275,7 @@ impl<E: ProcessEdgesWork> ProcessEdgesWorkTracer<E> {
         let next_nodes = self.process_edges_work.pop_nodes();
         assert!(!next_nodes.is_empty());
         let work_packet = self.process_edges_work.create_scan_work(next_nodes);
-        let worker = self.process_edges_work.worker();
+        let worker = unsafe { &mut *self.worker };
         worker.scheduler().work_buckets[self.stage].add(work_packet);
     }
 }
@@ -304,15 +305,13 @@ impl<E: ProcessEdgesWork> ObjectTracerContext<E::VM> for ProcessEdgesWorkTracerC
         let mmtk = worker.mmtk;
 
         // Prepare the underlying ProcessEdgesWork
-        let mut process_edges_work = E::new(vec![], false, mmtk, self.stage);
-        // FIXME: This line allows us to omit the borrowing lifetime of worker.
-        // We should refactor ProcessEdgesWork so that it uses `worker` locally, not as a member.
-        process_edges_work.set_worker(worker);
+        let process_edges_work = E::new(vec![], false, mmtk, self.stage);
 
-        // Cretae the tracer.
+        // Create the tracer.
         let mut tracer = ProcessEdgesWorkTracer {
             process_edges_work,
             stage: self.stage,
+            worker: worker as *mut _,
         };
 
         // The caller can use the tracer here.
@@ -473,14 +472,9 @@ pub struct ProcessEdgesBase<VM: VMBinding> {
     pub slots: Vec<VM::VMSlot>,
     pub nodes: VectorObjectQueue,
     mmtk: &'static MMTK<VM>,
-    // Use raw pointer for fast pointer dereferencing, instead of using `Option<&'static mut GCWorker<E::VM>>`.
-    // Because a copying gc will dereference this pointer at least once for every object copy.
-    worker: *mut GCWorker<VM>,
     pub roots: bool,
     pub bucket: WorkBucketStage,
 }
-
-unsafe impl<VM: VMBinding> Send for ProcessEdgesBase<VM> {}
 
 impl<VM: VMBinding> ProcessEdgesBase<VM> {
     // Requires an MMTk reference. Each plan-specific type that uses ProcessEdgesBase can get a static plan reference
@@ -502,18 +496,11 @@ impl<VM: VMBinding> ProcessEdgesBase<VM> {
             slots,
             nodes: VectorObjectQueue::new(),
             mmtk,
-            worker: std::ptr::null_mut(),
             roots,
             bucket,
         }
     }
-    pub fn set_worker(&mut self, worker: &mut GCWorker<VM>) {
-        self.worker = worker;
-    }
 
-    pub fn worker(&self) -> &'static mut GCWorker<VM> {
-        unsafe { &mut *self.worker }
-    }
 
     pub fn mmtk(&self) -> &'static MMTK<VM> {
         self.mmtk
@@ -598,7 +585,7 @@ pub trait ProcessEdgesWork:
     /// `trace_object()` methods, depending on which space this object is in.
     /// If the object is not in any MMTk space, the implementation should forward the call to
     /// `ActivePlan::vm_trace_object()` to let the binding handle the tracing.
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference;
+    fn trace_object(&mut self, object: ObjectReference, worker: &mut GCWorker<Self::VM>) -> ObjectReference;
 
     /// If the work includes roots, we will store the roots somewhere so for sanity GC, we can do another
     /// transitive closure from the roots.
@@ -614,14 +601,14 @@ pub trait ProcessEdgesWork:
 
     /// Start the a scan work packet. If SCAN_OBJECTS_IMMEDIATELY, the work packet will be executed immediately, in this method.
     /// Otherwise, the work packet will be added the Closure work bucket and will be dispatched later by the scheduler.
-    fn start_or_dispatch_scan_work(&mut self, mut work_packet: impl GCWork<Self::VM>) {
+    fn start_or_dispatch_scan_work(&mut self, mut work_packet: impl GCWork<Self::VM>, worker: &mut GCWorker<Self::VM>) {
         if Self::SCAN_OBJECTS_IMMEDIATELY {
             // We execute this `scan_objects_work` immediately.
             // This is expected to be a useful optimization because,
             // say for _pmd_ with 200M heap, we're likely to have 50000~60000 `ScanObjects` work packets
             // being dispatched (similar amount to `ProcessEdgesWork`).
             // Executing these work packets now can remarkably reduce the global synchronization time.
-            work_packet.do_work(self.worker(), self.mmtk);
+            work_packet.do_work(worker, self.mmtk);
         } else {
             debug_assert!(self.bucket != WorkBucketStage::Unconstrained);
             self.mmtk.scheduler.work_buckets[self.bucket].add(work_packet);
@@ -636,41 +623,40 @@ pub trait ProcessEdgesWork:
 
     /// Flush the nodes in ProcessEdgesBase, and create a ScanObjects work packet for it. If the node set is empty,
     /// this method will simply return with no work packet created.
-    fn flush(&mut self) {
+    fn flush(&mut self, worker: &mut GCWorker<Self::VM>) {
         let nodes = self.pop_nodes();
         if !nodes.is_empty() {
-            self.start_or_dispatch_scan_work(self.create_scan_work(nodes));
+            self.start_or_dispatch_scan_work(self.create_scan_work(nodes), worker);
         }
     }
 
     /// Process a slot, including loading the object reference from the memory slot,
     /// trace the object and store back the new object reference if necessary.
-    fn process_slot(&mut self, slot: SlotOf<Self>) {
+    fn process_slot(&mut self, slot: SlotOf<Self>, worker: &mut GCWorker<Self::VM>) {
         let Some(object) = slot.load() else {
             // Skip slots that are not holding an object reference.
             return;
         };
-        let new_object = self.trace_object(object);
+        let new_object = self.trace_object(object, worker);
         if Self::OVERWRITE_REFERENCE && new_object != object {
             slot.store(new_object);
         }
     }
 
     /// Process all the slots in the work packet.
-    fn process_slots(&mut self) {
+    fn process_slots(&mut self, worker: &mut GCWorker<Self::VM>) {
         probe!(mmtk, process_slots, self.slots.len(), self.is_roots());
         for i in 0..self.slots.len() {
-            self.process_slot(self.slots[i])
+            self.process_slot(self.slots[i], worker)
         }
     }
 }
 
 impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
-        self.set_worker(worker);
-        self.process_slots();
+        self.process_slots(worker);
         if !self.nodes.is_empty() {
-            self.flush();
+            self.flush(worker);
         }
         #[cfg(feature = "sanity")]
         if self.roots && !_mmtk.is_in_sanity() {
@@ -708,15 +694,15 @@ impl<VM: VMBinding> ProcessEdgesWork for SFTProcessEdges<VM> {
         Self { base }
     }
 
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+    fn trace_object(&mut self, object: ObjectReference, worker: &mut GCWorker<Self::VM>) -> ObjectReference {
         use crate::policy::sft::GCWorkerMutRef;
 
         // Erase <VM> type parameter
-        let worker = GCWorkerMutRef::new(self.worker());
+        let worker_ref = GCWorkerMutRef::new(worker);
 
         // Invoke trace object on sft
         let sft = crate::mmtk::SFT_MAP.get_unchecked(object.to_raw_address());
-        sft.sft_trace_object(&mut self.base.nodes, object, worker)
+        sft.sft_trace_object(&mut self.base.nodes, object, worker_ref)
     }
 
     fn create_scan_work(&self, nodes: Vec<ObjectReference>) -> ScanObjects<Self> {
@@ -990,19 +976,17 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         PlanScanObjects::<Self, P>::new(self.plan, nodes, false, self.bucket)
     }
 
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        // We cannot borrow `self` twice in a call, so we extract `worker` as a local variable.
-        let worker = self.worker();
+    fn trace_object(&mut self, object: ObjectReference, worker: &mut GCWorker<Self::VM>) -> ObjectReference {
         self.plan
             .trace_object::<VectorObjectQueue, KIND>(&mut self.base.nodes, object, worker)
     }
 
-    fn process_slot(&mut self, slot: SlotOf<Self>) {
+    fn process_slot(&mut self, slot: SlotOf<Self>, worker: &mut GCWorker<Self::VM>) {
         let Some(object) = slot.load() else {
             // Skip slots that are not holding an object reference.
             return;
         };
-        let new_object = self.trace_object(object);
+        let new_object = self.trace_object(object, worker);
         if P::may_move_objects::<KIND>() && new_object != object {
             slot.store(new_object);
         }
@@ -1150,10 +1134,9 @@ impl<VM: VMBinding, R2OPE: ProcessEdgesWork<VM = VM>, O2OPE: ProcessEdgesWork<VM
             // We create an instance of E to use its `trace_object` method and its object queue.
             let mut process_edges_work =
                 R2OPE::new(vec![], true, mmtk, WorkBucketStage::PinningRootsTrace);
-            process_edges_work.set_worker(worker);
 
             for object in self.roots.iter().copied() {
-                let new_object = process_edges_work.trace_object(object);
+                let new_object = process_edges_work.trace_object(object, worker);
                 debug_assert_eq!(
                     object, new_object,
                     "Object moved while tracing root unmovable root object: {} -> {}",
@@ -1213,7 +1196,7 @@ impl<VM: VMBinding> ProcessEdgesWork for UnsupportedProcessEdges<VM> {
         panic!("unsupported!")
     }
 
-    fn trace_object(&mut self, _object: ObjectReference) -> ObjectReference {
+    fn trace_object(&mut self, _object: ObjectReference, _worker: &mut GCWorker<Self::VM>) -> ObjectReference {
         panic!("unsupported!")
     }
 

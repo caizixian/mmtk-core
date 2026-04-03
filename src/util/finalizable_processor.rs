@@ -37,11 +37,11 @@ impl<F: Finalizable> FinalizableProcessor<F> {
         self.candidates.push(object);
     }
 
-    fn forward_finalizable_reference<E: ProcessEdgesWork>(e: &mut E, finalizable: &mut F) {
-        finalizable.keep_alive::<E>(e);
+    fn forward_finalizable_reference<E: ProcessEdgesWork>(e: &mut E, worker: &mut GCWorker<E::VM>, finalizable: &mut F) {
+        finalizable.keep_alive::<E>(e, worker);
     }
 
-    pub fn scan<E: ProcessEdgesWork>(&mut self, tls: VMWorkerThread, e: &mut E, nursery: bool) {
+    pub fn scan<E: ProcessEdgesWork>(&mut self, tls: VMWorkerThread, e: &mut E, worker: &mut GCWorker<E::VM>, nursery: bool) {
         let start = if nursery { self.nursery_index } else { 0 };
 
         // We should go through ready_for_finalize objects and keep them alive.
@@ -55,7 +55,7 @@ impl<F: Finalizable> FinalizableProcessor<F> {
             let reff = f.get_reference();
             trace!("Pop {:?} for finalization", reff);
             if reff.is_live() {
-                FinalizableProcessor::<F>::forward_finalizable_reference(e, &mut f);
+                FinalizableProcessor::<F>::forward_finalizable_reference(e, worker, &mut f);
                 trace!("{:?} is live, push {:?} back to candidates", reff, f);
                 self.candidates.push(f);
                 continue;
@@ -71,7 +71,7 @@ impl<F: Finalizable> FinalizableProcessor<F> {
         }
 
         // Keep the finalizable objects alive.
-        self.forward_finalizable(e, nursery);
+        self.forward_finalizable(e, worker, nursery);
 
         // Set nursery_index to the end of the candidates (the candidates before the index are scanned)
         self.nursery_index = self.candidates.len();
@@ -79,18 +79,18 @@ impl<F: Finalizable> FinalizableProcessor<F> {
         <<E as ProcessEdgesWork>::VM as VMBinding>::VMCollection::schedule_finalization(tls);
     }
 
-    pub fn forward_candidate<E: ProcessEdgesWork>(&mut self, e: &mut E, _nursery: bool) {
+    pub fn forward_candidate<E: ProcessEdgesWork>(&mut self, e: &mut E, worker: &mut GCWorker<E::VM>, _nursery: bool) {
         self.candidates
             .iter_mut()
-            .for_each(|f| FinalizableProcessor::<F>::forward_finalizable_reference(e, f));
-        e.flush();
+            .for_each(|f| FinalizableProcessor::<F>::forward_finalizable_reference(e, worker, f));
+        e.flush(worker);
     }
 
-    pub fn forward_finalizable<E: ProcessEdgesWork>(&mut self, e: &mut E, _nursery: bool) {
+    pub fn forward_finalizable<E: ProcessEdgesWork>(&mut self, e: &mut E, worker: &mut GCWorker<E::VM>, _nursery: bool) {
         self.ready_for_finalize
             .iter_mut()
-            .for_each(|f| FinalizableProcessor::<F>::forward_finalizable_reference(e, f));
-        e.flush();
+            .for_each(|f| FinalizableProcessor::<F>::forward_finalizable_reference(e, worker, f));
+        e.flush(worker);
     }
 
     pub fn get_ready_object(&mut self) -> Option<F> {
@@ -161,8 +161,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
         );
 
         let mut w = E::new(vec![], false, mmtk, WorkBucketStage::FinalRefClosure);
-        w.set_worker(worker);
-        finalizable_processor.scan(worker.tls, &mut w, is_nursery_gc(mmtk.get_plan()));
+        finalizable_processor.scan(worker.tls, &mut w, worker, is_nursery_gc(mmtk.get_plan()));
 
         let num_candidates_end = finalizable_processor.candidates.len();
         let num_ready_for_finalize_end = finalizable_processor.ready_for_finalize.len();
@@ -195,10 +194,9 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ForwardFinalization<E> {
         trace!("Forward finalization");
         let mut finalizable_processor = mmtk.finalizable_processor.lock().unwrap();
         let mut w = E::new(vec![], false, mmtk, WorkBucketStage::FinalizableForwarding);
-        w.set_worker(worker);
-        finalizable_processor.forward_candidate(&mut w, is_nursery_gc(mmtk.get_plan()));
+        finalizable_processor.forward_candidate(&mut w, worker, is_nursery_gc(mmtk.get_plan()));
 
-        finalizable_processor.forward_finalizable(&mut w, is_nursery_gc(mmtk.get_plan()));
+        finalizable_processor.forward_finalizable(&mut w, worker, is_nursery_gc(mmtk.get_plan()));
         trace!("Finished forwarding finlizable");
     }
 }
