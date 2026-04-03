@@ -29,10 +29,10 @@ pub extern "C" fn mmtk_set_option_from_string(
     value: *const c_char,
 ) -> bool {
     let builder = builder.expect("builder is null");
-    // SAFETY: The caller must ensure that `name` is a valid null-terminated C string.
-    let name_str: &CStr = unsafe { CStr::from_ptr(name) };
-    // SAFETY: The caller must ensure that `value` is a valid null-terminated C string.
-    let value_str: &CStr = unsafe { CStr::from_ptr(value) };
+    // SAFETY: The caller must ensure that `name` and `value` are valid null-terminated C strings.
+    let (name_str, value_str): (&CStr, &CStr) = unsafe {
+        (CStr::from_ptr(name), CStr::from_ptr(value))
+    };
     builder.set_option(name_str.to_str().unwrap(), value_str.to_str().unwrap())
 }
 
@@ -62,7 +62,7 @@ pub extern "C" fn mmtk_init(builder: Option<Box<MMTKBuilder>>) {
 
 #[no_mangle]
 pub extern "C" fn mmtk_bind_mutator(tls: VMMutatorThread) -> Option<Box<Mutator<DummyVM>>> {
-    Some(Box::new(memory_manager::bind_mutator(mmtk(), tls)))
+    Some(memory_manager::bind_mutator(mmtk(), tls))
 }
 
 #[no_mangle]
