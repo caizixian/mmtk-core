@@ -129,9 +129,7 @@ impl Block {
 
     #[cfg(feature = "malloc_native_mimalloc")]
     pub fn store_thread_free_list(&self, thread_free: Address) {
-        unsafe {
-            Block::THREAD_FREE_LIST_TABLE.store::<usize>(self.start(), thread_free.as_usize())
-        }
+        Block::THREAD_FREE_LIST_TABLE.slot_for::<usize>(self.start()).store(thread_free.as_usize());
     }
 
     #[cfg(feature = "malloc_native_mimalloc")]
@@ -203,6 +201,11 @@ impl Block {
         VMThread(OpaquePointer::from_address(unsafe {
             Address::from_usize(tls)
         }))
+    }
+
+    fn write_free_list_link(&self, cell: Address, next: Address) {
+        debug_assert!(cell >= self.start() && cell < self.start() + Block::BYTES);
+        unsafe { cell.store::<Address>(next); }
     }
 
     pub fn has_free_cells(&self) -> bool {
@@ -291,9 +294,7 @@ impl Block {
                 // we unset the bit anyway.
                 #[cfg(feature = "vo_bit")]
                 crate::util::metadata::vo_bit::unset_vo_bit_nocheck(potential_object);
-                unsafe {
-                    cell.store::<Address>(last);
-                }
+                self.write_free_list_link(cell, last);
                 last = cell;
             }
             cell += cell_size;
@@ -362,9 +363,7 @@ impl Block {
 
                     // store the previous cell to make the free list
                     debug_assert!(last.is_zero() || (last >= self.start() && last < self.end()));
-                    unsafe {
-                        cell.store::<Address>(last);
-                    }
+                    self.write_free_list_link(cell, last);
                     last = cell;
                     cell += cell_size;
                     debug_assert_eq!(cursor, cell);

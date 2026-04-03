@@ -1,15 +1,14 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 531 | Current: 526 | Δ: -5
+- Starting count: 531 | Current: 521 | Δ: -10
 - Phase: 1
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - `Address::from_usize` is marked unsafe by design to warn about invalid addresses. Replacing it with `ZERO.add` is considered an anti-pattern as it is semantically identical.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: Analyze `src/util/metadata/side_metadata/side_metadata_tests.rs` to see if unsafe blocks in tests can be reduced by using atomics or safe wrappers.
-2. 🟡 MED: Analyze `src/policy/marksweepspace/native_ms/block.rs` for reducible unsafe pointer operations.
+1. 🔴 HIGH: Analyze `src/util/heap/layout/map32.rs` for reducible unsafe usage in `Map32` implementation (e.g. `mut_self`).
 
 ## Patterns Discovered
 - `MaybeUninit` arrays of size 1 can be replaced with `Option` and `unwrap()` to eliminate unsafe access.
@@ -32,6 +31,7 @@
 - **Safe unset_mark_bit**: Made `unset_mark_bit` safe in `metadata.rs` by using `store_atomic` and updated call sites.
 - **Safe unset_vo_bit**: Used safe `unset_vo_bit` instead of `unset_vo_bit_unsafe` in `malloc_ms/global.rs`.
 - **Safe unset_page_mark**: Refactored `unset_page_mark` in `malloc_ms/global.rs` to use safe `is_page_marked` and `unset_page_mark` (using atomics) from `metadata.rs`, removing unsafe from the function and its call sites.
+- **Centralizing unsafe stores in loops**: In `block.rs`, centralized unsafe raw memory writes in `simple_sweep` and `naive_brute_force_sweep` into a safe helper `write_free_list_link` with `debug_assert!`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.
@@ -40,6 +40,8 @@
 - `src/util/metadata/side_metadata/helpers.rs` — Remaining unsafe are raw loads in functions that scan metadata addresses directly without a spec.
 - `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are `new_unchecked` on raw metadata addresses, `std::ptr::copy`, and `unsafe fn` due to concurrency invariants.
 - `src/util/metadata/metadata_val_traits.rs` — `MetadataValue` trait methods are unsafe by design as they perform raw memory access.
+- `src/util/metadata/side_metadata/side_metadata_tests.rs` — All unsafe are `Address::from_usize(...)` for creating test addresses.
+- `src/policy/marksweepspace/native_ms/block.rs` — Remaining unsafe are `Address::from_usize`, `ObjectReference::from_raw_address_unchecked`, and raw pointer dereferencing for `BlockList`.
 
 ## Abstraction Proposals (for Phase 2)
 - **Safe Metadata Accessor**: `MetadataSlot` implemented in `metadata_val_traits.rs`. Used in `header_metadata.rs` and `global.rs`.
