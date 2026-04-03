@@ -6,6 +6,7 @@ use std::fmt;
 use crate::util::constants::{BITS_IN_BYTE, LOG_BITS_IN_BYTE};
 use crate::util::metadata::metadata_val_traits::*;
 use crate::util::Address;
+use crate::util::metadata::safe_access::StwProof;
 use num_traits::FromPrimitive;
 
 const LOG_BITS_IN_U16: usize = 4;
@@ -129,9 +130,8 @@ impl HeaderMetadataSpec {
 
     /// This function provides a default implementation for the `load_metadata` method from the `ObjectModel` trait.
     ///
-    /// # Safety
-    /// This is a non-atomic load, thus not thread-safe.
-    pub unsafe fn load<T: MetadataValue>(&self, header: Address, optional_mask: Option<T>) -> T {
+    /// The `StwProof` proves that the world is stopped, making this operation safe.
+    pub fn load_stw<T: MetadataValue>(&self, header: Address, optional_mask: Option<T>, _proof: &StwProof) -> T {
         self.load_inner::<T>(header, optional_mask, None)
     }
 
@@ -187,13 +187,13 @@ impl HeaderMetadataSpec {
     ///
     /// Note: this function does compare-and-swap in a busy loop. So, unlike `compare_exchange_metadata`, this operation will always success.
     ///
-    /// # Safety
-    /// This is a non-atomic store, thus not thread-safe.
-    pub unsafe fn store<T: MetadataValue>(
+    /// The `StwProof` proves that the world is stopped, making this operation safe.
+    pub fn store_stw<T: MetadataValue>(
         &self,
         header: Address,
         val: T,
         optional_mask: Option<T>,
+        _proof: &StwProof,
     ) {
         self.store_inner::<T>(header, val, optional_mask, None)
     }

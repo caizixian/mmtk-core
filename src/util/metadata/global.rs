@@ -55,13 +55,13 @@ impl MetadataSpec {
         object: ObjectReference,
         mask: Option<T>,
     ) -> T {
+        let proof = StwProof::new();
         match self {
             MetadataSpec::OnSide(metadata_spec) => {
-                let proof = StwProof::new();
                 metadata_spec.load(object.to_raw_address(), &proof)
             }
             MetadataSpec::InHeader(metadata_spec) => {
-                VM::VMObjectModel::load_metadata::<T>(metadata_spec, object, mask)
+                VM::VMObjectModel::load_metadata::<T>(metadata_spec, object, mask, &proof)
             }
         }
     }
@@ -107,13 +107,13 @@ impl MetadataSpec {
         val: T,
         mask: Option<T>,
     ) {
+        let proof = StwProof::new();
         match self {
             MetadataSpec::OnSide(metadata_spec) => {
-                let proof = StwProof::new();
                 metadata_spec.store(object.to_raw_address(), val, &proof);
             }
             MetadataSpec::InHeader(metadata_spec) => {
-                VM::VMObjectModel::store_metadata::<T>(metadata_spec, object, val, mask)
+                VM::VMObjectModel::store_metadata::<T>(metadata_spec, object, val, mask, &proof)
             }
         }
     }

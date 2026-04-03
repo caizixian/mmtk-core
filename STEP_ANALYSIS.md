@@ -1,15 +1,13 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: <file being analyzed>
-- Strategy: <what you're attempting>
+- None.
 
 ## Findings
-- Line X: <unsafe type> — <eliminable? why/why not>
-- Line Y: <unsafe type> — <eliminable? why/why not>
+- None.
 
 ## Attempted Changes
-- <what you tried, what happened>
+- None.
 
 ## Blockers / Insights for Next Step
-- <what prevented completion, what the next step should know>
+- None.

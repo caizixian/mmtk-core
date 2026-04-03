@@ -38,6 +38,7 @@
 - **Passing &mut BlockList to attempt_release**: Eliminates unsafe raw pointer dereference by passing the list reference from the caller instead of loading it from metadata.
 - **Capability Token for Iterators**: Requiring `StwProof` in `ObjectIterator::new` when `ATOMIC_LOAD_VO_BIT` is false enforces safety at compile time and removes unsafe blocks from `next()`.
 - **Replacing get_unchecked with get_checked**: In `SFTProcessEdges::trace_object`, replaced `get_unchecked` with `get_checked` on `SFT_MAP` to remove an unsafe block, as the function is marked as unused/deprecated.
+- **StwProof for Header Metadata**: Applied `StwProof` to `HeaderMetadataSpec::load_stw` and `store_stw` and `ObjectModel::load_metadata` and `store_metadata` to make non-atomic header metadata access safe.
 
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)

@@ -4,6 +4,7 @@ use self::specs::*;
 use crate::util::copy::*;
 use crate::util::metadata::header_metadata::HeaderMetadataSpec;
 use crate::util::metadata::MetadataValue;
+use crate::util::metadata::safe_access::StwProof;
 use crate::util::{Address, ObjectReference};
 use crate::vm::VMBinding;
 
@@ -150,14 +151,14 @@ pub trait ObjectModel<VM: VMBinding> {
     /// * `object`: is a reference to the target object.
     /// * `mask`: is an optional mask value for the metadata. This value is used in cases like the forwarding pointer metadata, where some of the bits are reused by other metadata such as the forwarding bits.
     ///
-    /// # Safety
-    /// This is a non-atomic load, thus not thread-safe.
-    unsafe fn load_metadata<T: MetadataValue>(
+    /// The `StwProof` proves that the world is stopped, making this operation safe.
+    fn load_metadata<T: MetadataValue>(
         metadata_spec: &HeaderMetadataSpec,
         object: ObjectReference,
         mask: Option<T>,
+        proof: &StwProof,
     ) -> T {
-        metadata_spec.load::<T>(object.to_header::<VM>(), mask)
+        metadata_spec.load_stw::<T>(object.to_header::<VM>(), mask, proof)
     }
 
     /// A function to atomically load the specified per-object metadata's content.
@@ -189,15 +190,15 @@ pub trait ObjectModel<VM: VMBinding> {
     /// * `val`: is the new metadata value to be stored.
     /// * `mask`: is an optional mask value for the metadata. This value is used in cases like the forwarding pointer metadata, where some of the bits are reused by other metadata such as the forwarding bits.
     ///
-    /// # Safety
-    /// This is a non-atomic store, thus not thread-safe.
-    unsafe fn store_metadata<T: MetadataValue>(
+    /// The `StwProof` proves that the world is stopped, making this operation safe.
+    fn store_metadata<T: MetadataValue>(
         metadata_spec: &HeaderMetadataSpec,
         object: ObjectReference,
         val: T,
         mask: Option<T>,
+        proof: &StwProof,
     ) {
-        metadata_spec.store::<T>(object.to_header::<VM>(), val, mask)
+        metadata_spec.store_stw::<T>(object.to_header::<VM>(), val, mask, proof)
     }
 
     /// A function to atomically store a value to the specified per-object metadata.
