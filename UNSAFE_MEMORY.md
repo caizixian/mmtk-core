@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 569 | Current: 558 | Δ: -11
+- Starting count: 569 | Current: 549 | Δ: -20
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -26,6 +26,7 @@
 - In tests, `SideMetadataSpec::load/store` can be replaced with `load_atomic/store_atomic` with `Ordering::Relaxed` to eliminate unsafe blocks, provided the test does not specifically require non-atomic operations.
 - **Refactoring to use MetadataSlot**: Using `self.slot_for` or `MetadataSlot` methods can eliminate unsafe blocks in `SideMetadataSpec` methods like `compare_exchange_atomic` and `fetch_update`.
 - **Replacing raw pointers with Address**: In types like test slots, replacing `*mut Atomic<T>` with `Address` eliminates the need for `unsafe impl Send` while preserving functionality via `to_mut_ptr()`.
+- **Refactoring to use slot_for for Metadata**: Using `slot_for(...).load()` and `slot_for(...).store(...)` on `SideMetadataSpec` can eliminate unsafe blocks for direct metadata access in production code.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.
