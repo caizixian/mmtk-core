@@ -203,3 +203,74 @@ impl_metadata_value_trait!(u16, AtomicU16);
 impl_metadata_value_trait!(u32, AtomicU32);
 impl_metadata_value_trait!(u64, AtomicU64);
 impl_metadata_value_trait!(usize, AtomicUsize);
+
+pub struct MetadataSlot<T: MetadataValue> {
+    addr: Address,
+    _marker: std::marker::PhantomData<T>,
+}
+
+impl<T: MetadataValue> MetadataSlot<T> {
+    /// # Safety
+    /// The caller must ensure the address is valid for loading/storing `T`.
+    pub unsafe fn new_unchecked(addr: Address) -> Self {
+        Self {
+            addr,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    pub fn load(&self) -> T {
+        unsafe { T::load(self.addr) }
+    }
+
+    pub fn load_atomic(&self, order: Ordering) -> T {
+        unsafe { T::load_atomic(self.addr, order) }
+    }
+
+    pub fn store(&self, value: T) {
+        unsafe { T::store(self.addr, value) }
+    }
+
+    pub fn store_atomic(&self, value: T, order: Ordering) {
+        unsafe { T::store_atomic(self.addr, value, order) }
+    }
+
+    pub fn compare_exchange(
+        &self,
+        current: T,
+        new: T,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<T, T> {
+        unsafe { T::compare_exchange(self.addr, current, new, success, failure) }
+    }
+
+    pub fn fetch_add(&self, value: T, order: Ordering) -> T {
+        unsafe { T::fetch_add(self.addr, value, order) }
+    }
+
+    pub fn fetch_sub(&self, value: T, order: Ordering) -> T {
+        unsafe { T::fetch_sub(self.addr, value, order) }
+    }
+
+    pub fn fetch_and(&self, value: T, order: Ordering) -> T {
+        unsafe { T::fetch_and(self.addr, value, order) }
+    }
+
+    pub fn fetch_or(&self, value: T, order: Ordering) -> T {
+        unsafe { T::fetch_or(self.addr, value, order) }
+    }
+
+    pub fn fetch_update<F>(
+        &self,
+        set_order: Ordering,
+        fetch_order: Ordering,
+        f: F,
+    ) -> Result<T, T>
+    where
+        F: FnMut(T) -> Option<T>,
+    {
+        unsafe { T::fetch_update(self.addr, set_order, fetch_order, f) }
+    }
+}
+
