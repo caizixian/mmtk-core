@@ -2,16 +2,17 @@
 
 ## Target
 - File: All files with unsafe (Holistic Review)
-- Strategy: Verify irreducibility under Strategy Escalation (6 consecutive zero reductions)
+- Strategy: Verify irreducibility under Strategy Escalation (7 consecutive zero reductions)
 
 ## Findings
-- I reviewed `src/util/address.rs`, `src/util/metadata/side_metadata/global.rs`, `src/vm/slot.rs`, `src/policy/sft_map.rs`, and `src/util/malloc/malloc_ms_util.rs`.
-- I confirmed that the unsafe blocks are either core primitives, FFI calls, or performance-critical operations that are well-encapsulated.
-- I agree with the previous step that the codebase is in a steady state for Phase 3.
-- No new safe abstractions were identified that could reduce the unsafe count without violating safety or performance constraints.
+- I reviewed `src/mmtk.rs` and `src/vm/slot.rs`.
+- In `src/mmtk.rs`, `StwProtected` uses `UnsafeCell` to avoid locking overhead, which is a design decision for performance. The `unsafe` blocks are necessary to dereference the raw pointer returned by `UnsafeCell::get`.
+- In `src/vm/slot.rs`, `SimpleSlot::as_atomic` performs a raw pointer cast and dereference, which is encapsulated in a helper method. `MemorySlice::copy` uses `std::ptr::copy`, which is inherently unsafe. Both are justified.
+- I confirmed that all files with unsafe listed in the harness are in "Files NOT to Revisit" in `UNSAFE_MEMORY.md`.
+- I agree that the codebase is in a steady state for Phase 3.
 
 ## Attempted Changes
-- None (No reductions possible without creating unsound wrappers or moving unsafe to callers).
+- None.
 
 ## Blockers / Insights for Next Step
 - The project is in Phase 3. All remaining unsafe is irreducible.
