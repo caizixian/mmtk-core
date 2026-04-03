@@ -309,7 +309,7 @@ impl Block {
             // The invariants we checked earlier ensures that we can use cell and object reference interchangably
             // We may not really have an object in this cell, but if we do, this object reference is correct.
             // About unsafe: We know `cell` is non-zero here.
-            let potential_object = unsafe { ObjectReference::from_raw_address_unchecked(cell) };
+            let potential_object = ObjectReference::from_raw_address(cell).unwrap();
 
             if !VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
                 .is_marked::<VM>(potential_object, Ordering::SeqCst)
@@ -349,12 +349,11 @@ impl Block {
 
         while cell + cell_size <= self.end() {
             // possible object ref
-            let potential_object_ref = unsafe {
-                // We know cursor plus an offset cannot be 0.
-                ObjectReference::from_raw_address_unchecked(
-                    cursor + VM::VMObjectModel::OBJECT_REF_OFFSET_LOWER_BOUND,
-                )
-            };
+            // We know cursor plus an offset cannot be 0.
+            let potential_object_ref = ObjectReference::from_raw_address(
+                cursor + VM::VMObjectModel::OBJECT_REF_OFFSET_LOWER_BOUND,
+            )
+            .unwrap();
             trace!(
                 "{:?}: cell = {}, last cell in free list = {}, cursor = {}, potential object = {}",
                 self,

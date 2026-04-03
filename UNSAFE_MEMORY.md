@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 314 | Δ: -37
+- Starting count: 351 | Current: 312 | Δ: -39
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,7 @@ Architectural insights that affect ALL future safety decisions:
 - Static plan references are needed because plan types are generic and cannot be stored in global statics easily.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/alloc/allocators.rs:44` — Implement bitmask for initialized allocators to make `get_allocator` safe — expected Δ: -4
-2. 🟢 LOW: Consider using a library like `core_affinity` to remove remaining unsafe in `src/scheduler/affinity.rs` in the future.
+1. 🟢 LOW: Consider using a library like `core_affinity` to remove remaining unsafe in `src/scheduler/affinity.rs` in the future.
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
@@ -46,4 +45,4 @@ Reusable refactoring patterns (recipe format):
 - Target files: `src/util/alloc/allocators.rs`, `src/plan/mutator_context.rs`
 - Expected Δ: -4
 - Design sketch: Add a `u16` field to `Allocators` to track which allocators are initialized in `new`. Provide safe `get_allocator` methods that return `Option` or panic on uninitialized access but are safe from UB.
-- Status: proposed
+- Status: rejected (verified that `get_allocator` is already safe as it uses `.expect` and does not cause UB)
