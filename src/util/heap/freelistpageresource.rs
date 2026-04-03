@@ -30,8 +30,7 @@ pub struct FreeListPageResource<VM: VMBinding> {
     pub(crate) protect_memory_on_release: Option<memory::MmapProtection>,
 }
 
-unsafe impl<VM: VMBinding> Send for FreeListPageResource<VM> {}
-unsafe impl<VM: VMBinding> Sync for FreeListPageResource<VM> {}
+
 
 struct FreeListPageResourceSync {
     pub(crate) free_list: Box<dyn FreeList>,
