@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 495 | Δ: -227
+- Starting count: 722 | Current: 491 | Δ: -231
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,10 +10,11 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs:200-800` — Investigate raw loads/stores and `addr.as_ref` in side_metadata/global.rs. — expected Δ: ?
+1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs` — Use `MetadataSlot` for non-atomic operations or document as irreducible. — expected Δ: ?
 2. 🟡 MED: `src/util/heap/blockpageresource.rs` — Investigate `push_relaxed` and `assume_init`. — expected Δ: ?
 
 ## Patterns Discovered
+- Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
 - `unsafe { MaybeUninit::uninit().assume_init() }` → `[MaybeUninit::uninit()]` when array size is 1. Works for initializing arrays of `MaybeUninit` safely.
 - For arrays of size N where type is not Copy: `[const { MaybeUninit::uninit() }; N]` is safe.
 - Using `Address(x)` directly in tests within the same module/submodule to avoid `unsafe` blocks for `Address::from_usize`.

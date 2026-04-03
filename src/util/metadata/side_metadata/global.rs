@@ -13,6 +13,44 @@ use std::fmt;
 use std::io::Result;
 use std::sync::atomic::{AtomicU8, Ordering};
 
+#[derive(Clone, Copy)]
+struct MetadataSlot(Address);
+
+impl MetadataSlot {
+    fn fetch_and(&self, mask: u8, order: Ordering) -> u8 {
+        unsafe { self.0.as_ref::<AtomicU8>() }.fetch_and(mask, order)
+    }
+
+    fn fetch_or(&self, mask: u8, order: Ordering) -> u8 {
+        unsafe { self.0.as_ref::<AtomicU8>() }.fetch_or(mask, order)
+    }
+
+    fn load(&self, order: Ordering) -> u8 {
+        unsafe { self.0.as_ref::<AtomicU8>() }.load(order)
+    }
+
+    fn store(&self, val: u8, order: Ordering) {
+        unsafe { self.0.as_ref::<AtomicU8>() }.store(val, order)
+    }
+
+    fn fetch_update<F>(&self, set_order: Ordering, fetch_order: Ordering, f: F) -> std::result::Result<u8, u8>
+    where
+        F: FnMut(u8) -> Option<u8>,
+    {
+        unsafe { <u8 as MetadataValue>::fetch_update(self.0, set_order, fetch_order, f) }
+    }
+
+    fn compare_exchange(
+        &self,
+        old: u8,
+        new: u8,
+        success: Ordering,
+        failure: Ordering,
+    ) -> std::result::Result<u8, u8> {
+        unsafe { self.0.compare_exchange::<AtomicU8>(old, new, success, failure) }
+    }
+}
+
 /// This struct stores the specification of a side metadata bit-set.
 /// It is used as an input to the (inline) functions provided by the side metadata module.
 ///
@@ -211,7 +249,7 @@ impl SideMetadataSpec {
                     // Get a mask that the bits we need to zero are set to zero, and the other bits are 1.
                     let mask: u8 =
                         u8::MAX.checked_shl(bit_end as u32).unwrap_or(0) | !(u8::MAX << bit_start);
-                    unsafe { addr.as_ref::<AtomicU8>() }.fetch_and(mask, Ordering::SeqCst);
+                    MetadataSlot(addr).fetch_and(mask, Ordering::SeqCst);
                     false
                 }
             }
@@ -248,7 +286,7 @@ impl SideMetadataSpec {
                     // Get a mask that the bits we need to set are 1, and the other bits are 0.
                     let mask: u8 = !(u8::MAX.checked_shl(bit_end as u32).unwrap_or(0))
                         & (u8::MAX << bit_start);
-                    unsafe { addr.as_ref::<AtomicU8>() }.fetch_or(mask, Ordering::SeqCst);
+                    MetadataSlot(addr).fetch_or(mask, Ordering::SeqCst);
                     false
                 }
             }
@@ -444,10 +482,10 @@ impl SideMetadataSpec {
                     // we are setting selected bits in one byte
                     let mask: u8 = !(u8::MAX.checked_shl(bit_end as u32).unwrap_or(0))
                         & (u8::MAX << bit_start); // Get a mask that the bits we need to set are 1, and the other bits are 0.
-                    let old_src = unsafe { src.as_ref::<AtomicU8>() }.load(Ordering::Relaxed);
-                    let old_dst = unsafe { dst.as_ref::<AtomicU8>() }.load(Ordering::Relaxed);
+                    let old_src = MetadataSlot(src).load(Ordering::Relaxed);
+                    let old_dst = MetadataSlot(dst).load(Ordering::Relaxed);
                     let new = (old_src & mask) | (old_dst & !mask);
-                    unsafe { dst.as_ref::<AtomicU8>() }.store(new, Ordering::Relaxed);
+                    MetadataSlot(dst).store(new, Ordering::Relaxed);
                     false
                 }
             }
@@ -589,7 +627,7 @@ impl SideMetadataSpec {
                 if bits_num_log < 3 {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
-                    let byte_val = unsafe { meta_addr.atomic_load::<AtomicU8>(order) };
+                    let byte_val = MetadataSlot(meta_addr).load(order);
                     FromPrimitive::from_u8((byte_val & mask) >> lshift).unwrap()
                 } else {
                     unsafe { T::load_atomic(meta_addr, order) }
@@ -615,11 +653,9 @@ impl SideMetadataSpec {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
                     let metadata_u8 = metadata.to_u8().unwrap();
-                    let _ = unsafe {
-                        <u8 as MetadataValue>::fetch_update(meta_addr, order, order, |v: u8| {
-                            Some((v & !mask) | (metadata_u8 << lshift))
-                        })
-                    };
+                    let _ = MetadataSlot(meta_addr).fetch_update(order, order, |v: u8| {
+                        Some((v & !mask) | (metadata_u8 << lshift))
+                    });
                 } else {
                     unsafe {
                         T::store_atomic(meta_addr, metadata, order);
@@ -760,20 +796,18 @@ impl SideMetadataSpec {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
 
-                    let real_old_byte = unsafe { meta_addr.atomic_load::<AtomicU8>(success_order) };
+                    let real_old_byte = MetadataSlot(meta_addr).load(success_order);
                     let expected_old_byte =
                         (real_old_byte & !mask) | ((old_metadata.to_u8().unwrap()) << lshift);
                     let expected_new_byte =
                         (expected_old_byte & !mask) | ((new_metadata.to_u8().unwrap()) << lshift);
 
-                    unsafe {
-                        meta_addr.compare_exchange::<AtomicU8>(
-                            expected_old_byte,
-                            expected_new_byte,
-                            success_order,
-                            failure_order,
-                        )
-                    }
+                    MetadataSlot(meta_addr).compare_exchange(
+                        expected_old_byte,
+                        expected_new_byte,
+                        success_order,
+                        failure_order,
+                    )
                     .map(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
                     .map_err(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
                 } else {
