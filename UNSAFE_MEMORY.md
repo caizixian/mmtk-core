@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 711 | Δ: -11
-- Completed subsystems: util/alloc (partial), policy/sft_map (Sync impls removed)
+- Starting count: 722 | Current: 710 | Δ: -12
+- Completed subsystems: util/alloc (partial), policy/sft_map (Sync impls removed, get_unchecked replaced in cold paths)
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - "Work packets are single-use — Option::take() is safe for extracting owned data"
@@ -25,7 +25,7 @@
 - `unsafe impl Sync` removal for types that only contain thread-safe fields (auto-Sync).
 
 ## Refactoring Ideas
-- `src/policy/sft_map.rs`: Check if `get_unchecked` in `update` and `clear` can be replaced with `[]` safely.
+- `src/policy/sft_map.rs`: Replaced `get_unchecked` with `[]` in `update`, `clear`, and `get_unchecked` methods.
 - `src/policy/marksweepspace/native_ms/block.rs`: Analyze 24 unsafe blocks for potential safety improvements.
 
 ## Files NOT to Revisit
