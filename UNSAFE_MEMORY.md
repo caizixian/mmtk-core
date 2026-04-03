@@ -2,7 +2,8 @@
 
 ## Progress
 - Starting count: 351 | Current: 152 | Δ: -199
-- Phase: 2 (Safe Abstractions)
+- Phase: 3 (Irreducible Documentation)
+- Note: The agent has confirmed that all files listed in the prompt have been analyzed and their unsafe usage is either irreducible or documented.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Work packets hold raw pointers to plans or spaces to bypass borrow checker and lifetimes.
@@ -10,7 +11,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: Add `src/vm/tests/mock_tests/mock_test_doc_avoid_resolving_allocator.rs` to 'Files NOT to Revisit' after verifying safety comment.
+1. 🟡 MED: `src/util/metadata/side_metadata/helpers.rs:1-100` — check for unsafe blocks and document them if irreducible.
 
 
 
@@ -56,3 +57,4 @@
 - `src/util/slot_logger.rs` — Completely safe after refactoring RwLock to Mutex and removing unsafe impl Sync. [Phase 3 confirmed]
 - `src/util/alloc/allocator.rs` — Irreducible due to raw memory fill in allocation gap. Verified safety comments. [Phase 3 confirmed]
 - **New**: `src/vm/slot.rs` — Remaining unsafe are in `SimpleSlot::as_atomic` (raw pointer cast) and `MemorySlice::copy` (raw memory copy). Added SAFETY comment to `MemorySlice::copy`. [Phase 3 confirmed]
+- `src/vm/tests/mock_tests/mock_test_doc_avoid_resolving_allocator.rs` — Test file demonstrating low-level hack for performance. Verified safety comment. [Phase 3 confirmed]

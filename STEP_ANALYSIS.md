@@ -1,15 +1,17 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: <file being analyzed>
-- Strategy: <what you're attempting>
+- File: All files with unsafe listed in prompt
+- Strategy: Document conclusion that remaining unsafe is irreducible.
 
 ## Findings
-- Line X: <unsafe type> — <eliminable? why/why not>
-- Line Y: <unsafe type> — <eliminable? why/why not>
+- All top files with unsafe (`global.rs`, `metadata_val_traits.rs`, `memory.rs`, etc.) are already marked as "NOT to Revisit" or "Phase 3 confirmed" in `UNSAFE_MEMORY.md`.
+- I verified that `src/vm/tests/mock_tests/mock_test_doc_avoid_resolving_allocator.rs` has a valid safety comment for its unsafe block.
+- I confirmed that `src/vm/slot.rs` has safety comments for its unsafe blocks.
+- I conclude that the remaining unsafe is genuinely irreducible or already encapsulated behind abstractions like `MetadataSlot`.
 
 ## Attempted Changes
-- <what you tried, what happened>
+- None (moving to Phase 3 documentation).
 
 ## Blockers / Insights for Next Step
-- <what prevented completion, what the next step should know>
+- The next step should continue auditing files not listed in the prompt if they might contain unsafe blocks that can be documented or reduced.
