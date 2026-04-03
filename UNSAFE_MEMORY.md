@@ -11,7 +11,7 @@ Architectural insights that affect ALL future safety decisions:
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs:21-40` — Refactor `MetadataSlot` to use `AtomicPtr` or similar to reduce unsafe in `as_ref` calls — expected Δ: 2
+1. 🔴 HIGH: `src/policy/copyspace.rs:294-310` — Re-evaluate if unsafe blocks can be removed or abstracted — expected Δ: 1
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
