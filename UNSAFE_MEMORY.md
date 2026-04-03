@@ -10,8 +10,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: Review `src/util/raw_memory_freelist.rs` for proper // SAFETY: comments.
-2. 🟢 LOW: Review `src/util/metadata/global.rs` for proper // SAFETY: comments.
+1. 🟡 MED: Review `src/util/metadata/side_metadata/global.rs` for proper // SAFETY: comments.
 
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
@@ -24,9 +23,9 @@
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are irreducible function signatures and raw memory copy. [Phase 2 confirmed]
 - `src/util/metadata/metadata_val_traits.rs` — Defines contract for loading metadata values. Inherently unsafe. [Phase 2 confirmed]
-- `src/util/memory.rs` — Wrappers around libc calls. Standard FFI wrappers. [Phase 2 confirmed]
+- src/util/memory.rs — Wrappers around libc calls. Standard FFI wrappers. Verified safety comments. [Phase 3 confirmed]
 - `docs/dummyvm/src/api.rs` — Dummy VM implementation for testing/docs. Not part of production code. [Phase 2 confirmed]
-- `src/util/malloc/malloc_ms_util.rs` — Irreducible due to raw pointer manipulation in allocator. [Phase 2 confirmed]
+- src/util/malloc/malloc_ms_util.rs — Irreducible due to raw pointer manipulation in allocator. Verified safety comments. [Phase 3 confirmed]
 - `src/util/address.rs` — Core address type. Operations are inherently unsafe. [Phase 2 confirmed]
 - `src/mmtk.rs` — Uses `InitializeOnce` for `SFT_MAP`. Irreducible for performance. [Phase 2 confirmed]
 - `src/util/rust_util/mod.rs` — Implements `InitializeOnce`. Irreducible for performance. [Phase 2 confirmed]
@@ -47,4 +46,5 @@
 - `src/vm/tests/mock_tests/mock_test_vm_layout_compressed_pointer.rs` — Completely safe after removing unnecessary unsafe blocks. [Phase 3 confirmed]
 - `src/vm/tests/mock_tests/mock_test_vm_layout_heap_start.rs` — Completely safe after removing redundant unsafe blocks. [Phase 3 confirmed]
 - `src/util/erase_vm.rs` — Irreducible due to type erasure macro storing reference as usize. [Phase 3 confirmed]
-- `src/util/slot_logger.rs` — Completely safe after refactoring RwLock to Mutex and removing unsafe impl Sync. [Phase 3 confirmed]
+- src/util/slot_logger.rs — Completely safe after refactoring RwLock to Mutex and removing unsafe impl Sync. [Phase 3 confirmed]
+- src/util/alloc/allocator.rs — Irreducible due to raw memory fill in allocation gap. Verified safety comments. [Phase 3 confirmed]
