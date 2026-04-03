@@ -1,15 +1,18 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: <file being analyzed>
-- Strategy: <what you're attempting>
+- File: src/util/heap/gc_trigger.rs, src/mmtk.rs
+- Strategy: Remove plan storage from GCTrigger to eliminate unsafe static plan hack.
 
 ## Findings
-- Line X: <unsafe type> — <eliminable? why/why not>
-- Line Y: <unsafe type> — <eliminable? why/why not>
+- src/mmtk.rs:239: unsafe cast of plan to &'static dyn Plan. This is done to set the plan in GCTrigger.
+- GCTrigger stores plan in a OnceLock<&'static dyn Plan>.
+- Methods in GCTrigger that use plan can be refactored to take plan as an argument, as the plan is available at all call sites.
+- This will allow removing the plan field from GCTrigger and the unsafe cast in mmtk.rs.
 
 ## Attempted Changes
-- <what you tried, what happened>
+- None yet.
 
 ## Blockers / Insights for Next Step
-- <what prevented completion, what the next step should know>
+- Need to update GCTrigger methods and all call sites.
+

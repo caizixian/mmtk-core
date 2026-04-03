@@ -230,16 +230,6 @@ impl<VM: VMBinding> MMTK<VM> {
             &proof,
         );
 
-        // We haven't finished creating MMTk. No one is using the GC trigger.
-        {
-            // We know the plan address will not change. Cast it to a static reference.
-            // SAFETY: The plan is moved into the `MMTK` struct on line 250, which is then
-            // owned by the user or stored globally. The reference is valid as long as
-            // the `MMTK` instance lives.
-            let static_plan: &'static dyn Plan<VM = VM> = unsafe { &*(&*plan as *const _) };
-            // Set the plan so we can trigger GC and check GC condition without using plan
-            gc_trigger.set_plan(static_plan);
-        }
 
         // TODO: This probably does not work if we have multiple MMTk instances.
         // This needs to be called after we create Plan. It needs to use HeapMeta, which is gradually built when we create spaces.
@@ -469,7 +459,7 @@ impl<VM: VMBinding> MMTK<VM> {
     ) -> bool {
         if self
             .gc_trigger
-            .handle_user_collection_request(force, exhaustive)
+            .handle_user_collection_request(self.get_plan(), force, exhaustive)
         {
             use crate::vm::Collection;
             VM::VMCollection::block_for_gc(tls);
