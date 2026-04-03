@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 87 | Δ: -264
+- Starting count: 351 | Current: 86 | Δ: -265
 - Phase: 2 (Safe Abstractions)
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,8 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs:1708` — Replace `&'static [u8; ENTRIES]` with `Address` in `MetadataByteArrayRef` to eliminate unsafe block in `new` — expected Δ: -1
+1. 🟡 MED: `src/util/metadata/side_metadata/global.rs:550` — investigate if `std::ptr::copy` can be replaced with a safe wrapper or if it is irreducible — expected Δ: 0
+
 
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
@@ -46,6 +47,7 @@
 - `src/policy/marksweepspace/native_ms/block.rs` — Refactored sweep to use safe iterator. Remaining unsafe is encapsulated in BlockCell::store_link. Audited safety comments. [Phase 3 confirmed]
 - `src/util/raw_memory_freelist.rs` — Remaining unsafe are `from_raw_parts` to create slice views of raw memory. [Phase 3 confirmed]
 - `src/util/metadata/global.rs` — Unsafe fns for load/store are necessary as they are non-atomic. [Phase 3 confirmed]
+- `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are in `MetadataSlot` helpers, memory copy, and tests calling unsafe functions. [Phase 2 confirmed]
 - `src/util/heap/pageresource.rs` — Completely safe after removing unnecessary unsafe blocks. [Phase 3 confirmed]
 - `src/util/heap/layout/map.rs` — Completely safe after removing unsafe from trait definition. [Phase 3 confirmed]
 - `src/util/metadata/log_bit.rs` — Completely safe after replacing unsafe optimization with safe fallback. [Phase 3 confirmed]

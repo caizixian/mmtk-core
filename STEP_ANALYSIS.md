@@ -2,17 +2,17 @@
 
 ## Target
 - File: `src/util/metadata/side_metadata/global.rs`
-- Strategy: Replace unsafe non-atomic `load` with safe `load_atomic` in `scan_non_zero_values_simple` (line 1339).
+- Strategy: Replace `&'static [u8; ENTRIES]` with `Address` (or remove it and use `load_atomic`) in `MetadataByteArrayRef` to eliminate unsafe block in `new`.
 
 ## Findings
-- Identified an unsafe block in `src/util/metadata/side_metadata/global.rs:1339` where `self.load::<T>(cursor)` is called.
-- `self.load` is unsafe because it is non-atomic and requires synchronization.
-- However, `self.load_atomic` is a safe function provided by the same struct.
-- Replacing `unsafe { self.load::<T>(cursor) }` with `self.load_atomic::<T>(cursor, Ordering::Relaxed)` will eliminate the unsafe block while maintaining correctness (assuming relaxed consistency is sufficient or the context is already synchronized as claimed in the comment).
-- This will reduce the unsafe count by 1.
+- Line 1708: `data: unsafe { &*address_to_meta_address(metadata_spec, start).to_ptr() },` — Eliminable by removing `data` field and using `load_atomic` in `get`.
+- By removing the `#[cfg(feature = "extreme_assertions")]` guards from `heap_range_start` and `spec`, we can store them unconditionally.
+- We can then implement `get` using `self.spec.load_atomic::<u8>(data_addr, Ordering::Relaxed)` where `data_addr` is computed from `heap_range_start` and index.
+- This eliminates the unsafe block in `new` and does not introduce unsafe in `get`.
+- This reduces unsafe count by 1.
 
 ## Attempted Changes
-- Replaced `unsafe { self.load::<T>(cursor).is_zero() }` with `self.load_atomic::<T>(cursor, Ordering::Relaxed).is_zero()` at line 1339.
+- None yet.
 
 ## Blockers / Insights for Next Step
-- Need to run `cargo check` and `cargo test` to verify.
+- None.

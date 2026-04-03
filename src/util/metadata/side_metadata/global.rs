@@ -1672,11 +1672,8 @@ impl SideMetadataContext {
 
 /// A byte array in side-metadata
 pub struct MetadataByteArrayRef<const ENTRIES: usize> {
-    #[cfg(feature = "extreme_assertions")]
     heap_range_start: Address,
-    #[cfg(feature = "extreme_assertions")]
     spec: SideMetadataSpec,
-    data: &'static [u8; ENTRIES],
 }
 
 impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
@@ -1699,13 +1696,8 @@ impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
             "Heap range size and MetadataByteArray size does not match"
         );
         Self {
-            #[cfg(feature = "extreme_assertions")]
             heap_range_start: start,
-            #[cfg(feature = "extreme_assertions")]
             spec: *metadata_spec,
-            // # Safety
-            // The metadata memory is assumed to be mapped when accessing.
-            data: unsafe { &*address_to_meta_address(metadata_spec, start).to_ptr() },
         }
     }
 
@@ -1720,10 +1712,10 @@ impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
     pub fn get(&self, index: usize) -> u8 {
         #[cfg(feature = "extreme_assertions")]
         let _lock = sanity::SANITY_LOCK.lock().unwrap();
-        let value = self.data[index];
+        let data_addr = self.heap_range_start + (index << self.spec.log_bytes_in_region);
+        let value = self.spec.load_atomic::<u8>(data_addr, Ordering::Relaxed);
         #[cfg(feature = "extreme_assertions")]
         {
-            let data_addr = self.heap_range_start + (index << self.spec.log_bytes_in_region);
             sanity::verify_load::<u8>(&self.spec, data_addr, value);
         }
         value
