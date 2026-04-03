@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 677 | Δ: -45
-- Completed subsystems: util/alloc (partial), policy/sft_map (partial), policy/marksweepspace (block.rs cleanup), util/heap/layout (vm_layout.rs static mut), util/copy (MaybeUninit to Option in GCWorkerCopyContext), util/metadata/side_metadata (side_metadata_tests.rs Address::from_usize(0) cleanup)
+- Starting count: 722 | Current: 676 | Δ: -46
+- Completed subsystems: util/alloc (partial), policy/sft_map (partial), policy/marksweepspace (block.rs cleanup), util/heap/layout (vm_layout.rs static mut), util/copy (MaybeUninit to Option in GCWorkerCopyContext), util/metadata/side_metadata (side_metadata_tests.rs Address::from_usize(0) cleanup), util/heap/gc_trigger.rs (OnceLock for plan)
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - "Work packets are single-use — Option::take() is safe for extracting owned data"
@@ -24,6 +24,7 @@
 - `*const T` → `&T` in trait signatures where ownership is not required and lifetimes are valid.
 - `unsafe impl Sync` removal for types that only contain thread-safe fields (auto-Sync).
 - `static mut` → `OnceLock` for write-once globals.
+- `MaybeUninit` → `OnceLock` for late-initialized fields (e.g. `GCTrigger::plan`).
 
 ## Refactoring Ideas
 - `src/util/metadata/side_metadata/helpers.rs`: Analyze remaining unsafe blocks (mostly tests/Address::from_usize and load/store).
