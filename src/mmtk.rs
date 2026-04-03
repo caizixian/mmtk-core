@@ -447,6 +447,11 @@ impl<VM: VMBinding> MMTK<VM> {
         &mut **(self.plan.get())
     }
 
+    /// Get the plan as mutable reference safely when we have exclusive access to MMTK.
+    pub fn get_plan_mut_safe(&mut self) -> &mut dyn Plan<VM = VM> {
+        &mut **self.plan.get_mut()
+    }
+
     /// Get the run time options.
     pub fn get_options(&self) -> &Options {
         &self.options

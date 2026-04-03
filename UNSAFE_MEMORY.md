@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 441 | Δ: -281
+- Starting count: 722 | Current: 440 | Δ: -282
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/util/rust_util/atomic_box.rs:27-77` — Audit `OnceOptionBox` methods for reduction or document safety.
+1. 🟡 MED: `src/scheduler/gc_work.rs:57-135` — Investigate proof tokens or capabilities to encapsulate `get_plan_mut` calls during GC phases.
 
 ## Patterns Discovered
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
@@ -32,6 +32,7 @@
 - **New Pattern**: Removing raw pointers from work packets and using `mmtk.get_plan_mut()` eliminates the need for `unsafe impl Send` and raw pointer casts when the work packet only needs to call trait methods on the plan.
 - **New Pattern**: Introduce `FreeListCell` abstraction to encapsulate raw memory operations on free list cells.
 - **New Pattern**: Refactor `GCTrigger` to use `OnceLock` instead of `MaybeUninit` to remove `unsafe` in `plan()` and avoid `&mut` cast in `MMTK::new`.
+- **New Pattern**: Adding a safe `get_plan_mut_safe` to `MMTK` taking `&mut self` allows removing `unsafe` blocks when exclusive access to `MMTK` is available (e.g., in `set_vm_space`).
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/metadata/side_metadata/helpers.rs` — All unsafe removed by using `MetadataSlot`. [Phase 2 confirmed]
@@ -55,7 +56,6 @@
 - `src/util/heap/freelistpageresource.rs` — Remaining unsafe are `Send`/`Sync` impls for the type. [Phase 2 confirmed]
 - `src/util/alloc/free_list_allocator.rs` — Remaining unsafe is irreducible ObjectReference creation from raw address. [Phase 2 confirmed]
 - `src/util/test_util/fixtures.rs` — Test fixtures require `'static` reference for `MMTK` which is irreducible without leaking or redesign. [Phase 2 confirmed]
-
-## Abstraction Proposals (for Phase 2)
-- Implemented `SideMetadataSpecBlockExt` in `src/policy/marksweepspace/native_ms/block.rs` to abstract metadata accesses.
-- Extended `MetadataSlot` in `src/util/metadata/side_metadata/global.rs` to support generic `MetadataValue` operations.
+- `src/util/rust_util/atomic_box.rs` — Custom lock-free lazily initialized box with raw pointers for performance. Irreducible. [Phase 2 confirmed]
+- `src/mmtk.rs` — Irreducible unsafe for global plan access and extending lifetimes to avoid viral lifetimes. [Phase 2 confirmed]
+- `src/memory_manager.rs` — All unsafe removed (used `get_plan_mut_safe`). [Phase 2 confirmed]
