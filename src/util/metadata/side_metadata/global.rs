@@ -629,11 +629,11 @@ impl SideMetadataSpec {
                 if bits_num_log < 3 {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
-                    let byte_val = meta_addr.load::<u8>();
+                    let byte_val = MetadataSlot(meta_addr).load_non_atomic();
 
                     FromPrimitive::from_u8((byte_val & mask) >> lshift).unwrap()
                 } else {
-                    meta_addr.load::<T>()
+                    MetadataSlot(meta_addr).load_val::<T>()
                 }
             },
             |_v| {
@@ -661,12 +661,12 @@ impl SideMetadataSpec {
                 if bits_num_log < 3 {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
-                    let old_val = meta_addr.load::<u8>();
+                    let old_val = MetadataSlot(meta_addr).load_non_atomic();
                     let new_val = (old_val & !mask) | (metadata.to_u8().unwrap() << lshift);
 
-                    meta_addr.store::<u8>(new_val);
+                    MetadataSlot(meta_addr).store_non_atomic(new_val);
                 } else {
-                    meta_addr.store::<T>(metadata);
+                    MetadataSlot(meta_addr).store_val::<T>(metadata);
                 }
             },
             |_| {

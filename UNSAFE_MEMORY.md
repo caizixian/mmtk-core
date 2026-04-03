@@ -10,8 +10,7 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs` — Audit raw loads/stores and use `MetadataSlot` if possible. — expected Δ: 5
-2. 🟡 MED: `src/mmtk.rs:189` — Check if the `'static` cast for `plan` can be avoided or justified. — expected Δ: 1
+1. 🟡 MED: `src/util/rust_util/atomic_box.rs:27-77` — Audit `OnceOptionBox` methods for reduction or document safety.
 
 ## Patterns Discovered
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
@@ -55,6 +54,7 @@
 - `src/vm/slot.rs` — `SimpleSlot` is a safe abstraction. Unsafe operations inside it are irreducible without viral lifetimes. Tests use unsafe to check address iteration. [Phase 2 confirmed]
 - `src/util/heap/freelistpageresource.rs` — Remaining unsafe are `Send`/`Sync` impls for the type. [Phase 2 confirmed]
 - `src/util/alloc/free_list_allocator.rs` — Remaining unsafe is irreducible ObjectReference creation from raw address. [Phase 2 confirmed]
+- `src/util/test_util/fixtures.rs` — Test fixtures require `'static` reference for `MMTK` which is irreducible without leaking or redesign. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - Implemented `SideMetadataSpecBlockExt` in `src/policy/marksweepspace/native_ms/block.rs` to abstract metadata accesses.
