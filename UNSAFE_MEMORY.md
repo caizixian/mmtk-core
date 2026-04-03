@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 493 | Current: 425 | Δ: -68
+- Starting count: 493 | Current: 424 | Δ: -69
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -30,6 +30,7 @@
 - **Replacing std::ptr::copy with loop**: In `bcopy_metadata_contiguous`, replaced `std::ptr::copy` with a safe loop using `MetadataSlot`.
 - **Refactoring MetadataByteArrayRef**: Changed it to hold `Address` and `&SideMetadataSpec` instead of `&'static [u8; ENTRIES]`, eliminating a dangerous pointer-to-reference cast.
 - **Using MetadataSlot in Tests**: Replaced raw pointer dereferences in tests with `MetadataSlot::load` and `store` to eliminate unsafe blocks.
+- **Replacing Address::zero() with Address::ZERO**: Eliminated 1 unsafe block in `free_list_allocator.rs`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.
