@@ -1,8 +1,9 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 57 | Δ: -294
+- Starting count: 351 | Current: 55 | Δ: -296
 - Phase: 3 (Irreducible Documentation)
+- Antigravity reduced the unsafe count by 2 in `src/util/malloc/malloc_ms_util.rs` by using safe wrappers `crate::util::malloc::calloc` and `free` instead of direct FFI calls.
 - Status: Confirmed all remaining unsafe is irreducible or well-encapsulated. Moving to Phase 3. Verified again under strategy escalation (Step 10 of zero reductions). Re-verified and confirmed by multiple agents, including Antigravity.
 - Verified again under strategy escalation (10 steps of zero reductions) and confirmed all files with unsafe are listed in "Files NOT to Revisit" and their justifications are valid. Antigravity also specifically verified that `src/util/metadata/side_metadata/global.rs`, `src/util/metadata/global.rs`, and `src/util/address.rs` have proper `// SAFETY:` comments for their remaining unsafe blocks.
 - Antigravity verified again in the current step (after 11 zero reduction steps) and confirmed that remaining unsafe blocks in `src/util/raw_memory_freelist.rs`, `src/policy/sft_map.rs`, and `src/vm/slot.rs` are also irreducible or well-encapsulated.

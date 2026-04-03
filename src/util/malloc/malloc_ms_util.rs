@@ -71,7 +71,7 @@ pub fn free(address: Address, is_offset_malloc: bool) {
         offset_free(address);
     } else {
         // SAFETY: The caller must ensure that `address` is a valid pointer returned by malloc/calloc without offset.
-        unsafe { crate::util::malloc::library::free(address.to_mut_ptr()) }
+        crate::util::malloc::free(address);
     }
 }
 
@@ -94,9 +94,7 @@ pub fn alloc<VM: VMBinding>(size: usize, align: usize, offset: usize) -> (Addres
     // malloc returns 16 bytes aligned address.
     // So if the alignment is smaller than 16 bytes, we do not need to align.
     if align <= 16 && offset == 0 {
-        // SAFETY: calloc is safe to call with any size.
-        let raw = unsafe { calloc(1, size) };
-        address = Address::from_mut_ptr(raw);
+        address = crate::util::malloc::calloc(1, size);
         debug_assert!(address.is_aligned_to(align));
     } else if align > 16 && offset == 0 {
         address = align_alloc(size, align);
