@@ -24,21 +24,23 @@ pub fn align_offset_alloc<VM: VMBinding>(size: usize, align: usize, offset: usiz
     // we allocate extra `align` bytes here, so we are able to handle offset
     let actual_size = size + align + BYTES_IN_ADDRESS;
     // SAFETY: calloc is safe to call with any size. It returns null on failure.
-    let raw = unsafe { calloc(1, actual_size) };
-    let address = Address::from_mut_ptr(raw);
-    if address.is_zero() {
-        return address;
+    // malloc_res_ptr points within the allocated region and write_unaligned handles alignment.
+    unsafe {
+        let raw = calloc(1, actual_size);
+        let address = Address::from_mut_ptr(raw);
+        if address.is_zero() {
+            return address;
+        }
+        let mod_offset = offset % align;
+        let mut result =
+            crate::util::alloc::allocator::align_allocation_no_fill::<VM>(address, align, mod_offset);
+        if result - BYTES_IN_ADDRESS < address {
+            result += align;
+        }
+        let malloc_res_ptr: *mut usize = (result - BYTES_IN_ADDRESS).to_mut_ptr();
+        malloc_res_ptr.write_unaligned(address.as_usize());
+        result
     }
-    let mod_offset = offset % align;
-    let mut result =
-        crate::util::alloc::allocator::align_allocation_no_fill::<VM>(address, align, mod_offset);
-    if result - BYTES_IN_ADDRESS < address {
-        result += align;
-    }
-    let malloc_res_ptr: *mut usize = (result - BYTES_IN_ADDRESS).to_mut_ptr();
-    // SAFETY: malloc_res_ptr points within the allocated region and write_unaligned handles alignment.
-    unsafe { malloc_res_ptr.write_unaligned(address.as_usize()) };
-    result
 }
 
 /// Get the malloc usable size for an address that is returned by [`crate::util::malloc::malloc_ms_util::align_offset_alloc`].
