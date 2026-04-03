@@ -32,6 +32,8 @@ pub fn acquire_typed_allocator() {
             // At run time: allocate with the default semantics without resolving allocator
             let default_allocator: &mut BumpAllocator<MockVM> = {
                 let mutator_addr = Address::from_ref(&*mutator);
+                // SAFETY: This is a test demonstrating a low-level hack to avoid resolving allocator.
+                // The caller must ensure that `default_allocator_offset` is correct and the memory is valid.
                 unsafe {
                     (mutator_addr + default_allocator_offset).as_mut_ref::<BumpAllocator<MockVM>>()
                 }

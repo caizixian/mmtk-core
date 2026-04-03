@@ -10,7 +10,9 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: Audit remaining files in 'Files NOT to Revisit' for missing safety comments (checked global.rs, metadata_val_traits.rs, mmtk.rs, sft_map.rs, malloc_ms_util.rs, rust_util/mod.rs, slot.rs, raw_memory_freelist.rs, memory.rs, allocator.rs, api.rs, concurrent_marking_work.rs, erase_vm.rs, slot_logger.rs, address.rs, malloc/mod.rs, native_ms/block.rs, mock_vm.rs, malloc_ms/global.rs, csm/mod.rs).
+1. 🟢 LOW: Add `src/vm/tests/mock_tests/mock_test_doc_avoid_resolving_allocator.rs` to 'Files NOT to Revisit' after verifying safety comment.
+
+
 
 
 ## Patterns Discovered
