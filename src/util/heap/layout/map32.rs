@@ -7,10 +7,11 @@ use crate::util::heap::layout::heap_parameters::*;
 use crate::util::heap::layout::vm_layout::*;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::int_array_freelist::IntArrayFreeList;
-use crate::util::rust_util::zeroed_alloc::new_zeroed_vec;
+
 use crate::util::Address;
 use std::cell::UnsafeCell;
 use std::sync::{Mutex, MutexGuard};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub struct Map32 {
     sync: Mutex<()>,
@@ -26,7 +27,7 @@ pub struct Map32Inner {
     shared_discontig_fl_count: usize,
     total_available_discontiguous_chunks: usize,
     finalized: bool,
-    descriptor_map: Vec<SpaceDescriptor>,
+    descriptor_map: Vec<AtomicUsize>,
 }
 
 unsafe impl Send for Map32 {}
@@ -44,8 +45,9 @@ impl Map32 {
                 shared_discontig_fl_count: 0,
                 total_available_discontiguous_chunks: 0,
                 finalized: false,
-                // This can be big on 64-bit machines.  Use `new_zeroed_vec`.
-                descriptor_map: new_zeroed_vec(max_chunks),
+                descriptor_map: (0..max_chunks)
+                    .map(|_| AtomicUsize::new(SpaceDescriptor::UNINITIALIZED.as_usize()))
+                    .collect(),
             }),
             sync: Mutex::new(()),
         }
@@ -63,12 +65,11 @@ impl VMMap for Map32 {
     fn insert(&self, start: Address, extent: usize, descriptor: SpaceDescriptor) {
         // Each space will call this on exclusive address ranges. It is fine to mutate the descriptor map,
         // as each space will update different indices.
-        let self_mut: &mut Map32Inner = unsafe { self.mut_self() };
         let mut e = 0;
         while e < extent {
             let index = (start + e).chunk_index();
             assert!(
-                self.descriptor_map[index].is_empty(),
+                SpaceDescriptor::from_usize(self.descriptor_map[index].load(Ordering::Relaxed)).is_empty(),
                 "Conflicting virtual address request"
             );
             debug!(
@@ -76,7 +77,7 @@ impl VMMap for Map32 {
                 descriptor,
                 conversions::chunk_index_to_address(index)
             );
-            self_mut.descriptor_map[index] = descriptor;
+            self.descriptor_map[index].store(descriptor.as_usize(), Ordering::Relaxed);
             //   VM.barriers.objectArrayStoreNoGCBarrier(spaceMap, index, space);
             e += BYTES_IN_CHUNK;
         }
@@ -251,7 +252,7 @@ impl VMMap for Map32 {
         let index = address.chunk_index();
         self.descriptor_map
             .get(index)
-            .copied()
+            .map(|a| SpaceDescriptor::from_usize(a.load(Ordering::Relaxed)))
             .unwrap_or(SpaceDescriptor::UNINITIALIZED)
     }
 }
@@ -292,7 +293,7 @@ impl Map32 {
             let index = (chunk + offset) as usize;
             let chunk_start = conversions::chunk_index_to_address(index);
             debug!("Clear descriptor for Chunk {}", chunk_start);
-            self_mut.descriptor_map[index] = SpaceDescriptor::UNINITIALIZED;
+            self_mut.descriptor_map[index].store(SpaceDescriptor::UNINITIALIZED.as_usize(), Ordering::Relaxed);
             // SAFETY: SFT_MAP.clear is unsafe as it updates global SFT map.
             // We are holding the lock on Map32, which guarantees exclusive access to these chunks.
             unsafe { SFT_MAP.clear(chunk_start); }

@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 493 | Current: 417 | Δ: -76
+- Starting count: 493 | Current: 416 | Δ: -77
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -27,7 +27,7 @@
 - **Proof Token for Safe Functions**: Changing signatures of `unsafe fn` to take `&StwProof` can make them safe if the only safety invariant is no concurrent access.
 - **StwProof in Tests**: Using `StwProof::new_for_tests()` to remove redundant unsafe blocks around `load` and `store` in tests.
 - **OnceLock for late init**: Replacing `MaybeUninit` with `OnceLock` for late-initialized global or shared state (e.g., `GCTrigger::plan`).
-- **Atomics for Interior Mutability**: Replacing `UnsafeCell` and manual locking/unsafe with atomic types (`AtomicUsize`, `AtomicBool`) can eliminate `mut_self` patterns and reduce unsafe blocks (applied to `Map64`).
+- **Atomics for Interior Mutability**: Replacing `UnsafeCell` and manual locking/unsafe with atomic types (`AtomicUsize`, `AtomicBool`) can eliminate `mut_self` patterns and reduce unsafe blocks (applied to `Map64` and `Map32`).
 - **Replacing std::ptr::copy with loop**: In `bcopy_metadata_contiguous`, replaced `std::ptr::copy` with a safe loop using `MetadataSlot`.
 - **Refactoring MetadataByteArrayRef**: Changed it to hold `Address` and `&SideMetadataSpec` instead of `&'static [u8; ENTRIES]`, eliminating a dangerous pointer-to-reference cast.
 - **Using MetadataSlot in Tests**: Replaced raw pointer dereferences in tests with `MetadataSlot::load` and `store` to eliminate unsafe blocks.
@@ -44,7 +44,7 @@
 - `src/util/metadata/metadata_val_traits.rs` — `MetadataValue` trait methods are unsafe by design as they perform raw memory access.
 - `src/util/metadata/side_metadata/side_metadata_tests.rs` — All unsafe are `Address::from_usize(...)` for creating test addresses.
 - `src/policy/marksweepspace/native_ms/block.rs` — Remaining unsafe are `Address::from_usize`, `ObjectReference::from_raw_address_unchecked`, and raw pointer dereferencing for `BlockList`.
-- `src/util/heap/layout/map32.rs` — Remaining unsafe are `mut_self` calls claimed to be safe due to single-threaded boot time or exclusive ranges.
+- `src/util/heap/layout/map32.rs` — Remaining unsafe are `mut_self` calls in `finalize_static_space_map` and `get_discontig_freelist_pr_ordinal` claimed to be safe due to single-threaded boot time.
 - `src/util/heap/blockpageresource.rs` — Custom lock-free queue (`BlockQueue`) using `UnsafeCell` and `MaybeUninit`.
 - `src/scheduler/gc_work.rs` — Plan casts in `Prepare`/`Release` require raw pointers to avoid UB lint when casting to `&mut`.
 - `src/util/memory.rs` — Calls to `libc` functions (`mmap`, `mprotect`, etc.) and safe wrappers around them.
