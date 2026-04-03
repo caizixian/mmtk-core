@@ -86,6 +86,9 @@ impl<T> Drop for OnceOptionBox<T> {
 
 unsafe impl<T> Zeroable for OnceOptionBox<T> {}
 
+unsafe impl<T: Send> Send for OnceOptionBox<T> {}
+unsafe impl<T: Sync + Send> Sync for OnceOptionBox<T> {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
