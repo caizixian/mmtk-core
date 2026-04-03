@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 399 | Δ: -323
+- Starting count: 722 | Current: 348 | Δ: -374
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/rust_util/zeroed_alloc.rs` — Check if `new_zeroed_vec` can use a safe alternative from `bytemuck` or if it's irreducible for performance. — expected Δ: 1
+1. 🟡 MED: `src/util/erase_vm.rs:24-27` — Check if type erasure can be done safely or if it's irreducible. — expected Δ: 1
 
 ## Patterns Discovered
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.

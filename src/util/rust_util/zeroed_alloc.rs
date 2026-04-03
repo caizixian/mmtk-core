@@ -20,7 +20,7 @@
 //!
 //! The [`new_zeroed_vec`] function in this module can allocate zeroed vectors as fast as `vec![0;
 //! LEN]`;
-use std::alloc::{alloc_zeroed, handle_alloc_error, Layout};
+
 
 use bytemuck::Zeroable;
 
@@ -39,10 +39,5 @@ use bytemuck::Zeroable;
 ///
 /// Returns the created vector.
 pub(crate) fn new_zeroed_vec<T: Zeroable>(size: usize) -> Vec<T> {
-    let layout = Layout::array::<T>(size).unwrap();
-    let ptr = unsafe { alloc_zeroed(layout) } as *mut T;
-    if ptr.is_null() {
-        handle_alloc_error(layout);
-    }
-    unsafe { Vec::from_raw_parts(ptr, size, size) }
+    bytemuck::zeroed_vec(size)
 }
