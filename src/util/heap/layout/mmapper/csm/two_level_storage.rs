@@ -63,8 +63,7 @@ pub struct TwoLevelStateStorage {
     slabs: Vec<OnceOptionBox<Slab>>,
 }
 
-unsafe impl Send for TwoLevelStateStorage {}
-unsafe impl Sync for TwoLevelStateStorage {}
+
 
 impl fmt::Debug for TwoLevelStateStorage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

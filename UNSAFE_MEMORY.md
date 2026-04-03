@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 260 | Δ: -91
+- Starting count: 351 | Current: 258 | Δ: -93
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -11,7 +11,7 @@ Architectural insights that affect ALL future safety decisions:
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/int_array_freelist.rs:1-100` — Investigate if this file has unsafe code that can be reduced or abstracted — expected Δ: unknown
+1. 🔴 HIGH: `src/scheduler/gc_work.rs` — Investigate for unsafe code that can be reduced or abstracted — expected Δ: unknown
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
@@ -49,6 +49,8 @@ Reusable refactoring patterns (recipe format):
 - `src/policy/sft_map.rs` — Transmutes are irreducible due to fat pointer provenance. [Phase 2 confirmed]
 - `src/util/erase_vm.rs` — Erased VM references are used to bypass generic type parameters in object-safe traits (SFT), and are necessary for performance and design. [Phase 2 confirmed]
 - `src/policy/vmspace.rs` — Irreducible SFT initialization. [Phase 2 confirmed]
+- `src/util/int_array_freelist.rs` — No unsafe code found. [Phase 2 confirmed]
+- `src/util/heap/layout/mmapper/csm/two_level_storage.rs` — No unsafe code found after removing redundant unsafe impls. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 ### StwProof for safe plan access
