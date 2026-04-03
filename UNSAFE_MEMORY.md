@@ -11,7 +11,7 @@ Architectural insights that affect ALL future safety decisions:
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/metadata_val_traits.rs:143` — Add `// SAFETY:` comments for default implementations in MetadataValue — expected Δ: 0
+1. 🔴 HIGH: `src/util/malloc/malloc_ms_util.rs:10` — Add `// SAFETY:` comments for FFI calls in malloc_ms_util — expected Δ: 0
 
 
 ## Patterns Discovered

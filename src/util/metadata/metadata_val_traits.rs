@@ -141,18 +141,22 @@ macro_rules! impl_metadata_value_trait {
     ($non_atomic: ty, $atomic: ty) => {
         impl MetadataValue for $non_atomic {
             unsafe fn load(addr: Address) -> Self {
+                // SAFETY: The caller must ensure that `addr` is valid and properly aligned for the type.
                 addr.load::<$non_atomic>()
             }
 
             unsafe fn load_atomic(addr: Address, order: Ordering) -> Self {
+                // SAFETY: The caller must ensure that `addr` is valid and properly aligned for the type.
                 addr.as_ref::<$atomic>().load(order)
             }
 
             unsafe fn store(addr: Address, value: Self) {
+                // SAFETY: The caller must ensure that `addr` is valid and properly aligned for the type.
                 addr.store::<$non_atomic>(value)
             }
 
             unsafe fn store_atomic(addr: Address, value: Self, order: Ordering) {
+                // SAFETY: The caller must ensure that `addr` is valid and properly aligned for the type.
                 addr.as_ref::<$atomic>().store(value, order)
             }
 
@@ -163,23 +167,28 @@ macro_rules! impl_metadata_value_trait {
                 success: Ordering,
                 failure: Ordering,
             ) -> Result<Self, Self> {
+                // SAFETY: The caller must ensure that `addr` is valid and properly aligned for the type.
                 addr.as_ref::<$atomic>()
                     .compare_exchange(current, new, success, failure)
             }
 
             unsafe fn fetch_add(addr: Address, value: Self, order: Ordering) -> Self {
+                // SAFETY: The caller must ensure that `addr` is valid and properly aligned for the type.
                 addr.as_ref::<$atomic>().fetch_add(value, order)
             }
 
             unsafe fn fetch_sub(addr: Address, value: Self, order: Ordering) -> Self {
+                // SAFETY: The caller must ensure that `addr` is valid and properly aligned for the type.
                 addr.as_ref::<$atomic>().fetch_sub(value, order)
             }
 
             unsafe fn fetch_and(addr: Address, value: Self, order: Ordering) -> Self {
+                // SAFETY: The caller must ensure that `addr` is valid and properly aligned for the type.
                 addr.as_ref::<$atomic>().fetch_and(value, order)
             }
 
             unsafe fn fetch_or(addr: Address, value: Self, order: Ordering) -> Self {
+                // SAFETY: The caller must ensure that `addr` is valid and properly aligned for the type.
                 addr.as_ref::<$atomic>().fetch_or(value, order)
             }
 
@@ -192,6 +201,7 @@ macro_rules! impl_metadata_value_trait {
             where
                 F: FnMut(Self) -> Option<Self>,
             {
+                // SAFETY: The caller must ensure that `addr` is valid and properly aligned for the type.
                 addr.as_ref::<$atomic>()
                     .fetch_update(set_order, fetch_order, f)
             }
