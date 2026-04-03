@@ -103,8 +103,7 @@ pub struct GCWorker<VM: VMBinding> {
     pub local_work_buffer: deque::Worker<Box<dyn GCWork<VM>>>,
 }
 
-unsafe impl<VM: VMBinding> Sync for GCWorkerShared<VM> {}
-unsafe impl<VM: VMBinding> Send for GCWorkerShared<VM> {}
+
 
 // Error message for borrowing `GCWorkerShared::stat`.
 const STAT_BORROWED_MSG: &str = "GCWorkerShared.stat is already borrowed.  This may happen if \

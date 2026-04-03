@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 245 | Δ: -106
+- Starting count: 351 | Current: 242 | Δ: -109
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -11,10 +11,11 @@ Architectural insights that affect ALL future safety decisions:
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/scheduler/worker.rs:106-107` — Investigate if `GCWorkerShared` can eliminate `unsafe impl Send` and `Sync` — expected Δ: 2
+1. 🔴 HIGH: `src/scheduler/worker.rs:304` — Investigate if `WorkerGroup` can eliminate `unsafe impl Sync` — expected Δ: 1
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
+- Adding `Send + Sync` bounds to trait objects (e.g. `Box<dyn Trait + Send + Sync>`) can enable automatic derivation of `Send` and `Sync` for containing structures, eliminating the need for `unsafe impl Send` or `Sync`.
 - Introducing `StwProof` token to encapsulate raw memory operations or mutable access to shared structures (like `Plan`) during Stop-The-World phases.
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
 - Safe wrappers in `Mutator` (like `get_allocator_mut_safe`) can encapsulate `unsafe` array access by checking initialization against `space_mapping`.
