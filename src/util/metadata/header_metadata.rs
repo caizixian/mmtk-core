@@ -662,26 +662,18 @@ mod tests {
     macro_rules! impl_with_object {
         ($type: ty) => {
             paste!{
-                fn [<with_ $type _obj>]<F>(f: F) where F: FnOnce(Address, &mut [$type]) + std::panic::UnwindSafe {
-                    // Allocate a tuple that can hold 3 integers
-                    let ty_size = ($type::BITS >> LOG_BITS_IN_BYTE) as usize;
-                    let layout = std::alloc::Layout::from_size_align(ty_size * 3, ty_size).unwrap();
-                    let ptr_raw: *mut $type = unsafe { std::alloc::alloc_zeroed(layout) as *mut $type };
+                fn [<with_ $type _obj>]<F>(f: F) where F: FnOnce(Address, &mut [$type]) {
+                    // Create a vector with 3 elements initialized to 0
+                    let mut data = vec![0 as $type; 3];
                     
-                    let slice = unsafe { std::slice::from_raw_parts_mut(ptr_raw, 3) };
                     // Make sure they are all empty
-                    assert_eq!(slice[0], 0, "memory at offset -1 is not zero");
-                    assert_eq!(slice[1], 0, "memory at offset 0 is not zero");
-                    assert_eq!(slice[2], 0, "memory at offset 1 is not zero");
+                    assert_eq!(data[0], 0, "memory at offset -1 is not zero");
+                    assert_eq!(data[1], 0, "memory at offset 0 is not zero");
+                    assert_eq!(data[2], 0, "memory at offset 1 is not zero");
                     
-                    let obj = Address::from_ptr(unsafe { ptr_raw.offset(1) });
+                    let obj = Address::from_ref(&data[1]);
                     
-                    crate::util::test_util::with_cleanup(
-                        std::panic::AssertUnwindSafe(|| f(obj, slice)),
-                        || {
-                            unsafe { std::alloc::dealloc(ptr_raw as *mut u8, layout); }
-                        }
-                    )
+                    f(obj, &mut data)
                 }
             }
         }

@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 407 | Δ: -315
+- Starting count: 722 | Current: 402 | Δ: -320
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs:21-111` — Use `MetadataSlot` or similar abstraction to encapsulate raw memory operations on metadata addresses. — expected Δ: 10
+1. 🔴 HIGH: `src/policy/markcompactspace.rs:211` — Investigate if raw load of forwarding pointer can be made safe or encapsulated. — expected Δ: 1
 
 ## Patterns Discovered
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
@@ -39,7 +39,7 @@
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/metadata/side_metadata/helpers.rs` — All unsafe removed by using `MetadataSlot`. [Phase 2 confirmed]
-- `src/util/metadata/header_metadata.rs` — Irreducible raw loads from header addresses. [Phase 1 analysis] (Re-evaluated in Phase 2, used MetadataSlot for some reductions)
+- `src/util/metadata/header_metadata.rs` — Irreducible raw loads from header addresses. Also refactored test macro to use Vec. [Phase 2 confirmed]
 - `src/util/alloc/allocators.rs` — Irreducible `assume_init` for layout compatibility with VM bindings. [Phase 1 analysis]
 - `src/policy/sft_map.rs` — `SFTRefStorage` uses transmute for atomic fat pointers. [Phase 2 confirmed]
 - `src/util/metadata/metadata_val_traits.rs` — Irreducible raw loads from addresses in trait default impls. [Phase 2 confirmed]
@@ -65,3 +65,4 @@
 - `src/scheduler/gc_work.rs` — `get_plan_mut` calls are irreducible without major refactor to thread proof tokens or change trait signatures. [Phase 2 confirmed]
 - `src/plan/barriers.rs` — Reduced unsafe block in line 198. Remaining unsafe (if any) are likely irreducible. [Phase 2 confirmed]
 - `src/util/int_array_freelist.rs` — All unsafe removed by refactoring to use Arc<RwLock>. [Phase 2 confirmed]
+- `src/policy/immix/line.rs` — All unsafe removed by using atomic operations. [Phase 2 confirmed]
