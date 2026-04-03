@@ -34,11 +34,9 @@ use mmtk::util::{Address, ObjectReference};
 impl DummyVM {
     pub fn object_start_to_ref(start: Address) -> ObjectReference {
         // Safety: start is the allocation result, and it should not be zero with an offset.
-        unsafe {
-            ObjectReference::from_raw_address_unchecked(
-                start + crate::object_model::OBJECT_REF_OFFSET,
-            )
-        }
+        ObjectReference::from_raw_address(
+            start + crate::object_model::OBJECT_REF_OFFSET,
+        ).unwrap()
     }
 }
 
