@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 493 | Current: 398 | Δ: -95
+- Starting count: 493 | Current: 395 | Δ: -98
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,10 @@
 ## Work Queue (NEXT STEP: pick the first actionable item)
 1. 🔴 HIGH: Identify more files with irreducible unsafe blocks and document them with `// SAFETY:` comments (Phase 3).
 2. 🟡 MED: Identify other `MaybeUninit` usages in the codebase and apply safe abstractions if possible without performance regression.
+3. 🟢 LOW: Check if other free list implementations can use a similar abstraction to `Block::pop_free_list`.
 
 ## Patterns Discovered
+- **Centralizing Free List manipulation in Block**: Moved `pop_free_list` and `write_free_list_link` to `Block` to remove unsafe raw memory accesses in `FreeListAllocator`.
 - **Centralizing Address Conversions**: Added `load_address` and `load_address_atomic` to `MetadataSlot<'_, usize>` to remove unsafe `Address::from_usize` at call sites.
 - `MaybeUninit` arrays of size 1 can be replaced with `Option` and `unwrap()` to eliminate unsafe access.
 - In tests, raw memory allocation with `alloc_zeroed` and `dealloc` can be replaced with safe `Vec` to eliminate unsafe blocks.
@@ -50,15 +52,14 @@
 - `src/util/metadata/side_metadata/helpers.rs` — Remaining unsafe are raw loads in functions that scan metadata addresses directly without a spec. (Update: some removed by passing spec).
 - `src/util/metadata/metadata_val_traits.rs` — `MetadataValue` trait methods are unsafe by design as they perform raw memory access.
 - `src/util/metadata/side_metadata/side_metadata_tests.rs` — All unsafe are `Address::from_usize(...)` for creating test addresses.
-- `src/policy/marksweepspace/native_ms/block.rs` — Remaining unsafe are `Address::from_usize`, `ObjectReference::from_raw_address_unchecked`, and raw pointer dereferencing for `BlockList`.
+- `src/util/address.rs` — Primitives for raw memory access and address arithmetic.
+- `src/util/metadata/safe_access.rs` — Abstraction boundary for `MetadataSlot`.
+- `src/util/memory.rs` — Calls to `libc` functions (`mmap`, `mprotect`, etc.) and safe wrappers around them.
 - `src/util/heap/layout/map32.rs` — Remaining unsafe are `mut_self` calls in `finalize_static_space_map` and `get_discontig_freelist_pr_ordinal` claimed to be safe due to single-threaded boot time.
 - `src/util/heap/blockpageresource.rs` — Custom lock-free queue (`BlockQueue`) using `UnsafeCell` and `Option` (refactored from `MaybeUninit`).
 - `src/scheduler/gc_work.rs` — Plan casts in `Prepare`/`Release` require raw pointers to avoid UB lint when casting to `&mut`.
-- `src/util/memory.rs` — Calls to `libc` functions (`mmap`, `mprotect`, etc.) and safe wrappers around them.
-- `src/util/address.rs` — Primitives for raw memory access and address arithmetic.
 - `src/util/metadata/vo_bit/mod.rs` — Remaining unsafe is `from_raw_address_unchecked` in `get_object_ref_for_vo_addr` which is irreducible.
 - `src/util/heap/layout/map64.rs` — Remaining unsafe are trait signatures and unavoidable `from_usize` calls for reading high water mark.
-- `src/util/metadata/safe_access.rs` — Abstraction boundary for `MetadataSlot`.
 - `src/util/rust_util/mod.rs` — `InitializeOnce` provides zero-overhead reads for `SFT_MAP` in release builds, requiring unsafe; `libc::gettid()` is FFI.
 - `src/util/malloc/malloc_ms_util.rs` — FFI calls to C allocator and raw pointer operations for alignment.
 - `src/util/rust_util/atomic_box.rs` — `OnceOptionBox` is a safe lock-free abstraction; unsafe blocks are for atomic pointer manipulation and are documented.

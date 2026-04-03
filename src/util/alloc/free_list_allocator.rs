@@ -148,20 +148,10 @@ impl<VM: VMBinding> FreeListAllocator<VM> {
 
     // Find a free cell within a given block
     fn block_alloc(&mut self, block: Block) -> Address {
-        let cell = block.load_free_list();
+        let cell = block.pop_free_list();
         if cell.is_zero() {
             return cell; // return failed allocation
         }
-        let next_cell = unsafe { cell.load::<Address>() };
-        // Clear the link
-        unsafe { cell.store::<Address>(Address::ZERO) };
-        debug_assert!(
-            next_cell.is_zero() || block.includes_address(next_cell),
-            "next_cell {} is not in {:?}",
-            next_cell,
-            block
-        );
-        block.store_free_list(next_cell);
 
         // Zeroing memory right before we return it.
         // If we move the zeroing to somewhere else, we need to clear the list link here: cell.store::<Address>(Address::ZERO)
@@ -347,9 +337,7 @@ impl<VM: VMBinding> FreeListAllocator<VM> {
         let mut new_cell = block.start();
 
         let final_cell = loop {
-            unsafe {
-                new_cell.store::<Address>(old_cell);
-            }
+            block.write_free_list_link(new_cell, old_cell);
             old_cell = new_cell;
             new_cell += cell_size;
             if new_cell + cell_size > block_end {
@@ -379,9 +367,7 @@ impl<VM: VMBinding> FreeListAllocator<VM> {
         if self.tls == block_tls {
             // same thread that allocated
             let local_free = block.load_local_free_list();
-            unsafe {
-                addr.store(local_free);
-            }
+            block.write_free_list_link(addr, local_free);
             block.store_local_free_list(addr);
         } else {
             // different thread to allocator

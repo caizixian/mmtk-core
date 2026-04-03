@@ -109,6 +109,29 @@ impl Block {
         Block::FREE_LIST_TABLE.slot_for::<usize>(self.start()).store(free_list.as_usize());
     }
 
+    /// Pop a cell from the free list.
+    pub fn pop_free_list(&self) -> Address {
+        let cell = self.load_free_list();
+        if cell.is_zero() {
+            return cell;
+        }
+        // SAFETY: `cell` is guaranteed to be a valid cell in the free list or zero.
+        // We know it's not zero here. The free list contains valid cells in the block.
+        let next_cell = unsafe {
+            let next = cell.load::<Address>();
+            cell.store::<Address>(Address::ZERO);
+            next
+        };
+        debug_assert!(
+            next_cell.is_zero() || self.includes_address(next_cell),
+            "next_cell {} is not in {:?}",
+            next_cell,
+            self
+        );
+        self.store_free_list(next_cell);
+        cell
+    }
+
     #[cfg(feature = "malloc_native_mimalloc")]
     pub fn load_local_free_list(&self) -> Address {
         Block::LOCAL_FREE_LIST_TABLE.slot_for::<usize>(self.start()).load_address()
@@ -201,7 +224,7 @@ impl Block {
         }))
     }
 
-    fn write_free_list_link(&self, cell: Address, next: Address) {
+    pub(crate) fn write_free_list_link(&self, cell: Address, next: Address) {
         debug_assert!(cell >= self.start() && cell < self.start() + Block::BYTES);
         // SAFETY: `cell` is within the block's address range and is a valid location for a free list link.
         // This is called during sweep or when the block is owned exclusively.
