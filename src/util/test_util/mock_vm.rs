@@ -18,6 +18,7 @@ use crate::vm::ObjectTracerContext;
 use crate::vm::RootsWorkFactory;
 use crate::vm::SlotVisitor;
 use crate::vm::VMBinding;
+use crate::vm::slot::SimpleSlot;
 use crate::Mutator;
 
 use super::mock_method::*;
@@ -375,7 +376,7 @@ impl Default for MockVM {
 // MockVM is automatically Send and Sync because all its fields are Send and Sync.
 
 impl VMBinding for MockVM {
-    type VMSlot = Address;
+    type VMSlot = SimpleSlot;
     type VMMemorySlice = Range<Address>;
 
     type VMActivePlan = MockVM;

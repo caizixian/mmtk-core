@@ -7,28 +7,28 @@ use std::sync::{Arc, Mutex};
 
 use mmtk::{
     util::{Address, ObjectReference},
-    vm::RootsWorkFactory,
+    vm::{RootsWorkFactory, slot::SimpleSlot},
 };
 
 #[derive(Default)]
 struct MockScanning {
-    roots: Vec<Address>,
+    roots: Vec<SimpleSlot>,
 }
 
 impl MockScanning {
-    fn add_roots(&mut self, roots: &[Address]) {
+    fn add_roots(&mut self, roots: &[SimpleSlot]) {
         self.roots.extend(roots);
     }
 
-    fn mock_scan_roots(&self, mut factory: impl mmtk::vm::RootsWorkFactory<Address>) {
+    fn mock_scan_roots(&self, mut factory: impl mmtk::vm::RootsWorkFactory<SimpleSlot>) {
         factory.create_process_roots_work(self.roots.clone());
     }
 }
 
-static SLOTS: [Address; 3] = [
-    Address::from_usize(0x8),
-    Address::from_usize(0x8),
-    Address::from_usize(0x8),
+static SLOTS: [SimpleSlot; 3] = [
+    SimpleSlot::from_address(Address::from_usize(0x8)),
+    SimpleSlot::from_address(Address::from_usize(0x8)),
+    SimpleSlot::from_address(Address::from_usize(0x8)),
 ];
 
 /// A factory with a plain value, a boxed value and a shared data with Arc.
@@ -41,8 +41,8 @@ struct MockFactory {
     a: Arc<Mutex<String>>,
 }
 
-impl RootsWorkFactory<Address> for MockFactory {
-    fn create_process_roots_work(&mut self, slots: Vec<Address>) {
+impl RootsWorkFactory<SimpleSlot> for MockFactory {
+    fn create_process_roots_work(&mut self, slots: Vec<SimpleSlot>) {
         assert_eq!(slots, SLOTS);
         match self.round {
             1 => {
