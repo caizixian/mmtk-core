@@ -3,7 +3,7 @@
 ## Progress
 - Starting count: 351 | Current: 88 | Δ: -263
 - Phase: 3 (Irreducible Documentation)
-- Note: Audited `src/util/address.rs` and `src/mmtk.rs`. Added safety comments to `StwProtected` and static plan reference in `src/mmtk.rs`. Confirmed that `src/util/address.rs` has proper safety comments. Both moved to Phase 3 confirmed.
+- Note: Audited `src/util/malloc/mod.rs` and `src/policy/sft_map.rs`. Confirmed safety comments are present and adequate. Both moved to Phase 3 confirmed.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Work packets hold raw pointers to plans or spaces to bypass borrow checker and lifetimes.
@@ -11,8 +11,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/util/malloc/mod.rs:25` — Audit raw pointer manipulation in allocator for safety comments to move to Phase 3 confirmed.
-2. 🟡 MED: `src/policy/sft_map.rs:136` — Audit transmutes for safety comments to move to Phase 3 confirmed.
+1. 🟡 MED: `src/util/metadata/global.rs:56` — Audit unsafe function signatures for complete safety documentation.
 
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
@@ -35,15 +34,15 @@
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/heap/blockpageresource.rs` — Completely safe after removing `unsafe impl Sync` and adding `Send` bound to `Region` trait. [Phase 3 confirmed]
 - `src/util/metadata/side_metadata/global.rs` — Remaining production unsafe are irreducible function signatures and raw memory copy. Audited safety comments. [Phase 3 confirmed]
-- `src/util/metadata/metadata_val_traits.rs` — Completely safe after refactoring trait to take references. [Phase 2 confirmed]
+- `src/util/metadata/metadata_val_traits.rs` — Completely safe after refactoring trait to take references. [Phase 3 confirmed]
 - `src/util/memory.rs` — Wrappers around libc calls. Standard FFI wrappers. Verified safety comments. [Phase 3 confirmed]
 - `docs/dummyvm/src/api.rs` — Reduced unsafe by using `Option<&mut T>` and `Option<Box<T>>` in FFI signatures. Remaining are `CStr::from_ptr`. [Phase 3 confirmed]
 - `src/util/malloc/malloc_ms_util.rs` — Irreducible due to raw pointer manipulation in allocator. Verified safety comments. [Phase 3 confirmed]
 - `src/util/address.rs` — Core address type. Operations are inherently unsafe. Audited safety comments. [Phase 3 confirmed]
 - `src/mmtk.rs` — Uses `InitializeOnce` for `SFT_MAP`. Irreducible for performance. Audited safety comments for StwProtected. [Phase 3 confirmed]
 - `src/util/rust_util/mod.rs` — Implements `InitializeOnce`. Irreducible for performance and because `get_mut` requires unsafe casting that triggers `invalid_reference_casting` error in Rust 1.92+ if attempted with `OnceLock`. Added safety comments to document unsafe operations. [Phase 3 confirmed]
-- `src/util/malloc/mod.rs` — Irreducible due to raw pointer manipulation in allocator. Audited safety comments. [Phase 2 confirmed]
-- `src/policy/sft_map.rs` — Transmutes are irreducible due to fat pointer provenance. [Phase 2 confirmed]
+- `src/util/malloc/mod.rs` — Irreducible due to raw pointer manipulation in allocator. Audited safety comments. [Phase 3 confirmed]
+- `src/policy/sft_map.rs` — Transmutes are irreducible due to fat pointer provenance. [Phase 3 confirmed]
 - `src/policy/marksweepspace/native_ms/block.rs` — Refactored sweep to use safe iterator. Remaining unsafe is encapsulated in BlockCell::store_link. Audited safety comments. [Phase 3 confirmed]
 - `src/util/raw_memory_freelist.rs` — Remaining unsafe are `from_raw_parts` to create slice views of raw memory. [Phase 3 confirmed]
 - `src/util/metadata/global.rs` — Unsafe fns for load/store are necessary as they are non-atomic. [Phase 3 confirmed]
