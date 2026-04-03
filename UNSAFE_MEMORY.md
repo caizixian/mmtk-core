@@ -11,8 +11,7 @@ Architectural insights that affect ALL future safety decisions:
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/malloc/malloc_ms_util.rs:10` — Add `// SAFETY:` comments for FFI calls in malloc_ms_util — expected Δ: 0
-
+1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs:22` — Add `// SAFETY:` comments for unsafe blocks in MetadataSlot and SideMetadataSpec — expected Δ: 0
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
@@ -37,7 +36,7 @@ Reusable refactoring patterns (recipe format):
 - `src/util/metadata/metadata_val_traits.rs` — Irreducible raw loads from addresses in trait default impls. [Phase 2 confirmed]
 - `src/util/memory.rs` — Contains wrappers for FFI calls. [Phase 2 confirmed]
 - `docs/dummyvm/src/api.rs` — Irreducible FFI boundaries in dummy VM. [Phase 2 confirmed]
-- `src/util/malloc/malloc_ms_util.rs` — Irreducible FFI and raw pointer manipulation. [Phase 2 confirmed]
+- `src/util/malloc/malloc_ms_util.rs` — Irreducible FFI and raw pointer manipulation. Documented with SAFETY comments in Phase 3. [Phase 3 confirmed]
 - `src/util/address.rs` — Primitives for address operations. [Phase 2 confirmed]
 - `src/util/metadata/side_metadata/side_metadata_tests.rs` — Tests use unsafe to check address iteration. [Phase 2 confirmed]
 - `src/util/rust_util/atomic_box.rs` — Custom lock-free lazily initialized box. [Phase 2 confirmed]
@@ -61,6 +60,7 @@ Reusable refactoring patterns (recipe format):
 - `benches/mock_bench/mmapper.rs` — No unsafe code found. [Phase 2 confirmed]
 - `src/util/opaque_pointer.rs` — Refactored to use usize, eliminating unsafe impl Send/Sync. [Phase 2 confirmed]
 - `src/util/raw_memory_freelist.rs` — Remaining unsafe are `from_raw_parts` to create slice views of raw memory. Documented in Phase 3. [Phase 3 confirmed]
+- `src/util/metadata/global.rs` — Unsafe fns for load/store are necessary as they are non-atomic and rely on caller ensuring safety (no data races). [Phase 3 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 ### StwProof for safe plan access
