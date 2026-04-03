@@ -36,10 +36,16 @@ impl FreeList for RawMemoryFreeList {
         self.heads
     }
     fn get_entry(&self, index: i32) -> i32 {
-        self.get_slice()[index as usize]
+        let len = (self.high_water - self.base) >> LOG_BYTES_IN_ENTRY;
+        assert!((index as usize) < len, "index out of bounds: the len is {} but the index is {}", len, index);
+        // SAFETY: The memory is mapped and valid.
+        unsafe { *self.base.to_ptr::<i32>().add(index as usize) }
     }
     fn set_entry(&mut self, index: i32, value: i32) {
-        self.get_slice_mut()[index as usize] = value;
+        let len = (self.high_water - self.base) >> LOG_BYTES_IN_ENTRY;
+        assert!((index as usize) < len, "index out of bounds: the len is {} but the index is {}", len, index);
+        // SAFETY: The memory is mapped and valid.
+        unsafe { *self.base.to_mut_ptr::<i32>().add(index as usize) = value; }
     }
     fn alloc(&mut self, size: i32) -> i32 {
         if self.current_units == 0 {
@@ -63,19 +69,7 @@ impl FreeList for RawMemoryFreeList {
 }
 
 impl RawMemoryFreeList {
-    fn get_slice(&self) -> &[i32] {
-        let len = (self.high_water - self.base) >> LOG_BYTES_IN_ENTRY;
-        // SAFETY: The memory from `base` to `high_water` is mapped by this struct and is valid for reading.
-        // The length is correctly calculated based on the mapped region.
-        unsafe { std::slice::from_raw_parts(self.base.to_ptr::<i32>(), len) }
-    }
-    fn get_slice_mut(&mut self) -> &mut [i32] {
-        let len = (self.high_water - self.base) >> LOG_BYTES_IN_ENTRY;
-        // SAFETY: The memory from `base` to `high_water` is mapped by this struct and is valid for reading and writing.
-        // The length is correctly calculated based on the mapped region.
-        // `&mut self` ensures exclusive access.
-        unsafe { std::slice::from_raw_parts_mut(self.base.to_mut_ptr::<i32>(), len) }
-    }
+
     fn units_per_block(&self) -> i32 {
         (conversions::pages_to_bytes(self.pages_per_block as _) >> LOG_BYTES_IN_UNIT) as _
     }
