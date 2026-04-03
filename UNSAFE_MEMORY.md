@@ -45,3 +45,4 @@
 - `src/util/memory.rs` — FFI calls to libc (mmap, munmap, etc.).
 - `src/util/heap/layout/map32.rs` — Remaining unsafe is SFT_MAP.clear (side metadata access).
 - `src/util/heap/layout/map64.rs` — Remaining unsafe are trait methods or `Address::from_usize` (anti-pattern to replace with `ZERO.add`).
+- `src/util/heap/freelistpageresource.rs`: Remove `unsafe impl Send` and `unsafe impl Sync` for `FreeListPageResource` now that `FreeList` trait is `Send`.
