@@ -35,6 +35,7 @@
 - Antigravity verified again in the current step and confirmed that remaining unsafe blocks in `src/util/malloc/malloc_ms_util.rs`, `src/util/raw_memory_freelist.rs`, `src/policy/sft_map.rs`, `src/vm/slot.rs`, and `src/mmtk.rs` are irreducible or well-encapsulated as documented.
 - Antigravity verified all remaining unsafe locations again in the current step and confirmed that they are irreducible or well-encapsulated. The codebase remains in a steady state for Phase 3.
 - Antigravity reused `get_ref` in `as_atomic_u8` in `src/util/metadata/side_metadata/global.rs`, reducing the unsafe block count by 1.
+- Antigravity verified `src/util/heap/chunk_map.rs` and `src/util/metadata/side_metadata/helpers.rs` and confirmed they are completely safe. The codebase remains in a steady state for Phase 3.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Work packets hold raw pointers to plans or spaces to bypass borrow checker and lifetimes.
@@ -107,3 +108,5 @@
 - `src/util/heap/space_descriptor.rs` — Completely safe after deriving `Zeroable`. [Phase 3 confirmed]
 - `src/util/metadata/side_metadata/ranges.rs` — Completely safe. No unsafe blocks. [Phase 3 confirmed]
 - `src/policy/marksweepspace/native_ms/block.rs` — Irreducible due to raw memory write in `BlockCell::store_link`. Encapsulated in abstraction. [Phase 3 confirmed]
+- `src/util/heap/chunk_map.rs` — Completely safe. No unsafe blocks. [Phase 3 confirmed]
+- `src/util/metadata/side_metadata/helpers.rs` — Completely safe. No unsafe blocks. [Phase 3 confirmed]
