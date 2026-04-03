@@ -3,7 +3,7 @@
 ## Progress
 - Starting count: 351 | Current: 88 | Δ: -263
 - Phase: 3 (Irreducible Documentation)
-- Note: Audited `src/util/malloc/mod.rs` and `src/policy/sft_map.rs`. Confirmed safety comments are present and adequate. Both moved to Phase 3 confirmed.
+- Note: Audited `src/util/metadata/global.rs` and confirmed safety documentation is complete.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Work packets hold raw pointers to plans or spaces to bypass borrow checker and lifetimes.
@@ -11,7 +11,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/util/metadata/global.rs:56` — Audit unsafe function signatures for complete safety documentation.
+1. 🟡 MED: `src/policy/sft_map.rs:136` — Investigate if `bytemuck` can replace `mem::transmute` for SFT fat pointers.
 
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
