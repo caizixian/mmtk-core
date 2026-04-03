@@ -1,19 +1,18 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: `src/vm/tests/mock_tests/mock_test_slots.rs`
-- Strategy: Replace raw pointers with references in test slot implementations to eliminate unsafe blocks and `unsafe impl Send`.
+- File: `src/policy/marksweepspace/native_ms/block.rs`
+- Strategy: Replace non-atomic `load`/`store` on `SideMetadataSpec` with `load_atomic`/`store_atomic` with `SeqCst` ordering to remove unsafe blocks.
 
 ## Findings
-- `CompressedOopSlot`, `OffsetSlot`, and `TaggedSlot` all use raw pointers (`*mut Atomic<T>`) to access memory.
-- In tests, these slots are initialized from local stack variables (`Atomic<T>`).
-- If we change these structs to hold references (`&Atomic<T>`) instead of raw pointers, we can use safe methods like `load` and `store` on the atomics without `unsafe`.
-- This will also eliminate the need for `unsafe impl Send` for these types, as references to atomics are `Send` and `Sync`.
-- This should remove about 10 unsafe blocks/impls in this file.
+- Lines 69, 73, 81, 85: These methods in `SideMetadataSpecBlockExt` use `load` and `store` which are unsafe.
+- `SideMetadataSpec` has `load_atomic` and `store_atomic` which are safe.
+- According to `UNSAFE_MEMORY.md` patterns, we can use `store_atomic` to replace raw stores in metadata updates.
+- Line 208: `store_block_list` also uses `store`. Can be replaced with `store_atomic`.
 
 ## Attempted Changes
-- Refactored `CompressedOopSlot`, `OffsetSlot`, `TaggedSlot`, and `DummyVMSlot` to use references with lifetimes instead of raw pointers.
-- Updated tests to pass references directly instead of creating `Address` from references.
+- Replaced non-atomic `load` and `store` with `load_atomic` and `store_atomic` using `Ordering::SeqCst` in `SideMetadataSpecBlockExt` and `store_block_list`.
+- Removed 5 unsafe blocks.
 
 ## Blockers / Insights for Next Step
-- Need to verify if the changes compile and pass tests.
+- Need to run `cargo check` and `cargo test` to verify.

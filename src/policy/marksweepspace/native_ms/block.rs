@@ -66,11 +66,11 @@ trait SideMetadataSpecBlockExt {
 
 impl SideMetadataSpecBlockExt for SideMetadataSpec {
     fn load_address(&self, block: Block) -> Address {
-        unsafe { Address::from_usize(self.load::<usize>(block.start())) }
+        Address::from_usize(self.load_atomic::<usize>(block.start(), Ordering::SeqCst))
     }
     
     fn store_address(&self, block: Block, value: Address) {
-        unsafe { self.store::<usize>(block.start(), value.as_usize()) }
+        self.store_atomic::<usize>(block.start(), value.as_usize(), Ordering::SeqCst)
     }
     
     fn load_address_atomic(&self, block: Block, order: Ordering) -> Address {
@@ -78,11 +78,11 @@ impl SideMetadataSpecBlockExt for SideMetadataSpec {
     }
     
     fn load_usize(&self, block: Block) -> usize {
-        unsafe { self.load::<usize>(block.start()) }
+        self.load_atomic::<usize>(block.start(), Ordering::SeqCst)
     }
     
     fn store_usize(&self, block: Block, value: usize) {
-        unsafe { self.store::<usize>(block.start(), value) }
+        self.store_atomic::<usize>(block.start(), value, Ordering::SeqCst)
     }
     
     fn load_usize_atomic(&self, block: Block, order: Ordering) -> usize {
@@ -204,9 +204,7 @@ impl Block {
 
     pub fn store_block_list(&self, block_list: &BlockList) {
         let block_list_usize: usize = block_list as *const BlockList as usize;
-        unsafe {
-            Block::BLOCK_LIST_TABLE.store::<usize>(self.start(), block_list_usize);
-        }
+        Block::BLOCK_LIST_TABLE.store_atomic::<usize>(self.start(), block_list_usize, Ordering::SeqCst);
     }
 
     pub fn load_block_list(&self) -> *mut BlockList {
