@@ -1,6 +1,7 @@
 use super::sft::*;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::Address;
+use crate::util::ObjectReference;
 
 use std::sync::atomic::Ordering;
 
@@ -30,6 +31,12 @@ pub trait SFTMap {
     /// We only provide the checked version for `get()`, as it may be used to query arbitrary objects and addresses. Other methods like `update/clear/etc` are
     /// mostly used inside MMTk, and in most cases, we know that they are within our space address range.
     fn get_checked(&self, address: Address) -> &dyn SFT;
+
+    /// Get SFT for the object. The object must be a valid object reference.
+    fn get_for_object(&self, object: ObjectReference) -> &dyn SFT {
+        // SAFETY: ObjectReference is guaranteed to point to a valid object in a mapped space.
+        unsafe { self.get_unchecked(object.to_raw_address()) }
+    }
 
     /// Set SFT for the address range. The address must have a valid SFT entry in the table.
     ///
