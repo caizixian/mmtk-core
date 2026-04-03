@@ -53,7 +53,7 @@ lazy_static! {
 use crate::util::rust_util::InitializeOnce;
 
 // A global space function table that allows efficient dispatch space specific code for addresses in our heap.
-pub static SFT_MAP: InitializeOnce<Box<dyn SFTMap>> = InitializeOnce::new();
+pub static SFT_MAP: InitializeOnce<Box<dyn SFTMap + Sync>> = InitializeOnce::new();
 
 /// Get the SFT map mutably. This requires a proof that the world is stopped or we are in initialization.
 pub fn get_sft_map_mut(_proof: &StwProof) -> &mut dyn SFTMap {
