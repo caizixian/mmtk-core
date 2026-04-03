@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 78 | Δ: -273
+- Starting count: 351 | Current: 76 | Δ: -275
 - Phase: 3 (Irreducible Documentation)
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -32,14 +32,15 @@
 - Investigation confirmed that `bytemuck` cannot be used for fat pointer transmutes in `sft_map.rs` due to unstable layout and lack of `Pod` implementation.
 - Replaced unsafe non-atomic `load` with safe `load_atomic` in `scan_non_zero_values_simple` in `side_metadata/global.rs`.
 - Added safe test wrappers for unsafe methods in tests to eliminate unsafe blocks in macro expansions in `side_metadata/global.rs`.
-- **New**: Added `test_dzmmap` safe wrapper in `src/util/memory.rs` tests to ensure mapping only within `MEMORY_TEST_REGION`, eliminating 4 unsafe blocks.
+- Added `test_dzmmap` safe wrapper in `src/util/memory.rs` tests to ensure mapping only within `MEMORY_TEST_REGION`, eliminating 4 unsafe blocks.
+- **New**: Combined near-contiguous unsafe blocks in `malloc_ms_util.rs` (`offset_free` and `offset_malloc_usable_size`) to reduce the total count of unsafe blocks by 2.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/heap/blockpageresource.rs` — Completely safe after removing `unsafe impl Sync` and adding `Send` bound to `Region` trait. [Phase 3 confirmed]
 - `src/util/metadata/metadata_val_traits.rs` — Completely safe after refactoring trait to take references. [Phase 3 confirmed]
 - `src/util/memory.rs` — Wrappers around libc calls. Standard FFI wrappers. Verified safety comments. Eliminated unsafe in tests using `test_dzmmap`. [Phase 3 confirmed]
 - `docs/dummyvm/src/api.rs` — Reduced unsafe by using `Option<&mut T>` and `Option<Box<T>>` in FFI signatures. Remaining are `CStr::from_ptr`. [Phase 3 confirmed]
-- `src/util/malloc/malloc_ms_util.rs` — Irreducible due to raw pointer manipulation in allocator. Verified safety comments. [Phase 3 confirmed]
+- `src/util/malloc/malloc_ms_util.rs` — Irreducible due to raw pointer manipulation in allocator. Verified safety comments. Combined near-contiguous unsafe blocks to reduce count. [Phase 3 confirmed]
 - `src/util/address.rs` — Core address type. Operations are inherently unsafe. Audited safety comments. [Phase 3 confirmed]
 - `src/mmtk.rs` — Uses `InitializeOnce` for `SFT_MAP` (irreducible for performance). `StwProtected` uses `UnsafeCell` to avoid locking overhead; safety relies on external invariant (world stopped) guaranteed by `StwProof` token. [Phase 3 confirmed]
 - `src/util/rust_util/mod.rs` — Implements `InitializeOnce`. Irreducible for performance and because `get_mut` requires unsafe casting that triggers `invalid_reference_casting` error in Rust 1.92+ if attempted with `OnceLock`. Added safety comments to document unsafe operations. [Phase 3 confirmed]

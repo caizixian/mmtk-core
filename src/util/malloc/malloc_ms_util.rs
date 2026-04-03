@@ -45,18 +45,22 @@ pub fn align_offset_alloc<VM: VMBinding>(size: usize, align: usize, offset: usiz
 pub fn offset_malloc_usable_size(address: Address) -> usize {
     let malloc_res_ptr: *mut usize = (address - BYTES_IN_ADDRESS).to_mut_ptr();
     // SAFETY: The caller must ensure that `address` was returned by `align_offset_alloc`, so that `malloc_res_ptr` points to the stored original malloc result.
-    let malloc_res = unsafe { malloc_res_ptr.read_unaligned() } as *mut libc::c_void;
-    // SAFETY: malloc_res is a valid pointer returned by calloc.
-    unsafe { malloc_usable_size(malloc_res) }
+    // malloc_res is a valid pointer returned by calloc.
+    unsafe {
+        let malloc_res = malloc_res_ptr.read_unaligned() as *mut libc::c_void;
+        malloc_usable_size(malloc_res)
+    }
 }
 
 /// Free an address that is allocated with an offset (returned by [`crate::util::malloc::malloc_ms_util::align_offset_alloc`]).
 pub fn offset_free(address: Address) {
     let malloc_res_ptr: *mut usize = (address - BYTES_IN_ADDRESS).to_mut_ptr();
     // SAFETY: The caller must ensure that `address` was returned by `align_offset_alloc`.
-    let malloc_res = unsafe { malloc_res_ptr.read_unaligned() } as *mut libc::c_void;
-    // SAFETY: malloc_res is a valid pointer returned by calloc and can be freed.
-    unsafe { crate::util::malloc::library::free(malloc_res) };
+    // malloc_res is a valid pointer returned by calloc and can be freed.
+    unsafe {
+        let malloc_res = malloc_res_ptr.read_unaligned() as *mut libc::c_void;
+        crate::util::malloc::library::free(malloc_res);
+    }
 }
 
 /// Free an address allocated by `alloc`.
