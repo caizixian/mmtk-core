@@ -161,9 +161,10 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
             // We assert this when we set VO bit for LOS.
             if vo_bit::get_raw_vo_bit_word(cur_page) != 0 {
                 // Find the exact address that has vo bit set
+                let proof = unsafe { crate::util::metadata::safe_access::StwProof::new() };
                 for offset in 0..vo_bit::VO_BIT_WORD_TO_REGION {
                     let addr = cur_page + offset;
-                    if unsafe { vo_bit::is_vo_addr(addr) } {
+                    if vo_bit::is_vo_addr(addr, &proof) {
                         return vo_bit::is_internal_ptr_from_vo_bit::<VM>(addr, ptr);
                     }
                 }

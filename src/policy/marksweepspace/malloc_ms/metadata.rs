@@ -87,8 +87,8 @@ pub(super) fn unset_offset_malloc_bit(address: Address) {
     OFFSET_MALLOC_METADATA_SPEC.store_atomic::<u8>(address, 0, Ordering::SeqCst);
 }
 
-pub unsafe fn unset_vo_bit_unsafe(object: ObjectReference) {
-    vo_bit::unset_vo_bit_unsafe(object);
+pub fn unset_vo_bit_unsafe(object: ObjectReference, proof: &StwProof) {
+    vo_bit::unset_vo_bit_unsafe(object, proof);
 }
 
 #[allow(unused)]

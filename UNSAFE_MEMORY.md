@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 493 | Current: 483 (est) | Δ: -10
+- Starting count: 493 | Current: 479 (est) | Δ: -14
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -39,6 +39,7 @@
 - `src/scheduler/gc_work.rs` — Plan casts in `Prepare`/`Release` require raw pointers to avoid UB lint when casting to `&mut`.
 - `src/util/memory.rs` — Calls to `libc` functions (`mmap`, `mprotect`, etc.) and safe wrappers around them.
 - `src/util/address.rs` — Primitives for raw memory access and address arithmetic.
+- `src/util/metadata/vo_bit/mod.rs` — Remaining unsafe is `from_raw_address_unchecked` in `get_object_ref_for_vo_addr` which is irreducible.
 
 ## Abstraction Proposals (for Phase 2)
 - **Safe Metadata Accessor**: `MetadataSlot` implemented in `safe_access.rs`. Used in `header_metadata.rs` and `global.rs`.
