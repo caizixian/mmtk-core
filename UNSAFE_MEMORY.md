@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 63 | Δ: -288
+- Starting count: 351 | Current: 59 | Δ: -292
 - Phase: 3 (Irreducible Documentation)
 - Status: Confirmed all remaining unsafe is irreducible or well-encapsulated. Moving to Phase 3. Verified again under strategy escalation (Step 10 of zero reductions). Re-verified and confirmed by multiple agents, including Antigravity.
 - Verified again under strategy escalation (10 steps of zero reductions) and confirmed all files with unsafe are listed in "Files NOT to Revisit" and their justifications are valid. Antigravity also specifically verified that `src/util/metadata/side_metadata/global.rs`, `src/util/metadata/global.rs`, and `src/util/address.rs` have proper `// SAFETY:` comments for their remaining unsafe blocks.
@@ -20,6 +20,8 @@
 - Antigravity verified again in the current step and confirmed that remaining unsafe blocks in `src/policy/marksweepspace/native_ms/block.rs`, `src/util/heap/layout/mmapper/csm/mod.rs`, `src/util/alloc/allocator.rs`, and `src/policy/marksweepspace/malloc_ms/global.rs` are irreducible as documented.
 - Antigravity investigated `sft_map.rs` lifetime extension and confirmed it is irreducible without performance regression or moving unsafe to callers.
 - Antigravity verified again under strategy escalation and confirmed that remaining unsafe blocks in `src/vm/slot.rs`, `src/mmtk.rs`, `src/util/raw_memory_freelist.rs`, and `src/policy/sft_map.rs` are irreducible or well-encapsulated.
+- Antigravity removed 4 unused unsafe functions in `src/util/metadata/side_metadata/global.rs` (`set_zero`, `set_raw_byte_atomic`, `load_raw_byte`, `load_raw_word`), reducing the count by 4.
+
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Work packets hold raw pointers to plans or spaces to bypass borrow checker and lifetimes.

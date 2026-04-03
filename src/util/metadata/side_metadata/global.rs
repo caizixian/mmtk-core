@@ -749,25 +749,7 @@ impl SideMetadataSpec {
         )
     }
 
-    /// Non-atomically store zero to the side metadata for the given address.
-    /// This method mainly facilitates clearing multiple metadata specs for the same address in a loop.
-    ///
-    /// # Safety
-    ///
-    /// This is unsafe because:
-    ///
-    /// 1. Concurrent access to this operation is undefined behaviour.
-    /// 2. Interleaving Non-atomic and atomic operations is undefined behaviour.
-    pub unsafe fn set_zero(&self, data_addr: Address) {
-        use num_traits::Zero;
-        match self.log_num_of_bits {
-            0..=3 => self.store(data_addr, u8::zero()),
-            4 => self.store(data_addr, u16::zero()),
-            5 => self.store(data_addr, u32::zero()),
-            6 => self.store(data_addr, u64::zero()),
-            _ => unreachable!(),
-        }
-    }
+
 
     /// Atomiccally store zero to the side metadata for the given address.
     /// This method mainly facilitates clearing multiple metadata specs for the same address in a loop.
@@ -782,77 +764,11 @@ impl SideMetadataSpec {
         }
     }
 
-    /// Atomically store one to the side metadata for the data address with the _possible_ side effect of corrupting
-    /// and setting the entire byte in the side metadata to 0xff. This can only be used for side metadata smaller
-    /// than a byte.
-    /// This means it does not only set the side metadata for the data address, and it may also have a side effect of
-    /// corrupting and setting the side metadata for the adjacent data addresses. This method is only intended to be
-    /// used as an optimization to skip masking and setting bits in some scenarios where setting adjancent bits to 1 is benign.
-    ///
-    /// # Safety
-    /// This method _may_ corrupt and set adjacent bits in the side metadata as a side effect. The user must
-    /// make sure that this behavior is correct and must not rely on the side effect of this method to set bits.
-    pub unsafe fn set_raw_byte_atomic(&self, data_addr: Address, order: Ordering) {
-        debug_assert!(self.log_num_of_bits < 3);
-        cfg_if::cfg_if! {
-            if #[cfg(feature = "extreme_assertions")] {
-                // For extreme assertions, we only set 1 to the given address.
-                self.store_atomic::<u8>(data_addr, 1, order)
-            } else {
-                self.side_metadata_access::<false, u8, _, _, _>(
-                    data_addr,
-                    Some(1u8),
-                    || {
-                        let meta_addr = address_to_meta_address(self, data_addr);
-                        MetadataSlot(meta_addr).store(0xffu8, order);
-                    },
-                    |_| {}
-                )
-            }
-        }
-    }
 
-    /// Load the raw byte in the side metadata byte that is mapped to the data address.
-    ///
-    /// # Safety
-    /// This is unsafe because:
-    ///
-    /// 1. Concurrent access to this operation is undefined behaviour.
-    /// 2. Interleaving Non-atomic and atomic operations is undefined behaviour.
-    pub unsafe fn load_raw_byte(&self, data_addr: Address) -> u8 {
-        debug_assert!(self.log_num_of_bits < 3);
-        self.side_metadata_access::<false, u8, _, _, _>(
-            data_addr,
-            None,
-            || {
-                let meta_addr = address_to_meta_address(self, data_addr);
-                MetadataSlot(meta_addr).load_non_atomic()
-            },
-            |_| {},
-        )
-    }
 
-    /// Load the raw word that includes the side metadata byte mapped to the data address.
-    ///
-    /// # Safety
-    /// This is unsafe because:
-    ///
-    /// 1. Concurrent access to this operation is undefined behaviour.
-    /// 2. Interleaving Non-atomic and atomic operations is undefined behaviour.
-    pub unsafe fn load_raw_word(&self, data_addr: Address) -> usize {
-        use crate::util::constants::*;
-        debug_assert!(self.log_num_of_bits < (LOG_BITS_IN_BYTE + LOG_BYTES_IN_ADDRESS) as usize);
-        self.side_metadata_access::<false, usize, _, _, _>(
-            data_addr,
-            None,
-            || {
-                let meta_addr = address_to_meta_address(self, data_addr);
-                let aligned_meta_addr = meta_addr.align_down(BYTES_IN_ADDRESS);
-                MetadataSlot(aligned_meta_addr).load_usize_non_atomic()
-            },
-            |_| {},
-        )
-    }
+
+
+
 
     /// Load the raw word that includes the side metadata byte mapped to the data address atomically.
     pub fn load_raw_word_atomic(&self, data_addr: Address, order: Ordering) -> usize {
