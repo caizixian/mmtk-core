@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 176 | Δ: -175
+- Starting count: 351 | Current: 175 | Δ: -176
 - Phase: 3 (Irreducible Documentation)
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -17,8 +17,9 @@
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
 - `MetadataSlot` wraps `Address` but methods remain unsafe due to raw memory access. Moving unsafe to constructor increases count at call sites.
 - Centralized unsafe raw pointer dereferences in `MetadataSlot` by introducing a helper `get_ref<T>` method, reducing unsafe blocks in load methods.
-- **New**: `VMMap` trait methods were made safe as implementations (`Map32` and `Map64`) are internally synchronized with `Mutex`.
-- **New**: `BlockCell` and `CellIter` abstractions in `block.rs` eliminate unsafe writes during sweep by encapsulating raw writes and ensuring valid iteration.
+- `VMMap` trait methods were made safe as implementations (`Map32` and `Map64`) are internally synchronized with `Mutex`.
+- `BlockCell` and `CellIter` abstractions in `block.rs` eliminate unsafe writes during sweep by encapsulating raw writes and ensuring valid iteration.
+- **New**: `SlotLogger` was refactored to use `Mutex` instead of `RwLock`, making it automatically `Sync` and eliminating `unsafe impl Sync`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are irreducible function signatures and raw memory copy. [Phase 2 confirmed]
@@ -41,10 +42,9 @@
 - `src/plan/concurrent/concurrent_marking_work.rs` — Irreducible due to overlapping borrows and API constraints. [Phase 3 confirmed]
 - `src/util/test_util/mock_vm.rs` — Irreducible due to lifetime hacks needed for mocking in tests. [Phase 3 confirmed]
 - `src/policy/marksweepspace/malloc_ms/global.rs` — Irreducible due to passing space reference to work packets (Codebase Invariant). [Phase 3 confirmed]
-- `src/policy/vmspace.rs` — Completely safe after removing unnecessary unsafe blocks. [Phase 3 confirmed]
-- `src/util/alloc/allocator.rs` — Irreducible due to raw memory write in `fill_alignment_gap`. Added safety comment. [Phase 3 confirmed]
-- `src/util/erase_vm.rs` — Irreducible due to type erasure macro storing reference as usize. [Phase 3 confirmed]
 - `src/util/heap/layout/mmapper/csm/mod.rs` — Irreducible due to calling unsafe `dzmmap` for memory mapping. [Phase 3 confirmed]
 - `src/plan/concurrent/mod.rs` — Completely safe after removing unsafe impls for bytemuck traits. [Phase 3 confirmed]
 - `src/vm/tests/mock_tests/mock_test_vm_layout_compressed_pointer.rs` — Completely safe after removing unnecessary unsafe blocks. [Phase 3 confirmed]
 - `src/vm/tests/mock_tests/mock_test_vm_layout_heap_start.rs` — Completely safe after removing redundant unsafe blocks. [Phase 3 confirmed]
+- `src/util/erase_vm.rs` — Irreducible due to type erasure macro storing reference as usize. [Phase 3 confirmed]
+- `src/util/slot_logger.rs` — Completely safe after refactoring RwLock to Mutex and removing unsafe impl Sync. [Phase 3 confirmed]
