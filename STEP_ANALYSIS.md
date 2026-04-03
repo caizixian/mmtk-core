@@ -12,4 +12,4 @@
 - <what you tried, what happened>
 
 ## Blockers / Insights for Next Step
-- <what prevented completion, what the next step should know>
+- I need to ensure that `BlockPageResource` and other fields can be moved to the new struct without breaking other usages.

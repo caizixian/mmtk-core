@@ -439,7 +439,7 @@ impl<VM: VMBinding> FreeListAllocator<VM> {
             debug_assert!(unswept.is_empty());
 
             let mut sweep_later = |list: &mut BlockList| {
-                list.release_blocks(self.space);
+                list.release_blocks(self.space.inner.as_ref());
 
                 // For eager sweeping, that's it.  We just release unmarked blocks, and leave marked
                 // blocks to be swept later in the `SweepChunk` work packet.

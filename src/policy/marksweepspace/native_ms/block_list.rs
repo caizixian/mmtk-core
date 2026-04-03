@@ -165,22 +165,22 @@ impl BlockList {
     }
 
     /// Release unmarked blocks, and sweep other blocks in the block list. Used by eager sweeping.
-    pub fn release_and_sweep_blocks<VM: VMBinding>(&self, space: &super::MarkSweepSpace<VM>) {
+    pub fn release_and_sweep_blocks<VM: VMBinding>(&self, inner: &super::MarkSweepSpaceInner<VM>) {
         for block in self.iter() {
             // We should not have unallocated blocks in a block list
             debug_assert_ne!(block.get_state(), BlockState::Unallocated);
-            if !block.attempt_release(space) {
+            if !block.attempt_release(inner) {
                 block.sweep::<VM>();
             }
         }
     }
 
     /// Release unmarked blocks, and do not sweep any blocks. Used by lazy sweeping
-    pub fn release_blocks<VM: VMBinding>(&self, space: &super::MarkSweepSpace<VM>) {
+    pub fn release_blocks<VM: VMBinding>(&self, inner: &super::MarkSweepSpaceInner<VM>) {
         for block in self.iter() {
             // We should not have unallocated blocks in a block list
             debug_assert_ne!(block.get_state(), BlockState::Unallocated);
-            block.attempt_release(space);
+            block.attempt_release(inner);
         }
     }
 }

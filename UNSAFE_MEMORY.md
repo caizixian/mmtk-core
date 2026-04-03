@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 279 | Δ: -72
+- Starting count: 351 | Current: 276 | Δ: -75
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -45,7 +45,7 @@ Reusable refactoring patterns (recipe format):
 - `src/util/malloc/mod.rs` — Irreducible FFI wrappers. [Phase 2 confirmed]
 - `src/mmtk.rs` — Irreducible UnsafeCell access and circular initialization. [Phase 2 confirmed]
 - `src/policy/sft_map.rs` — Transmutes are irreducible due to fat pointer provenance. [Phase 2 confirmed]
-- `src/policy/marksweepspace/native_ms/global.rs` — Unsafe impl Sync required for BlockPageResource, and pointer casts for work packets are irreducible. [Phase 2 confirmed]
+- `src/policy/marksweepspace/native_ms/global.rs` — Unsafe impl Sync required for BlockPageResource. (Pointer casts for work packets were removed in Phase 2). [Phase 2 confirmed]
 - `src/util/erase_vm.rs` — Erased VM references are used to bypass generic type parameters in object-safe traits (SFT), and are necessary for performance and design. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
