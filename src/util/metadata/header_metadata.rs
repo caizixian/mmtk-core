@@ -163,12 +163,10 @@ impl HeaderMetadataSpec {
 
             FromPrimitive::from_u8(self.get_bits_from_u8(byte_val)).unwrap()
         } else {
-            unsafe {
-                if let Some(order) = atomic_ordering {
-                    T::load_atomic(self.meta_addr(header), order)
-                } else {
-                    (self.meta_addr(header)).load::<T>()
-                }
+            if let Some(order) = atomic_ordering {
+                MetadataSlot(self.meta_addr(header)).load_atomic_val::<T>(order)
+            } else {
+                MetadataSlot(self.meta_addr(header)).load_val::<T>()
             }
         };
 
@@ -235,25 +233,23 @@ impl HeaderMetadataSpec {
             }
         } else {
             let addr = self.meta_addr(header);
-            unsafe {
-                if let Some(order) = atomic_ordering {
-                    // if the optional mask is provided (e.g. for forwarding pointer), we need to use compare_exchange
-                    if let Some(mask) = optional_mask {
-                        let _ = T::fetch_update(addr, order, order, |old_val: T| {
-                            Some(old_val.bitand(mask.inv()).bitor(val.bitand(mask)))
-                        });
-                    } else {
-                        T::store_atomic(addr, val, order);
-                    }
+            if let Some(order) = atomic_ordering {
+                // if the optional mask is provided (e.g. for forwarding pointer), we need to use compare_exchange
+                if let Some(mask) = optional_mask {
+                    let _ = MetadataSlot(addr).fetch_update_val(order, order, |old_val: T| {
+                        Some(old_val.bitand(mask.inv()).bitor(val.bitand(mask)))
+                    });
                 } else {
-                    let val = if let Some(mask) = optional_mask {
-                        let old_val = T::load(addr);
-                        old_val.bitand(mask.inv()).bitor(val.bitand(mask))
-                    } else {
-                        val
-                    };
-                    T::store(addr, val);
+                    MetadataSlot(addr).store_atomic_val(val, order);
                 }
+            } else {
+                let val = if let Some(mask) = optional_mask {
+                    let old_val = MetadataSlot(addr).load_val::<T>();
+                    old_val.bitand(mask.inv()).bitor(val.bitand(mask))
+                } else {
+                    val
+                };
+                MetadataSlot(addr).store_val(val);
             }
         }
     }
@@ -292,7 +288,7 @@ impl HeaderMetadataSpec {
         } else {
             let addr = self.meta_addr(header);
             let (old_metadata, new_metadata) = if let Some(mask) = optional_mask {
-                let old_byte = unsafe { T::load_atomic(addr, success_order) };
+                let old_byte = MetadataSlot(addr).load_atomic_val::<T>(success_order);
                 let expected_new_byte = old_byte.bitand(mask.inv()).bitor(new_metadata);
                 let expected_old_byte = old_byte.bitand(mask.inv()).bitor(old_metadata);
                 (expected_old_byte, expected_new_byte)
@@ -300,15 +296,12 @@ impl HeaderMetadataSpec {
                 (old_metadata, new_metadata)
             };
 
-            unsafe {
-                T::compare_exchange(
-                    addr,
-                    old_metadata,
-                    new_metadata,
-                    success_order,
-                    failure_order,
-                )
-            }
+            MetadataSlot(addr).compare_exchange_val(
+                old_metadata,
+                new_metadata,
+                success_order,
+                failure_order,
+            )
         }
     }
 
@@ -347,7 +340,7 @@ impl HeaderMetadataSpec {
             }))
             .unwrap()
         } else {
-            unsafe { T::fetch_add(self.meta_addr(header), val, order) }
+            MetadataSlot(self.meta_addr(header)).fetch_add_val(val, order)
         }
     }
 
@@ -361,7 +354,7 @@ impl HeaderMetadataSpec {
             }))
             .unwrap()
         } else {
-            unsafe { T::fetch_sub(self.meta_addr(header), val, order) }
+            MetadataSlot(self.meta_addr(header)).fetch_sub_val(val, order)
         }
     }
 
@@ -378,7 +371,7 @@ impl HeaderMetadataSpec {
             let old_val = self.get_bits_from_u8(old_raw_byte);
             FromPrimitive::from_u8(old_val).unwrap()
         } else {
-            unsafe { T::fetch_and(self.meta_addr(header), val, order) }
+            MetadataSlot(self.meta_addr(header)).fetch_and_val(val, order)
         }
     }
 
@@ -395,7 +388,7 @@ impl HeaderMetadataSpec {
             let old_val = self.get_bits_from_u8(old_raw_byte);
             FromPrimitive::from_u8(old_val).unwrap()
         } else {
-            unsafe { T::fetch_or(self.meta_addr(header), val, order) }
+            MetadataSlot(self.meta_addr(header)).fetch_or_val(val, order)
         }
     }
 
@@ -427,7 +420,7 @@ impl HeaderMetadataSpec {
             .map(|raw_byte| FromPrimitive::from_u8(self.get_bits_from_u8(raw_byte)).unwrap())
             .map_err(|raw_byte| FromPrimitive::from_u8(self.get_bits_from_u8(raw_byte)).unwrap())
         } else {
-            unsafe { T::fetch_update(self.meta_addr(header), set_order, fetch_order, f) }
+            MetadataSlot(self.meta_addr(header)).fetch_update_val(set_order, fetch_order, f)
         }
     }
 }

@@ -10,8 +10,9 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/header_metadata.rs` — Check if remaining unsafe blocks can be reduced further using `MetadataSlot` or other abstractions. — expected Δ: ?
-2. 🟡 MED: `src/util/metadata/side_metadata/global.rs` — Centralize unsafe raw memory accesses or document as irreducible. — expected Δ: ?
+1. 🔴 HIGH: `src/util/heap/freelistpageresource.rs` — Audit unsafe blocks and see if they can be replaced with safe abstractions. — expected Δ: ?
+2. 🟡 MED: `src/scheduler/gc_work.rs` — Audit unsafe blocks, especially `Send` impls and pointer derefs. — expected Δ: ?
+3. 🟢 LOW: `src/policy/marksweepspace/malloc_ms/global.rs` — Audit unsafe blocks. — expected Δ: ?
 
 ## Patterns Discovered
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
@@ -28,7 +29,8 @@
 - Using `store_atomic` to replace raw stores in metadata updates, allowing helper functions to be safe and eliminating `unsafe` blocks at call sites.
 - Using references instead of raw pointers in test slots when the slots borrow from local variables in tests. This eliminates unsafe dereferences and `unsafe impl Send`.
 - Replacing non-atomic `load`/`store` on `SideMetadataSpec` with `load_atomic`/`store_atomic` (with `Relaxed` or `SeqCst`) to remove `unsafe` blocks at call sites.
-- **New Pattern**: Replacing `UnsafeCell` with `Mutex` for global state that is accessed via shared references, eliminating unsafe mutable access.
+- Replacing `UnsafeCell` with `Mutex` for global state that is accessed via shared references, eliminating unsafe mutable access.
+- **New Pattern**: Extending `MetadataSlot` with generic methods for `MetadataValue` allows centralizing unsafe operations on types larger than `u8` (like `u16`, `u32`, `usize`) and removing unsafe blocks at call sites in `header_metadata.rs` and `global.rs`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/metadata/side_metadata/helpers.rs` — All unsafe removed by using `MetadataSlot`. [Phase 2 confirmed]
@@ -52,3 +54,4 @@
 
 ## Abstraction Proposals (for Phase 2)
 - Implemented `SideMetadataSpecBlockExt` in `src/policy/marksweepspace/native_ms/block.rs` to abstract metadata accesses.
+- Extended `MetadataSlot` in `src/util/metadata/side_metadata/global.rs` to support generic `MetadataValue` operations.

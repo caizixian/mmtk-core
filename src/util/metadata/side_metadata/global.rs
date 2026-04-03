@@ -61,6 +61,55 @@ impl MetadataSlot {
     pub(crate) fn store_non_atomic(&self, val: u8) {
         unsafe { self.0.store::<u8>(val) }
     }
+
+    pub(crate) fn load_val<T: MetadataValue>(&self) -> T {
+        unsafe { T::load(self.0) }
+    }
+
+    pub(crate) fn load_atomic_val<T: MetadataValue>(&self, order: Ordering) -> T {
+        unsafe { T::load_atomic(self.0, order) }
+    }
+
+    pub(crate) fn store_val<T: MetadataValue>(&self, val: T) {
+        unsafe { T::store(self.0, val) }
+    }
+
+    pub(crate) fn store_atomic_val<T: MetadataValue>(&self, val: T, order: Ordering) {
+        unsafe { T::store_atomic(self.0, val, order) }
+    }
+
+    pub(crate) fn compare_exchange_val<T: MetadataValue>(
+        &self,
+        old: T,
+        new: T,
+        success: Ordering,
+        failure: Ordering,
+    ) -> std::result::Result<T, T> {
+        unsafe { T::compare_exchange(self.0, old, new, success, failure) }
+    }
+
+    pub(crate) fn fetch_add_val<T: MetadataValue>(&self, val: T, order: Ordering) -> T {
+        unsafe { T::fetch_add(self.0, val, order) }
+    }
+
+    pub(crate) fn fetch_sub_val<T: MetadataValue>(&self, val: T, order: Ordering) -> T {
+        unsafe { T::fetch_sub(self.0, val, order) }
+    }
+
+    pub(crate) fn fetch_and_val<T: MetadataValue>(&self, val: T, order: Ordering) -> T {
+        unsafe { T::fetch_and(self.0, val, order) }
+    }
+
+    pub(crate) fn fetch_or_val<T: MetadataValue>(&self, val: T, order: Ordering) -> T {
+        unsafe { T::fetch_or(self.0, val, order) }
+    }
+
+    pub(crate) fn fetch_update_val<T: MetadataValue, F>(&self, set_order: Ordering, fetch_order: Ordering, f: F) -> std::result::Result<T, T>
+    where
+        F: FnMut(T) -> Option<T>,
+    {
+        unsafe { T::fetch_update(self.0, set_order, fetch_order, f) }
+    }
 }
 
 /// This struct stores the specification of a side metadata bit-set.
@@ -642,7 +691,7 @@ impl SideMetadataSpec {
                     let byte_val = MetadataSlot(meta_addr).load(order);
                     FromPrimitive::from_u8((byte_val & mask) >> lshift).unwrap()
                 } else {
-                    unsafe { T::load_atomic(meta_addr, order) }
+                    MetadataSlot(meta_addr).load_atomic_val::<T>(order)
                 }
             },
             |_v| {
@@ -669,9 +718,7 @@ impl SideMetadataSpec {
                         Some((v & !mask) | (metadata_u8 << lshift))
                     });
                 } else {
-                    unsafe {
-                        T::store_atomic(meta_addr, metadata, order);
-                    }
+                    MetadataSlot(meta_addr).store_atomic_val(metadata, order);
                 }
             },
             |_| {
