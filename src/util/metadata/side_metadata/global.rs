@@ -193,6 +193,14 @@ impl SideMetadataSpec {
         MMAPPER.is_mapped_address(meta_addr)
     }
 
+    /// Get a `MetadataSlot` for the given data address.
+    pub fn slot_for<T: MetadataValue>(&self, data_addr: Address) -> MetadataSlot<T> {
+        let meta_addr = address_to_meta_address(self, data_addr);
+        // SAFETY: `address_to_meta_address` computes a valid metadata address for the given data address.
+        // The caller must ensure the data address is within the heap range handled by this spec.
+        unsafe { MetadataSlot::new_unchecked(meta_addr) }
+    }
+
     /// This method is used for bulk zeroing side metadata for a data address range.
     pub(crate) fn zero_meta_bits(
         meta_start_addr: Address,
@@ -448,10 +456,13 @@ impl SideMetadataSpec {
                     // we are setting selected bits in one byte
                     let mask: u8 = !(u8::MAX.checked_shl(bit_end as u32).unwrap_or(0))
                         & (u8::MAX << bit_start); // Get a mask that the bits we need to set are 1, and the other bits are 0.
-                    let old_src = unsafe { src.as_ref::<AtomicU8>() }.load(Ordering::Relaxed);
-                    let old_dst = unsafe { dst.as_ref::<AtomicU8>() }.load(Ordering::Relaxed);
+                    let (src_slot, dst_slot) = unsafe {
+                        (MetadataSlot::<u8>::new_unchecked(src), MetadataSlot::<u8>::new_unchecked(dst))
+                    };
+                    let old_src = src_slot.load_atomic(Ordering::Relaxed);
+                    let old_dst = dst_slot.load_atomic(Ordering::Relaxed);
                     let new = (old_src & mask) | (old_dst & !mask);
-                    unsafe { dst.as_ref::<AtomicU8>() }.store(new, Ordering::Relaxed);
+                    dst_slot.store_atomic(new, Ordering::Relaxed);
                     false
                 }
             }
@@ -588,15 +599,14 @@ impl SideMetadataSpec {
             data_addr,
             None,
             || {
-                let meta_addr = address_to_meta_address(self, data_addr);
                 let bits_num_log = self.log_num_of_bits;
                 if bits_num_log < 3 {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
-                    let byte_val = unsafe { meta_addr.atomic_load::<AtomicU8>(order) };
+                    let byte_val = self.slot_for::<u8>(data_addr).load_atomic(order);
                     FromPrimitive::from_u8((byte_val & mask) >> lshift).unwrap()
                 } else {
-                    unsafe { T::load_atomic(meta_addr, order) }
+                    self.slot_for::<T>(data_addr).load_atomic(order)
                 }
             },
             |_v| {
@@ -613,21 +623,16 @@ impl SideMetadataSpec {
             data_addr,
             Some(metadata),
             || {
-                let meta_addr = address_to_meta_address(self, data_addr);
                 let bits_num_log = self.log_num_of_bits;
                 if bits_num_log < 3 {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
                     let metadata_u8 = metadata.to_u8().unwrap();
-                    let _ = unsafe {
-                        <u8 as MetadataValue>::fetch_update(meta_addr, order, order, |v: u8| {
-                            Some((v & !mask) | (metadata_u8 << lshift))
-                        })
-                    };
+                    let _ = self.slot_for::<u8>(data_addr).fetch_update(order, order, |v: u8| {
+                        Some((v & !mask) | (metadata_u8 << lshift))
+                    });
                 } else {
-                    unsafe {
-                        T::store_atomic(meta_addr, metadata, order);
-                    }
+                    self.slot_for::<T>(data_addr).store_atomic(metadata, order);
                 }
             },
             |_| {
