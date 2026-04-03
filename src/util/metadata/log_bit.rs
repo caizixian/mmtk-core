@@ -26,13 +26,9 @@ impl VMGlobalLogBitSpec {
         match self.as_spec() {
             // If the log bit is in the header, there is nothing we can do. We just call `mark_as_unlogged`.
             MetadataSpec::InHeader(_) => self.mark_as_unlogged::<VM>(object, order),
-            // If the log bit is in the side metadata, we can simply set the entire byte to 0xff. Because we
-            // know we are setting log bit for mature space, and every object in the space should have log
-            // bit as 1.
-            // SAFETY: Setting adjacent bits to 1 is benign because all objects in this space should have log bit as 1.
-            MetadataSpec::OnSide(spec) => unsafe {
-                spec.set_raw_byte_atomic(object.to_raw_address(), order)
-            },
+            // If the log bit is in the side metadata, we could set the entire byte to 0xff as an optimization.
+            // However, that requires unsafe code. We fall back to `mark_as_unlogged` to keep code safe.
+            MetadataSpec::OnSide(_) => self.mark_as_unlogged::<VM>(object, order),
         }
     }
 

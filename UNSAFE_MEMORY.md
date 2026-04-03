@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 197 | Δ: -154
+- Starting count: 351 | Current: 196 | Δ: -155
 - Phase: 3 (Irreducible Documentation)
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -33,3 +33,4 @@
 - `src/util/raw_memory_freelist.rs` — Remaining unsafe are `from_raw_parts` to create slice views of raw memory. [Phase 3 confirmed]
 - `src/util/metadata/global.rs` — Unsafe fns for load/store are necessary as they are non-atomic. [Phase 3 confirmed]
 - `src/util/heap/pageresource.rs` — Documented irreducible unsafe calls to VMMap with SAFETY comments. [Phase 3 confirmed]
+- `src/util/metadata/log_bit.rs` — Completely safe after replacing unsafe optimization with safe fallback. [Phase 3 confirmed]
