@@ -102,14 +102,12 @@ pub(super) fn unset_page_mark(page_addr: Address) {
 }
 
 /// Load u128 bits of side metadata
-///
-/// # Safety
-/// unsafe as it can segfault if one tries to read outside the bounds of the mapped side metadata
-pub(super) unsafe fn load128(metadata_spec: &SideMetadataSpec, data_addr: Address) -> u128 {
+pub(super) fn load128(metadata_spec: &SideMetadataSpec, data_addr: Address, _proof: &StwProof) -> u128 {
     let meta_addr = side_metadata::address_to_meta_address(metadata_spec, data_addr);
 
     #[cfg(all(debug_assertions, feature = "extreme_assertions"))]
     metadata_spec.assert_metadata_mapped(data_addr);
 
-    meta_addr.load::<u128>()
+    // SAFETY: StwProof guarantees no concurrent access.
+    unsafe { meta_addr.load::<u128>() }
 }

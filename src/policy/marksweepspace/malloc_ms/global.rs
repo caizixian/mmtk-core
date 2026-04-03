@@ -714,13 +714,12 @@ impl<VM: VMBinding> MallocSpace<VM> {
 
             // Scan the chunk by every 'bulk_load_size' region.
             while address < chunk_end {
-                let alloc_128: u128 = unsafe {
-                    load128(
-                        &crate::util::metadata::vo_bit::VO_BIT_SIDE_METADATA_SPEC,
-                        address,
-                    )
-                };
-                let mark_128: u128 = unsafe { load128(&mark_bit_spec, address) };
+                let alloc_128: u128 = load128(
+                    &crate::util::metadata::vo_bit::VO_BIT_SIDE_METADATA_SPEC,
+                    address,
+                    &proof,
+                );
+                let mark_128: u128 = load128(&mark_bit_spec, address, &proof);
 
                 // Check if there are dead objects in the bulk loaded region
                 if alloc_128 ^ mark_128 != 0 {
