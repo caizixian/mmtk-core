@@ -109,18 +109,8 @@ unsafe impl<T> Sync for InitializeOnce<T> {}
 /// Create a formatted string that makes the best effort idenfying the current process and thread.
 pub fn debug_process_thread_id() -> String {
     let pid = std::process::id();
-    #[cfg(target_os = "linux")]
-    {
-        // `gettid()` is Linux-specific.
-        let tid = unsafe { libc::gettid() };
-        format!("PID: {}, TID: {}", pid, tid)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        // TODO: When we support other platforms, use platform-specific methods to get thread
-        // identifiers.
-        format!("PID: {}", pid)
-    }
+    let tid = std::thread::current().id();
+    format!("PID: {}, TID: {:?}", pid, tid)
 }
 
 #[cfg(test)]

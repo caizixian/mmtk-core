@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 347 | Δ: -375
+- Starting count: 722 | Current: 346 | Δ: -376
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,7 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/vo_bit/mod.rs:184` — Check if `find_prev_non_zero_value` can be made safe or wrapped. — expected Δ: 1
-2. 🔴 HIGH: `src/util/metadata/vo_bit/mod.rs:172` — Check if `load_raw_word` can be made safe or wrapped. — expected Δ: 1
+1. 🔴 HIGH: `src/policy/marksweepspace/malloc_ms/metadata.rs:29-111` — Check if `is_marked_unsafe` and other unsafe functions can be made safe or if unsafe can be encapsulated. — expected Δ: 1
 
 ## Patterns Discovered
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
@@ -47,12 +46,11 @@
 - `src/vm/tests/mock_tests/mock_test_slots.rs` — All unsafe removed by refactoring to use references in tests. [Phase 2 confirmed]
 - `src/policy/marksweepspace/native_ms/block.rs` — Remaining unsafe are irreducible raw memory accesses for free list and raw pointer dereferences. [Phase 2 confirmed]
 - `src/util/heap/layout/map32.rs` — Remaining unsafe are trait methods that must match the unsafe trait definition. [Phase 2 confirmed]
-- `src/util/rust_util/mod.rs` — `InitializeOnce` is a custom optimization for `SFT_MAP` to avoid checks on reads. Remaining unsafe in `gettid` is platform-specific. [Phase 2 confirmed]
+- `src/util/rust_util/mod.rs` — `InitializeOnce` is a custom optimization for `SFT_MAP` to avoid checks on reads. Unsafe in `gettid` removed. Remaining unsafe in `InitializeOnce` is irreducible for performance. [Phase 2 confirmed]
 - `src/util/metadata/side_metadata/side_metadata_tests.rs` — Remaining unsafe are irreducible raw memory accesses and allocation in tests. [Phase 2 confirmed]
 - `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are irreducible function signatures and raw memory copy. [Phase 2 confirmed]
 - `src/util/heap/blockpageresource.rs` — Remaining unsafe are irreducible UnsafeCell accesses in lock-free queue. [Phase 2 confirmed]
 - `src/util/malloc/malloc_ms_util.rs` — Irreducible FFI and raw pointer manipulation. [Phase 2 confirmed]
-- `src/policy/marksweepspace/malloc_ms/metadata.rs` — Remaining unsafe are non-atomic performance optimizations or low-level primitives (`load128`). [Phase 2 confirmed]
 - `docs/dummyvm/src/api.rs` — Irreducible FFI boundaries in dummy VM implementation. [Phase 2 confirmed]
 - `src/util/memory.rs` — Contains wrappers for FFI calls. The unsafe blocks are the FFI calls themselves. [Phase 2 confirmed]
 - `src/util/address.rs` — Primitives for address operations. Unsafe signatures are necessary. [Phase 2 confirmed]
@@ -70,3 +68,4 @@
 - `src/scheduler/affinity.rs` — Irreducible FFI interaction for thread affinity. [Phase 2 confirmed]
 - `src/scheduler/worker.rs` — Remaining unsafe are `Send`/`Sync` impls. Function body unsafe removed. [Phase 2 confirmed]
 - `src/util/erase_vm.rs` — Type erasure for non-'static references is irreducible without unsafe. [Phase 2 confirmed]
+- `src/util/metadata/vo_bit/mod.rs` — Unsafe calls to `load_raw_word` and `find_prev_non_zero_value` are wrapped in safe functions `get_raw_vo_bit_word` and `find_object_from_internal_pointer`. [Phase 2 confirmed]
