@@ -1112,7 +1112,7 @@ impl SideMetadataSpec {
         let mut visitor = |range: BitByteRange| {
             match range {
                 BitByteRange::Bytes { start, end } => {
-                    match helpers::find_last_non_zero_bit_in_metadata_bytes(start, end) {
+                    match helpers::find_last_non_zero_bit_in_metadata_bytes(self, start, end) {
                         helpers::FindMetaBitResult::Found { addr, bit } => {
                             let (addr, bit) = align_metadata_address(self, addr, bit);
                             res = Some(contiguous_meta_address_to_address(self, addr, bit));
@@ -1130,7 +1130,7 @@ impl SideMetadataSpec {
                     bit_start,
                     bit_end,
                 } => {
-                    match helpers::find_last_non_zero_bit_in_metadata_bits(addr, bit_start, bit_end)
+                    match helpers::find_last_non_zero_bit_in_metadata_bits(self, addr, bit_start, bit_end)
                     {
                         helpers::FindMetaBitResult::Found { addr, bit } => {
                             let (addr, bit) = align_metadata_address(self, addr, bit);
@@ -1237,7 +1237,7 @@ impl SideMetadataSpec {
         let mut visitor = |range| {
             match range {
                 BitByteRange::Bytes { start, end } => {
-                    helpers::scan_non_zero_bits_in_metadata_bytes(start, end, &mut |addr, bit| {
+                    helpers::scan_non_zero_bits_in_metadata_bytes(self, start, end, &mut |addr, bit| {
                         visit_data(helpers::contiguous_meta_address_to_address(self, addr, bit));
                     });
                 }
@@ -1246,6 +1246,7 @@ impl SideMetadataSpec {
                     bit_start,
                     bit_end,
                 } => helpers::scan_non_zero_bits_in_metadata_bits(
+                    self,
                     addr,
                     bit_start,
                     bit_end,

@@ -1,14 +1,14 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 493 | Current: 413 | Δ: -80
+- Starting count: 493 | Current: 409 | Δ: -84
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - `Address::from_usize` is marked unsafe by design to warn about invalid addresses. Replacing it with `ZERO.add` is considered an anti-pattern as it is semantically identical.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: Continue applying `slot_from_meta_addr` in `global.rs` and other metadata files to remove unsafe blocks.
+1. 🔴 HIGH: Investigate `MaybeUninit` usages in `src/util/heap/blockpageresource.rs` or `src/util/alloc/allocators.rs` for potential safe abstractions.
 2. 🟡 MED: Identify other `MaybeUninit` usages in the codebase and apply safe abstractions.
 3. 🟢 LOW: Check if other files have unnecessary `unsafe` on functions that can be made safe.
 
@@ -39,13 +39,13 @@
 - **Capability Token for Iterators**: Requiring `StwProof` in `ObjectIterator::new` when `ATOMIC_LOAD_VO_BIT` is false enforces safety at compile time and removes unsafe blocks from `next()`.
 - **Replacing get_unchecked with get_checked**: In `SFTProcessEdges::trace_object`, replaced `get_unchecked` with `get_checked` on `SFT_MAP` to remove an unsafe block, as the function is marked as unused/deprecated.
 - **StwProof for Header Metadata**: Applied `StwProof` to `HeaderMetadataSpec::load_stw` and `store_stw` and `ObjectModel::load_metadata` and `store_metadata` to make non-atomic header metadata access safe.
-
+- **Passing spec to helpers functions**: Added `&SideMetadataSpec` parameter to scanning functions in `helpers.rs` to use `slot_from_meta_addr` and remove unsafe blocks.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.
 - `src/policy/sft_map.rs` — Remaining unsafe are trait signatures and unavoidable transmutes for fat pointers in atomics.
 - `src/util/alloc/allocators.rs` — Remaining unsafe are centralized in `get_allocator` implementations using `assume_init_ref/mut` on `MaybeUninit` arrays, guarded by a runtime bitmap check.
-- `src/util/metadata/side_metadata/helpers.rs` — Remaining unsafe are raw loads in functions that scan metadata addresses directly without a spec.
+- `src/util/metadata/side_metadata/helpers.rs` — Remaining unsafe are raw loads in functions that scan metadata addresses directly without a spec. (Update: some removed by passing spec).
 - `src/util/metadata/metadata_val_traits.rs` — `MetadataValue` trait methods are unsafe by design as they perform raw memory access.
 - `src/util/metadata/side_metadata/side_metadata_tests.rs` — All unsafe are `Address::from_usize(...)` for creating test addresses.
 - `src/policy/marksweepspace/native_ms/block.rs` — Remaining unsafe are `Address::from_usize`, `ObjectReference::from_raw_address_unchecked`, and raw pointer dereferencing for `BlockList`.
@@ -57,7 +57,3 @@
 - `src/util/metadata/vo_bit/mod.rs` — Remaining unsafe is `from_raw_address_unchecked` in `get_object_ref_for_vo_addr` which is irreducible.
 - `src/util/heap/layout/map64.rs` — Remaining unsafe are trait signatures and unavoidable `from_usize` calls for reading high water mark.
 - `src/util/metadata/safe_access.rs` — Abstraction boundary for `MetadataSlot`.
-
-## Abstraction Proposals (for Phase 2)
-- **Safe Metadata Accessor**: `MetadataSlot` implemented in `safe_access.rs`. Used in `header_metadata.rs` and `global.rs`.
-- **StwProof**: Token to prove world is stopped, allowing safe non-atomic access to metadata. (Done)

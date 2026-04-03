@@ -248,6 +248,7 @@ pub enum FindMetaBitResult {
 
 // Check and find the last bit that is set. We try load words where possible, and fall back to load bytes.
 pub fn find_last_non_zero_bit_in_metadata_bytes(
+    spec: &SideMetadataSpec,
     meta_start: Address,
     meta_end: Address,
 ) -> FindMetaBitResult {
@@ -290,7 +291,7 @@ pub fn find_last_non_zero_bit_in_metadata_bytes(
 
         if step == BYTES_IN_ADDRESS {
             // Load and check a usize word
-            let value = unsafe { cur.load::<usize>() };
+            let value = spec.slot_from_meta_addr::<usize>(cur).load();
             if value != 0 {
                 let bit = find_last_non_zero_bit::<usize>(value, 0, usize::BITS as u8).unwrap();
                 let byte_offset = bit >> LOG_BITS_IN_BYTE;
@@ -302,7 +303,7 @@ pub fn find_last_non_zero_bit_in_metadata_bytes(
             }
         } else {
             // Load and check a byte
-            let value = unsafe { cur.load::<u8>() };
+            let value = spec.slot_from_meta_addr::<u8>(cur).load();
             if let Some(bit) = find_last_non_zero_bit::<u8>(value, 0, 8) {
                 return FindMetaBitResult::Found { addr: cur, bit };
             }
@@ -313,6 +314,7 @@ pub fn find_last_non_zero_bit_in_metadata_bytes(
 
 // Check and find the last non-zero bit in the same byte.
 pub fn find_last_non_zero_bit_in_metadata_bits(
+    spec: &SideMetadataSpec,
     addr: Address,
     start_bit: u8,
     end_bit: u8,
@@ -320,7 +322,7 @@ pub fn find_last_non_zero_bit_in_metadata_bits(
     if !addr.is_mapped() {
         return FindMetaBitResult::UnmappedMetadata;
     }
-    let byte = unsafe { addr.load::<u8>() };
+    let byte = spec.slot_from_meta_addr::<u8>(addr).load();
     if let Some(bit) = find_last_non_zero_bit::<u8>(byte, start_bit, end_bit) {
         return FindMetaBitResult::Found { addr, bit };
     }
@@ -347,6 +349,7 @@ where
 }
 
 pub fn scan_non_zero_bits_in_metadata_bytes(
+    spec: &SideMetadataSpec,
     meta_start: Address,
     meta_end: Address,
     visit_bit: &mut impl FnMut(Address, BitOffset),
@@ -355,19 +358,19 @@ pub fn scan_non_zero_bits_in_metadata_bytes(
 
     let mut cursor = meta_start;
     while cursor < meta_end && !cursor.is_aligned_to(BYTES_IN_ADDRESS) {
-        let byte = unsafe { cursor.load::<u8>() };
+        let byte = spec.slot_from_meta_addr::<u8>(cursor).load();
         scan_non_zero_bits_in_metadata_word(cursor, byte as usize, visit_bit);
         cursor += 1usize;
     }
 
     while cursor + BYTES_IN_ADDRESS < meta_end {
-        let word = unsafe { cursor.load::<usize>() };
+        let word = spec.slot_from_meta_addr::<usize>(cursor).load();
         scan_non_zero_bits_in_metadata_word(cursor, word, visit_bit);
         cursor += BYTES_IN_ADDRESS;
     }
 
     while cursor < meta_end {
-        let byte = unsafe { cursor.load::<u8>() };
+        let byte = spec.slot_from_meta_addr::<u8>(cursor).load();
         scan_non_zero_bits_in_metadata_word(cursor, byte as usize, visit_bit);
         cursor += 1usize;
     }
@@ -386,12 +389,13 @@ fn scan_non_zero_bits_in_metadata_word(
 }
 
 pub fn scan_non_zero_bits_in_metadata_bits(
+    spec: &SideMetadataSpec,
     meta_addr: Address,
     bit_start: BitOffset,
     bit_end: BitOffset,
     visit_bit: &mut impl FnMut(Address, BitOffset),
 ) {
-    let byte = unsafe { meta_addr.load::<u8>() };
+    let byte = spec.slot_from_meta_addr::<u8>(meta_addr).load();
     for bit in bit_start..bit_end {
         if byte & (1 << bit) != 0 {
             visit_bit(meta_addr, bit);
