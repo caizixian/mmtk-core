@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 523 | Δ: -199
-- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace (and native_ms/block.rs safe load_atomic), util/heap/layout/map32.rs (removed unnecessary unsafe block), util/heap/layout, util/copy, util/metadata/side_metadata, util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util, policy/sft_map (SFTMap update/eager_initialize take reference, remove unsafe in implementations), policy/marksweepspace/malloc_ms/global.rs (unnecessary SFT_MAP unsafe, safe page marks), policy/lockfreeimmortalspace.rs (unnecessary eager_initialize unsafe), mmtk.rs (removed unnecessary unsafe cast for GCTrigger mutation), policy/marksweepspace/malloc_ms/metadata.rs (safe page marks), util/metadata/side_metadata/global.rs (combined unsafe blocks in bcopy_metadata_contiguous)
+- Starting count: 722 | Current: 519 | Δ: -203
+- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace (and native_ms/block.rs safe load_atomic), util/heap/layout/map32.rs (removed unnecessary unsafe block), util/heap/layout, util/copy, util/metadata/side_metadata, util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util, policy/sft_map (SFTMap update/eager_initialize take reference, remove unsafe in implementations), policy/marksweepspace/malloc_ms/global.rs (unnecessary SFT_MAP unsafe, safe page marks), policy/lockfreeimmortalspace.rs (unnecessary eager_initialize unsafe), mmtk.rs (removed unnecessary unsafe cast for GCTrigger mutation), policy/marksweepspace/malloc_ms/metadata.rs (safe page marks), util/metadata/side_metadata/global.rs (combined unsafe blocks in bcopy_metadata_contiguous), util/heap/monotonepageresource.rs (made reset/release_pages safe), policy/copyspace.rs (removed unnecessary unsafe)
 
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -42,7 +42,8 @@
 - `*mut T = val` in tests → `MetadataValue::store(meta_addr, val)` — use abstractions instead of raw pointers in tests.
 
 ## Refactoring Ideas
-- Scan for other usages of non-atomic `SideMetadataSpec::load` that can be replaced with `load_atomic(Ordering::Relaxed)` to remove `unsafe` blocks.
+- Scan for other usages of non-atomic SideMetadataSpec::load that can be replaced with load_atomic(Ordering::Relaxed) to remove unsafe blocks.
+- Investigate `Mutator::allocator_impl_mut_for_semantic` in `src/plan/mutator_context.rs` to see if downcasting of raw trait objects can be made safer or abstracted.
 
 ## Files NOT to Revisit
 - `src/util/memory.rs` — FFI calls to libc (mmap, munmap, etc.).

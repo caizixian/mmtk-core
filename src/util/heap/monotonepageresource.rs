@@ -183,9 +183,9 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
         MonotonePageResource {
             common: CommonPageResource::new(false, true, vm_map),
             sync: Mutex::new(MonotonePageResourceSync {
-                cursor: unsafe { Address::zero() },
-                current_chunk: unsafe { Address::zero() },
-                sentinel: unsafe { Address::zero() },
+                cursor: Address::ZERO,
+                current_chunk: Address::ZERO,
+                sentinel: Address::ZERO,
                 conditional: MonotonePageResourceConditional::Discontiguous,
             }),
             _p: PhantomData,
@@ -214,15 +214,14 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
     }
 
     /// # Safety
-    /// TODO: I am not sure why this is unsafe.
-    pub unsafe fn reset(&self) {
+    pub fn reset(&self) {
         let mut guard = self.sync.lock().unwrap();
         self.common().accounting.reset();
         self.release_pages(&mut guard);
         drop(guard);
     }
 
-    pub unsafe fn get_current_chunk(&self) -> Address {
+    pub fn get_current_chunk(&self) -> Address {
         let guard = self.sync.lock().unwrap();
         guard.current_chunk
     }
@@ -309,7 +308,7 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
         }
     }
 
-    unsafe fn release_pages(&self, guard: &mut MutexGuard<MonotonePageResourceSync>) {
+    fn release_pages(&self, guard: &mut MutexGuard<MonotonePageResourceSync>) {
         // TODO: concurrent zeroing
         if self.common().contiguous {
             guard.cursor = match guard.conditional {
@@ -325,9 +324,9 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
                 self.release_pages_extent(guard.current_chunk, bytes);
             }
 
-            guard.current_chunk = Address::zero();
-            guard.sentinel = Address::zero();
-            guard.cursor = Address::zero();
+            guard.current_chunk = Address::ZERO;
+            guard.sentinel = Address::ZERO;
+            guard.cursor = Address::ZERO;
             self.common.release_all_chunks();
         }
     }
