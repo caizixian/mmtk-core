@@ -12,7 +12,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/util/metadata/side_metadata/global.rs` — Investigate if `MetadataSlot` helpers can be made safe by guaranteeing validity at creation time.
+1. 🟡 MED: `src/util/metadata/side_metadata/global.rs:550` — Investigate if `std::ptr::copy` in `bcopy_metadata_contiguous` can be replaced with a safe alternative or if it is irreducible.
 2. 🟡 MED: `src/util/address.rs` — Document safety invariants for core address operations.
 
 
@@ -44,6 +44,7 @@
 - **New**: Confirmed that making helper methods like `MetadataSlot::get_ref` `unsafe fn` would increase the count of unsafe blocks at call sites because the callers (like `Slot::load`) are often safe trait methods. Centralizing the unsafe block inside the helper is preferred to keep the count low.
 - **New**: Investigated using `StwProof` to make `SideMetadataSpec::load` and `store` safe. However, this would require all call sites to provide a proof, and if they don't have one, they would need to create it unsafely, pushing the unsafe to call sites.
 - **New**: Investigated changing `SFTMap::update` to take `&'static dyn SFT` to eliminate the unsafe cast in `get_sft_wrapper`. However, callers likely cannot prove `'static` to the compiler without leaking or unsafe casts, which would just move the unsafe to callers.
+- **New**: Investigated making `MetadataSlot` helpers safe by construction. Concluded it is not possible to remove the internal unsafe block as we must cross the raw pointer boundary. Current encapsulation is appropriate.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/heap/blockpageresource.rs` — Completely safe after removing `unsafe impl Sync` and adding `Send` bound to `Region` trait. [Phase 3 confirmed]
@@ -76,5 +77,6 @@
 - `src/vm/tests/mock_tests/mock_test_doc_avoid_resolving_allocator.rs` — Test file demonstrating low-level hack for performance. Verified safety comment. [Phase 3 confirmed]
 - `src/util/heap/space_descriptor.rs` — Completely safe after deriving `Zeroable`. [Phase 3 confirmed]
 - `src/util/metadata/side_metadata/ranges.rs` — Completely safe. No unsafe blocks. [Phase 3 confirmed]
+- `src/policy/marksweepspace/native_ms/block.rs` — Irreducible due to raw memory write in `BlockCell::store_link`. Encapsulated in abstraction. [Phase 3 confirmed]
 
 
