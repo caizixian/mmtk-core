@@ -52,6 +52,7 @@
 
 ## Files NOT to Revisit
 - `src/util/memory.rs` — FFI calls to libc (mmap, munmap, etc.).
+- `src/util/object_forwarding.rs` — Remaining unsafe is `Address::from_usize` (anti-pattern to replace with `ZERO.add`). Used `from_raw_address().unwrap()` to remove unchecked conversion.
 - src/util/heap/layout/map32.rs — Completed (no remaining unsafe blocks, removed `new_zeroed_vec` usage).
 - `src/util/heap/blockpageresource.rs` — Uses `new_zeroed_vec` for `BlockQueue`. Can be replaced with `vec![const { MaybeUninit::uninit() }; CAPACITY]` to remove transitive dependency on `new_zeroed_vec` and eventually delete `zeroed_alloc.rs`.
 - `src/util/heap/layout/map64.rs` — Remaining unsafe are trait methods or `Address::from_usize` (anti-pattern to replace with `ZERO.add`).
