@@ -37,8 +37,6 @@ pub struct UpdateReferences<VM: VMBinding> {
     p: PhantomData<VM>,
 }
 
-unsafe impl<VM: VMBinding> Send for UpdateReferences<VM> {}
-
 impl<VM: VMBinding> GCWork<VM> for UpdateReferences<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         // The following needs to be done right before the second round of root scanning

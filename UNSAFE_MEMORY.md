@@ -10,9 +10,7 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/plan/markcompact/mutator.rs:55` — Use safe wrapper `allocator_impl_mut_for_semantic`.
-2. 🟡 MED: `src/plan/marksweep/mutator.rs:69` — Use safe wrapper `allocator_impl_mut_for_semantic`.
-3. 🟡 MED: `src/plan/semispace/mutator.rs:23` — Use safe wrapper `allocator_impl_mut_for_semantic`.
+1. 🔴 HIGH: `src/util/int_array_freelist.rs:12-70` — Refactor to use `Arc<RwLock<Vec<i32>>>` (or similar) to eliminate `NonNull` and associated `unsafe` blocks. — expected Δ: 4
 
 ## Patterns Discovered
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
