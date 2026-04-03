@@ -655,14 +655,13 @@ impl SideMetadataSpec {
     ///
     /// 1. Concurrent access to this operation is undefined behaviour.
     /// 2. Interleaving Non-atomic and atomic operations is undefined behaviour.
-    pub unsafe fn set_zero(&self, data_addr: Address) {
+    pub fn set_zero(&self, data_addr: Address, _proof: &StwProof) {
         use num_traits::Zero;
-        let proof = unsafe { StwProof::new() };
         match self.log_num_of_bits {
-            0..=3 => self.store(data_addr, u8::zero(), &proof),
-            4 => self.store(data_addr, u16::zero(), &proof),
-            5 => self.store(data_addr, u32::zero(), &proof),
-            6 => self.store(data_addr, u64::zero(), &proof),
+            0..=3 => self.store(data_addr, u8::zero(), _proof),
+            4 => self.store(data_addr, u16::zero(), _proof),
+            5 => self.store(data_addr, u32::zero(), _proof),
+            6 => self.store(data_addr, u64::zero(), _proof),
             _ => unreachable!(),
         }
     }
@@ -1023,21 +1022,22 @@ impl SideMetadataSpec {
     /// This function uses non-atomic load for the side metadata. The user needs to make sure
     /// that there is no other thread that is mutating the side metadata.
     #[allow(clippy::let_and_return)]
-    pub unsafe fn find_prev_non_zero_value<T: MetadataValue>(
+    pub fn find_prev_non_zero_value<T: MetadataValue>(
         &self,
         data_addr: Address,
         search_limit_bytes: usize,
+        _proof: &StwProof,
     ) -> Option<Address> {
         debug_assert!(search_limit_bytes > 0);
 
         if self.uses_contiguous_side_metadata() {
             // Contiguous side metadata
-            let result = self.find_prev_non_zero_value_fast::<T>(data_addr, search_limit_bytes);
+            let result = self.find_prev_non_zero_value_fast::<T>(data_addr, search_limit_bytes, _proof);
             #[cfg(debug_assertions)]
             {
                 // Double check if the implementation is correct
                 let result2 =
-                    self.find_prev_non_zero_value_simple::<T>(data_addr, search_limit_bytes);
+                    self.find_prev_non_zero_value_simple::<T>(data_addr, search_limit_bytes, _proof);
                 assert_eq!(result, result2, "find_prev_non_zero_value_fast returned a diffrent result from the naive implementation.");
             }
             result
@@ -1046,7 +1046,7 @@ impl SideMetadataSpec {
             // is not contiguous, and we need to skip to the next chunk's side metadata when we search to a different chunk.
             // This won't be used for VO bit, as VO bit is global and is always contiguous. So for now, I am not bothered to do it.
             warn!("We are trying to search non zero bits in an discontiguous side metadata. The performance is slow, as MMTk does not optimize for this case.");
-            self.find_prev_non_zero_value_simple::<T>(data_addr, search_limit_bytes)
+            self.find_prev_non_zero_value_simple::<T>(data_addr, search_limit_bytes, _proof)
         }
     }
 
@@ -1054,13 +1054,13 @@ impl SideMetadataSpec {
         &self,
         data_addr: Address,
         search_limit_bytes: usize,
+        _proof: &StwProof,
     ) -> Option<Address> {
         let region_bytes = 1 << self.log_bytes_in_region;
         // Figure out the range that we need to search.
         let start_addr = data_addr.align_down(region_bytes);
         let end_addr = data_addr.saturating_sub(search_limit_bytes) + 1usize;
 
-        let proof = unsafe { StwProof::new() };
         let mut cursor = start_addr;
         while cursor >= end_addr {
             // We encounter an unmapped address. Just return None.
@@ -1068,7 +1068,7 @@ impl SideMetadataSpec {
                 return None;
             }
             // If we find non-zero value, just return it.
-            if !self.load::<T>(cursor, &proof).is_zero() {
+            if !self.load::<T>(cursor, _proof).is_zero() {
                 return Some(cursor);
             }
             cursor -= region_bytes;
@@ -1081,16 +1081,16 @@ impl SideMetadataSpec {
         &self,
         data_addr: Address,
         search_limit_bytes: usize,
+        _proof: &StwProof,
     ) -> Option<Address> {
         debug_assert!(self.uses_contiguous_side_metadata());
 
-        let proof = unsafe { StwProof::new() };
         // Quick check if the data address is mapped at all.
         if !data_addr.is_mapped() {
             return None;
         }
         // Quick check if the current data_addr has a non zero value.
-        if !self.load::<T>(data_addr, &proof).is_zero() {
+        if !self.load::<T>(data_addr, _proof).is_zero() {
             return Some(data_addr.align_down(1 << self.log_bytes_in_region));
         }
 
@@ -2078,7 +2078,10 @@ mod tests {
 
                         // Find the value starting from data_addr, at max 8 bytes.
                         // We should find data_addr
-                        let res_addr = unsafe { spec.find_prev_non_zero_value::<$type>(data_addr, 8) };
+                        let res_addr = unsafe {
+                            let proof = StwProof::new();
+                            spec.find_prev_non_zero_value::<$type>(data_addr, 8, &proof)
+                        };
                         assert!(res_addr.is_some());
                         assert_eq!(res_addr.unwrap(), data_addr);
                     });
@@ -2096,7 +2099,10 @@ mod tests {
                         for len in 1..(test_region*4) {
                             let start_addr = data_addr + len;
                             // Use len+1, as len is non inclusive.
-                            let res_addr = unsafe { spec.find_prev_non_zero_value::<$type>(start_addr, len + 1) };
+                            let res_addr = unsafe {
+                                let proof = StwProof::new();
+                                spec.find_prev_non_zero_value::<$type>(start_addr, len + 1, &proof)
+                            };
                             assert!(res_addr.is_some());
                             assert_eq!(res_addr.unwrap(), data_addr);
                         }
@@ -2115,7 +2121,10 @@ mod tests {
                             spec.store_atomic::<$type>(test_data_addr, max_value, Ordering::SeqCst);
 
                             // The return result should be aligned
-                            let res_addr = unsafe { spec.find_prev_non_zero_value::<$type>(test_data_addr, 4096) };
+                            let res_addr = unsafe {
+                                let proof = StwProof::new();
+                                spec.find_prev_non_zero_value::<$type>(test_data_addr, 4096, &proof)
+                            };
                             assert!(res_addr.is_some());
                             assert_eq!(res_addr.unwrap(), data_addr);
 
@@ -2136,7 +2145,10 @@ mod tests {
                         for len in 1..(test_region*4) {
                             let start_addr = data_addr + len;
                             // Use len+1, as len is non inclusive.
-                            let res_addr = unsafe { spec.find_prev_non_zero_value::<$type>(start_addr, len + 1) };
+                            let res_addr = unsafe {
+                                let proof = StwProof::new();
+                                spec.find_prev_non_zero_value::<$type>(start_addr, len + 1, &proof)
+                            };
                             assert!(res_addr.is_none());
                         }
                     });

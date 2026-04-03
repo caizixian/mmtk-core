@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 531 | Current: 512 | Δ: -19 (Harness reported 512 at start of this turn)
+- Starting count: 493 | Current: 488 (est) | Δ: -5
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -9,7 +9,7 @@
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
 1. 🔴 HIGH: Continue applying `slot_from_meta_addr` in `global.rs` and other metadata files to remove unsafe blocks.
-2. 🟡 MED: Identify other `MaybeUninit` usages in the codebase and apply safe abstractions (like the bitmap check in `Allocators`).
+2. 🟡 MED: Identify other `MaybeUninit` usages in the codebase and apply safe abstractions.
 
 ## Patterns Discovered
 - `MaybeUninit` arrays of size 1 can be replaced with `Option` and `unwrap()` to eliminate unsafe access.
