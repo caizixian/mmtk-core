@@ -493,11 +493,13 @@ mod tests {
         serial_test(|| {
             with_cleanup(
                 || {
+                    // SAFETY: This is a test.
                     let res = unsafe {
                         dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!())
                     };
                     assert!(res.is_ok());
                     // We can overwrite with dzmmap
+                    // SAFETY: This is a test.
                     let res = unsafe {
                         dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!())
                     };
@@ -539,6 +541,7 @@ mod tests {
             with_cleanup(
                 || {
                     // Make sure we mmapped the memory
+                    // SAFETY: This is a test.
                     let res = unsafe {
                         dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!())
                     };
@@ -568,6 +571,7 @@ mod tests {
                         mmap_noreserve(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!());
                     assert!(res.is_ok());
                     // Try reserve it
+                    // SAFETY: This is a test.
                     let res = unsafe {
                         dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!())
                     };

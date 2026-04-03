@@ -21,6 +21,7 @@ use crate::MMTK;
 
 /// Manually allocate memory. Similar to libc's malloc.
 pub fn malloc(size: usize) -> Address {
+    // SAFETY: This is a thin wrapper around C malloc. It is safe to call with any size.
     Address::from_mut_ptr(unsafe { self::library::malloc(size) })
 }
 
@@ -37,6 +38,7 @@ pub fn counted_malloc<VM: VMBinding>(mmtk: &MMTK<VM>, size: usize) -> Address {
 
 /// Manually allocate memory and initialize the bytes in the allocated memory to zero. Similar to libc's calloc.
 pub fn calloc(num: usize, size: usize) -> Address {
+    // SAFETY: This is a thin wrapper around C calloc. It is safe to call with any arguments.
     Address::from_mut_ptr(unsafe { self::library::calloc(num, size) })
 }
 
@@ -53,6 +55,7 @@ pub fn counted_calloc<VM: VMBinding>(mmtk: &MMTK<VM>, num: usize, size: usize) -
 
 /// Reallocate the given area of memory. Similar to libc's realloc.
 pub fn realloc(addr: Address, size: usize) -> Address {
+    // SAFETY: This is a thin wrapper around C realloc. The caller must ensure `addr` is a valid pointer returned by malloc/calloc/realloc.
     Address::from_mut_ptr(unsafe { self::library::realloc(addr.to_mut_ptr(), size) })
 }
 
@@ -80,6 +83,7 @@ pub fn realloc_with_old_size<VM: VMBinding>(
 
 /// Manually free the memory that is returned from other manual allocation functions in this module.
 pub fn free(addr: Address) {
+    // SAFETY: This is a thin wrapper around C free. The caller must ensure `addr` is a valid pointer returned by malloc/calloc/realloc.
     unsafe { self::library::free(addr.to_mut_ptr()) }
 }
 
