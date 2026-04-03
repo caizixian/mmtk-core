@@ -64,6 +64,8 @@
 - Static plan references are needed because plan types are generic and cannot be stored in global statics easily.
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 - `SFTRefStorage::load` returns a reference lock-free and thus requires leaked or static data to be sound without hazard pointers or Arc overhead.
+- `StwProof` is a capability token created via runtime check on GC status. Refactoring it to be passed from the stop-the-world source of truth would require extensive changes to scheduler and work packet traits.
+- `SFTWrapper` uses unsafe to extend the lifetime of space references to `'static` to store them in a global map. This is justified because spaces are globally allocated and live forever, but Rust cannot infer this from the `Box<dyn Plan>` ownership.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
 - No actionable items remaining. Project is in Phase 3.
@@ -111,7 +113,7 @@
 - `src/policy/sft_map.rs` — Lifetime extension in `get_sft_wrapper` is necessary to return `&'static` from a short-lived reference, justified by spaces living forever. [Phase 3 confirmed]
 - `src/util/raw_memory_freelist.rs` — Remaining unsafe is a single `from_raw_parts_mut` call in `grow_list_by_blocks` to create a slice view of raw memory. [Phase 3 confirmed]
 - `src/util/metadata/global.rs` — Unsafe fns for load/store are necessary as they are non-atomic. [Phase 3 confirmed]
-- `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are in `MetadataSlot` helpers, memory copy, and tests calling unsafe functions. [Phase 3 confirmed]
+- `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are in `MetadataSlot` helpers, memory copy, and tests calling unsafe functions. Side metadata uses raw memory operations and assumes the caller ensures valid access. [Phase 3 confirmed]
 - `src/util/heap/pageresource.rs` — Completely safe after removing unnecessary unsafe blocks. [Phase 3 confirmed]
 - `src/util/heap/layout/map.rs` — Completely safe after removing unsafe from trait definition. [Phase 3 confirmed]
 - `src/util/metadata/log_bit.rs` — Completely safe after replacing unsafe optimization with safe fallback. [Phase 3 confirmed]
