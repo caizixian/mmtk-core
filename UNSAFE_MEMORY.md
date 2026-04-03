@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 232 | Δ: -119
+- Starting count: 351 | Current: 229 | Δ: -122
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -11,7 +11,7 @@ Architectural insights that affect ALL future safety decisions:
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs` — Investigate if any unsafe can be reduced or abstracted — expected Δ: ?
+1. 🟢 LOW: `src/util/metadata/side_metadata/helpers.rs:90-110` — Check if test utilities can be refactored to use safer abstractions — expected Δ: 0
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):

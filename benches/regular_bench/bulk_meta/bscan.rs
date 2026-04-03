@@ -7,12 +7,7 @@ use mmtk::util::{
 use rand::{seq::IteratorRandom, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
-fn allocate_aligned(size: usize) -> Address {
-    let ptr = unsafe {
-        std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(size, size).unwrap())
-    };
-    Address::from_mut_ptr(ptr)
-}
+
 
 const BLOCK_BYTES: usize = 32768usize; // Match an Immix block size.
 
@@ -40,27 +35,32 @@ struct PreparedBitmap {
 
 /// Make a bitmap of the desired size and set bits.
 fn make_standard_bitmap() -> PreparedBitmap {
-    let start = allocate_aligned(BLOCK_META_BYTES);
-    let end = start + BLOCK_META_BYTES;
+    let mut vec = vec![0usize; BLOCK_META_BYTES / std::mem::size_of::<usize>()];
     let mut rng = get_rng();
 
-    let mut set_bits = (0..(BLOCK_BYTES >> LOG_BITS_IN_WORD))
-        .choose_multiple(&mut rng, NUM_OBJECTS)
-        .iter()
+    let mut offsets = (0..(BLOCK_BYTES >> LOG_BITS_IN_WORD))
+        .choose_multiple(&mut rng, NUM_OBJECTS);
+    offsets.sort();
+
+    for &total_bit_offset in offsets.iter() {
+        let word_offset = total_bit_offset >> LOG_BITS_IN_WORD;
+        let bit_offset = total_bit_offset & ((1 << LOG_BITS_IN_WORD) - 1);
+        vec[word_offset] |= 1 << bit_offset;
+    }
+
+    let boxed_slice = vec.into_boxed_slice();
+    let leaked_slice = Box::leak(boxed_slice);
+    let start = Address::from_mut_ptr(leaked_slice.as_mut_ptr() as *mut u8);
+    let end = start + BLOCK_META_BYTES;
+
+    let set_bits = offsets
+        .into_iter()
         .map(|total_bit_offset| {
             let word_offset = total_bit_offset >> LOG_BITS_IN_WORD;
             let bit_offset = total_bit_offset & ((1 << LOG_BITS_IN_WORD) - 1);
             (start + (word_offset << LOG_BITS_IN_WORD), bit_offset as u8)
         })
         .collect::<Vec<_>>();
-
-    set_bits.sort();
-
-    for (addr, bit) in set_bits.iter() {
-        let word = unsafe { addr.load::<usize>() };
-        let new_word = word | (1 << bit);
-        unsafe { addr.store::<usize>(new_word) };
-    }
 
     PreparedBitmap {
         start,
