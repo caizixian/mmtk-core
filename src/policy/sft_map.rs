@@ -177,7 +177,7 @@ mod space_map {
         space_address_end: Address,
     }
 
-    unsafe impl Sync for SFTSpaceMap {}
+
 
     impl SFTMap for SFTSpaceMap {
         fn has_sft_entry(&self, addr: Address) -> bool {
@@ -341,7 +341,7 @@ mod dense_chunk_map {
         index_map: HashMap<String, usize>,
     }
 
-    unsafe impl Sync for SFTDenseChunkMap {}
+
 
     impl SFTMap for SFTDenseChunkMap {
         fn has_sft_entry(&self, addr: Address) -> bool {
@@ -467,7 +467,7 @@ mod sparse_chunk_map {
         sft: Vec<SFTRefStorage>,
     }
 
-    unsafe impl Sync for SFTSparseChunkMap {}
+
 
     impl SFTMap for SFTSparseChunkMap {
         fn has_sft_entry(&self, addr: Address) -> bool {
