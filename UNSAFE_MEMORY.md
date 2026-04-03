@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 439 | Δ: -283
+- Starting count: 722 | Current: 433 | Δ: -289
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,9 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/plan/mutator_context.rs:290-340` — Investigate safe wrappers for `get_allocator` calls.
+1. 🟡 MED: `src/plan/markcompact/mutator.rs:55` — Use safe wrapper `allocator_impl_mut_for_semantic`.
+2. 🟡 MED: `src/plan/marksweep/mutator.rs:69` — Use safe wrapper `allocator_impl_mut_for_semantic`.
+3. 🟡 MED: `src/plan/semispace/mutator.rs:23` — Use safe wrapper `allocator_impl_mut_for_semantic`.
 
 ## Patterns Discovered
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
@@ -34,6 +36,7 @@
 - **New Pattern**: Refactor `GCTrigger` to use `OnceLock` instead of `MaybeUninit` to remove `unsafe` in `plan()` and avoid `&mut` cast in `MMTK::new`.
 - **New Pattern**: Adding a safe `get_plan_mut_safe` to `MMTK` taking `&mut self` allows removing `unsafe` blocks when exclusive access to `MMTK` is available (e.g., in `set_vm_space`).
 - **New Pattern**: Replacing unsafe non-atomic `load` on `MetadataSpec` with safe `load_atomic` with `Relaxed` ordering when logic allows (e.g. monotonic transitions).
+- **New Pattern**: Using safe wrappers in `Mutator` (like `allocator_impl_mut_for_semantic`) in plan-specific mutators to eliminate direct unsafe calls to `allocators.get_allocator_mut`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/metadata/side_metadata/helpers.rs` — All unsafe removed by using `MetadataSlot`. [Phase 2 confirmed]
