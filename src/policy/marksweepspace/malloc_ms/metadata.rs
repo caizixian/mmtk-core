@@ -67,6 +67,10 @@ pub(super) fn set_page_mark(page_addr: Address) {
     ACTIVE_PAGE_METADATA_SPEC.store_atomic::<u8>(page_addr, 1, Ordering::SeqCst);
 }
 
+pub(super) fn unset_page_mark(page_addr: Address) {
+    ACTIVE_PAGE_METADATA_SPEC.store_atomic::<u8>(page_addr, 0, Ordering::SeqCst);
+}
+
 /// Is this allocation an offset malloc? The argument address should be the allocation address (object start)
 pub(super) fn is_offset_malloc(address: Address) -> bool {
     unsafe { OFFSET_MALLOC_METADATA_SPEC.load::<u8>(address) == 1 }
@@ -75,6 +79,10 @@ pub(super) fn is_offset_malloc(address: Address) -> bool {
 /// Set the offset bit for the allocation. The argument address should be the allocation address (object start)
 pub(super) fn set_offset_malloc_bit(address: Address) {
     OFFSET_MALLOC_METADATA_SPEC.store_atomic::<u8>(address, 1, Ordering::SeqCst);
+}
+
+pub(super) fn unset_offset_malloc_bit(address: Address) {
+    OFFSET_MALLOC_METADATA_SPEC.store_atomic::<u8>(address, 0, Ordering::SeqCst);
 }
 
 /// Unset the offset bit for the allocation. The argument address should be the allocation address (object start)

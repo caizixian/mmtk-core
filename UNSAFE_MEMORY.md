@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 540 | Δ: -182
+- Starting count: 722 | Current: 535 | Δ: -187
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/policy/marksweepspace/malloc_ms/global.rs:357-870` — Continue investigating unsafe blocks in malloc_ms/global.rs (3 addressed). — expected Δ: ?
+1. 🔴 HIGH: `src/policy/marksweepspace/malloc_ms/global.rs:395-850` — Continue investigating remaining unsafe blocks in malloc_ms/global.rs (SFT_MAP, free, load128). — expected Δ: ?
 
 ## Patterns Discovered
 - `unsafe { MaybeUninit::uninit().assume_init() }` → `[MaybeUninit::uninit()]` when array size is 1. Works for initializing arrays of `MaybeUninit` safely.
@@ -22,6 +22,7 @@
 - Creating an extension trait (e.g., `SideMetadataSpecBlockExt`) to encapsulate unsafe operations on `SideMetadataSpec` for a specific handle type (like `Block`) can reduce unsafe blocks at many call sites.
 - Replacing `MaybeUninit` with `Option` for arrays of objects that are initialized late allows safe access via `as_mut().expect(...)` and eliminates `assume_init_mut` calls.
 - Adding runtime checks (asserts) in `Mutator` to validate that allocators are initialized before accessing them allows removing `unsafe` from accessor methods and callers.
+- Using `store_atomic` to replace raw stores in metadata updates, allowing helper functions to be safe and eliminating `unsafe` blocks at call sites.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/metadata/side_metadata/helpers.rs` — Irreducible raw loads from metadata addresses. [Phase 1 analysis]
