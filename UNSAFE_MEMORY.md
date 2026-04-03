@@ -2,8 +2,8 @@
 
 ## Progress
 - Starting count: 351 | Current: 66 | Δ: -285
-- Phase: 2 (Safe Abstractions)
-- Status: Confirmed remaining work queue items are irreducible or already addressed.
+- Phase: 3 (Irreducible Documentation)
+- Status: Confirmed all remaining unsafe is irreducible or well-encapsulated. Moving to Phase 3.
 
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -77,5 +77,3 @@
 - `src/util/heap/space_descriptor.rs` — Completely safe after deriving `Zeroable`. [Phase 3 confirmed]
 - `src/util/metadata/side_metadata/ranges.rs` — Completely safe. No unsafe blocks. [Phase 3 confirmed]
 - `src/policy/marksweepspace/native_ms/block.rs` — Irreducible due to raw memory write in `BlockCell::store_link`. Encapsulated in abstraction. [Phase 3 confirmed]
-
-
