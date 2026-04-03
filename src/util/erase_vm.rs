@@ -14,20 +14,15 @@
 
 macro_rules! define_erased_vm_mut_ref {
     ($new_type: ident = $orig_type: ty) => {
-        pub struct $new_type<'a>(usize, PhantomData<&'a ()>);
+        pub struct $new_type<'a>(&'a mut dyn std::any::Any);
         impl<'a> $new_type<'a> {
-            pub fn new<VM: VMBinding>(r: &'a mut $orig_type) -> Self {
-                let worker_as_usize: usize = (r as *mut $orig_type).expose_provenance();
-                Self(worker_as_usize, PhantomData)
+            pub fn new<VM: VMBinding>(r: &'a mut $orig_type) -> Self 
+            where $orig_type: 'static {
+                Self(r)
             }
-            pub fn into_mut<VM: VMBinding>(self) -> &'a mut $orig_type {
-                // SAFETY: The stored usize was created from a valid reference to `$orig_type`.
-                // The lifetime 'a ensures the reference is still valid.
-                // We assume that there is only one VM type in the process, so casting back with any `VM` is safe.
-                unsafe {
-                    &mut *(std::ptr::with_exposed_provenance(self.0) as *const $orig_type
-                        as *mut $orig_type)
-                }
+            pub fn into_mut<VM: VMBinding>(self) -> &'a mut $orig_type 
+            where $orig_type: 'static {
+                self.0.downcast_mut::<$orig_type>().expect("Type mismatch in erased VM ref")
             }
         }
     };

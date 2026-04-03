@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 74 | Δ: -277
+- Starting count: 351 | Current: 73 | Δ: -278
 - Phase: 3 (Irreducible Documentation)
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -60,7 +60,7 @@
 - `src/plan/concurrent/mod.rs` — Completely safe after removing unsafe impls for bytemuck traits. [Phase 3 confirmed]
 - `src/vm/tests/mock_tests/mock_test_vm_layout_compressed_pointer.rs` — Completely safe after removing unnecessary unsafe blocks. [Phase 3 confirmed]
 - `src/vm/tests/mock_tests/mock_test_vm_layout_heap_start.rs` — Completely safe after removing redundant unsafe blocks. [Phase 3 confirmed]
-- `src/util/erase_vm.rs` — Irreducible due to type erasure macro storing reference as usize. [Phase 3 confirmed]
+- `src/util/erase_vm.rs` — Completely safe after refactoring macro to use `dyn Any` for type erasure. [Phase 3 confirmed]
 - `src/util/slot_logger.rs` — Completely safe after refactoring RwLock to Mutex and removing unsafe impl Sync. [Phase 3 confirmed]
 - `src/util/alloc/allocator.rs` — Irreducible due to raw memory fill in allocation gap. Verified safety comments. [Phase 3 confirmed]
 - `src/vm/slot.rs` — Remaining unsafe are in `SimpleSlot::as_atomic` (raw pointer cast) and `MemorySlice::copy` (raw memory copy). Added SAFETY comment to `MemorySlice::copy`. [Phase 3 confirmed]

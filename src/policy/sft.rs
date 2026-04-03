@@ -2,7 +2,6 @@ use crate::plan::VectorObjectQueue;
 use crate::scheduler::GCWorker;
 use crate::util::*;
 use crate::vm::VMBinding;
-use std::marker::PhantomData;
 
 /// Space Function Table (SFT).
 ///
