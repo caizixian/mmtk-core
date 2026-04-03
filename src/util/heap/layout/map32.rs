@@ -276,7 +276,7 @@ impl Map32 {
             let chunk_start = conversions::chunk_index_to_address(index);
             debug!("Clear descriptor for Chunk {}", chunk_start);
             inner.descriptor_map[index] = SpaceDescriptor::UNINITIALIZED;
-            unsafe { SFT_MAP.clear(chunk_start) };
+            SFT_MAP.clear(chunk_start);
         }
         chunks as _
     }

@@ -127,7 +127,7 @@ impl<VM: VMBinding> Space<VM> for LockFreeImmortalSpace<VM> {
     }
 
     fn initialize_sft(&self, sft_map: &mut dyn crate::policy::sft_map::SFTMap) {
-        unsafe { sft_map.eager_initialize(self.as_sft(), self.start, self.total_bytes) };
+        sft_map.eager_initialize(self.as_sft(), self.start, self.total_bytes);
     }
 
     fn estimate_side_meta_pages(&self, data_pages: usize) -> usize {

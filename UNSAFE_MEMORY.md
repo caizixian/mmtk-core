@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 459 | Δ: -263
+- Starting count: 722 | Current: 452 | Δ: -270
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/policy/marksweepspace/malloc_ms/global.rs:392,605` — Check if SFT_MAP updates can be safe (e.g. if they have been refactored in other files). — expected Δ: 2
+1. 🔴 HIGH: `src/util/alloc/free_list_allocator.rs:155,157,177` — Use MetadataSlot or similar abstraction instead of raw load/store on Address. — expected Δ: 3+
 2. 🟡 MED: `src/util/metadata/side_metadata/global.rs` — Check if remaining unsafe can be abstracted. — expected Δ: ?
 
 ## Patterns Discovered
