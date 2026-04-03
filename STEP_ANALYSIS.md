@@ -1,15 +1,17 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: <file being analyzed>
-- Strategy: <what you're attempting>
+- File: `src/vm/slot.rs`
+- Strategy: Document irreducible unsafe in `SimpleSlot` with SAFETY comments.
 
 ## Findings
-- Line X: <unsafe type> — <eliminable? why/why not>
-- Line Y: <unsafe type> — <eliminable? why/why not>
+- Line 178: `unsafe { (*self.slot_addr.to_ptr::<Atomic<Address>>()).load(...) }` — Irreducible because `slot_addr` is stored as `Address` (usize) to bypass lifetimes and trait object limitations. The caller must ensure it is valid.
+- Line 183: `unsafe { (*self.slot_addr.to_ptr::<Atomic<Address>>()).store(...) }` — Similar to above.
+
+I also analyzed `src/util/metadata/side_metadata/global.rs` and confirmed that moving unsafe to `MetadataSlot` constructor would increase count at call sites (about 20 call sites vs 15 methods).
 
 ## Attempted Changes
-- <what you tried, what happened>
+- Adding SAFETY comments to `src/vm/slot.rs` lines 178 and 183.
 
 ## Blockers / Insights for Next Step
-- <what prevented completion, what the next step should know>
+- All remaining unsafe in the codebase seems to be documented or analyzed as irreducible by previous agents. We are likely in Phase 3 (Irreducible Documentation).
