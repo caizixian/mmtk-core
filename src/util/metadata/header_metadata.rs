@@ -459,6 +459,30 @@ mod tests {
     use super::*;
     use crate::util::address::Address;
 
+    struct TestBuffer<T> {
+        ptr: *mut T,
+        layout: std::alloc::Layout,
+    }
+
+    impl<T> TestBuffer<T> {
+        fn new() -> Self {
+            let ty_size = std::mem::size_of::<T>();
+            let layout = std::alloc::Layout::from_size_align(ty_size * 3, ty_size).unwrap();
+            let ptr = unsafe { std::alloc::alloc_zeroed(layout) as *mut T };
+            Self { ptr, layout }
+        }
+
+        fn address(&self) -> Address {
+            Address::from_ptr(unsafe { self.ptr.offset(1) })
+        }
+    }
+
+    impl<T> Drop for TestBuffer<T> {
+        fn drop(&mut self) {
+            unsafe { std::alloc::dealloc(self.ptr as *mut u8, self.layout) }
+        }
+    }
+
     #[test]
     fn test_valid_specs() {
         let spec = HeaderMetadataSpec {
@@ -680,25 +704,10 @@ mod tests {
         ($type: ty) => {
             paste!{
                 fn [<with_ $type _obj>]<F>(f: F) where F: FnOnce(Address, *mut $type) + std::panic::UnwindSafe {
-                    // Allocate a tuple that can hold 3 integers
-                    let ty_size = ($type::BITS >> LOG_BITS_IN_BYTE) as usize;
-                    let layout = std::alloc::Layout::from_size_align(ty_size * 3, ty_size).unwrap();
-                    let (obj, ptr) = {
-                        let ptr_raw: *mut $type = unsafe { std::alloc::alloc_zeroed(layout) as *mut $type };
-                        // Use the mid one for testing, as we can use offset to access the other integers.
-                        let ptr_mid: *mut $type = unsafe { ptr_raw.offset(1) };
-                        // Make sure they are all empty
-                        assert_eq!(unsafe { *(ptr_mid.offset(-1)) }, 0, "memory at offset -1 is not zero");
-                        assert_eq!(unsafe { *ptr_mid }, 0, "memory at offset 0 is not zero");
-                        assert_eq!(unsafe { *(ptr_mid.offset(1)) }, 0, "memory at offset 1 is not zero");
-                        (Address::from_ptr(ptr_mid), ptr_mid)
-                    };
-                    crate::util::test_util::with_cleanup(
-                        || f(obj, ptr),
-                        || {
-                            unsafe { std::alloc::dealloc(ptr.offset(-1) as *mut u8, layout); }
-                        }
-                    )
+                    let mut buffer = TestBuffer::<$type>::new();
+                    let obj = buffer.address();
+                    let ptr = unsafe { buffer.ptr.offset(1) };
+                    f(obj, ptr);
                 }
             }
         }

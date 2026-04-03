@@ -2,7 +2,7 @@
 
 ## Progress
 - Starting count: 722 | Current: 676 | Δ: -46
-- Completed subsystems: util/alloc (partial), policy/sft_map (partial), policy/marksweepspace (block.rs cleanup), util/heap/layout (vm_layout.rs static mut), util/copy (MaybeUninit to Option in GCWorkerCopyContext), util/metadata/side_metadata (side_metadata_tests.rs Address::from_usize(0) cleanup), util/heap/gc_trigger.rs (OnceLock for plan)
+- Completed subsystems: util/alloc (partial), policy/sft_map (partial), policy/marksweepspace (block.rs cleanup), util/heap/layout (vm_layout.rs static mut), util/copy (MaybeUninit to Option in GCWorkerCopyContext), util/metadata/side_metadata (side_metadata_tests.rs Address::from_usize(0) cleanup), util/heap/gc_trigger.rs (OnceLock for plan), util/metadata/header_metadata.rs (TestBuffer wrapper for tests)
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - "Work packets are single-use — Option::take() is safe for extracting owned data"
@@ -25,6 +25,7 @@
 - `unsafe impl Sync` removal for types that only contain thread-safe fields (auto-Sync).
 - `static mut` → `OnceLock` for write-once globals.
 - `MaybeUninit` → `OnceLock` for late-initialized fields (e.g. `GCTrigger::plan`).
+- Raw memory allocation in tests → `TestBuffer<T>` safe wrapper with `Drop` for automatic cleanup.
 
 ## Refactoring Ideas
 - `src/util/metadata/side_metadata/helpers.rs`: Analyze remaining unsafe blocks (mostly tests/Address::from_usize and load/store).
