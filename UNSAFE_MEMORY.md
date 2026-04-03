@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 504 | Δ: -218
+- Starting count: 722 | Current: 503 | Δ: -219
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -37,6 +37,7 @@
 - `src/vm/tests/mock_tests/mock_test_slots.rs` — All unsafe removed by refactoring to use references in tests. [Phase 2 confirmed]
 - `src/policy/marksweepspace/native_ms/block.rs` — Remaining unsafe are irreducible raw memory accesses for free list and raw pointer dereferences. [Phase 2 confirmed]
 - `src/util/heap/layout/map32.rs` — Remaining unsafe are trait methods that must match the unsafe trait definition. [Phase 2 confirmed]
+- `src/util/rust_util/mod.rs` — `InitializeOnce` is a custom optimization for `SFT_MAP` to avoid checks on reads. Remaining unsafe in `gettid` is platform-specific. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - Implemented `SideMetadataSpecBlockExt` in `src/policy/marksweepspace/native_ms/block.rs` to abstract metadata accesses.
