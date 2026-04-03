@@ -24,12 +24,11 @@ pub extern "C" fn mmtk_create_builder() -> *mut MMTKBuilder {
 
 #[no_mangle]
 pub extern "C" fn mmtk_set_option_from_string(
-    builder: *mut MMTKBuilder,
+    builder: Option<&mut MMTKBuilder>,
     name: *const c_char,
     value: *const c_char,
 ) -> bool {
-    // SAFETY: The caller must ensure that `builder` is a valid pointer to an `MMTKBuilder`.
-    let builder = unsafe { &mut *builder };
+    let builder = builder.expect("builder is null");
     // SAFETY: The caller must ensure that `name` is a valid null-terminated C string.
     let name_str: &CStr = unsafe { CStr::from_ptr(name) };
     // SAFETY: The caller must ensure that `value` is a valid null-terminated C string.
@@ -38,9 +37,8 @@ pub extern "C" fn mmtk_set_option_from_string(
 }
 
 #[no_mangle]
-pub extern "C" fn mmtk_set_fixed_heap_size(builder: *mut MMTKBuilder, heap_size: usize) -> bool {
-    // SAFETY: The caller must ensure that `builder` is a valid pointer to an `MMTKBuilder`.
-    let builder = unsafe { &mut *builder };
+pub extern "C" fn mmtk_set_fixed_heap_size(builder: Option<&mut MMTKBuilder>, heap_size: usize) -> bool {
+    let builder = builder.expect("builder is null");
     builder
         .options
         .gc_trigger
@@ -80,7 +78,7 @@ pub extern "C" fn mmtk_destroy_mutator(mutator: *mut Mutator<DummyVM>) {
 
 #[no_mangle]
 pub extern "C" fn mmtk_alloc(
-    mutator: *mut Mutator<DummyVM>,
+    mutator: Option<&mut Mutator<DummyVM>>,
     size: usize,
     align: usize,
     offset: usize,
@@ -97,13 +95,12 @@ pub extern "C" fn mmtk_alloc(
     {
         semantics = AllocationSemantics::Los;
     }
-    // SAFETY: The caller must ensure that `mutator` is a valid pointer to a `Mutator`.
-    memory_manager::alloc::<DummyVM>(unsafe { &mut *mutator }, size, align, offset, semantics)
+    memory_manager::alloc::<DummyVM>(mutator.expect("mutator is null"), size, align, offset, semantics)
 }
 
 #[no_mangle]
 pub extern "C" fn mmtk_post_alloc(
-    mutator: *mut Mutator<DummyVM>,
+    mutator: Option<&mut Mutator<DummyVM>>,
     refer: ObjectReference,
     bytes: usize,
     mut semantics: AllocationSemantics,
@@ -119,8 +116,7 @@ pub extern "C" fn mmtk_post_alloc(
     {
         semantics = AllocationSemantics::Los;
     }
-    // SAFETY: The caller must ensure that `mutator` is a valid pointer to a `Mutator`.
-    memory_manager::post_alloc::<DummyVM>(unsafe { &mut *mutator }, refer, bytes, semantics)
+    memory_manager::post_alloc::<DummyVM>(mutator.expect("mutator is null"), refer, bytes, semantics)
 }
 
 #[no_mangle]
@@ -277,7 +273,7 @@ mod tests {
         let builder = mmtk_create_builder();
 
         // Set option by value using extern "C" wrapper.
-        let success = mmtk_set_fixed_heap_size(builder, 1048576);
+        let success = mmtk_set_fixed_heap_size(unsafe { builder.as_mut() }, 1048576);
         assert!(success);
 
         // Set option by value.  We set the the option direcly using `MMTKOption::set`. Useful if
@@ -285,7 +281,7 @@ mod tests {
         // command line arguments.
         let name = CString::new("plan").unwrap();
         let val = CString::new("NoGC").unwrap();
-        let success = mmtk_set_option_from_string(builder, name.as_ptr(), val.as_ptr());
+        let success = mmtk_set_option_from_string(unsafe { builder.as_mut() }, name.as_ptr(), val.as_ptr());
         assert!(success);
 
         // Set layout if necessary
@@ -299,14 +295,14 @@ mod tests {
         let mutator = mmtk_bind_mutator(tls);
 
         // Do an allocation
-        let addr = mmtk_alloc(mutator, 16, 8, 0, mmtk::AllocationSemantics::Default);
+        let addr = mmtk_alloc(unsafe { mutator.as_mut() }, 16, 8, 0, mmtk::AllocationSemantics::Default);
         assert!(!addr.is_zero());
 
         // Turn the allocation address into the object reference.
         let obj = DummyVM::object_start_to_ref(addr);
 
         // Post allocation
-        mmtk_post_alloc(mutator, obj, 16, mmtk::AllocationSemantics::Default);
+        mmtk_post_alloc(unsafe { mutator.as_mut() }, obj, 16, mmtk::AllocationSemantics::Default);
 
         // If the thread quits, destroy the mutator.
         mmtk_destroy_mutator(mutator);

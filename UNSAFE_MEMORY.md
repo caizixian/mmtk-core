@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 175 | Δ: -176
+- Starting count: 351 | Current: 171 | Δ: -180
 - Phase: 3 (Irreducible Documentation)
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,8 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-- (No actionable items. All remaining unsafe is irreducible and documented.)
+1. 🔴 HIGH: `src/vm/slot.rs:170-210` — Investigate if we can use a safe wrapper for `Atomic<Address>` to eliminate unsafe in `SimpleSlot` — expected Δ: -2
+
 
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
@@ -24,7 +25,7 @@
 - `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are irreducible function signatures and raw memory copy. [Phase 2 confirmed]
 - `src/util/metadata/metadata_val_traits.rs` — Defines contract for loading metadata values. Inherently unsafe. [Phase 2 confirmed]
 - src/util/memory.rs — Wrappers around libc calls. Standard FFI wrappers. Verified safety comments. [Phase 3 confirmed]
-- `docs/dummyvm/src/api.rs` — Dummy VM implementation for testing/docs. Not part of production code. [Phase 2 confirmed]
+- docs/dummyvm/src/api.rs — Reduced unsafe by using `Option<&mut T>` in FFI signatures. Remaining are `CStr::from_ptr` and `Box::from_raw`. [Phase 3 confirmed]
 - src/util/malloc/malloc_ms_util.rs — Irreducible due to raw pointer manipulation in allocator. Verified safety comments. [Phase 3 confirmed]
 - `src/util/address.rs` — Core address type. Operations are inherently unsafe. [Phase 2 confirmed]
 - `src/mmtk.rs` — Uses `InitializeOnce` for `SFT_MAP`. Irreducible for performance. [Phase 2 confirmed]
