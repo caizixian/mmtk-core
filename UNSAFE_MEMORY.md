@@ -36,6 +36,7 @@
 - **Eliminating unsafe casts in constructors**: If a type uses `OnceLock` for late initialization, its setter can take `&self` instead of `&mut self`, avoiding the need to cast `Arc` to `&mut` in constructors when the object is shared but not yet fully initialized in the type system's view.
 - **Removing unnecessary unsafe from functions**: Functions marked `unsafe` that contain no unsafe operations and rely on safe abstractions can be made safe (applied to `FreeListPageResource`).
 - **Passing &mut BlockList to attempt_release**: Eliminates unsafe raw pointer dereference by passing the list reference from the caller instead of loading it from metadata.
+- **Capability Token for Iterators**: Requiring `StwProof` in `ObjectIterator::new` when `ATOMIC_LOAD_VO_BIT` is false enforces safety at compile time and removes unsafe blocks from `next()`.
 
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)

@@ -4,6 +4,7 @@ use crate::util::ObjectReference;
 use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
 use std::marker::PhantomData;
+use crate::util::metadata::safe_access::StwProof;
 
 // FIXME: MarkCompact uses linear scanning to discover allocated objects in the MarkCompactSpace.
 // It should use a local metadata (specific to the MarkCompactSpace) for that purpose.
@@ -17,12 +18,11 @@ pub struct ObjectIterator<VM: VMBinding, S: LinearScanObjectSize, const ATOMIC_L
     start: Address,
     end: Address,
     cursor: Address,
+    proof: Option<StwProof>,
     _p: PhantomData<(VM, S)>,
 }
 
-impl<VM: VMBinding, S: LinearScanObjectSize, const ATOMIC_LOAD_VO_BIT: bool>
-    ObjectIterator<VM, S, ATOMIC_LOAD_VO_BIT>
-{
+impl<VM: VMBinding, S: LinearScanObjectSize> ObjectIterator<VM, S, true> {
     /// Create an iterator for the address range. The caller must ensure
     /// that the VO bit metadata is mapped for the address range.
     pub fn new(start: Address, end: Address) -> Self {
@@ -39,6 +39,30 @@ impl<VM: VMBinding, S: LinearScanObjectSize, const ATOMIC_LOAD_VO_BIT: bool>
             start,
             end,
             cursor: start,
+            proof: None,
+            _p: PhantomData,
+        }
+    }
+}
+
+impl<VM: VMBinding, S: LinearScanObjectSize> ObjectIterator<VM, S, false> {
+    /// Create an iterator for the address range. The caller must ensure
+    /// that the VO bit metadata is mapped for the address range.
+    pub fn new(start: Address, end: Address, proof: StwProof) -> Self {
+        debug_assert!(start < end);
+        debug_assert!(
+            start.is_aligned_to(ObjectReference::ALIGNMENT),
+            "start is not word-aligned: {start}"
+        );
+        debug_assert!(
+            end.is_aligned_to(ObjectReference::ALIGNMENT),
+            "end is not word-aligned: {end}"
+        );
+        ObjectIterator {
+            start,
+            end,
+            cursor: start,
+            proof: Some(proof),
             _p: PhantomData,
         }
     }
@@ -54,8 +78,7 @@ impl<VM: VMBinding, S: LinearScanObjectSize, const ATOMIC_LOAD_VO_BIT: bool> std
             let is_object = if ATOMIC_LOAD_VO_BIT {
                 vo_bit::is_vo_bit_set_for_addr(self.cursor)
             } else {
-                let proof = unsafe { crate::util::metadata::safe_access::StwProof::new() };
-                vo_bit::is_vo_bit_set_unsafe(self.cursor, &proof)
+                vo_bit::is_vo_bit_set_unsafe(self.cursor, self.proof.as_ref().unwrap())
             };
 
             if let Some(object) = is_object {

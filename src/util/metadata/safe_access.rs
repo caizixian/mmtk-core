@@ -6,6 +6,7 @@ use std::sync::atomic::Ordering;
 
 /// Proof that the world is stopped. Only the GC controller can create this.
 /// This allows safe non-atomic access to metadata.
+#[derive(Copy, Clone)]
 pub struct StwProof(());
 
 impl StwProof {

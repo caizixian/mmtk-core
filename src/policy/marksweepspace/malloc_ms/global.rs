@@ -710,6 +710,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
 
             // The start of a possibly empty page. This will be updated during the sweeping, and always points to the next page of last live objects.
             let mut empty_page_start = Address::ZERO;
+            let proof = unsafe { crate::util::metadata::safe_access::StwProof::new() };
 
             // Scan the chunk by every 'bulk_load_size' region.
             while address < chunk_end {
@@ -731,7 +732,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
                         VM,
                         MallocObjectSize<VM>,
                         false,
-                    >::new(address, end);
+                    >::new(address, end, proof);
                     for object in bulk_load_scan {
                         self.sweep_object(object, &mut empty_page_start);
                     }
@@ -756,7 +757,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
                     VM,
                     MallocObjectSize<VM>,
                     false,
-                >::new(chunk_start, chunk_end);
+                >::new(chunk_start, chunk_end, proof);
                 for object in chunk_linear_scan {
                     let (obj_start, _, bytes) = Self::get_malloc_addr_size(object);
 
@@ -817,11 +818,13 @@ impl<VM: VMBinding> MallocSpace<VM> {
         // The start of a possibly empty page. This will be updated during the sweeping, and always points to the next page of last live objects.
         let mut empty_page_start = Address::ZERO;
 
+        let proof = unsafe { crate::util::metadata::safe_access::StwProof::new() };
+
         let chunk_linear_scan = crate::util::linear_scan::ObjectIterator::<
             VM,
             MallocObjectSize<VM>,
             false,
-        >::new(chunk_start, chunk_start + BYTES_IN_CHUNK);
+        >::new(chunk_start, chunk_start + BYTES_IN_CHUNK, proof);
 
         for object in chunk_linear_scan {
             #[cfg(debug_assertions)]
