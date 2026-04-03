@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 279 | Δ: -72
+- Starting count: 351 | Current: 270 | Δ: -81
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@ Architectural insights that affect ALL future safety decisions:
 - Static plan references are needed because plan types are generic and cannot be stored in global statics easily.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/util/metadata/vo_bit/mod.rs:184` — investigate if we can use atomic loads in `find_prev_non_zero_value` to avoid UB during mutator time — expected Δ: 0
+1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs:825` — add `load_raw_word_atomic` and use it in `vo_bit::get_raw_vo_bit_word` to eliminate unsafe block — expected Δ: -1
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
