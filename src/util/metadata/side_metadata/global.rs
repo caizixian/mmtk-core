@@ -1335,6 +1335,7 @@ impl SideMetadataSpec {
             debug_assert!(cursor.is_mapped());
 
             // If we find non-zero value, just call back.
+            // SAFETY: The operation is safe because we assume that this scan is performed when no concurrent mutation of the same metadata is happening (e.g., during GC or with appropriate external synchronization).
             if !unsafe { self.load::<T>(cursor).is_zero() } {
                 visit_data(cursor);
             }
@@ -2262,26 +2263,25 @@ mod tests {
 
     #[test]
     fn test_bulk_update_meta_bits() {
-        let raw_mem =
-            unsafe { std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(8, 8).unwrap()) };
-        let addr = Address::from_mut_ptr(raw_mem);
+        let mut data = [0u64; 1];
+        let addr = Address::from_mut_ptr(data.as_mut_ptr() as *mut u8);
 
         SideMetadataSpec::set_meta_bits(addr, 0, addr, 4);
-        assert_eq!(unsafe { addr.load::<u64>() }, 0b1111);
+        assert_eq!(data[0], 0b1111);
 
         SideMetadataSpec::zero_meta_bits(addr, 1, addr, 3);
-        assert_eq!(unsafe { addr.load::<u64>() }, 0b1001);
+        assert_eq!(data[0], 0b1001);
 
         SideMetadataSpec::set_meta_bits(addr, 2, addr, 6);
-        assert_eq!(unsafe { addr.load::<u64>() }, 0b0011_1101);
+        assert_eq!(data[0], 0b0011_1101);
 
         SideMetadataSpec::zero_meta_bits(addr, 0, addr + 1usize, 0);
-        assert_eq!(unsafe { addr.load::<u64>() }, 0b0);
+        assert_eq!(data[0], 0b0);
 
         SideMetadataSpec::set_meta_bits(addr, 2, addr + 1usize, 2);
-        assert_eq!(unsafe { addr.load::<u64>() }, 0b11_1111_1100);
+        assert_eq!(data[0], 0b11_1111_1100);
 
         SideMetadataSpec::set_meta_bits(addr, 0, addr + 1usize, 2);
-        assert_eq!(unsafe { addr.load::<u64>() }, 0b11_1111_1111);
+        assert_eq!(data[0], 0b11_1111_1111);
     }
 }
