@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 480 | Δ: -242
+- Starting count: 722 | Current: 479 | Δ: -243
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,8 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `docs/dummyvm/src/api.rs:31-119` — Investigate if raw pointer dereferences can be replaced with references or safe wrappers. — expected Δ: ?
-2. 🟡 MED: `src/util/memory.rs:173-563` — Investigate if FFI calls can be encapsulated or if they are irreducible. — expected Δ: ?
+1. 🔴 HIGH: `src/vm/slot.rs:180-206` — Investigate if `SimpleSlot` operations can be made safe or if it's a safe abstraction. — expected Δ: ?
+2. 🟡 MED: `src/util/metadata/header_metadata.rs` — Re-evaluate if `MetadataSlot` can be used to reduce unsafe blocks. [Phase 1 analysis] — expected Δ: ?
 
 ## Patterns Discovered
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
@@ -44,6 +44,9 @@
 - `src/util/heap/blockpageresource.rs` — Remaining unsafe are irreducible UnsafeCell accesses in lock-free queue. [Phase 2 confirmed]
 - `src/util/malloc/malloc_ms_util.rs` — Irreducible FFI and raw pointer manipulation. [Phase 2 confirmed]
 - `src/policy/marksweepspace/malloc_ms/metadata.rs` — Remaining unsafe are non-atomic performance optimizations or low-level primitives (`load128`). [Phase 2 confirmed]
+- `docs/dummyvm/src/api.rs` — Irreducible FFI boundaries in dummy VM implementation. [Phase 2 confirmed]
+- `src/util/memory.rs` — Contains wrappers for FFI calls. The unsafe blocks are the FFI calls themselves. [Phase 2 confirmed]
+- `src/util/address.rs` — Primitives for address operations. Unsafe signatures are necessary. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - Implemented `SideMetadataSpecBlockExt` in `src/policy/marksweepspace/native_ms/block.rs` to abstract metadata accesses.
