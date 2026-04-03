@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 628 | Δ: -94
-- Completed subsystems: util/alloc (partial), policy/sft_map (partial), policy/marksweepspace (block.rs cleanup), util/heap/layout (vm_layout.rs static mut, map32.rs Mutex, map64.rs RwLock), util/copy (MaybeUninit to Option in GCWorkerCopyContext), util/metadata/side_metadata (side_metadata_tests.rs Address::from_usize(0) cleanup, global.rs SideMetadataOffset union to enum), util/heap/gc_trigger.rs (OnceLock for plan), util/metadata/header_metadata.rs (TestBuffer yield slice for tests), util/heap/blockpageresource.rs (push on unique BlockQueue)
+- Starting count: 722 | Current: 627 | Δ: -95
+- Completed subsystems: util/alloc/allocator.rs (RefCell to AtomicU8 for AllocationOptionsHolder), util/alloc (partial), policy/sft_map (partial), policy/marksweepspace (block.rs cleanup), util/heap/layout (vm_layout.rs static mut, map32.rs Mutex, map64.rs RwLock), util/copy (MaybeUninit to Option in GCWorkerCopyContext), util/metadata/side_metadata (side_metadata_tests.rs Address::from_usize(0) cleanup, global.rs SideMetadataOffset union to enum), util/heap/gc_trigger.rs (OnceLock for plan), util/metadata/header_metadata.rs (TestBuffer yield slice for tests), util/heap/blockpageresource.rs (push on unique BlockQueue)
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - "Work packets are single-use — Option::take() is safe for extracting owned data"
