@@ -457,11 +457,14 @@ impl SideMetadataSpec {
                 BitByteRange::Bytes {
                     start: dst_start,
                     end: dst_end,
-                } => unsafe {
+                } => {
                     let byte_offset = dst_start - dst_meta_start_addr;
                     let src_start = src_meta_start_addr + byte_offset;
                     let size = dst_end - dst_start;
-                    std::ptr::copy::<u8>(src_start.to_ptr(), dst_start.to_mut_ptr(), size);
+                    for i in 0..size {
+                        let val = other.slot_from_meta_addr::<u8>(src_start + i).load();
+                        self.slot_from_meta_addr::<u8>(dst_start + i).store(val);
+                    }
                     false
                 },
                 BitByteRange::BitsInByte {
@@ -1571,15 +1574,14 @@ impl SideMetadataContext {
 }
 
 /// A byte array in side-metadata
-pub struct MetadataByteArrayRef<const ENTRIES: usize> {
+pub struct MetadataByteArrayRef<'a, const ENTRIES: usize> {
     #[cfg(feature = "extreme_assertions")]
     heap_range_start: Address,
-    #[cfg(feature = "extreme_assertions")]
-    spec: SideMetadataSpec,
-    data: &'static [u8; ENTRIES],
+    spec: &'a SideMetadataSpec,
+    addr: Address,
 }
 
-impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
+impl<'a, const ENTRIES: usize> MetadataByteArrayRef<'a, ENTRIES> {
     /// Get a piece of metadata address range as a byte array.
     ///
     /// # Arguments
@@ -1588,7 +1590,7 @@ impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
     /// * `start` - The starting address of the heap range.
     /// * `bytes` - The size of the heap range.
     ///
-    pub fn new(metadata_spec: &SideMetadataSpec, start: Address, bytes: usize) -> Self {
+    pub fn new(metadata_spec: &'a SideMetadataSpec, start: Address, bytes: usize) -> Self {
         debug_assert_eq!(
             metadata_spec.log_num_of_bits, LOG_BITS_IN_BYTE as usize,
             "Each heap entry should map to a byte in side-metadata"
@@ -1601,11 +1603,8 @@ impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
         Self {
             #[cfg(feature = "extreme_assertions")]
             heap_range_start: start,
-            #[cfg(feature = "extreme_assertions")]
-            spec: *metadata_spec,
-            // # Safety
-            // The metadata memory is assumed to be mapped when accessing.
-            data: unsafe { &*address_to_meta_address(metadata_spec, start).to_ptr() },
+            spec: metadata_spec,
+            addr: address_to_meta_address(metadata_spec, start),
         }
     }
 
@@ -1620,11 +1619,11 @@ impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
     pub fn get(&self, index: usize) -> u8 {
         #[cfg(feature = "extreme_assertions")]
         let _lock = sanity::SANITY_LOCK.lock().unwrap();
-        let value = self.data[index];
+        let value = self.spec.slot_from_meta_addr::<u8>(self.addr + index).load();
         #[cfg(feature = "extreme_assertions")]
         {
             let data_addr = self.heap_range_start + (index << self.spec.log_bytes_in_region);
-            sanity::verify_load::<u8>(&self.spec, data_addr, value);
+            sanity::verify_load::<u8>(self.spec, data_addr, value);
         }
         value
     }

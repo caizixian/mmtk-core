@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 493 | Current: 469 | Δ: -24
+- Starting count: 493 | Current: 468 | Δ: -25
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -27,6 +27,8 @@
 - **StwProof in Tests**: Using `StwProof` in tests to remove redundant unsafe blocks around `load` and `store`.
 - **OnceLock for late init**: Replacing `MaybeUninit` with `OnceLock` for late-initialized global or shared state (e.g., `GCTrigger::plan`).
 - **Atomics for Interior Mutability**: Replacing `UnsafeCell` and manual locking/unsafe with atomic types (`AtomicUsize`, `AtomicBool`) can eliminate `mut_self` patterns and reduce unsafe blocks (applied to `Map64`).
+- **Replacing std::ptr::copy with loop**: In `bcopy_metadata_contiguous`, replaced `std::ptr::copy` with a safe loop using `MetadataSlot`.
+- **Refactoring MetadataByteArrayRef**: Changed it to hold `Address` and `&SideMetadataSpec` instead of `&'static [u8; ENTRIES]`, eliminating a dangerous pointer-to-reference cast.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.

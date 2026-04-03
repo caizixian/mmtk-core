@@ -118,9 +118,9 @@ impl Block {
 
     /// Get the address range of the block's line mark table.
     #[allow(clippy::assertions_on_constants)]
-    pub fn line_mark_table(&self) -> MetadataByteArrayRef<{ Block::LINES }> {
+    pub fn line_mark_table(&self) -> MetadataByteArrayRef<'_, { Block::LINES }> {
         debug_assert!(!super::BLOCK_ONLY);
-        MetadataByteArrayRef::<{ Block::LINES }>::new(&Line::MARK_TABLE, self.start(), Self::BYTES)
+        MetadataByteArrayRef::new(&Line::MARK_TABLE, self.start(), Self::BYTES)
     }
 
     /// Get block mark state.
