@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 324 | Δ: -27
+- Starting count: 351 | Current: 323 | Δ: -28
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,11 +10,9 @@ Architectural insights that affect ALL future safety decisions:
 - Static plan references are needed because plan types are generic and cannot be stored in global statics easily.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/memory_manager.rs` — Replace `static mut` with `OnceLock` or atomic.
-2. 🔴 HIGH: `src/plan/concurrent/concurrent_marking_work.rs` — Replace `static mut` with `OnceLock` or atomic.
-3. 🔴 HIGH: `src/scheduler/gc_work.rs` — Replace `static mut` with `OnceLock` or atomic.
-4. 🟡 MED: Scan for other files with count < 6 that are not in "Files NOT to Revisit".
-5. 🟢 LOW: Consider using a library like `core_affinity` to remove remaining unsafe in `src/scheduler/affinity.rs` in the future.
+1. 🔴 HIGH: `src/util/object_forwarding.rs:170-180` — Replace `ObjectReference::from_raw_address_unchecked` with `from_raw_address(...).unwrap()` — expected Δ: -1
+2. 🟡 MED: Scan for other files with count < 6 that are not in "Files NOT to Revisit".
+3. 🟢 LOW: Consider using a library like `core_affinity` to remove remaining unsafe in `src/scheduler/affinity.rs` in the future.
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
@@ -23,6 +21,7 @@ Reusable refactoring patterns (recipe format):
 - Extending `MetadataSlot` with generic methods for `MetadataValue` allows centralizing unsafe operations on types larger than `u8`.
 - Using safe wrappers in `Mutator` (like `allocator_impl_mut_for_semantic`) in plan-specific mutators to eliminate direct unsafe calls to `allocators.get_allocator_mut`.
 - Replacing platform-specific FFI calls with safe standard library equivalents (e.g. `std::thread::available_parallelism` instead of `sched_getaffinity`).
+- Replacing `ObjectReference::from_raw_address_unchecked` with `ObjectReference::from_raw_address(...).unwrap()` when the address is guaranteed to be non-zero (e.g. checked by assertion or invariant).
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/policy/sft_map.rs` — `SFTRefStorage` uses transmute for atomic fat pointers. [Phase 2 confirmed]
