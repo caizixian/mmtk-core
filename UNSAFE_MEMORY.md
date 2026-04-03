@@ -24,9 +24,10 @@
 - Work packets hold raw pointers to plans or spaces to bypass borrow checker and lifetimes.
 - Static plan references are needed because plan types are generic and cannot be stored in global statics easily.
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
+- `SFTRefStorage::load` returns a reference lock-free and thus requires leaked or static data to be sound without hazard pointers or Arc overhead.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/policy/sft_map.rs:103-115` — Investigate if using `Arc` for spaces in `SFTMap` can eliminate unsafe lifetime extension, and measure overhead. — expected Δ: 0
+1. 🔴 HIGH: `src/util/malloc/malloc_ms_util.rs:1-120` — Audit remaining unsafe blocks to ensure they cannot be replaced by safe abstractions. — expected Δ: 0
 
 ## Patterns Discovered
 - Refactored `SFTWrapper` to hold a reference instead of a raw pointer, eliminating `unsafe impl Send` and `Sync` for the wrapper and reducing unsafe count.
