@@ -48,7 +48,11 @@ impl MetadataSpec {
     /// * `mask`: is an optional mask value for the metadata. This value is used in cases like the forwarding pointer metadata, where some of the bits are reused by other metadata such as the forwarding bits.
     ///
     /// # Safety
-    /// This is a non-atomic load, thus not thread-safe.
+    /// This is a non-atomic load and is not thread-safe.
+    /// The caller must ensure that:
+    /// 1. No other thread is concurrently writing to this metadata for the given object.
+    /// 2. The `object` reference is valid and points to a properly initialized object.
+    /// 3. The metadata has been initialized if required by the specific metadata spec.
     pub unsafe fn load<VM: VMBinding, T: MetadataValue>(
         &self,
         object: ObjectReference,
@@ -96,7 +100,10 @@ impl MetadataSpec {
     /// * `mask`: is an optional mask value for the metadata. This value is used in cases like the forwarding pointer metadata, where some of the bits are reused by other metadata such as the forwarding bits.
     ///
     /// # Safety
-    /// This is a non-atomic store, thus not thread-safe.
+    /// This is a non-atomic store and is not thread-safe.
+    /// The caller must ensure that:
+    /// 1. No other thread is concurrently reading or writing to this metadata for the given object.
+    /// 2. The `object` reference is valid and points to a properly initialized object.
     pub unsafe fn store<VM: VMBinding, T: MetadataValue>(
         &self,
         object: ObjectReference,

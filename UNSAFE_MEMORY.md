@@ -10,7 +10,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: `src/util/metadata/global.rs:1-100` — review and improve SAFETY documentation for load/store methods — expected Δ: 0
+1. 🟢 LOW: `src/util/metadata/vo_bit/mod.rs:100-200` — review for potential unsafe reduction or documentation — expected Δ: 0
 
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
