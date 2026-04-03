@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 251 | Δ: -100
+- Starting count: 351 | Current: 246 | Δ: -105
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -11,7 +11,7 @@ Architectural insights that affect ALL future safety decisions:
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/vm/slot.rs:176-185` — Investigate if `slot_addr` can use atomics or references instead of raw pointers — expected Δ: 2
+1. 🔴 HIGH: `src/util/test_util/fixtures.rs:24` — Investigate if `Fixture` can use `RwLock` instead of `AtomicRefCell` to eliminate `unsafe impl Sync` — expected Δ: 1
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
@@ -26,6 +26,7 @@ Reusable refactoring patterns (recipe format):
 - Centralizing thread-safety guarantees in low-level utilities (like `BlockQueue` or `BlockPageResource`) can eliminate `unsafe impl Sync` in high-level types (like spaces) that use them.
 - Replacing custom lock-free queues with `crossbeam::queue::ArrayQueue` and using `Mutex` for thread-local access can eliminate unsafe code in queue implementations.
 - Using Generic Associated Types (GATs) in `ObjectTracerContext` to allow `TracerType` to borrow `GCWorker` without raw pointers.
+- Using `Box::leak` in test fixtures to avoid raw pointer management and lifetimes, making the fixture safe.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/plan/concurrent/concurrent_marking_work.rs` — Eliminated raw pointer from `ConcurrentTraceObjects` by using a temporary tracer type. Localized unsafe in the tracer. [Phase 2 confirmed]
@@ -36,8 +37,6 @@ Reusable refactoring patterns (recipe format):
 - `src/util/address.rs` — Primitives for address operations. [Phase 2 confirmed]
 - `src/util/metadata/side_metadata/side_metadata_tests.rs` — Tests use unsafe to check address iteration. [Phase 2 confirmed]
 - `src/util/rust_util/atomic_box.rs` — Custom lock-free lazily initialized box. [Phase 2 confirmed]
-- `src/util/test_util/fixtures.rs` — Fixtures use unsafe for test setup. [Phase 2 confirmed]
-- `src/vm/slot.rs` — `SimpleSlot` is a safe abstraction. [Phase 2 confirmed]
 - `src/util/rust_util/mod.rs` — `InitializeOnce` is irreducible for performance. [Phase 2 confirmed]
 - `src/policy/marksweepspace/native_ms/block.rs` — Raw memory accesses for free list. [Phase 2 confirmed]
 - `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are irreducible function signatures and raw memory copy. [Phase 2 confirmed]
@@ -51,7 +50,8 @@ Reusable refactoring patterns (recipe format):
 - `src/util/erase_vm.rs` — Erased VM references are used to bypass generic type parameters in object-safe traits (SFT), and are necessary for performance and design. [Phase 2 confirmed]
 - `src/policy/vmspace.rs` — Irreducible SFT initialization. [Phase 2 confirmed]
 - `src/util/int_array_freelist.rs` — No unsafe code found. [Phase 2 confirmed]
-- `src/util/heap/layout/mmapper/csm/two_level_storage.rs` — No unsafe code found after removing redundant unsafe impls. [Phase 2 confirmed]
+- `src/util/heap/layout/mmapper/csm/two_level_storage.rs` — No unsafe code found after removing redundant unsafe impls. [Phase2 confirmed]
+- `src/vm/slot.rs` — SimpleSlot is a safe abstraction. Investigation showed that using references adds lifetime burden and moves unsafe to construction. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 ### StwProof for safe plan access
