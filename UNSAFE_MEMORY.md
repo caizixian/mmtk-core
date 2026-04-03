@@ -48,3 +48,4 @@
 - src/util/heap/layout/map32.rs — Completed (no remaining unsafe blocks, only trait-required unsafe fn).
 - `src/util/heap/layout/map64.rs` — Remaining unsafe are trait methods or `Address::from_usize` (anti-pattern to replace with `ZERO.add`).
 - `src/util/heap/freelistpageresource.rs`: Remove `unsafe impl Send` and `unsafe impl Sync` for `FreeListPageResource` now that `FreeList` trait is `Send`.
+- `src/util/heap/space_descriptor.rs` — `Zeroable` implementation is required for `new_zeroed_vec` in `map32.rs`. Remaining `unsafe` are `Address::from_usize` which are anti-patterns to replace.

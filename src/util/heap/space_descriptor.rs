@@ -1,3 +1,4 @@
+
 use bytemuck::Zeroable;
 
 use crate::util::constants::*;
@@ -30,7 +31,6 @@ const DISCONTIG_INDEX_INCREMENT: usize = 1 << TYPE_BITS;
 #[derive(Copy, Clone, PartialEq, Debug)]
 #[repr(transparent)]
 pub struct SpaceDescriptor(usize);
-
 unsafe impl Zeroable for SpaceDescriptor {}
 
 impl SpaceDescriptor {
