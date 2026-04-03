@@ -1,6 +1,7 @@
 use super::header_metadata::HeaderMetadataSpec;
 use crate::util::metadata::metadata_val_traits::*;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
+use crate::util::metadata::safe_access::StwProof;
 use crate::util::ObjectReference;
 use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
@@ -55,7 +56,10 @@ impl MetadataSpec {
         mask: Option<T>,
     ) -> T {
         match self {
-            MetadataSpec::OnSide(metadata_spec) => metadata_spec.load(object.to_raw_address()),
+            MetadataSpec::OnSide(metadata_spec) => {
+                let proof = StwProof::new();
+                metadata_spec.load(object.to_raw_address(), &proof)
+            }
             MetadataSpec::InHeader(metadata_spec) => {
                 VM::VMObjectModel::load_metadata::<T>(metadata_spec, object, mask)
             }
@@ -105,7 +109,8 @@ impl MetadataSpec {
     ) {
         match self {
             MetadataSpec::OnSide(metadata_spec) => {
-                metadata_spec.store(object.to_raw_address(), val);
+                let proof = StwProof::new();
+                metadata_spec.store(object.to_raw_address(), val, &proof);
             }
             MetadataSpec::InHeader(metadata_spec) => {
                 VM::VMObjectModel::store_metadata::<T>(metadata_spec, object, val, mask)

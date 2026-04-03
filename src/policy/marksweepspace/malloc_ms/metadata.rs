@@ -1,6 +1,7 @@
 use crate::util::metadata::side_metadata;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::metadata::vo_bit;
+use crate::util::metadata::safe_access::StwProof;
 use crate::util::Address;
 use crate::util::ObjectReference;
 use crate::vm::{ObjectModel, VMBinding};
@@ -46,7 +47,8 @@ pub(super) fn is_page_marked(page_addr: Address) -> bool {
 
 #[allow(unused)]
 pub(super) unsafe fn is_page_marked_unsafe(page_addr: Address) -> bool {
-    ACTIVE_PAGE_METADATA_SPEC.load::<u8>(page_addr) == 1
+    let proof = StwProof::new();
+    ACTIVE_PAGE_METADATA_SPEC.load::<u8>(page_addr, &proof) == 1
 }
 
 pub fn set_vo_bit(object: ObjectReference) {
@@ -69,7 +71,10 @@ pub(super) fn set_page_mark(page_addr: Address) {
 
 /// Is this allocation an offset malloc? The argument address should be the allocation address (object start)
 pub(super) fn is_offset_malloc(address: Address) -> bool {
-    unsafe { OFFSET_MALLOC_METADATA_SPEC.load::<u8>(address) == 1 }
+    unsafe {
+        let proof = StwProof::new();
+        OFFSET_MALLOC_METADATA_SPEC.load::<u8>(address, &proof) == 1
+    }
 }
 
 /// Set the offset bit for the allocation. The argument address should be the allocation address (object start)

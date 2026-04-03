@@ -2,6 +2,7 @@ use crate::scheduler::GCWork;
 use crate::util::linear_scan::Region;
 use crate::util::linear_scan::RegionIterator;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
+use crate::util::metadata::safe_access::StwProof;
 use crate::util::Address;
 use crate::vm::VMBinding;
 use spin::Mutex;
@@ -145,7 +146,10 @@ impl ChunkMap {
             );
         }
         // Update alloc byte
-        unsafe { Self::ALLOC_TABLE.store::<u8>(chunk.start(), state.0) };
+        unsafe {
+            let proof = StwProof::new();
+            Self::ALLOC_TABLE.store::<u8>(chunk.start(), state.0, &proof);
+        };
         // If this is a newly allcoated chunk, then expand the chunk range.
         if allocated {
             debug_assert!(!chunk.start().is_zero());
@@ -170,7 +174,10 @@ impl ChunkMap {
 
     /// Get chunk state, regardless of the space. This should always be private.
     fn get_internal(&self, chunk: Chunk) -> ChunkState {
-        let byte = unsafe { Self::ALLOC_TABLE.load::<u8>(chunk.start()) };
+        let byte = unsafe {
+            let proof = StwProof::new();
+            Self::ALLOC_TABLE.load::<u8>(chunk.start(), &proof)
+        };
         ChunkState(byte)
     }
 

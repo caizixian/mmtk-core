@@ -1,14 +1,14 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 531 | Current: 512 | Δ: -19
+- Starting count: 531 | Current: 512 | Δ: -19 (Phase 2 progress made, awaiting count update)
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - `Address::from_usize` is marked unsafe by design to warn about invalid addresses. Replacing it with `ZERO.add` is considered an anti-pattern as it is semantically identical.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: Use `StwProof` to make `SideMetadataSpec::load` and `store` safe (remove `unsafe` from signature).
+1. 🔴 HIGH: Typestate pattern for `mutator_context.rs` — replace `MaybeUninit` with type-indexed dispatch.
 2. 🟡 MED: Explore other files for Phase 2 abstractions.
 
 ## Patterns Discovered
@@ -21,18 +21,17 @@
 - `NonZeroUsize::new_unchecked` can be replaced with `NonZeroUsize::new().expect()` if the value is known to be non-zero.
 - **MetadataSlot**: Centralizes unsafe raw memory access in `safe_access.rs`.
 - **Safe Constructor**: Adding `slot_for` to `SideMetadataSpec` and `HeaderMetadataSpec` allows safe access to `MetadataSlot` without unsafe blocks at call sites.
+- **StwProof**: Token to prove world is stopped, allowing safe non-atomic access to metadata. Used to make `SideMetadataSpec::load` and `store` safe.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.
 - `src/policy/sft_map.rs` — Remaining unsafe are trait signatures and unavoidable transmutes for fat pointers in atomics.
 - `src/util/alloc/allocators.rs` — Remaining unsafe are getters using `assume_init_ref/mut` on `MaybeUninit` arrays, required for layout compatibility.
 - `src/util/metadata/side_metadata/helpers.rs` — Remaining unsafe are raw loads in functions that scan metadata addresses directly without a spec.
-- `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are `new_unchecked` on raw metadata addresses, `std::ptr::copy`, and `unsafe fn` due to concurrency invariants. (Analyzed in step bf97f4bf)
 - `src/util/metadata/metadata_val_traits.rs` — `MetadataValue` trait methods are unsafe by design as they perform raw memory access.
 - `src/util/metadata/side_metadata/side_metadata_tests.rs` — All unsafe are `Address::from_usize(...)` for creating test addresses.
 - `src/policy/marksweepspace/native_ms/block.rs` — Remaining unsafe are `Address::from_usize`, `ObjectReference::from_raw_address_unchecked`, and raw pointer dereferencing for `BlockList`.
 - `src/util/heap/layout/map32.rs` — Remaining unsafe are `mut_self` calls claimed to be safe due to single-threaded boot time or exclusive ranges.
-- `src/plan/mutator_context.rs` — Remaining unsafe are allocator accesses relying on `Allocators` unsafe methods, required for layout compatibility.
 - `src/util/heap/blockpageresource.rs` — Custom lock-free queue (`BlockQueue`) using `UnsafeCell` and `MaybeUninit`.
 - `src/scheduler/gc_work.rs` — Plan casts in `Prepare`/`Release` require raw pointers to avoid UB lint when casting to `&mut`.
 - `src/util/memory.rs` — Calls to `libc` functions (`mmap`, `mprotect`, etc.) and safe wrappers around them.
@@ -40,4 +39,4 @@
 
 ## Abstraction Proposals (for Phase 2)
 - **Safe Metadata Accessor**: `MetadataSlot` implemented in `safe_access.rs`. Used in `header_metadata.rs` and `global.rs`.
-- **StwProof**: Token to prove world is stopped, allowing safe non-atomic access to metadata.
+- **StwProof**: Token to prove world is stopped, allowing safe non-atomic access to metadata. (Done)

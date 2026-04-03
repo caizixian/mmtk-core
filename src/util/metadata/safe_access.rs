@@ -4,6 +4,20 @@ use crate::util::metadata::side_metadata::SideMetadataSpec;
 use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
 
+/// Proof that the world is stopped. Only the GC controller can create this.
+/// This allows safe non-atomic access to metadata.
+pub struct StwProof(());
+
+impl StwProof {
+    /// Only callable by the GC controller after stopping mutators.
+    ///
+    /// # Safety
+    /// The caller must ensure that the world is stopped and no concurrent access to metadata is possible.
+    pub unsafe fn new() -> Self {
+        StwProof(())
+    }
+}
+
 /// A safe wrapper around a metadata address.
 /// It is tied to the lifetime of the `SideMetadataSpec` that created it.
 pub struct MetadataSlot<'a, T: MetadataValue> {

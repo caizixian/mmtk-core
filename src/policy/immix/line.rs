@@ -3,6 +3,7 @@ use std::ops::Range;
 use super::block::Block;
 use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::SideMetadataSpec;
+use crate::util::metadata::safe_access::StwProof;
 use crate::{
     util::{Address, ObjectReference},
     vm::*,
@@ -52,15 +53,15 @@ impl Line {
     /// Mark the line. This will update the side line mark table.
     pub fn mark(&self, state: u8) {
         debug_assert!(!super::BLOCK_ONLY);
-        unsafe {
-            Self::MARK_TABLE.store::<u8>(self.start(), state);
-        }
+        let proof = unsafe { StwProof::new() };
+        Self::MARK_TABLE.store::<u8>(self.start(), state, &proof);
     }
 
     /// Test line mark state.
     pub fn is_marked(&self, state: u8) -> bool {
         debug_assert!(!super::BLOCK_ONLY);
-        unsafe { Self::MARK_TABLE.load::<u8>(self.start()) == state }
+        let proof = unsafe { StwProof::new() };
+        Self::MARK_TABLE.load::<u8>(self.start(), &proof) == state
     }
 
     /// Mark all lines the object is spanned to.

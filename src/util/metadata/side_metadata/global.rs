@@ -12,6 +12,7 @@ use ranges::BitByteRange;
 use std::fmt;
 use std::io::Result;
 use std::sync::atomic::Ordering;
+use crate::util::metadata::safe_access::StwProof;
 
 /// This struct stores the specification of a side metadata bit-set.
 /// It is used as an input to the (inline) functions provided by the side metadata module.
@@ -529,13 +530,8 @@ impl SideMetadataSpec {
 
     /// Non-atomic load of metadata.
     ///
-    /// # Safety
-    ///
-    /// This is unsafe because:
-    ///
-    /// 1. Concurrent access to this operation is undefined behaviour.
-    /// 2. Interleaving Non-atomic and atomic operations is undefined behaviour.
-    pub unsafe fn load<T: MetadataValue>(&self, data_addr: Address) -> T {
+    /// This requires a `StwProof` to ensure no concurrent access.
+    pub fn load<T: MetadataValue>(&self, data_addr: Address, _proof: &StwProof) -> T {
         self.side_metadata_access::<true, T, _, _, _>(
             data_addr,
             None,
@@ -560,13 +556,8 @@ impl SideMetadataSpec {
 
     /// Non-atomic store of metadata.
     ///
-    /// # Safety
-    ///
-    /// This is unsafe because:
-    ///
-    /// 1. Concurrent access to this operation is undefined behaviour.
-    /// 2. Interleaving Non-atomic and atomic operations is undefined behaviour.
-    pub unsafe fn store<T: MetadataValue>(&self, data_addr: Address, metadata: T) {
+    /// This requires a `StwProof` to ensure no concurrent access.
+    pub fn store<T: MetadataValue>(&self, data_addr: Address, metadata: T, _proof: &StwProof) {
         self.side_metadata_access::<true, T, _, _, _>(
             data_addr,
             Some(metadata),
@@ -651,11 +642,12 @@ impl SideMetadataSpec {
     /// 2. Interleaving Non-atomic and atomic operations is undefined behaviour.
     pub unsafe fn set_zero(&self, data_addr: Address) {
         use num_traits::Zero;
+        let proof = unsafe { StwProof::new() };
         match self.log_num_of_bits {
-            0..=3 => self.store(data_addr, u8::zero()),
-            4 => self.store(data_addr, u16::zero()),
-            5 => self.store(data_addr, u32::zero()),
-            6 => self.store(data_addr, u64::zero()),
+            0..=3 => self.store(data_addr, u8::zero(), &proof),
+            4 => self.store(data_addr, u16::zero(), &proof),
+            5 => self.store(data_addr, u32::zero(), &proof),
+            6 => self.store(data_addr, u64::zero(), &proof),
             _ => unreachable!(),
         }
     }
@@ -1053,6 +1045,7 @@ impl SideMetadataSpec {
         let start_addr = data_addr.align_down(region_bytes);
         let end_addr = data_addr.saturating_sub(search_limit_bytes) + 1usize;
 
+        let proof = unsafe { StwProof::new() };
         let mut cursor = start_addr;
         while cursor >= end_addr {
             // We encounter an unmapped address. Just return None.
@@ -1060,7 +1053,7 @@ impl SideMetadataSpec {
                 return None;
             }
             // If we find non-zero value, just return it.
-            if !unsafe { self.load::<T>(cursor).is_zero() } {
+            if !self.load::<T>(cursor, &proof).is_zero() {
                 return Some(cursor);
             }
             cursor -= region_bytes;
@@ -1076,12 +1069,13 @@ impl SideMetadataSpec {
     ) -> Option<Address> {
         debug_assert!(self.uses_contiguous_side_metadata());
 
+        let proof = unsafe { StwProof::new() };
         // Quick check if the data address is mapped at all.
         if !data_addr.is_mapped() {
             return None;
         }
         // Quick check if the current data_addr has a non zero value.
-        if !unsafe { self.load::<T>(data_addr).is_zero() } {
+        if !self.load::<T>(data_addr, &proof).is_zero() {
             return Some(data_addr.align_down(1 << self.log_bytes_in_region));
         }
 
@@ -1197,12 +1191,13 @@ impl SideMetadataSpec {
     ) {
         let region_bytes = 1usize << self.log_bytes_in_region;
 
+        let proof = unsafe { StwProof::new() };
         let mut cursor = data_start_addr;
         while cursor < data_end_addr {
             debug_assert!(cursor.is_mapped());
 
             // If we find non-zero value, just call back.
-            if !unsafe { self.load::<T>(cursor).is_zero() } {
+            if !self.load::<T>(cursor, &proof).is_zero() {
                 visit_data(cursor);
             }
             cursor += region_bytes;
