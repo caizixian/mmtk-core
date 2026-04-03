@@ -10,7 +10,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/global.rs:50-120` — Investigate if we can use a helper method abstraction to centralize unsafe dereferences, similar to `SimpleSlot` and `MetadataSlot`.
+1. 🟢 LOW: `src/util/metadata/metadata_val_traits.rs:80-200` — Check if safety comments are present for all unsafe trait methods and implementations, and add them if missing.
 
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
