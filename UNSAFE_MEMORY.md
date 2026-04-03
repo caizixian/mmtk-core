@@ -8,9 +8,8 @@
 - `Address::from_usize` is marked unsafe by design to warn about invalid addresses. Replacing it with `ZERO.add` is considered an anti-pattern as it is semantically identical.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: Investigate `src/policy/marksweepspace/native_ms/block.rs` for implementing `BlockList` context pattern to remove unsafe stores.
-2. 🟡 MED: Investigate `MaybeUninit` usages in `src/util/alloc/allocators.rs` for potential safe abstractions.
-3. 🟢 LOW: Identify other `MaybeUninit` usages in the codebase and apply safe abstractions.
+1. 🔴 HIGH: Start Phase 3: Document remaining unsafe blocks in `src/util/rust_util/mod.rs` and `src/policy/marksweepspace/native_ms/block.rs` with `// SAFETY:` comments or justifications.
+2. 🟡 MED: Identify other `MaybeUninit` usages in the codebase and apply safe abstractions if possible without performance regression.
 
 ## Patterns Discovered
 - `MaybeUninit` arrays of size 1 can be replaced with `Option` and `unwrap()` to eliminate unsafe access.
@@ -59,3 +58,5 @@
 - `src/util/metadata/vo_bit/mod.rs` — Remaining unsafe is `from_raw_address_unchecked` in `get_object_ref_for_vo_addr` which is irreducible.
 - `src/util/heap/layout/map64.rs` — Remaining unsafe are trait signatures and unavoidable `from_usize` calls for reading high water mark.
 - `src/util/metadata/safe_access.rs` — Abstraction boundary for `MetadataSlot`.
+- `src/util/rust_util/mod.rs` — `InitializeOnce` provides zero-overhead reads for `SFT_MAP` in release builds, requiring unsafe; `libc::gettid()` is FFI.
+- `src/util/malloc/malloc_ms_util.rs` — FFI calls to C allocator and raw pointer operations for alignment.
