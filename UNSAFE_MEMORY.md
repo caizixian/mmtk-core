@@ -10,7 +10,7 @@ Architectural insights that affect ALL future safety decisions:
 - Static plan references are needed because plan types are generic and cannot be stored in global statics easily.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/heap/blockpageresource.rs:216` — Investigate replacing `MaybeUninit` with `Option` in `BlockQueue` — expected Δ: -2
+1. 🔴 HIGH: `src/util/alloc/allocators.rs:44` — Implement bitmask for initialized allocators to make `get_allocator` safe — expected Δ: -4
 2. 🟢 LOW: Consider using a library like `core_affinity` to remove remaining unsafe in `src/scheduler/affinity.rs` in the future.
 
 ## Patterns Discovered
