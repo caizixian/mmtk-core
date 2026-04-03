@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 221 | Δ: -130
+- Starting count: 351 | Current: 219 | Δ: -132
 - Phase: 3
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -17,6 +17,7 @@ Architectural insights that affect ALL future safety decisions:
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
 - Adding `Send + Sync` bounds to trait objects (e.g. `Box<dyn Trait + Send + Sync>`) can enable automatic derivation of `Send` and `Sync` for containing structures, eliminating the need for `unsafe impl Send` or `Sync`.
+- Replacing `PhantomData<T>` with `PhantomData<fn() -> T>` to allow automatic derivation of `Send` when the type parameter is only used as a marker.
 - Introducing `StwProof` token to encapsulate raw memory operations or mutable access to shared structures (like `Plan`) during Stop-The-World phases.
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
 - Safe wrappers in `Mutator` (like `get_allocator_mut_safe`) can encapsulate `unsafe` array access by checking initialization against `space_mapping`.
@@ -32,7 +33,7 @@ Reusable refactoring patterns (recipe format):
 - Changing `prepare_worker` in `Plan` trait to take `&'static self` can propagate the `'static` lifetime to `tospace()` and remove unsafe casts in `rebind`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
-- `src/plan/concurrent/concurrent_marking_work.rs` — Eliminated raw pointer from `ConcurrentTraceObjects` by using a temporary tracer type. Localized unsafe in the tracer. [Phase 2 confirmed]
+- `src/plan/concurrent/concurrent_marking_work.rs` — Eliminated raw pointer from `ConcurrentTraceObjects` by using a temporary tracer type. Removed `unsafe impl Send` by using `PhantomData<fn() -> T>`. Remaining unsafe is the raw pointer in the tracer. [Phase 3 confirmed]
 - `src/util/metadata/metadata_val_traits.rs` — Irreducible raw loads from addresses in trait default impls. [Phase 2 confirmed]
 - `src/util/memory.rs` — Contains wrappers for FFI calls. [Phase 2 confirmed]
 - `docs/dummyvm/src/api.rs` — Irreducible FFI boundaries in dummy VM. [Phase 2 confirmed]

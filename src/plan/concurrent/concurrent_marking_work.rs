@@ -146,13 +146,9 @@ pub struct ProcessModBufSATB<
     const KIND: TraceKind,
 > {
     nodes: Option<Vec<ObjectReference>>,
-    _p: std::marker::PhantomData<(VM, P)>,
+    _p: std::marker::PhantomData<fn() -> (VM, P)>,
 }
 
-unsafe impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
-    Send for ProcessModBufSATB<VM, P, KIND>
-{
-}
 
 impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
     ProcessModBufSATB<VM, P, KIND>
@@ -188,13 +184,9 @@ pub struct ProcessRootSlots<
     const KIND: TraceKind,
 > {
     base: ProcessEdgesBase<VM>,
-    _p: std::marker::PhantomData<P>,
+    _p: std::marker::PhantomData<fn() -> P>,
 }
 
-unsafe impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
-    Send for ProcessRootSlots<VM, P, KIND>
-{
-}
 
 impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
     ProcessRootSlots<VM, P, KIND>
