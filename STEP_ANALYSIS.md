@@ -1,16 +1,17 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: None
-- Strategy: Phase 2
+- File: `src/util/metadata/side_metadata/global.rs`
+- Strategy: Phase 2 (Safe Abstraction)
 
 ## Findings
-- All errors fixed after making `SideMetadataSpec::load` and `store` safe by requiring `StwProof`.
+- Added `slot_from_meta_addr` to `SideMetadataSpec`.
+- Refactored `zero_meta_bits`, `set_meta_bits`, and `bcopy_metadata_contiguous` to use it.
+- Fixed tests and wrappers.
+- Build passes.
 
 ## Attempted Changes
-- Introduced `StwProof` in `safe_access.rs`.
-- Updated `load` and `store` in `global.rs`.
-- Fixed callers in `global.rs`, `line.rs`, `malloc_ms/metadata.rs`, `chunk_map.rs`, and `vo_bit/mod.rs`.
+- See above.
 
 ## Blockers / Insights for Next Step
-- None. Build passes.
+- None. Ready to commit.

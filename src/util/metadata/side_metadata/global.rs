@@ -202,8 +202,24 @@ impl SideMetadataSpec {
         unsafe { MetadataSlot::new_unchecked(meta_addr) }
     }
 
+    /// Get a `MetadataSlot` for the given metadata address.
+    ///
+    /// # Safety
+    /// The caller must ensure the metadata address is valid for this spec.
+    /// In debug builds, this checks if the address is mapped.
+    pub fn slot_from_meta_addr<T: MetadataValue>(&self, meta_addr: Address) -> MetadataSlot<'_, T> {
+        #[cfg(debug_assertions)]
+        {
+            use crate::MMAPPER;
+            debug_assert!(MMAPPER.is_mapped_address(meta_addr), "Metadata address is not mapped");
+        }
+        // SAFETY: The caller must ensure the address is valid. We check it in debug builds.
+        unsafe { MetadataSlot::new_unchecked(meta_addr) }
+    }
+
     /// This method is used for bulk zeroing side metadata for a data address range.
     pub(crate) fn zero_meta_bits(
+        spec: &SideMetadataSpec,
         meta_start_addr: Address,
         meta_start_bit: u8,
         meta_end_addr: Address,
@@ -224,7 +240,7 @@ impl SideMetadataSpec {
                     // Get a mask that the bits we need to zero are set to zero, and the other bits are 1.
                     let mask: u8 =
                         u8::MAX.checked_shl(bit_end as u32).unwrap_or(0) | !(u8::MAX << bit_start);
-                    unsafe { MetadataSlot::<u8>::new_unchecked(addr) }.fetch_and(mask, Ordering::SeqCst);
+                    spec.slot_from_meta_addr::<u8>(addr).fetch_and(mask, Ordering::SeqCst);
                     false
                 }
             }
@@ -241,6 +257,7 @@ impl SideMetadataSpec {
 
     /// This method is used for bulk setting side metadata for a data address range.
     pub(crate) fn set_meta_bits(
+        spec: &SideMetadataSpec,
         meta_start_addr: Address,
         meta_start_bit: u8,
         meta_end_addr: Address,
@@ -261,7 +278,7 @@ impl SideMetadataSpec {
                     // Get a mask that the bits we need to set are 1, and the other bits are 0.
                     let mask: u8 = !(u8::MAX.checked_shl(bit_end as u32).unwrap_or(0))
                         & (u8::MAX << bit_start);
-                    unsafe { MetadataSlot::<u8>::new_unchecked(addr) }.fetch_or(mask, Ordering::SeqCst);
+                    spec.slot_from_meta_addr::<u8>(addr).fetch_or(mask, Ordering::SeqCst);
                     false
                 }
             }
@@ -381,7 +398,7 @@ impl SideMetadataSpec {
         #[cfg(feature = "extreme_assertions")]
         sanity::verify_bzero(self, start, size);
 
-        self.bulk_update_metadata(start, size, &Self::zero_meta_bits)
+        self.bulk_update_metadata(start, size, &|a, b, c, d| Self::zero_meta_bits(self, a, b, c, d))
     }
 
     /// Bulk set a specific metadata for a memory region. Note that this method is more sophisiticated than a simple memset, especially in the following
@@ -400,7 +417,7 @@ impl SideMetadataSpec {
         #[cfg(feature = "extreme_assertions")]
         sanity::verify_bset(self, start, size);
 
-        self.bulk_update_metadata(start, size, &Self::set_meta_bits)
+        self.bulk_update_metadata(start, size, &|a, b, c, d| Self::set_meta_bits(self, a, b, c, d))
     }
 
     /// Bulk copy the `other` side metadata for a memory region to this side metadata.
@@ -457,9 +474,7 @@ impl SideMetadataSpec {
                     // we are setting selected bits in one byte
                     let mask: u8 = !(u8::MAX.checked_shl(bit_end as u32).unwrap_or(0))
                         & (u8::MAX << bit_start); // Get a mask that the bits we need to set are 1, and the other bits are 0.
-                    let (src_slot, dst_slot) = unsafe {
-                        (MetadataSlot::<u8>::new_unchecked(src), MetadataSlot::<u8>::new_unchecked(dst))
-                    };
+                    let (src_slot, dst_slot) = (other.slot_from_meta_addr::<u8>(src), self.slot_from_meta_addr::<u8>(dst));
                     let old_src = src_slot.load_atomic(Ordering::Relaxed);
                     let old_dst = dst_slot.load_atomic(Ordering::Relaxed);
                     let new = (old_src & mask) | (old_dst & !mask);
@@ -2155,22 +2170,30 @@ mod tests {
             unsafe { std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(8, 8).unwrap()) };
         let addr = Address::from_mut_ptr(raw_mem);
 
-        SideMetadataSpec::set_meta_bits(addr, 0, addr, 4);
+        let spec = SideMetadataSpec {
+            name: "test_spec",
+            is_global: true,
+            offset: SideMetadataOffset::addr(Address::ZERO),
+            log_num_of_bits: 0,
+            log_bytes_in_region: 0,
+        };
+
+        SideMetadataSpec::set_meta_bits(&spec, addr, 0, addr, 4);
         assert_eq!(unsafe { addr.load::<u64>() }, 0b1111);
 
-        SideMetadataSpec::zero_meta_bits(addr, 1, addr, 3);
+        SideMetadataSpec::zero_meta_bits(&spec, addr, 1, addr, 3);
         assert_eq!(unsafe { addr.load::<u64>() }, 0b1001);
 
-        SideMetadataSpec::set_meta_bits(addr, 2, addr, 6);
+        SideMetadataSpec::set_meta_bits(&spec, addr, 2, addr, 6);
         assert_eq!(unsafe { addr.load::<u64>() }, 0b0011_1101);
 
-        SideMetadataSpec::zero_meta_bits(addr, 0, addr + 1usize, 0);
+        SideMetadataSpec::zero_meta_bits(&spec, addr, 0, addr + 1usize, 0);
         assert_eq!(unsafe { addr.load::<u64>() }, 0b0);
 
-        SideMetadataSpec::set_meta_bits(addr, 2, addr + 1usize, 2);
+        SideMetadataSpec::set_meta_bits(&spec, addr, 2, addr + 1usize, 2);
         assert_eq!(unsafe { addr.load::<u64>() }, 0b11_1111_1100);
 
-        SideMetadataSpec::set_meta_bits(addr, 0, addr + 1usize, 2);
+        SideMetadataSpec::set_meta_bits(&spec, addr, 0, addr + 1usize, 2);
         assert_eq!(unsafe { addr.load::<u64>() }, 0b11_1111_1111);
     }
 }

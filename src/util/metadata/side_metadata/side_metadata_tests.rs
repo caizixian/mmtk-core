@@ -685,24 +685,32 @@ mod tests {
         let start = Address::from_mut_ptr(data.as_mut_ptr());
         let end = start + size;
 
+        let spec = SideMetadataSpec {
+            name: "test_spec",
+            is_global: true,
+            offset: SideMetadataOffset::addr(Address::ZERO),
+            log_num_of_bits: 0,
+            log_bytes_in_region: 0,
+        };
+
         data[0] = u32::MAX;
         // zero the word
-        SideMetadataSpec::zero_meta_bits(start, 0, end, 0);
+        SideMetadataSpec::zero_meta_bits(&spec, start, 0, end, 0);
         assert_eq!(data[0], 0);
 
         data[0] = u32::MAX;
         // zero first 2 bits
-        SideMetadataSpec::zero_meta_bits(start, 0, start, 2);
+        SideMetadataSpec::zero_meta_bits(&spec, start, 0, start, 2);
         assert_eq!(data[0], 0xFFFF_FFFC); // ....1100
 
         data[0] = u32::MAX;
         // zero last 2 bits
-        SideMetadataSpec::zero_meta_bits(end - 1, 6, end, 0);
+        SideMetadataSpec::zero_meta_bits(&spec, end - 1, 6, end, 0);
         assert_eq!(data[0], 0x3FFF_FFFF); // 0011....
 
         data[0] = u32::MAX;
         // zero everything except first 2 bits and last 2 bits
-        SideMetadataSpec::zero_meta_bits(start, 2, end - 1, 6);
+        SideMetadataSpec::zero_meta_bits(&spec, start, 2, end - 1, 6);
         assert_eq!(data[0], 0xC000_0003); // 1100....0011
     }
 

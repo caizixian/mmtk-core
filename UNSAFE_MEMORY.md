@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 531 | Current: 512 | Δ: -19 (Phase 2 progress made, awaiting count update)
+- Starting count: 531 | Current: 514 | Δ: -17 (Harness reported 514 at start of this turn)
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -9,7 +9,7 @@
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
 1. 🔴 HIGH: Typestate pattern for `mutator_context.rs` — replace `MaybeUninit` with type-indexed dispatch.
-2. 🟡 MED: Explore other files for Phase 2 abstractions.
+2. 🟡 MED: Continue applying `slot_from_meta_addr` in `global.rs` and other metadata files to remove unsafe blocks.
 
 ## Patterns Discovered
 - `MaybeUninit` arrays of size 1 can be replaced with `Option` and `unwrap()` to eliminate unsafe access.
@@ -22,6 +22,7 @@
 - **MetadataSlot**: Centralizes unsafe raw memory access in `safe_access.rs`.
 - **Safe Constructor**: Adding `slot_for` to `SideMetadataSpec` and `HeaderMetadataSpec` allows safe access to `MetadataSlot` without unsafe blocks at call sites.
 - **StwProof**: Token to prove world is stopped, allowing safe non-atomic access to metadata. Used to make `SideMetadataSpec::load` and `store` safe.
+- **slot_from_meta_addr**: Added to `SideMetadataSpec` to return a `MetadataSlot` from a metadata address, allowing safe operations in `zero_meta_bits` and `set_meta_bits`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.

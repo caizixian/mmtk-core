@@ -21,7 +21,14 @@ pub fn zero_meta_bits(
     meta_end_addr: Address,
     meta_end_bit: u8,
 ) {
-    SideMetadataSpec::zero_meta_bits(meta_start_addr, meta_start_bit, meta_end_addr, meta_end_bit)
+    let spec = SideMetadataSpec {
+        name: "test_spec",
+        is_global: true,
+        offset: crate::util::metadata::side_metadata::SideMetadataOffset::addr(Address::ZERO),
+        log_num_of_bits: 0,
+        log_bytes_in_region: 0,
+    };
+    SideMetadataSpec::zero_meta_bits(&spec, meta_start_addr, meta_start_bit, meta_end_addr, meta_end_bit)
 }
 
 /// Expose `set_meta_bits` when running `cargo bench`.
@@ -32,7 +39,14 @@ pub fn set_meta_bits(
     meta_end_addr: Address,
     meta_end_bit: u8,
 ) {
-    SideMetadataSpec::set_meta_bits(meta_start_addr, meta_start_bit, meta_end_addr, meta_end_bit)
+    let spec = SideMetadataSpec {
+        name: "test_spec",
+        is_global: true,
+        offset: crate::util::metadata::side_metadata::SideMetadataOffset::addr(Address::ZERO),
+        log_num_of_bits: 0,
+        log_bytes_in_region: 0,
+    };
+    SideMetadataSpec::set_meta_bits(&spec, meta_start_addr, meta_start_bit, meta_end_addr, meta_end_bit)
 }
 
 #[cfg(feature = "mock_test")]
