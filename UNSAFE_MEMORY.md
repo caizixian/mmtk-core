@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 277 | Δ: -74
+- Starting count: 351 | Current: 279 | Δ: -72
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@ Architectural insights that affect ALL future safety decisions:
 - Static plan references are needed because plan types are generic and cannot be stored in global statics easily.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/vo_bit/mod.rs:184` — investigate if we can use `StwProof` to make `find_prev_non_zero_value` safe — expected Δ: -1
+1. 🟡 MED: `src/util/metadata/vo_bit/mod.rs:184` — investigate if we can use atomic loads in `find_prev_non_zero_value` to avoid UB during mutator time — expected Δ: 0
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
