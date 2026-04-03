@@ -10,7 +10,7 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/malloc/malloc_ms_util.rs` — Investigate unsafe operations in malloc_ms_util. — expected Δ: ?
+1. 🔴 HIGH: `src/policy/marksweepspace/malloc_ms/metadata.rs:29-111` — Investigate if `load_atomic` or safe wrappers can reduce unsafe. — expected Δ: ?
 
 ## Patterns Discovered
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
@@ -41,6 +41,7 @@
 - `src/util/metadata/side_metadata/side_metadata_tests.rs` — Remaining unsafe are irreducible raw memory accesses and allocation in tests. [Phase 2 confirmed]
 - `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are irreducible function signatures and raw memory copy. [Phase 2 confirmed]
 - `src/util/heap/blockpageresource.rs` — Remaining unsafe are irreducible UnsafeCell accesses in lock-free queue. [Phase 2 confirmed]
+- `src/util/malloc/malloc_ms_util.rs` — Irreducible FFI and raw pointer manipulation. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - Implemented `SideMetadataSpecBlockExt` in `src/policy/marksweepspace/native_ms/block.rs` to abstract metadata accesses.
