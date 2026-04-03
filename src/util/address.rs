@@ -226,39 +226,48 @@ impl Address {
 
     /// loads a value of type T from the address
     /// # Safety
-    /// This could throw a segment fault if the address is invalid
+    /// The caller must ensure that the address is valid for reading a value of type `T` and properly aligned.
+    /// Accessing an invalid address or misaligned pointer is undefined behavior.
     pub unsafe fn load<T: Copy>(self) -> T {
+        // SAFETY: The caller must ensure the address is valid and aligned.
         *(self.0 as *mut T)
     }
 
     /// stores a value of type T to the address
     /// # Safety
-    /// This could throw a segment fault if the address is invalid
+    /// The caller must ensure that the address is valid for writing a value of type `T` and properly aligned.
+    /// Accessing an invalid address or misaligned pointer is undefined behavior.
     pub unsafe fn store<T>(self, value: T) {
         // We use a ptr.write() operation as directly setting the pointer would drop the old value
         // which may result in unexpected behaviour
+        // SAFETY: The caller must ensure the address is valid and aligned.
         (self.0 as *mut T).write(value);
     }
 
     /// atomic operation: load
     /// # Safety
-    /// This could throw a segment fault if the address is invalid
+    /// The caller must ensure that the address is valid for reading a value of type `T` (Atomic) and properly aligned.
+    /// Accessing an invalid address or misaligned pointer is undefined behavior.
     pub unsafe fn atomic_load<T: Atomic>(self, order: Ordering) -> T::Type {
+        // SAFETY: The caller must ensure the address is valid and aligned.
         let loc = &*(self.0 as *const T);
         loc.load(order)
     }
 
     /// atomic operation: store
     /// # Safety
-    /// This could throw a segment fault if the address is invalid
+    /// The caller must ensure that the address is valid for writing a value of type `T` (Atomic) and properly aligned.
+    /// Accessing an invalid address or misaligned pointer is undefined behavior.
     pub unsafe fn atomic_store<T: Atomic>(self, val: T::Type, order: Ordering) {
+        // SAFETY: The caller must ensure the address is valid and aligned.
         let loc = &*(self.0 as *const T);
         loc.store(val, order)
     }
 
     /// atomic operation: compare and exchange usize
     /// # Safety
-    /// This could throw a segment fault if the address is invalid
+    /// The caller must ensure that the address is valid for atomic operations on type `T` and properly aligned.
+    /// Accessing an invalid address or misaligned pointer is undefined behavior.
     pub unsafe fn compare_exchange<T: Atomic>(
         self,
         old: T::Type,
@@ -266,6 +275,7 @@ impl Address {
         success: Ordering,
         failure: Ordering,
     ) -> Result<T::Type, T::Type> {
+        // SAFETY: The caller must ensure the address is valid and aligned.
         let loc = &*(self.0 as *const T);
         loc.compare_exchange(old, new, success, failure)
     }
@@ -306,16 +316,20 @@ impl Address {
     /// converts the Address to a Rust reference
     ///
     /// # Safety
-    /// The caller must guarantee the address actually points to a Rust object.
+    /// The caller must guarantee the address actually points to a valid Rust object of type `T`.
+    /// The reference must not outlive the validity of the object.
     pub unsafe fn as_ref<'a, T>(self) -> &'a T {
+        // SAFETY: The caller must guarantee the address points to a valid object.
         &*self.to_mut_ptr()
     }
 
     /// converts the Address to a mutable Rust reference
     ///
     /// # Safety
-    /// The caller must guarantee the address actually points to a Rust object.
+    /// The caller must guarantee the address actually points to a valid Rust object of type `T`.
+    /// The reference must not outlive the validity of the object and must have exclusive access.
     pub unsafe fn as_mut_ref<'a, T>(self) -> &'a mut T {
+        // SAFETY: The caller must guarantee the address points to a valid object and exclusive access.
         &mut *self.to_mut_ptr()
     }
 
