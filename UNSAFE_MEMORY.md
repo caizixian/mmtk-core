@@ -10,8 +10,8 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/policy/sft_map.rs:103-115` — Investigate if `get_sft_wrapper` can take `&'static` reference — expected Δ: -1
-2. 🟢 LOW: `src/util/metadata/side_metadata/global.rs:550-556` — Verify if `std::ptr::copy` can be wrapped or replaced — expected Δ: 0
+All remaining unsafe blocks have been analyzed and categorized as irreducible or justified in the current architecture. No actionable items remain for local refactoring.
+
 
 ## Patterns Discovered
 - Refactored `SFTWrapper` to hold a reference instead of a raw pointer, eliminating `unsafe impl Send` and `Sync` for the wrapper and reducing unsafe count.
@@ -50,7 +50,7 @@
 - `src/mmtk.rs` — Uses `InitializeOnce` for `SFT_MAP` (irreducible for performance). `get_sft_map_mut` uses `get_ptr` and dereferences it unsafely under protection of `StwProof`. `StwProtected` uses `UnsafeCell` to avoid locking overhead. [Phase 3 confirmed]
 - `src/util/rust_util/mod.rs` — Implements `InitializeOnce`. Removed unsafe `get_mut` and added safe `get_ptr` to defer unsafety to call sites with proof tokens. Remaining unsafe are in initialization and `get_ref`. [Phase 3 confirmed]
 - `src/util/malloc/mod.rs` — Irreducible due to raw pointer manipulation in allocator. Audited safety comments. [Phase 3 confirmed]
-- `src/policy/sft_map.rs` — Transmutes between fat pointers (`&dyn SFT`) and double-word integers are irreducible due to lack of safe fat pointer atomics in Rust. [Phase 3 confirmed]
+- `src/policy/sft_map.rs` — Lifetime extension in `get_sft_wrapper` is necessary to return `&'static` from a short-lived reference, justified by spaces living forever. [Phase 3 confirmed]
 - `src/util/raw_memory_freelist.rs` — Remaining unsafe are `from_raw_parts` to create slice views of raw memory. [Phase 3 confirmed]
 - `src/util/metadata/global.rs` — Unsafe fns for load/store are necessary as they are non-atomic. [Phase 3 confirmed]
 - `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are in `MetadataSlot` helpers, memory copy, and tests calling unsafe functions. [Phase 3 confirmed]
