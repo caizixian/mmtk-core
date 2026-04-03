@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 536 | Δ: -186
-- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout/map32.rs (removed unnecessary unsafe block), util/heap/layout, util/copy, util/metadata/side_metadata, util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util, policy/sft_map (SFTMap update/eager_initialize take reference, remove unsafe in implementations), policy/marksweepspace/malloc_ms/global.rs (unnecessary SFT_MAP unsafe), policy/lockfreeimmortalspace.rs (unnecessary eager_initialize unsafe), mmtk.rs (removed unnecessary unsafe cast for GCTrigger mutation)
+- Starting count: 722 | Current: 528 | Δ: -194
+- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout/map32.rs (removed unnecessary unsafe block), util/heap/layout, util/copy, util/metadata/side_metadata, util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util, policy/sft_map (SFTMap update/eager_initialize take reference, remove unsafe in implementations), policy/marksweepspace/malloc_ms/global.rs (unnecessary SFT_MAP unsafe, safe page marks), policy/lockfreeimmortalspace.rs (unnecessary eager_initialize unsafe), mmtk.rs (removed unnecessary unsafe cast for GCTrigger mutation), policy/marksweepspace/malloc_ms/metadata.rs (safe page marks)
 
 
 ## Codebase Invariants (PROTECTED — do not prune)

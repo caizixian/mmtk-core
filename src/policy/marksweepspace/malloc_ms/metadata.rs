@@ -38,12 +38,7 @@ pub(super) fn compare_exchange_set_page_mark(page_addr: Address) -> bool {
 
 #[allow(unused)]
 pub(super) fn is_page_marked(page_addr: Address) -> bool {
-    ACTIVE_PAGE_METADATA_SPEC.load_atomic::<u8>(page_addr, Ordering::SeqCst) == 1
-}
-
-#[allow(unused)]
-pub(super) unsafe fn is_page_marked_unsafe(page_addr: Address) -> bool {
-    ACTIVE_PAGE_METADATA_SPEC.load::<u8>(page_addr) == 1
+    ACTIVE_PAGE_METADATA_SPEC.load_atomic::<u8>(page_addr, Ordering::Relaxed) == 1
 }
 
 pub fn set_vo_bit(object: ObjectReference) {
@@ -83,14 +78,12 @@ pub unsafe fn unset_vo_bit_unsafe(object: ObjectReference) {
     vo_bit::unset_vo_bit_unsafe(object);
 }
 
-#[allow(unused)]
-pub unsafe fn unset_mark_bit<VM: VMBinding>(object: ObjectReference) {
-    VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.store::<VM, u8>(object, 0, None);
+pub fn unset_mark_bit<VM: VMBinding>(object: ObjectReference) {
+    VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.store_atomic::<VM, u8>(object, 0, None, Ordering::Relaxed);
 }
 
-#[allow(unused)]
-pub(super) unsafe fn unset_page_mark_unsafe(page_addr: Address) {
-    ACTIVE_PAGE_METADATA_SPEC.store::<u8>(page_addr, 0)
+pub(super) fn unset_page_mark(page_addr: Address) {
+    ACTIVE_PAGE_METADATA_SPEC.store_atomic::<u8>(page_addr, 0, Ordering::Relaxed)
 }
 
 /// Load u128 bits of side metadata
