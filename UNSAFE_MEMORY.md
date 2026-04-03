@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 199 | Δ: -152
+- Starting count: 351 | Current: 196 | Δ: -155
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -49,7 +49,7 @@ Reusable refactoring patterns (recipe format):
 - `src/plan/global.rs` — Unsafe for SFT_MAP access and CommonPlan reference for work packet. [Phase 2 confirmed]
 - `src/util/alloc/allocator.rs` — Raw memory write in `fill_alignment_gap`. [Phase 2 confirmed]
 - `src/util/malloc/mod.rs` — Irreducible FFI wrappers. [Phase 2 confirmed]
-- `src/mmtk.rs` — Irreducible UnsafeCell access and circular initialization. [Phase 2 confirmed]
+- `src/mmtk.rs` — Refactored `plan` to use `StwProtected`, removing `unsafe impl Sync` and unsafe blocks in accessors. Remaining unsafe are SFT_MAP access and lifetime extension in `new`. [Phase 3 confirmed]
 - `src/policy/sft_map.rs` — Transmutes are irreducible due to fat pointer provenance. [Phase 2 confirmed]
 - `src/util/erase_vm.rs` — Erased VM references are used to bypass generic type parameters in object-safe traits (SFT), and are necessary for performance and design. [Phase 2 confirmed]
 - `src/policy/vmspace.rs` — Irreducible SFT initialization. [Phase 2 confirmed]

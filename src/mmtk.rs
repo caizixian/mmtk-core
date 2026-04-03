@@ -118,12 +118,40 @@ impl Default for MMTKBuilder {
 /// when the GC is in progress.
 pub struct StwProof(());
 
+/// A wrapper around `UnsafeCell` that allows safe access to the plan.
+/// It is `Sync` if the contained type is `Sync`.
+pub struct StwProtected<T> {
+    value: UnsafeCell<T>,
+}
+
+unsafe impl<T: Sync> Sync for StwProtected<T> {}
+
+impl<T> StwProtected<T> {
+    pub fn new(value: T) -> Self {
+        Self {
+            value: UnsafeCell::new(value),
+        }
+    }
+
+    pub fn get(&self) -> &T {
+        unsafe { &*self.value.get() }
+    }
+
+    pub fn get_mut(&self, _proof: &StwProof) -> &mut T {
+        unsafe { &mut *self.value.get() }
+    }
+
+    pub fn get_mut_safe(&mut self) -> &mut T {
+        self.value.get_mut()
+    }
+}
+
 /// An MMTk instance. MMTk allows multiple instances to run independently, and each instance gives users a separate heap.
 /// *Note that multi-instances is not fully supported yet*
 pub struct MMTK<VM: VMBinding> {
     pub(crate) options: Arc<Options>,
     pub(crate) state: Arc<GlobalState>,
-    pub(crate) plan: UnsafeCell<Box<dyn Plan<VM = VM> + Send + Sync>>,
+    pub(crate) plan: StwProtected<Box<dyn Plan<VM = VM> + Send + Sync>>,
     pub(crate) reference_processors: ReferenceProcessors,
     pub(crate) finalizable_processor:
         Mutex<FinalizableProcessor<<VM::VMReferenceGlue as ReferenceGlue<VM>>::FinalizableType>>,
@@ -141,7 +169,7 @@ pub struct MMTK<VM: VMBinding> {
     pub(crate) analysis_manager: Arc<AnalysisManager<VM>>,
 }
 
-unsafe impl<VM: VMBinding> Sync for MMTK<VM> {}
+// unsafe impl<VM: VMBinding> Sync for MMTK<VM> {}
 
 impl<VM: VMBinding> MMTK<VM> {
     /// Create an MMTK instance. This is not public. Bindings should use [`MMTKBuilder::build`].
@@ -219,7 +247,7 @@ impl<VM: VMBinding> MMTK<VM> {
         MMTK {
             options,
             state,
-            plan: UnsafeCell::new(plan),
+            plan: StwProtected::new(plan),
             reference_processors: ReferenceProcessors::new(),
             finalizable_processor: Mutex::new(FinalizableProcessor::<
                 <VM::VMReferenceGlue as ReferenceGlue<VM>>::FinalizableType,
@@ -446,14 +474,14 @@ impl<VM: VMBinding> MMTK<VM> {
 
     /// Get a reference to the plan.
     pub fn get_plan(&self) -> &dyn Plan<VM = VM> {
-        unsafe { &**(self.plan.get()) }
+        &**self.plan.get()
     }
 
 
 
     /// Get the plan as mutable reference safely when we have exclusive access to MMTK.
     pub fn get_plan_mut_safe(&mut self) -> &mut dyn Plan<VM = VM> {
-        &mut **self.plan.get_mut()
+        &mut **self.plan.get_mut_safe()
     }
 
     /// Get a proof that the world is stopped.
@@ -467,9 +495,8 @@ impl<VM: VMBinding> MMTK<VM> {
     }
 
     /// Get the plan as mutable reference safely by providing a proof that the world is stopped.
-    pub fn get_plan_mut_with_proof(&self, _proof: StwProof) -> &mut dyn Plan<VM = VM> {
-        // SAFETY: We have a proof that the world is stopped, so it is safe to access the plan mutably.
-        unsafe { &mut **(self.plan.get()) }
+    pub fn get_plan_mut_with_proof(&self, proof: StwProof) -> &mut dyn Plan<VM = VM> {
+        &mut **self.plan.get_mut(&proof)
     }
 
     /// Get the run time options.
