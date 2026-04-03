@@ -39,6 +39,8 @@ All remaining unsafe blocks have been analyzed and categorized as irreducible or
 - Making `set` and `zero` in `memory.rs` unsafe would require adding unsafe blocks to 8 call sites, increasing the total count.
 - **New**: Eliminated 2 unsafe blocks in `src/util/metadata/side_metadata/global.rs` tests by using safe `load_atomic` and `store_atomic` instead of unsafe `load` and `store`.
 - **New**: Confirmed that making helper methods like `MetadataSlot::get_ref` `unsafe fn` would increase the count of unsafe blocks at call sites because the callers (like `Slot::load`) are often safe trait methods. Centralizing the unsafe block inside the helper is preferred to keep the count low.
+- **New**: Investigated using `StwProof` to make `SideMetadataSpec::load` and `store` safe. However, this would require all call sites to provide a proof, and if they don't have one, they would need to create it unsafely, pushing the unsafe to call sites.
+- **New**: Investigated changing `SFTMap::update` to take `&'static dyn SFT` to eliminate the unsafe cast in `get_sft_wrapper`. However, callers likely cannot prove `'static` to the compiler without leaking or unsafe casts, which would just move the unsafe to callers.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/heap/blockpageresource.rs` — Completely safe after removing `unsafe impl Sync` and adding `Send` bound to `Region` trait. [Phase 3 confirmed]
