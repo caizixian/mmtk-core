@@ -804,7 +804,7 @@ impl SideMetadataSpec {
                     Some(1u8),
                     || {
                         let meta_addr = address_to_meta_address(self, data_addr);
-                        u8::store_atomic(unsafe { meta_addr.as_ref::<AtomicU8>() }, 0xffu8, order);
+                        MetadataSlot(meta_addr).store(0xffu8, order);
                     },
                     |_| {}
                 )
@@ -826,7 +826,7 @@ impl SideMetadataSpec {
             None,
             || {
                 let meta_addr = address_to_meta_address(self, data_addr);
-                meta_addr.load::<u8>()
+                MetadataSlot(meta_addr).load_non_atomic()
             },
             |_| {},
         )
@@ -848,7 +848,7 @@ impl SideMetadataSpec {
             || {
                 let meta_addr = address_to_meta_address(self, data_addr);
                 let aligned_meta_addr = meta_addr.align_down(BYTES_IN_ADDRESS);
-                aligned_meta_addr.load::<usize>()
+                MetadataSlot(aligned_meta_addr).load_usize_non_atomic()
             },
             |_| {},
         )

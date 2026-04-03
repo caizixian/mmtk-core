@@ -3,7 +3,7 @@
 ## Progress
 - Starting count: 351 | Current: 123 | Δ: -228
 - Phase: 3 (Irreducible Documentation)
-- Note: Reduced count by 9 in this step by refactoring `SpaceDescriptor` to derive `Zeroable` and using `MetadataSlot` helpers in `global.rs`.
+- Note: Eliminated 1 unsafe block and 2 unsafe operations in `global.rs` by using `MetadataSlot` helpers.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Work packets hold raw pointers to plans or spaces to bypass borrow checker and lifetimes.
@@ -11,7 +11,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/util/metadata/side_metadata/global.rs` — Audit remaining unsafe blocks (approx 53) to see if they can be encapsulated by `MetadataSlot` or other abstractions.
+1. 🟡 MED: `src/util/metadata/side_metadata/global.rs` — Audit remaining unsafe blocks (approx 50) to see if they can be encapsulated by `MetadataSlot` or other abstractions.
 
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
@@ -26,8 +26,9 @@
 - Centralized unsafe raw pointer dereferences in `MetadataSlot` by introducing a helper `get_mut_ref` method, and refactored `load_val` to use `get_ref`, eliminating 3 unsafe blocks at call sites (net reduction of 2).
 - Used existing `MetadataSlot` abstraction to eliminate 10 unsafe blocks in `global.rs` by replacing direct calls to `MetadataValue` trait methods on `Address` with calls to `MetadataSlot` methods.
 - Refactored `MetadataValue` trait to take references instead of `Address`, eliminating unsafe blocks in trait implementations and narrowing unsafe scope at call sites in `MetadataSlot`.
-- **New**: Eliminated 8 unsafe blocks in `MetadataSlot` methods by using `self.get_ref::<T::Atomic>()` instead of direct unsafe casting.
-- **New**: Eliminated 1 unsafe block by deriving `Zeroable` for `SpaceDescriptor`.
+- Eliminated 8 unsafe blocks in `MetadataSlot` methods by using `self.get_ref::<T::Atomic>()` instead of direct unsafe casting.
+- Deriving `Zeroable` for `SpaceDescriptor` eliminated 1 unsafe block.
+- **New**: Eliminated direct unsafe operations in `SideMetadataSpec` methods by using `MetadataSlot` equivalents.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/heap/blockpageresource.rs` — Completely safe after removing `unsafe impl Sync` and adding `Send` bound to `Region` trait. [Phase 3 confirmed]
