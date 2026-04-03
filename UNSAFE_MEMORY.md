@@ -10,7 +10,7 @@ Architectural insights that affect ALL future safety decisions:
 - Static plan references are needed because plan types are generic and cannot be stored in global statics easily.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs:529` — investigate if we can use safe slices instead of `std::ptr::copy` — expected Δ: 0
+1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs:622` — investigate if we can use `StwProof` to make non-atomic `load`/`store` safe — expected Δ: -2
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
