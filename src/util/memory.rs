@@ -493,21 +493,22 @@ mod tests {
     // In the tests, we will mmap this address. This address should not be in our heap (in case we mess up with other tests)
     const START: Address = MEMORY_TEST_REGION.start;
 
+    fn test_dzmmap(start: Address, size: usize, strategy: MmapStrategy, anno: &MmapAnnotation) -> Result<()> {
+        assert!(start >= MEMORY_TEST_REGION.start);
+        assert!(start + size <= MEMORY_TEST_REGION.start + MEMORY_TEST_REGION.size);
+        // SAFETY: This is a safe wrapper for tests that ensures we only mmap within the test region.
+        unsafe { dzmmap(start, size, strategy, anno) }
+    }
+
     #[test]
     fn test_mmap() {
         serial_test(|| {
             with_cleanup(
                 || {
-                    // SAFETY: This is a test.
-                    let res = unsafe {
-                        dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!())
-                    };
+                    let res = test_dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!());
                     assert!(res.is_ok());
                     // We can overwrite with dzmmap
-                    // SAFETY: This is a test.
-                    let res = unsafe {
-                        dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!())
-                    };
+                    let res = test_dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!());
                     assert!(res.is_ok());
                 },
                 || {
@@ -546,10 +547,7 @@ mod tests {
             with_cleanup(
                 || {
                     // Make sure we mmapped the memory
-                    // SAFETY: This is a test.
-                    let res = unsafe {
-                        dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!())
-                    };
+                    let res = test_dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!());
                     assert!(res.is_ok());
                     // Use dzmmap_noreplace will fail
                     let res = dzmmap_noreplace(
@@ -576,10 +574,7 @@ mod tests {
                         mmap_noreserve(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!());
                     assert!(res.is_ok());
                     // Try reserve it
-                    // SAFETY: This is a test.
-                    let res = unsafe {
-                        dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!())
-                    };
+                    let res = test_dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!());
                     assert!(res.is_ok());
                 },
                 || {
