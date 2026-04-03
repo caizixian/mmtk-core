@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 178 | Δ: -173
+- Starting count: 351 | Current: 176 | Δ: -175
 - Phase: 3 (Irreducible Documentation)
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,8 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: Final review of all irreducible unsafe blocks to ensure they have proper // SAFETY: comments. (Reviewed: erase_vm.rs, sft_map.rs, mock_test_vm_layout_heap_start.rs, slot.rs)
+1. 🟢 LOW: Review `src/util/raw_memory_freelist.rs` for proper // SAFETY: comments.
+2. 🟢 LOW: Review `src/util/metadata/global.rs` for proper // SAFETY: comments.
 
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
@@ -46,3 +47,4 @@
 - `src/util/heap/layout/mmapper/csm/mod.rs` — Irreducible due to calling unsafe `dzmmap` for memory mapping. [Phase 3 confirmed]
 - `src/plan/concurrent/mod.rs` — Completely safe after removing unsafe impls for bytemuck traits. [Phase 3 confirmed]
 - `src/vm/tests/mock_tests/mock_test_vm_layout_compressed_pointer.rs` — Completely safe after removing unnecessary unsafe blocks. [Phase 3 confirmed]
+- `src/vm/tests/mock_tests/mock_test_vm_layout_heap_start.rs` — Completely safe after removing redundant unsafe blocks. [Phase 3 confirmed]
