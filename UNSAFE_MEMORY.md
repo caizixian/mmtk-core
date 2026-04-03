@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 548 | Δ: -174
-- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout, util/copy, util/metadata/side_metadata (side_metadata_tests.rs load/store to load_atomic/store_atomic, global.rs load to load_atomic in search), util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util (InitializeOnce Sync bound), policy/sft_map (SFTMap get_unchecked safe, SFTMap Sync, SFTDenseChunkMap auto-Sync, update/clear/eager_initialize safe), policy/marksweepspace/malloc_ms/global.rs (is_marked_unsafe to is_marked Relaxed), policy/marksweepspace/malloc_ms/metadata.rs (remove is_marked_unsafe, is_offset_malloc Relaxed load)
+- Starting count: 722 | Current: 544 | Δ: -178
+- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout, util/copy, util/metadata/side_metadata, util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util, policy/sft_map (SFTMap update/eager_initialize take reference, remove unsafe in implementations)
 
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -26,6 +26,7 @@
 - `MaybeUninit::uninit().assume_init()` for arrays → `[const { MaybeUninit::uninit() }; N]` — works when type is `MaybeUninit`.
 - `get_unchecked(i)` → `[i]` — works in non-hot paths where bounds are guaranteed or panic is acceptable.
 - `unsafe fn` in trait → safe `fn` when all implementations are safe (e.g. use standard indexing instead of raw pointers). Removes `unsafe` blocks at call sites.
+- `SFTRawPointer` (raw pointer) to `&(dyn SFT + Sync + 'static)` (reference) in trait signatures for `update` and `eager_initialize`. Removes `unsafe` blocks when dereferencing the space object in implementations.
 - `*const T` → `&T` in trait signatures where ownership is not required and lifetimes are valid.
 - `unsafe impl Sync` removal for types that only contain thread-safe fields (auto-Sync).
 - `InitializeOnce<T>` bound tightening: `unsafe impl<T: Sync> Sync for InitializeOnce<T>` to prevent unsound sharing of non-Sync types.
@@ -40,12 +41,10 @@
 - `SimpleSlot` → `&Atomic<T>` in tests for direct access without raw pointers.
 
 ## Refactoring Ideas
-- `src/util/metadata/side_metadata/helpers.rs`: Analyze remaining unsafe blocks (mostly tests/Address::from_usize and load/store).
-- `src/util/metadata/metadata_val_traits.rs`: Analyze 20 unsafe blocks (mostly trait methods for load/store).
-- `src/util/metadata/side_metadata/global.rs`: Analyze remaining unsafe blocks (74 count). Done load to load_atomic in search functions.
-- `src/policy/sft_map.rs`: Analyze remaining unsafe (20 count) for potential safe abstractions in SFT map access.
-- `src/plan/global.rs`: Remove `unsafe { crate::mmtk::SFT_MAP.get_mut() }` at line 114 by changing `notify_space_creation` to `&self` in `SFTMap` trait and using `Deref` on `SFT_MAP`.
-- Remove unused `unsafe` blocks at call sites of `SFTMap::update` and `SFTMap::clear` in `src/policy/space.rs`, `src/policy/marksweepspace/malloc_ms/global.rs`, and `src/util/heap/layout/map32.rs`.
+- `src/policy/space.rs`: Remove unnecessary `unsafe` blocks at call sites of `SFT_MAP.update` and `sft_map.eager_initialize` (lines 371, 750).
+- `src/policy/lockfreeimmortalspace.rs`: Remove unnecessary `unsafe` block at call site of `sft_map.eager_initialize` (line 130).
+- `src/policy/marksweepspace/malloc_ms/global.rs`: Remove unnecessary `unsafe` blocks at call sites of `SFT_MAP.update` and `SFT_MAP.clear` (lines 395, 608).
+- `src/util/heap/layout/map32.rs`: Remove unnecessary `unsafe` block at call site of `SFT_MAP.clear` (line 257).
 
 ## Files NOT to Revisit
 - `src/util/memory.rs` — FFI calls to libc (mmap, munmap, etc.).
