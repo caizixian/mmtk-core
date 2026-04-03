@@ -180,9 +180,9 @@ impl<VM: VMBinding> GCWorkerCopyContext<VM> {
     /// * `config`: The configuration for the copy context.
     pub fn new(worker_tls: VMWorkerThread, mmtk: &MMTK<VM>, config: CopyConfig<VM>) -> Self {
         let mut ret = GCWorkerCopyContext {
-            copy: unsafe { MaybeUninit::uninit().assume_init() },
-            immix: unsafe { MaybeUninit::uninit().assume_init() },
-            immix_hybrid: unsafe { MaybeUninit::uninit().assume_init() },
+            copy: [MaybeUninit::uninit()],
+            immix: [MaybeUninit::uninit()],
+            immix_hybrid: [MaybeUninit::uninit()],
             config,
         };
         let context = Arc::new(AllocatorContext::new(mmtk));
@@ -221,9 +221,9 @@ impl<VM: VMBinding> GCWorkerCopyContext<VM> {
     /// Create a stub GCWorkerCopyContext for non copying plans.
     pub fn new_non_copy() -> Self {
         GCWorkerCopyContext {
-            copy: unsafe { MaybeUninit::uninit().assume_init() },
-            immix: unsafe { MaybeUninit::uninit().assume_init() },
-            immix_hybrid: unsafe { MaybeUninit::uninit().assume_init() },
+            copy: [MaybeUninit::uninit()],
+            immix: [MaybeUninit::uninit()],
+            immix_hybrid: [MaybeUninit::uninit()],
             config: CopyConfig::default(),
         }
     }

@@ -41,7 +41,7 @@ impl Region for Block {
     fn from_aligned_address(address: Address) -> Self {
         debug_assert!(address.is_aligned_to(Self::BYTES));
         debug_assert!(!address.is_zero());
-        Self(unsafe { NonZeroUsize::new_unchecked(address.as_usize()) })
+        Self(NonZeroUsize::new(address.as_usize()).expect("address is zero"))
     }
 
     fn start(&self) -> Address {
