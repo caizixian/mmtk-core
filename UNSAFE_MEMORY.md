@@ -22,6 +22,7 @@ Reusable refactoring patterns (recipe format):
 - Replacing `ObjectReference::from_raw_address_unchecked` with `ObjectReference::from_raw_address(...).unwrap()` when the address is guaranteed to be non-zero (e.g. checked by assertion or invariant).
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
+- `src/plan/concurrent/concurrent_marking_work.rs` — `ConcurrentTraceObjects` uses raw pointer to bypass borrow checker for work packet. [Phase 2 confirmed]
 - `src/policy/sft_map.rs` — `SFTRefStorage` uses transmute for atomic fat pointers. [Phase 2 confirmed]
 - `src/util/metadata/metadata_val_traits.rs` — Irreducible raw loads from addresses in trait default impls. [Phase 2 confirmed]
 - `src/util/memory.rs` — Contains wrappers for FFI calls. [Phase 2 confirmed]
