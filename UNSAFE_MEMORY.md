@@ -10,7 +10,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-- (None. All remaining unsafe blocks are documented as irreducible.)
+1. 🟡 MED: `src/policy/sft_map.rs` — Investigate using thin pointers to `SFTWrapper` to eliminate transmutes of fat pointers — expected Δ: 0-3
 
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
@@ -68,3 +68,10 @@
 - `src/vm/slot.rs` — Remaining unsafe are in `SimpleSlot::as_atomic` (raw pointer cast) and `MemorySlice::copy` (raw memory copy). Added SAFETY comment to `MemorySlice::copy`. [Phase 3 confirmed]
 - `src/vm/tests/mock_tests/mock_test_doc_avoid_resolving_allocator.rs` — Test file demonstrating low-level hack for performance. Verified safety comment. [Phase 3 confirmed]
 - `src/util/heap/space_descriptor.rs` — Completely safe after deriving `Zeroable`. [Phase 3 confirmed]
+
+## Abstraction Proposals (for Phase 2)
+### SFTWrapper for SFTMap
+- Target files: `src/policy/sft_map.rs`
+- Expected Δ: 3 (potential reduction if we can eliminate transmutes)
+- Design sketch: Store `*const SFTWrapper` in `AtomicPtr` instead of transmuting fat pointer to `DoubleWord`. `SFTWrapper` contains `&'static dyn SFT`.
+- Status: proposed
