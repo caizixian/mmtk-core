@@ -8,8 +8,9 @@
 - `Address::from_usize` is marked unsafe by design to warn about invalid addresses. Replacing it with `ZERO.add` is considered an anti-pattern as it is semantically identical.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: Scan tests for `SideMetadataSpec::load/store` that can be replaced with `load_atomic/store_atomic` to remove unsafe blocks.
-2. 🟡 MED: Analyze remaining unsafe in `src/util/metadata/side_metadata/global.rs` and document them as irreducible if appropriate.
+1. 🔴 HIGH: Complete refactoring of `HeaderMetadataSpec` tests in `src/util/metadata/header_metadata.rs` (chunks 10-19 remaining).
+2. 🔴 HIGH: Scan tests for `SideMetadataSpec::load/store` that can be replaced with `load_atomic/store_atomic` to remove unsafe blocks.
+3. 🟡 MED: Analyze remaining unsafe in `src/util/metadata/side_metadata/global.rs` and document them as irreducible if appropriate.
 
 ## Patterns Discovered
 - `MaybeUninit` arrays of size 1 can be replaced with `Option` and `unwrap()` to eliminate unsafe access.
