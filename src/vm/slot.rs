@@ -151,7 +151,7 @@ pub trait Slot: Copy + Send + Debug + PartialEq + Eq + Hash {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct SimpleSlot {
-    slot_addr: *mut Atomic<Address>,
+    slot_addr: Address,
 }
 
 impl SimpleSlot {
@@ -161,7 +161,7 @@ impl SimpleSlot {
     /// *   `address`: The address in memory where an `ObjectReference` is stored.
     pub fn from_address(address: Address) -> Self {
         Self {
-            slot_addr: address.to_mut_ptr(),
+            slot_addr: address,
         }
     }
 
@@ -169,20 +169,18 @@ impl SimpleSlot {
     ///
     /// Return the address at which the `ObjectReference` is stored.
     pub fn as_address(&self) -> Address {
-        Address::from_mut_ptr(self.slot_addr)
+        self.slot_addr
     }
 }
 
-unsafe impl Send for SimpleSlot {}
-
 impl Slot for SimpleSlot {
     fn load(&self) -> Option<ObjectReference> {
-        let addr = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
+        let addr = unsafe { (*self.slot_addr.to_ptr::<Atomic<Address>>()).load(atomic::Ordering::Relaxed) };
         ObjectReference::from_raw_address(addr)
     }
 
     fn store(&self, object: ObjectReference) {
-        unsafe { (*self.slot_addr).store(object.to_raw_address(), atomic::Ordering::Relaxed) }
+        unsafe { (*self.slot_addr.to_ptr::<Atomic<Address>>()).store(object.to_raw_address(), atomic::Ordering::Relaxed) }
     }
 }
 

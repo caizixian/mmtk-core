@@ -1,17 +1,16 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 200 | Δ: -151
-- Phase: 3
+- Starting count: 351 | Current: 199 | Δ: -152
+- Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
-Architectural insights that affect ALL future safety decisions:
 - Work packets hold raw pointers to plans or spaces to bypass borrow checker and lifetimes.
 - Static plan references are needed because plan types are generic and cannot be stored in global statics easily.
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-- All scheduled work queue items completed. All remaining unsafe blocks have been verified and documented where appropriate.
+1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs:19-136` — Investigate making `MetadataSlot` methods safe by moving unsafe to constructor or checking validity — expected Δ: 15
 
 
 ## Patterns Discovered
@@ -56,7 +55,7 @@ Reusable refactoring patterns (recipe format):
 - `src/policy/vmspace.rs` — Irreducible SFT initialization. [Phase 2 confirmed]
 - `src/util/int_array_freelist.rs` — No unsafe code found. [Phase 2 confirmed]
 - `src/util/heap/layout/mmapper/csm/two_level_storage.rs` — No unsafe code found after removing redundant unsafe impls. [Phase2 confirmed]
-- `src/vm/slot.rs` — SimpleSlot is a safe abstraction. Investigation showed that using references adds lifetime burden and moves unsafe to construction. [Phase 2 confirmed]
+- `src/vm/slot.rs` — Refactored `SimpleSlot` to use `Address` instead of raw pointer, removing `unsafe impl Send`. Remaining unsafe are dereferences in `load`/`store` and memory copy. [Phase 3 confirmed]
 - `src/vm/tests/mock_tests/mock_test_conservatism.rs` — No unsafe code found. [Phase 2 confirmed]
 - `benches/regular_bench/bulk_meta/bzero_bset.rs` — Refactored to use safe Rust vectors and fill. [Phase 2 confirmed]
 - `benches/mock_bench/mmapper.rs` — No unsafe code found. [Phase 2 confirmed]
