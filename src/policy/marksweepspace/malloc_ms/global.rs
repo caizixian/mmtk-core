@@ -380,7 +380,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
         if self.get_gc_trigger().poll(false, Some(self)) {
             assert!(VM::VMActivePlan::is_mutator(tls), "Polling in GC worker");
             VM::VMCollection::block_for_gc(VMMutatorThread(tls));
-            return unsafe { Address::zero() };
+            return Address::ZERO;
         }
 
         let (address, is_offset_malloc) = alloc::<VM>(size, align, offset);
@@ -616,14 +616,14 @@ impl<VM: VMBinding> MallocSpace<VM> {
         let (obj_start, offset_malloc, bytes) = Self::get_malloc_addr_size(object);
 
         // We are the only thread that is dealing with the object. We can use non-atomic methods for the metadata.
-        if !unsafe { is_marked_unsafe::<VM>(object) } {
+        if !is_marked::<VM>(object, Ordering::Relaxed) {
             // Dead object
             trace!("Object {} has been allocated but not marked", object);
 
             // Free object
             self.free_internal(obj_start, bytes, offset_malloc);
             trace!("free object {}", object);
-            unsafe { unset_vo_bit_unsafe(object) };
+            unset_vo_bit(object);
 
             true
         } else {
@@ -778,7 +778,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
                     }
 
                     debug_assert!(
-                        unsafe { is_marked_unsafe::<VM>(object) },
+                        is_marked::<VM>(object, Ordering::Relaxed),
                         "Dead object = {} found after sweep",
                         object
                     );
@@ -847,7 +847,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
             if live {
                 // Live object. Unset mark bit.
                 // We should be the only thread that access this chunk, it is okay to use non-atomic store.
-                unsafe { unset_mark_bit::<VM>(object) };
+                unset_mark_bit::<VM>(object, Ordering::Relaxed);
 
                 #[cfg(debug_assertions)]
                 {

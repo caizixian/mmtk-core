@@ -87,8 +87,8 @@ pub unsafe fn unset_vo_bit_unsafe(object: ObjectReference) {
 }
 
 #[allow(unused)]
-pub unsafe fn unset_mark_bit<VM: VMBinding>(object: ObjectReference) {
-    VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.store::<VM, u8>(object, 0, None);
+pub fn unset_mark_bit<VM: VMBinding>(object: ObjectReference, ordering: Ordering) {
+    VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.store_atomic::<VM, u8>(object, 0, None, ordering);
 }
 
 #[allow(unused)]

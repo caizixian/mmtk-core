@@ -1,15 +1,15 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 547 | Current: 537 | Δ: -10 (estimated)
+- Starting count: 547 | Current: 532 | Δ: -15 (estimated)
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - `Address::from_usize` is marked unsafe by design to warn about invalid addresses. Replacing it with `ZERO.add` is considered an anti-pattern as it is semantically identical.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: Analyze `src/policy/marksweepspace/malloc_ms/global.rs` to see if unsafe blocks can be reduced (e.g., line 560 raw pointer cast).
-2. 🟡 MED: Analyze `src/util/malloc/malloc_ms_util.rs` to see if FFI calls can be wrapped or if some operations can be made safe.
+1. 🔴 HIGH: Analyze `src/util/malloc/malloc_ms_util.rs` to see if FFI calls can be wrapped or if some operations can be made safe.
+2. 🟡 MED: Analyze remaining unsafe in `src/policy/marksweepspace/malloc_ms/global.rs` (e.g., `SFT_MAP.update`, `unset_page_mark`) to see if any more can be reduced.
 
 ## Patterns Discovered
 - `MaybeUninit` arrays of size 1 can be replaced with `Option` and `unwrap()` to eliminate unsafe access.
@@ -30,6 +30,10 @@
 - **Safe Wrappers for Allocator Access**: Added `non_moving_allocator_mut` to `Mutator` to reduce unsafe blocks at call sites in `mutator_context.rs`.
 - **Safe Wrappers for Allocator Access by Semantic**: Added `get_allocator_for_semantic_mut` to `Mutator` to eliminate unsafe blocks in allocation methods.
 - **Safe SFT Access**: Added `get_for_object` to `SFTMap` to eliminate unsafe blocks when querying SFT for an `ObjectReference`.
+- **Replacing Address::zero()**: Replaced `unsafe { Address::zero() }` with `Address::ZERO` in `malloc_ms/global.rs`.
+- **Safe is_marked**: Replaced `is_marked_unsafe` with `is_marked(..., Ordering::Relaxed)` in `malloc_ms/global.rs` to eliminate unsafe blocks.
+- **Safe unset_mark_bit**: Made `unset_mark_bit` safe in `metadata.rs` by using `store_atomic` and updated call sites.
+- **Safe unset_vo_bit**: Used safe `unset_vo_bit` instead of `unset_vo_bit_unsafe` in `malloc_ms/global.rs`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.
