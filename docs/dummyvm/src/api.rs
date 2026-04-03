@@ -18,8 +18,8 @@ use std::ffi::CStr;
 // Most commonly used APIs are listed in https://docs.mmtk.io/api/mmtk/memory_manager/index.html. The binding can expose them here.
 
 #[no_mangle]
-pub extern "C" fn mmtk_create_builder() -> *mut MMTKBuilder {
-    Box::into_raw(Box::new(mmtk::MMTKBuilder::new()))
+pub extern "C" fn mmtk_create_builder() -> Option<Box<MMTKBuilder>> {
+    Some(Box::new(mmtk::MMTKBuilder::new()))
 }
 
 #[no_mangle]
@@ -48,9 +48,8 @@ pub extern "C" fn mmtk_set_fixed_heap_size(builder: Option<&mut MMTKBuilder>, he
 }
 
 #[no_mangle]
-pub fn mmtk_init(builder: *mut MMTKBuilder) {
-    // SAFETY: The caller must ensure that `builder` is a valid pointer returned by `mmtk_create_builder` and has not been freed.
-    let builder = unsafe { Box::from_raw(builder) };
+pub extern "C" fn mmtk_init(builder: Option<Box<MMTKBuilder>>) {
+    let builder = builder.expect("builder is null");
 
     // Create MMTK instance.
     let mmtk = memory_manager::mmtk_init::<DummyVM>(&builder);
@@ -62,18 +61,17 @@ pub fn mmtk_init(builder: *mut MMTKBuilder) {
 }
 
 #[no_mangle]
-pub extern "C" fn mmtk_bind_mutator(tls: VMMutatorThread) -> *mut Mutator<DummyVM> {
-    Box::into_raw(memory_manager::bind_mutator(mmtk(), tls))
+pub extern "C" fn mmtk_bind_mutator(tls: VMMutatorThread) -> Option<Box<Mutator<DummyVM>>> {
+    Some(Box::new(memory_manager::bind_mutator(mmtk(), tls)))
 }
 
 #[no_mangle]
-pub extern "C" fn mmtk_destroy_mutator(mutator: *mut Mutator<DummyVM>) {
+pub extern "C" fn mmtk_destroy_mutator(mutator: Option<Box<Mutator<DummyVM>>>) {
+    let mut mutator = mutator.expect("mutator is null");
     // notify mmtk-core about destroyed mutator
-    // SAFETY: The caller must ensure that `mutator` is a valid pointer to a `Mutator`.
-    memory_manager::destroy_mutator(unsafe { &mut *mutator });
+    memory_manager::destroy_mutator(&mut mutator);
     // turn the ptr back to a box, and let Rust properly reclaim it
-    // SAFETY: The caller must ensure that `mutator` is a valid pointer returned by `mmtk_bind_mutator` and has not been freed.
-    let _ = unsafe { Box::from_raw(mutator) };
+    // The box will be dropped here and reclaimed.
 }
 
 #[no_mangle]
@@ -120,9 +118,8 @@ pub extern "C" fn mmtk_post_alloc(
 }
 
 #[no_mangle]
-pub extern "C" fn mmtk_start_worker(tls: VMWorkerThread, worker: *mut GCWorker<DummyVM>) {
-    // SAFETY: The caller must ensure that `worker` is a valid pointer to a `GCWorker` and has not been freed.
-    let worker = unsafe { Box::from_raw(worker) };
+pub extern "C" fn mmtk_start_worker(tls: VMWorkerThread, worker: Option<Box<GCWorker<DummyVM>>>) {
+    let worker = worker.expect("worker is null");
     memory_manager::start_worker::<DummyVM>(mmtk(), tls, worker)
 }
 
@@ -270,10 +267,10 @@ mod tests {
     #[test]
     fn mmtk_init_test() {
         // We demonstrate the main workflow to initialize MMTk, create mutators and allocate objects.
-        let builder = mmtk_create_builder();
+        let mut builder = mmtk_create_builder();
 
         // Set option by value using extern "C" wrapper.
-        let success = mmtk_set_fixed_heap_size(unsafe { builder.as_mut() }, 1048576);
+        let success = mmtk_set_fixed_heap_size(builder.as_deref_mut(), 1048576);
         assert!(success);
 
         // Set option by value.  We set the the option direcly using `MMTKOption::set`. Useful if
@@ -281,7 +278,7 @@ mod tests {
         // command line arguments.
         let name = CString::new("plan").unwrap();
         let val = CString::new("NoGC").unwrap();
-        let success = mmtk_set_option_from_string(unsafe { builder.as_mut() }, name.as_ptr(), val.as_ptr());
+        let success = mmtk_set_option_from_string(builder.as_deref_mut(), name.as_ptr(), val.as_ptr());
         assert!(success);
 
         // Set layout if necessary
@@ -292,17 +289,17 @@ mod tests {
 
         // Create an MMTk mutator
         let tls = VMMutatorThread(VMThread(OpaquePointer::UNINITIALIZED)); // FIXME: Use the actual thread pointer or identifier
-        let mutator = mmtk_bind_mutator(tls);
+        let mut mutator = mmtk_bind_mutator(tls);
 
         // Do an allocation
-        let addr = mmtk_alloc(unsafe { mutator.as_mut() }, 16, 8, 0, mmtk::AllocationSemantics::Default);
+        let addr = mmtk_alloc(mutator.as_deref_mut(), 16, 8, 0, mmtk::AllocationSemantics::Default);
         assert!(!addr.is_zero());
 
         // Turn the allocation address into the object reference.
         let obj = DummyVM::object_start_to_ref(addr);
 
         // Post allocation
-        mmtk_post_alloc(unsafe { mutator.as_mut() }, obj, 16, mmtk::AllocationSemantics::Default);
+        mmtk_post_alloc(mutator.as_deref_mut(), obj, 16, mmtk::AllocationSemantics::Default);
 
         // If the thread quits, destroy the mutator.
         mmtk_destroy_mutator(mutator);

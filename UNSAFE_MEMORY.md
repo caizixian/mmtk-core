@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 171 | Δ: -180
+- Starting count: 351 | Current: 167 | Δ: -184
 - Phase: 3 (Irreducible Documentation)
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -12,21 +12,21 @@
 ## Work Queue (NEXT STEP: pick the first actionable item)
 1. 🔴 HIGH: `src/vm/slot.rs:170-210` — Investigate if we can use a safe wrapper for `Atomic<Address>` to eliminate unsafe in `SimpleSlot` — expected Δ: -2
 
-
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
 - `MetadataSlot` wraps `Address` but methods remain unsafe due to raw memory access. Moving unsafe to constructor increases count at call sites.
 - Centralized unsafe raw pointer dereferences in `MetadataSlot` by introducing a helper `get_ref<T>` method, reducing unsafe blocks in load methods.
 - `VMMap` trait methods were made safe as implementations (`Map32` and `Map64`) are internally synchronized with `Mutex`.
 - `BlockCell` and `CellIter` abstractions in `block.rs` eliminate unsafe writes during sweep by encapsulating raw writes and ensuring valid iteration.
-- **New**: `SlotLogger` was refactored to use `Mutex` instead of `RwLock`, making it automatically `Sync` and eliminating `unsafe impl Sync`.
+- `SlotLogger` was refactored to use `Mutex` instead of `RwLock`, making it automatically `Sync` and eliminating `unsafe impl Sync`.
+- **New**: FFI functions transferring ownership can use `Option<Box<T>>` instead of `*mut T` to eliminate `Box::from_raw` and `Box::into_raw` unsafe blocks, provided `T` is `Sized`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are irreducible function signatures and raw memory copy. [Phase 2 confirmed]
 - `src/util/metadata/metadata_val_traits.rs` — Defines contract for loading metadata values. Inherently unsafe. [Phase 2 confirmed]
-- src/util/memory.rs — Wrappers around libc calls. Standard FFI wrappers. Verified safety comments. [Phase 3 confirmed]
-- docs/dummyvm/src/api.rs — Reduced unsafe by using `Option<&mut T>` in FFI signatures. Remaining are `CStr::from_ptr` and `Box::from_raw`. [Phase 3 confirmed]
-- src/util/malloc/malloc_ms_util.rs — Irreducible due to raw pointer manipulation in allocator. Verified safety comments. [Phase 3 confirmed]
+- `src/util/memory.rs` — Wrappers around libc calls. Standard FFI wrappers. Verified safety comments. [Phase 3 confirmed]
+- `docs/dummyvm/src/api.rs` — Reduced unsafe by using `Option<&mut T>` and `Option<Box<T>>` in FFI signatures. Remaining are `CStr::from_ptr`. [Phase 3 confirmed]
+- `src/util/malloc/malloc_ms_util.rs` — Irreducible due to raw pointer manipulation in allocator. Verified safety comments. [Phase 3 confirmed]
 - `src/util/address.rs` — Core address type. Operations are inherently unsafe. [Phase 2 confirmed]
 - `src/mmtk.rs` — Uses `InitializeOnce` for `SFT_MAP`. Irreducible for performance. [Phase 2 confirmed]
 - `src/util/rust_util/mod.rs` — Implements `InitializeOnce`. Irreducible for performance. [Phase 2 confirmed]
@@ -47,5 +47,5 @@
 - `src/vm/tests/mock_tests/mock_test_vm_layout_compressed_pointer.rs` — Completely safe after removing unnecessary unsafe blocks. [Phase 3 confirmed]
 - `src/vm/tests/mock_tests/mock_test_vm_layout_heap_start.rs` — Completely safe after removing redundant unsafe blocks. [Phase 3 confirmed]
 - `src/util/erase_vm.rs` — Irreducible due to type erasure macro storing reference as usize. [Phase 3 confirmed]
-- src/util/slot_logger.rs — Completely safe after refactoring RwLock to Mutex and removing unsafe impl Sync. [Phase 3 confirmed]
-- src/util/alloc/allocator.rs — Irreducible due to raw memory fill in allocation gap. Verified safety comments. [Phase 3 confirmed]
+- `src/util/slot_logger.rs` — Completely safe after refactoring RwLock to Mutex and removing unsafe impl Sync. [Phase 3 confirmed]
+- `src/util/alloc/allocator.rs` — Irreducible due to raw memory fill in allocation gap. Verified safety comments. [Phase 3 confirmed]
