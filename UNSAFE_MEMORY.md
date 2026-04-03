@@ -4,7 +4,7 @@
 - Starting count: 351 | Current: 66 | Δ: -285
 - Phase: 3 (Irreducible Documentation)
 - Status: Confirmed all remaining unsafe is irreducible or well-encapsulated. Moving to Phase 3. Verified again under strategy escalation (Step 10 of zero reductions). Re-verified and confirmed by multiple agents, including Antigravity.
-- Verified again under strategy escalation (10 steps of zero reductions) and confirmed all files with unsafe are listed in "Files NOT to Revisit" and their justifications are valid.
+- Verified again under strategy escalation (10 steps of zero reductions) and confirmed all files with unsafe are listed in "Files NOT to Revisit" and their justifications are valid. Antigravity also specifically verified that `src/util/metadata/side_metadata/global.rs`, `src/util/metadata/global.rs`, and `src/util/address.rs` have proper `// SAFETY:` comments for their remaining unsafe blocks.
 
 
 ## Codebase Invariants (PROTECTED — do not prune)
