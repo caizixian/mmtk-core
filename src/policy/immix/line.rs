@@ -1,4 +1,5 @@
 use std::ops::Range;
+use std::sync::atomic::Ordering;
 
 use super::block::Block;
 use crate::util::linear_scan::{Region, RegionIterator};
@@ -52,15 +53,13 @@ impl Line {
     /// Mark the line. This will update the side line mark table.
     pub fn mark(&self, state: u8) {
         debug_assert!(!super::BLOCK_ONLY);
-        unsafe {
-            Self::MARK_TABLE.store::<u8>(self.start(), state);
-        }
+        Self::MARK_TABLE.store_atomic::<u8>(self.start(), state, Ordering::Relaxed);
     }
 
     /// Test line mark state.
     pub fn is_marked(&self, state: u8) -> bool {
         debug_assert!(!super::BLOCK_ONLY);
-        unsafe { Self::MARK_TABLE.load::<u8>(self.start()) == state }
+        Self::MARK_TABLE.load_atomic::<u8>(self.start(), Ordering::Relaxed) == state
     }
 
     /// Mark all lines the object is spanned to.
