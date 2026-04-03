@@ -21,7 +21,6 @@ pub struct Fixture<T: FixtureContent> {
     once: Once,
 }
 
-unsafe impl<T: FixtureContent> Sync for Fixture<T> {}
 
 impl<T: FixtureContent> Fixture<T> {
     pub fn new() -> Self {
