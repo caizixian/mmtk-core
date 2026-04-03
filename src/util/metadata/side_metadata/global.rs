@@ -1733,12 +1733,10 @@ mod tests {
 
     impl SideMetadataSpec {
         pub fn load_test<T: MetadataValue>(&self, data_addr: Address) -> T {
-            // SAFETY: This is a test, we assume no concurrent mutation.
-            unsafe { self.load::<T>(data_addr) }
+            self.load_atomic::<T>(data_addr, Ordering::Relaxed)
         }
         pub fn store_test<T: MetadataValue>(&self, data_addr: Address, metadata: T) {
-            // SAFETY: This is a test, we assume no concurrent mutation.
-            unsafe { self.store::<T>(data_addr, metadata) }
+            self.store_atomic::<T>(data_addr, metadata, Ordering::Relaxed)
         }
     }
 
