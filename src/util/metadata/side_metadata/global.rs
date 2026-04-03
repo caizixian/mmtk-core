@@ -2163,7 +2163,7 @@ mod tests {
 
                         // Find the value starting from data_addr, at max 8 bytes.
                         // We should find data_addr
-                        let res_addr = unsafe { spec.find_prev_non_zero_value::<$type>(data_addr, 8) };
+                        let res_addr = spec.find_prev_non_zero_value::<$type>(data_addr, 8);
                         assert!(res_addr.is_some());
                         assert_eq!(res_addr.unwrap(), data_addr);
                     });
@@ -2181,7 +2181,7 @@ mod tests {
                         for len in 1..(test_region*4) {
                             let start_addr = data_addr + len;
                             // Use len+1, as len is non inclusive.
-                            let res_addr = unsafe { spec.find_prev_non_zero_value::<$type>(start_addr, len + 1) };
+                            let res_addr = spec.find_prev_non_zero_value::<$type>(start_addr, len + 1);
                             assert!(res_addr.is_some());
                             assert_eq!(res_addr.unwrap(), data_addr);
                         }
@@ -2200,7 +2200,7 @@ mod tests {
                             spec.store_atomic::<$type>(test_data_addr, max_value, Ordering::SeqCst);
 
                             // The return result should be aligned
-                            let res_addr = unsafe { spec.find_prev_non_zero_value::<$type>(test_data_addr, 4096) };
+                            let res_addr = spec.find_prev_non_zero_value::<$type>(test_data_addr, 4096);
                             assert!(res_addr.is_some());
                             assert_eq!(res_addr.unwrap(), data_addr);
 
@@ -2221,7 +2221,7 @@ mod tests {
                         for len in 1..(test_region*4) {
                             let start_addr = data_addr + len;
                             // Use len+1, as len is non inclusive.
-                            let res_addr = unsafe { spec.find_prev_non_zero_value::<$type>(start_addr, len + 1) };
+                            let res_addr = spec.find_prev_non_zero_value::<$type>(start_addr, len + 1);
                             assert!(res_addr.is_none());
                         }
                     });

@@ -51,13 +51,7 @@ impl<F: FnMut(ObjectReference) -> ObjectReference> ObjectTracer for F {
 /// This trait is used during root scanning and binding-side weak reference processing.
 pub trait ObjectTracerContext<VM: VMBinding>: Clone + Send + 'static {
     /// The concrete `ObjectTracer` type.
-    ///
-    /// FIXME: The current code works because of the unsafe method `ProcessEdgesWork::set_worker`.
-    /// The tracer should borrow the worker passed to `with_queuing_tracer` during its lifetime.
-    /// For this reason, `TracerType` should have a `<'w>` lifetime parameter.
-    /// Generic Associated Types (GAT) is already stablized in Rust 1.65.
-    /// We should update our toolchain version, too.
-    type TracerType: ObjectTracer;
+    type TracerType<'w>: ObjectTracer where Self: 'w;
 
     /// Create a temporary `ObjectTracer` and provide access in the scope of `func`.
     ///
@@ -76,9 +70,9 @@ pub trait ObjectTracerContext<VM: VMBinding>: Clone + Send + 'static {
     /// -   `func`: A caller-supplied closure in which the created `ObjectTracer` can be used.
     ///
     /// Returns: The return value of `func`.
-    fn with_tracer<R, F>(&self, worker: &mut GCWorker<VM>, func: F) -> R
+    fn with_tracer<'w, R, F>(&'w self, worker: &'w mut GCWorker<VM>, func: F) -> R
     where
-        F: FnOnce(&mut Self::TracerType) -> R;
+        F: FnOnce(&mut Self::TracerType<'w>) -> R;
 }
 
 /// Root-scanning methods use this trait to create work packets for processing roots.

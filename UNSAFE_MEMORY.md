@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 257 | Δ: -94
+- Starting count: 351 | Current: 251 | Δ: -100
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -11,7 +11,7 @@ Architectural insights that affect ALL future safety decisions:
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/scheduler/gc_work.rs` — Investigate for unsafe code that can be reduced or abstracted — expected Δ: unknown
+1. 🔴 HIGH: `src/vm/slot.rs:176-185` — Investigate if `slot_addr` can use atomics or references instead of raw pointers — expected Δ: 2
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
@@ -25,6 +25,7 @@ Reusable refactoring patterns (recipe format):
 - Changing trait methods to take references instead of raw pointers when call sites already have references, eliminating unsafe blocks used for dereferencing or coercion.
 - Centralizing thread-safety guarantees in low-level utilities (like `BlockQueue` or `BlockPageResource`) can eliminate `unsafe impl Sync` in high-level types (like spaces) that use them.
 - Replacing custom lock-free queues with `crossbeam::queue::ArrayQueue` and using `Mutex` for thread-local access can eliminate unsafe code in queue implementations.
+- Using Generic Associated Types (GATs) in `ObjectTracerContext` to allow `TracerType` to borrow `GCWorker` without raw pointers.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/plan/concurrent/concurrent_marking_work.rs` — Eliminated raw pointer from `ConcurrentTraceObjects` by using a temporary tracer type. Localized unsafe in the tracer. [Phase 2 confirmed]

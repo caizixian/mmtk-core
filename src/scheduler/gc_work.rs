@@ -242,23 +242,23 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
 
 /// This implements `ObjectTracer` by forwarding the `trace_object` calls to the wrapped
 /// `ProcessEdgesWork` instance.
-pub(crate) struct ProcessEdgesWorkTracer<E: ProcessEdgesWork> {
+pub(crate) struct ProcessEdgesWorkTracer<'w, E: ProcessEdgesWork> {
     process_edges_work: E,
     stage: WorkBucketStage,
-    worker: *mut GCWorker<E::VM>,
+    worker: &'w mut GCWorker<E::VM>,
 }
 
-impl<E: ProcessEdgesWork> ObjectTracer for ProcessEdgesWorkTracer<E> {
+impl<'w, E: ProcessEdgesWork> ObjectTracer for ProcessEdgesWorkTracer<'w, E> {
     /// Forward the `trace_object` call to the underlying `ProcessEdgesWork`,
     /// and flush as soon as the underlying buffer of `process_edges_work` is full.
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        let result = self.process_edges_work.trace_object(object, unsafe { &mut *self.worker });
+        let result = self.process_edges_work.trace_object(object, self.worker);
         self.flush_if_full();
         result
     }
 }
 
-impl<E: ProcessEdgesWork> ProcessEdgesWorkTracer<E> {
+impl<'w, E: ProcessEdgesWork> ProcessEdgesWorkTracer<'w, E> {
     fn flush_if_full(&mut self) {
         if self.process_edges_work.nodes.is_full() {
             self.flush();
@@ -275,8 +275,9 @@ impl<E: ProcessEdgesWork> ProcessEdgesWorkTracer<E> {
         let next_nodes = self.process_edges_work.pop_nodes();
         assert!(!next_nodes.is_empty());
         let work_packet = self.process_edges_work.create_scan_work(next_nodes);
-        let worker = unsafe { &mut *self.worker };
-        worker.scheduler().work_buckets[self.stage].add(work_packet);
+        let stage = self.stage;
+        let worker = &mut *self.worker;
+        worker.scheduler().work_buckets[stage].add(work_packet);
     }
 }
 
@@ -296,11 +297,11 @@ impl<E: ProcessEdgesWork> Clone for ProcessEdgesWorkTracerContext<E> {
 }
 
 impl<E: ProcessEdgesWork> ObjectTracerContext<E::VM> for ProcessEdgesWorkTracerContext<E> {
-    type TracerType = ProcessEdgesWorkTracer<E>;
+    type TracerType<'w> = ProcessEdgesWorkTracer<'w, E> where Self: 'w;
 
-    fn with_tracer<R, F>(&self, worker: &mut GCWorker<E::VM>, func: F) -> R
+    fn with_tracer<'w, R, F>(&'w self, worker: &'w mut GCWorker<E::VM>, func: F) -> R
     where
-        F: FnOnce(&mut Self::TracerType) -> R,
+        F: FnOnce(&mut Self::TracerType<'w>) -> R,
     {
         let mmtk = worker.mmtk;
 
@@ -311,7 +312,7 @@ impl<E: ProcessEdgesWork> ObjectTracerContext<E::VM> for ProcessEdgesWorkTracerC
         let mut tracer = ProcessEdgesWorkTracer {
             process_edges_work,
             stage: self.stage,
-            worker: worker as *mut _,
+            worker,
         };
 
         // The caller can use the tracer here.
