@@ -10,8 +10,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/util/rust_util/mod.rs:49-106` — propose replacing `InitializeOnce` with `OnceLock` and asking user to benchmark. Expected Δ: -5.
-2. 🟢 LOW: Audit remaining files in 'Files NOT to Revisit' for missing safety comments (checked global.rs, metadata_val_traits.rs, mmtk.rs, sft_map.rs, malloc_ms_util.rs, rust_util/mod.rs, slot.rs, raw_memory_freelist.rs, memory.rs, allocator.rs, api.rs, concurrent_marking_work.rs, erase_vm.rs, slot_logger.rs, address.rs, malloc/mod.rs, native_ms/block.rs, mock_vm.rs, malloc_ms/global.rs, csm/mod.rs).
+1. 🟢 LOW: Audit remaining files in 'Files NOT to Revisit' for missing safety comments (checked global.rs, metadata_val_traits.rs, mmtk.rs, sft_map.rs, malloc_ms_util.rs, rust_util/mod.rs, slot.rs, raw_memory_freelist.rs, memory.rs, allocator.rs, api.rs, concurrent_marking_work.rs, erase_vm.rs, slot_logger.rs, address.rs, malloc/mod.rs, native_ms/block.rs, mock_vm.rs, malloc_ms/global.rs, csm/mod.rs).
 
 
 ## Patterns Discovered
@@ -35,7 +34,7 @@
 - `src/util/malloc/malloc_ms_util.rs` — Irreducible due to raw pointer manipulation in allocator. Verified safety comments. [Phase 3 confirmed]
 - `src/util/address.rs` — Core address type. Operations are inherently unsafe. Audited safety comments. [Phase 2 confirmed]
 - `src/mmtk.rs` — Uses `InitializeOnce` for `SFT_MAP`. Irreducible for performance. [Phase 2 confirmed]
-- `src/util/rust_util/mod.rs` — Implements `InitializeOnce`. Irreducible for performance. [Phase 2 confirmed]
+- `src/util/rust_util/mod.rs` — Implements `InitializeOnce`. Irreducible for performance and because `get_mut` requires unsafe casting that triggers `invalid_reference_casting` error in Rust 1.92+ if attempted with `OnceLock`. [Phase 2 confirmed]
 - `src/util/malloc/mod.rs` — Irreducible due to raw pointer manipulation in allocator. Audited safety comments. [Phase 2 confirmed]
 - `src/policy/sft_map.rs` — Transmutes are irreducible due to fat pointer provenance. [Phase 2 confirmed]
 - `src/policy/marksweepspace/native_ms/block.rs` — Refactored sweep to use safe iterator. Remaining unsafe is encapsulated in BlockCell::store_link. Audited safety comments. [Phase 3 confirmed]
