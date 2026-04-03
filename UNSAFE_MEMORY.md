@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 633 | Δ: -89
-- Completed subsystems: util/alloc (partial), policy/sft_map (partial), policy/sft_map (partial), policy/marksweepspace (block.rs cleanup), util/heap/layout (vm_layout.rs static mut, map32.rs Mutex, map64.rs RwLock), util/copy (MaybeUninit to Option in GCWorkerCopyContext), util/metadata/side_metadata (side_metadata_tests.rs Address::from_usize(0) cleanup, global.rs SideMetadataOffset union to enum), util/heap/gc_trigger.rs (OnceLock for plan), util/metadata/header_metadata.rs (TestBuffer yield slice for tests)
+- Starting count: 722 | Current: 628 | Δ: -94
+- Completed subsystems: util/alloc (partial), policy/sft_map (partial), policy/marksweepspace (block.rs cleanup), util/heap/layout (vm_layout.rs static mut, map32.rs Mutex, map64.rs RwLock), util/copy (MaybeUninit to Option in GCWorkerCopyContext), util/metadata/side_metadata (side_metadata_tests.rs Address::from_usize(0) cleanup, global.rs SideMetadataOffset union to enum), util/heap/gc_trigger.rs (OnceLock for plan), util/metadata/header_metadata.rs (TestBuffer yield slice for tests), util/heap/blockpageresource.rs (push on unique BlockQueue)
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - "Work packets are single-use — Option::take() is safe for extracting owned data"
@@ -21,6 +21,7 @@
 ## Patterns Discovered
 - `union` to `enum` for types that can be either A or B (e.g. `SideMetadataOffset`). Eliminates `unsafe` for field access and allows safe `PartialEq`/`Eq`/`Hash` derivation.
 - `UnsafeCell<T>` → `RwLock<T>` (or `Mutex<T>`) for thread-safe interior mutability in shared data structures (e.g. `Map64`).
+- `UnsafeCell::get_mut()` / `AtomicXxx::get_mut()` when uniqueness is guaranteed (e.g. local variables or `&mut self` methods) to bypass `unsafe` and atomic operations entirely.
 - `MaybeUninit::uninit().assume_init()` for arrays → `[const { MaybeUninit::uninit() }; N]` — works when type is `MaybeUninit`.
 - `get_unchecked(i)` → `[i]` — works in non-hot paths where bounds are guaranteed or panic is acceptable.
 - `*const T` → `&T` in trait signatures where ownership is not required and lifetimes are valid.
