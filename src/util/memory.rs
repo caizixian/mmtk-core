@@ -170,6 +170,7 @@ pub fn zero(start: Address, len: usize) {
 
 /// Set a range of memory to the given value. Similar to memset.
 pub fn set(start: Address, val: u8, len: usize) {
+    // SAFETY: The caller must ensure that the address range is valid and mapped.
     unsafe {
         std::ptr::write_bytes::<u8>(start.to_mut_ptr(), val, len);
     }
@@ -245,6 +246,8 @@ fn mmap_fixed(
     let ptr = start.to_mut_ptr();
     let prot = strategy.prot.into_native_flags();
     wrap_libc_call(
+        // SAFETY: The caller must ensure that the arguments are valid. If flags include MAP_FIXED,
+        // it may overwrite existing mappings.
         &|| unsafe { libc::mmap(start.to_mut_ptr(), size, prot, flags, -1, 0) },
         ptr,
     )?;
@@ -263,6 +266,7 @@ fn mmap_fixed(
         let anno_str = _anno.to_string();
         let anno_cstr = std::ffi::CString::new(anno_str).unwrap();
         let result = wrap_libc_call(
+            // SAFETY: This is a debugging call and is safe to fail. The arguments are valid.
             &|| unsafe {
                 libc::prctl(
                     libc::PR_SET_VMA,
@@ -285,6 +289,7 @@ fn mmap_fixed(
             #[cfg(target_os = "linux")]
             {
                 wrap_libc_call(
+                    // SAFETY: madvise is an advice and is safe to fail. The arguments are valid.
                     &|| unsafe { libc::madvise(start.to_mut_ptr(), size, libc::MADV_HUGEPAGE) },
                     0,
                 )
@@ -299,6 +304,7 @@ fn mmap_fixed(
 
 /// Unmap the given memory (in page granularity). This wraps the unsafe libc munmap call.
 pub fn munmap(start: Address, size: usize) -> Result<()> {
+    // SAFETY: The caller must ensure that the memory range is valid and was mapped by MMTk.
     wrap_libc_call(&|| unsafe { libc::munmap(start.to_mut_ptr(), size) }, 0)
 }
 
@@ -382,6 +388,7 @@ pub(crate) fn panic_if_unmapped(_start: Address, _size: usize, _anno: &MmapAnnot
 pub fn munprotect(start: Address, size: usize, prot: MmapProtection) -> Result<()> {
     let prot = prot.into_native_flags();
     wrap_libc_call(
+        // SAFETY: The caller must ensure that the memory range is valid and was mapped by MMTk.
         &|| unsafe { libc::mprotect(start.to_mut_ptr(), size, prot) },
         0,
     )
@@ -390,6 +397,7 @@ pub fn munprotect(start: Address, size: usize, prot: MmapProtection) -> Result<(
 /// Protect the given memory (in page granularity) to forbid any access (PROT_NONE).
 pub fn mprotect(start: Address, size: usize) -> Result<()> {
     wrap_libc_call(
+        // SAFETY: The caller must ensure that the memory range is valid and was mapped by MMTk.
         &|| unsafe { libc::mprotect(start.to_mut_ptr(), size, PROT_NONE) },
         0,
     )
