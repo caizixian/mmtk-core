@@ -11,7 +11,7 @@ Architectural insights that affect ALL future safety decisions:
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/vm/slot.rs:180` — Investigate if `slot_addr` in `SimpleSlot` can be made a reference or if the unsafe block can be justified and documented — expected Δ: 0 or -1
+1. 🔴 HIGH: `src/util/int_array_freelist.rs:1-100` — Investigate if this file has unsafe code that can be reduced or abstracted — expected Δ: unknown
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
