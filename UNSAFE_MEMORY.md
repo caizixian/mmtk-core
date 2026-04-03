@@ -1,16 +1,17 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 269 | Δ: -82
+- Starting count: 351 | Current: 268 | Δ: -83
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
 Architectural insights that affect ALL future safety decisions:
 - Work packets hold raw pointers to plans or spaces to bypass borrow checker and lifetimes.
 - Static plan references are needed because plan types are generic and cannot be stored in global statics easily.
+- `BlockQueue` in `BlockPageResource` is thread-safe for concurrent pops due to atomic cursor updates, but requires external synchronization or thread-local access for pushes.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/test_util/mock_vm.rs:375-376` — Investigate if `MockVM` can be made `Send` and `Sync` by adding bounds to `MockAny` or `MockMethod` instead of `unsafe impl` — expected Δ: -2
+1. 🔴 HIGH: `src/util/heap/blockpageresource.rs:212-247` — Investigate if `UnsafeCell` accesses in `BlockQueue` can be replaced with safe atomics or a safe concurrent queue without performance regression — expected Δ: -3
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
@@ -22,6 +23,7 @@ Reusable refactoring patterns (recipe format):
 - Replacing platform-specific FFI calls with safe standard library equivalents (e.g. `std::thread::available_parallelism` instead of `sched_getaffinity`).
 - Replacing `ObjectReference::from_raw_address_unchecked` with `ObjectReference::from_raw_address(...).unwrap()` when the address is guaranteed to be non-zero (e.g. checked by assertion or invariant).
 - Changing trait methods to take references instead of raw pointers when call sites already have references, eliminating unsafe blocks used for dereferencing or coercion.
+- Centralizing thread-safety guarantees in low-level utilities (like `BlockQueue` or `BlockPageResource`) can eliminate `unsafe impl Sync` in high-level types (like spaces) that use them.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/plan/concurrent/concurrent_marking_work.rs` — `ConcurrentTraceObjects` uses raw pointer to bypass borrow checker for work packet. [Phase 2 confirmed]
@@ -35,7 +37,7 @@ Reusable refactoring patterns (recipe format):
 - `src/util/test_util/fixtures.rs` — Fixtures use unsafe for test setup. [Phase 2 confirmed]
 - `src/vm/slot.rs` — `SimpleSlot` is a safe abstraction. [Phase 2 confirmed]
 - `src/util/rust_util/mod.rs` — `InitializeOnce` is irreducible for performance. [Phase 2 confirmed]
-- `src/util/heap/blockpageresource.rs` — UnsafeCell accesses in lock-free queue. [Phase 2 confirmed]
+- `src/util/heap/blockpageresource.rs` — UnsafeCell accesses in lock-free queue and unsafe impl Sync. [Phase 2 confirmed]
 - `src/policy/marksweepspace/native_ms/block.rs` — Raw memory accesses for free list. [Phase 2 confirmed]
 - `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are irreducible function signatures and raw memory copy. [Phase 2 confirmed]
 - `src/policy/marksweepspace/malloc_ms/global.rs` — Remaining unsafe are irreducible FFI and lifetime extension. [Phase 2 confirmed]
@@ -45,7 +47,6 @@ Reusable refactoring patterns (recipe format):
 - `src/util/malloc/mod.rs` — Irreducible FFI wrappers. [Phase 2 confirmed]
 - `src/mmtk.rs` — Irreducible UnsafeCell access and circular initialization. [Phase 2 confirmed]
 - `src/policy/sft_map.rs` — Transmutes are irreducible due to fat pointer provenance. [Phase 2 confirmed]
-- `src/policy/marksweepspace/native_ms/global.rs` — Unsafe impl Sync required for BlockPageResource. (Pointer casts for work packets were removed in Phase 2). [Phase 2 confirmed]
 - `src/util/erase_vm.rs` — Erased VM references are used to bypass generic type parameters in object-safe traits (SFT), and are necessary for performance and design. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)

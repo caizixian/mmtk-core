@@ -71,7 +71,7 @@ pub struct ImmixSpaceArgs {
     pub never_move_objects: bool,
 }
 
-unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
+
 
 impl<VM: VMBinding> SFT for ImmixSpace<VM> {
     fn name(&self) -> &'static str {

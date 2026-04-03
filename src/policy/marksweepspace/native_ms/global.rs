@@ -95,8 +95,7 @@ pub struct MarkSweepSpace<VM: VMBinding> {
     pub(crate) inner: Arc<MarkSweepSpaceInner<VM>>,
 }
 
-unsafe impl<VM: VMBinding> Sync for MarkSweepSpace<VM> {}
-unsafe impl<VM: VMBinding> Sync for MarkSweepSpaceInner<VM> {}
+
 
 pub struct AbandonedBlockLists {
     pub available: BlockLists,

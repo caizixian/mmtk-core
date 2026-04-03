@@ -29,6 +29,8 @@ pub struct BlockPageResource<VM: VMBinding, B: Region + 'static> {
     sync: Mutex<()>,
 }
 
+unsafe impl<VM: VMBinding, B: Region + 'static> Sync for BlockPageResource<VM, B> {}
+
 impl<VM: VMBinding, B: Region> PageResource<VM> for BlockPageResource<VM, B> {
     fn common(&self) -> &CommonPageResource {
         self.flpr.common()
@@ -193,6 +195,8 @@ struct BlockQueue<B: Region> {
     /// The implementation of `BlockQueue` must ensure there is no data race.
     data: UnsafeCell<Box<[Option<B>]>>,
 }
+
+unsafe impl<B: Region> Sync for BlockQueue<B> {}
 
 impl<B: Region> BlockQueue<B> {
     /// Create an array
