@@ -10,7 +10,7 @@ Architectural insights that affect ALL future safety decisions:
 - Static plan references are needed because plan types are generic and cannot be stored in global statics easily.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: Re-evaluate files marked as "NOT to Revisit" to see if `StwProof` can be applied to remove more `get_plan_mut` calls.
+1. 🔴 HIGH: `src/policy/immix/immixspace.rs:450,547` — use plan downcasting or trait method to avoid casting `self` to pass to work packets — expected Δ: -2
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
