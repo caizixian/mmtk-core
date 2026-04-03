@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 612 | Δ: -110
-- Completed subsystems: util/alloc/allocator.rs (RefCell to AtomicU8 for AllocationOptionsHolder), util/alloc (partial), policy/sft_map (partial), policy/marksweepspace (block.rs cleanup), util/heap/layout (vm_layout.rs static mut, map32.rs Mutex, map64.rs RwLock), util/copy (MaybeUninit to Option in GCWorkerCopyContext), util/metadata/side_metadata (side_metadata_tests.rs Address::from_usize(0) and zero_meta_bits vector cleanup, global.rs SideMetadataOffset union to enum), util/heap/gc_trigger.rs (OnceLock for plan), util/metadata/header_metadata.rs (Vec for TestBuffer in tests), util/heap/blockpageresource.rs (push on unique BlockQueue), scheduler/gc_work.rs (Prepare/Release unsafe Send removal), util/metadata/vo_bit (Relaxed load and safe ObjectReference creation), util/linear_scan (unnecessary unsafe removal)
+- Starting count: 722 | Current: 610 | Δ: -112
+- Completed subsystems: util/alloc/allocator.rs (RefCell to AtomicU8 for AllocationOptionsHolder), util/alloc/free_list_allocator.rs (from_raw_address_unchecked to from_raw_address().unwrap()), util/alloc (partial), policy/sft_map (partial), policy/marksweepspace (block.rs cleanup), util/heap/layout (vm_layout.rs static mut, map32.rs Mutex, map64.rs RwLock), util/copy (MaybeUninit to Option in GCWorkerCopyContext), util/metadata/side_metadata (side_metadata_tests.rs Address::from_usize(0) and zero_meta_bits vector cleanup, global.rs SideMetadataOffset union to enum), util/heap/gc_trigger.rs (OnceLock for plan), util/metadata/header_metadata.rs (Vec for TestBuffer in tests), util/heap/blockpageresource.rs (push on unique BlockQueue), scheduler/gc_work.rs (Prepare/Release unsafe Send removal), util/metadata/vo_bit (Relaxed load and safe ObjectReference creation), util/linear_scan (unnecessary unsafe removal)
 
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -37,6 +37,7 @@
 - `src/util/metadata/side_metadata/helpers.rs`: Analyze remaining unsafe blocks (mostly tests/Address::from_usize and load/store).
 - `src/util/metadata/metadata_val_traits.rs`: Analyze 20 unsafe blocks (mostly trait methods for load/store).
 - `src/util/metadata/side_metadata/global.rs`: Analyze 89 unsafe blocks (likely many load/store or FFI).
+- `src/vm/tests/mock_tests/mock_test_slots.rs`: Refactor mock slots to use lifetimes instead of raw pointers to eliminate `unsafe` loads/stores in tests.
 
 ## Files NOT to Revisit
 - `src/util/memory.rs` — FFI calls to libc (mmap, munmap, etc.).
