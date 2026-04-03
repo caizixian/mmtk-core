@@ -131,7 +131,6 @@ pub struct MMTK<VM: VMBinding> {
 }
 
 unsafe impl<VM: VMBinding> Sync for MMTK<VM> {}
-unsafe impl<VM: VMBinding> Send for MMTK<VM> {}
 
 impl<VM: VMBinding> MMTK<VM> {
     /// Create an MMTK instance. This is not public. Bindings should use [`MMTKBuilder::build`].
