@@ -10,7 +10,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs:19-136` — Investigate making `MetadataSlot` methods safe by moving unsafe to constructor or checking validity — expected Δ: 15
+- (Empty) All prioritized items have been investigated or completed. We are likely in Phase 3 (Irreducible Documentation).
 
 
 ## Patterns Discovered
@@ -43,7 +43,7 @@ Reusable refactoring patterns (recipe format):
 - `src/util/rust_util/atomic_box.rs` — Removed. Replaced by `OnceLock` in `two_level_storage.rs`. [Phase 3 confirmed]
 - `src/util/rust_util/mod.rs` — `InitializeOnce` is irreducible for performance. [Phase 2 confirmed]
 - `src/policy/marksweepspace/native_ms/block.rs` — Raw memory accesses for free list. [Phase 2 confirmed]
-- `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are irreducible function signatures and raw memory copy. [Phase 2 confirmed]
+- `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are irreducible function signatures and raw memory copy. Investigated MetadataSlot and concluded that moving unsafe to constructor would increase count at call sites. [Phase 2 confirmed]
 - `src/policy/marksweepspace/malloc_ms/global.rs` — Remaining unsafe are irreducible FFI and lifetime extension. Removed one unsafe block in `free_internal` by using safe `free` wrapper. [Phase 2 confirmed]
 - `src/policy/copyspace.rs` — Remaining unsafe are irreducible FFI and lifetime extension. [Phase 2 confirmed]
 - `src/plan/global.rs` — Unsafe for SFT_MAP access and CommonPlan reference for work packet. [Phase 2 confirmed]
