@@ -1,16 +1,16 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 493 | Current: 402 | Δ: -91
+- Starting count: 493 | Current: 399 | Δ: -94
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - `Address::from_usize` is marked unsafe by design to warn about invalid addresses. Replacing it with `ZERO.add` is considered an anti-pattern as it is semantically identical.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: Investigate `MaybeUninit` usages in `src/util/alloc/allocators.rs` for potential safe abstractions.
-2. 🟡 MED: Identify other `MaybeUninit` usages in the codebase and apply safe abstractions.
-3. 🟢 LOW: Check if other files have unnecessary `unsafe` on functions that can be made safe.
+1. 🔴 HIGH: Investigate `src/policy/marksweepspace/native_ms/block.rs` for implementing `BlockList` context pattern to remove unsafe stores.
+2. 🟡 MED: Investigate `MaybeUninit` usages in `src/util/alloc/allocators.rs` for potential safe abstractions.
+3. 🟢 LOW: Identify other `MaybeUninit` usages in the codebase and apply safe abstractions.
 
 ## Patterns Discovered
 - `MaybeUninit` arrays of size 1 can be replaced with `Option` and `unwrap()` to eliminate unsafe access.
@@ -41,6 +41,7 @@
 - **StwProof for Header Metadata**: Applied `StwProof` to `HeaderMetadataSpec::load_stw` and `store_stw` and `ObjectModel::load_metadata` and `store_metadata` to make non-atomic header metadata access safe.
 - **Passing spec to helpers functions**: Added `&SideMetadataSpec` parameter to scanning functions in `helpers.rs` to use `slot_from_meta_addr` and remove unsafe blocks.
 - **Replacing MaybeUninit with Option in BlockQueue**: Eliminated unsafe `assume_init()` and safe initialization in `src/util/heap/blockpageresource.rs`.
+- **Safe push_mut in BlockQueue**: Added `push_mut` taking `&mut self` to `BlockQueue` to allow safe pushing when the queue is local, removing 3 unsafe blocks.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.
