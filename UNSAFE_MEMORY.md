@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 708 | Δ: -14
-- Completed subsystems: util/alloc (partial), policy/sft_map (partial), policy/marksweepspace (block.rs cleanup)
+- Starting count: 722 | Current: 706 | Δ: -16
+- Completed subsystems: util/alloc (partial), policy/sft_map (partial), policy/marksweepspace (block.rs cleanup), util/heap/layout (vm_layout.rs static mut)
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - "Work packets are single-use — Option::take() is safe for extracting owned data"
@@ -23,10 +23,11 @@
 - `get_unchecked(i)` → `[i]` — works in non-hot paths where bounds are guaranteed or panic is acceptable.
 - `*const T` → `&T` in trait signatures where ownership is not required and lifetimes are valid.
 - `unsafe impl Sync` removal for types that only contain thread-safe fields (auto-Sync).
+- `static mut` → `OnceLock` for write-once globals.
 
 ## Refactoring Ideas
-- `src/policy/marksweepspace/native_ms/block.rs`: Analyzed. Remaining 22 are mostly side metadata access (RawHeapAccess).
-- `src/util/metadata/side_metadata/helpers.rs`: Analyze 34 unsafe blocks for potential safety improvements.
+- `src/util/metadata/side_metadata/helpers.rs`: Analyze 34 unsafe blocks for potential safety improvements (mostly tests/Address::from_usize).
+- `src/util/metadata/metadata_val_traits.rs`: Analyze 20 unsafe blocks (mostly trait methods for load/store).
 
 ## Files NOT to Revisit
 - `src/util/memory.rs` — FFI calls to libc (mmap, munmap, etc.).

@@ -1,9 +1,6 @@
 //! The module defines virutal memory layout parameters.
 
-use std::ptr::addr_of;
-use std::sync::atomic::AtomicBool;
 
-use atomic::Ordering;
 
 use super::heap_parameters::*;
 use crate::util::constants::*;
@@ -159,15 +156,9 @@ impl VMLayout {
     /// Custom VM layout constants. VM bindings may use this function for compressed or 39-bit heap support.
     /// This function must be called before MMTk::new()
     pub(crate) fn set_custom_vm_layout(constants: VMLayout) {
-        if cfg!(debug_assertions) {
-            assert!(
-                !VM_LAYOUT_FETCHED.load(Ordering::SeqCst),
-                "vm_layout is already been used before setup"
-            );
-        }
         constants.validate();
-        unsafe {
-            VM_LAYOUT = constants;
+        if VM_LAYOUT.set(constants).is_err() {
+            panic!("vm_layout is already been used before setup");
         }
     }
 }
@@ -185,19 +176,13 @@ impl std::default::Default for VMLayout {
     }
 }
 
-#[cfg(target_pointer_width = "32")]
-static mut VM_LAYOUT: VMLayout = VMLayout::new_32bit();
-#[cfg(target_pointer_width = "64")]
-static mut VM_LAYOUT: VMLayout = VMLayout::new_64bit();
-
-static VM_LAYOUT_FETCHED: AtomicBool = AtomicBool::new(false);
+static VM_LAYOUT: std::sync::OnceLock<VMLayout> = std::sync::OnceLock::new();
 
 /// Get the current virtual memory layout in use.
 /// If the binding would like to set a custom virtual memory layout ([`crate::mmtk::MMTKBuilder::set_vm_layout`]), they should not
 /// call this function before they set a custom layout.
 pub fn vm_layout() -> &'static VMLayout {
-    if cfg!(debug_assertions) {
-        VM_LAYOUT_FETCHED.store(true, Ordering::SeqCst);
-    }
-    unsafe { &*addr_of!(VM_LAYOUT) }
+    VM_LAYOUT.get_or_init(|| {
+        VMLayout::default()
+    })
 }
