@@ -1,4 +1,5 @@
 use std::sync::atomic::Ordering;
+#![deny(unsafe_code)]
 use std::sync::Arc;
 
 use super::allocator::{align_allocation_no_fill, fill_alignment_gap, AllocatorContext};
