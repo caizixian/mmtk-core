@@ -432,12 +432,12 @@ impl<C: GCWorkContext> GCWork<C::VM> for ScanMutatorRoots<C> {
             C::DefaultProcessEdges,
             C::PinningProcessEdges,
         >::new(mmtk);
+        mutator.flush();
         <C::VM as VMBinding>::VMScanning::scan_roots_in_mutator_thread(
             worker.tls,
             mutator,
             factory,
         );
-        mutator.flush();
 
         if mmtk.state.inform_stack_scanned(mutators) {
             <C::VM as VMBinding>::VMScanning::notify_initial_thread_scan_complete(

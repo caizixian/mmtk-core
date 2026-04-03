@@ -1,15 +1,15 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: src/scheduler/gc_work.rs
-- Strategy: Remove unnecessary unsafe block in `ScanMutatorRoots`.
+- File: <file being analyzed>
+- Strategy: <what you're attempting>
 
 ## Findings
-- `src/scheduler/gc_work.rs:436`: Casts `self.0` (which is `&'static mut Mutator`) to `*mut _` and dereferences it.
-- Since `self.0` is already a mutable reference, we should be able to pass it directly without unsafe casting.
+- Line X: <unsafe type> — <eliminable? why/why not>
+- Line Y: <unsafe type> — <eliminable? why/why not>
 
 ## Attempted Changes
-- Replace `unsafe { &mut *(self.0 as *mut _) }` with `self.0` in `src/scheduler/gc_work.rs`.
+- <what you tried, what happened>
 
 ## Blockers / Insights for Next Step
-- Need to verify if it compiles and if tests pass.
+- <what prevented completion, what the next step should know>
