@@ -140,7 +140,7 @@ fn is_vo_bit_set_inner<const ATOMIC: bool>(addr: Address) -> Option<ObjectRefere
     let vo_bit = if ATOMIC {
         VO_BIT_SIDE_METADATA_SPEC.load_atomic::<u8>(addr, Ordering::SeqCst)
     } else {
-        unsafe { VO_BIT_SIDE_METADATA_SPEC.load::<u8>(addr) }
+        VO_BIT_SIDE_METADATA_SPEC.slot_for::<u8>(addr).load()
     };
 
     (vo_bit == 1).then(|| get_object_ref_for_vo_addr(addr))
@@ -178,7 +178,7 @@ pub(crate) const VO_BIT_WORD_TO_REGION: usize = 1
 
 /// Bulk check if a VO bit word. Return true if there is any bit set in the word.
 pub(crate) fn get_raw_vo_bit_word(addr: Address) -> usize {
-    unsafe { VO_BIT_SIDE_METADATA_SPEC.load_raw_word(addr) }
+    VO_BIT_SIDE_METADATA_SPEC.slot_for::<usize>(addr).load()
 }
 
 /// Find the base reference to the object from a potential internal pointer.
