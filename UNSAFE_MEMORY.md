@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 229 | Δ: -122
+- Starting count: 351 | Current: 226 | Δ: -125
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -11,7 +11,7 @@ Architectural insights that affect ALL future safety decisions:
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: `src/util/metadata/side_metadata/helpers.rs:90-110` — Check if test utilities can be refactored to use safer abstractions — expected Δ: 0
+1. 🟡 MED: `src/policy/immortalspace.rs:1-100` — Audit for reducible unsafe blocks — expected Δ: 0
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
@@ -55,6 +55,7 @@ Reusable refactoring patterns (recipe format):
 - `src/util/heap/layout/mmapper/csm/two_level_storage.rs` — No unsafe code found after removing redundant unsafe impls. [Phase2 confirmed]
 - `src/vm/slot.rs` — SimpleSlot is a safe abstraction. Investigation showed that using references adds lifetime burden and moves unsafe to construction. [Phase 2 confirmed]
 - `src/vm/tests/mock_tests/mock_test_conservatism.rs` — No unsafe code found. [Phase 2 confirmed]
+- `benches/regular_bench/bulk_meta/bzero_bset.rs` — Refactored to use safe Rust vectors and fill. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 ### StwProof for safe plan access
