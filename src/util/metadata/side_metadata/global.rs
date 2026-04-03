@@ -18,18 +18,22 @@ pub(crate) struct MetadataSlot(pub(crate) Address);
 
 impl MetadataSlot {
     pub(crate) fn fetch_and(&self, mask: u8, order: Ordering) -> u8 {
+        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `AtomicU8`.
         unsafe { self.0.as_ref::<AtomicU8>() }.fetch_and(mask, order)
     }
 
     pub(crate) fn fetch_or(&self, mask: u8, order: Ordering) -> u8 {
+        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `AtomicU8`.
         unsafe { self.0.as_ref::<AtomicU8>() }.fetch_or(mask, order)
     }
 
     pub(crate) fn load(&self, order: Ordering) -> u8 {
+        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `AtomicU8`.
         unsafe { self.0.as_ref::<AtomicU8>() }.load(order)
     }
 
     pub(crate) fn store(&self, val: u8, order: Ordering) {
+        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `AtomicU8`.
         unsafe { self.0.as_ref::<AtomicU8>() }.store(val, order)
     }
 
@@ -37,6 +41,7 @@ impl MetadataSlot {
     where
         F: FnMut(u8) -> Option<u8>,
     {
+        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for the metadata value.
         unsafe { <u8 as MetadataValue>::fetch_update(self.0, set_order, fetch_order, f) }
     }
 
@@ -47,38 +52,47 @@ impl MetadataSlot {
         success: Ordering,
         failure: Ordering,
     ) -> std::result::Result<u8, u8> {
+        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `AtomicU8`.
         unsafe { self.0.compare_exchange::<AtomicU8>(old, new, success, failure) }
     }
 
     pub(crate) fn load_non_atomic(&self) -> u8 {
+        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `u8`.
         unsafe { self.0.load::<u8>() }
     }
 
     pub(crate) fn load_usize_non_atomic(&self) -> usize {
+        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `usize`.
         unsafe { self.0.load::<usize>() }
     }
 
     pub(crate) fn load_usize_atomic(&self, order: Ordering) -> usize {
+        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `AtomicUsize`.
         unsafe { self.0.atomic_load::<std::sync::atomic::AtomicUsize>(order) }
     }
 
     pub(crate) fn store_non_atomic(&self, val: u8) {
+        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `u8`.
         unsafe { self.0.store::<u8>(val) }
     }
 
     pub(crate) fn load_val<T: MetadataValue>(&self) -> T {
+        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T`.
         unsafe { T::load(self.0) }
     }
 
     pub(crate) fn load_atomic_val<T: MetadataValue>(&self, order: Ordering) -> T {
+        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T`.
         unsafe { T::load_atomic(self.0, order) }
     }
 
     pub(crate) fn store_val<T: MetadataValue>(&self, val: T) {
+        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T`.
         unsafe { T::store(self.0, val) }
     }
 
     pub(crate) fn store_atomic_val<T: MetadataValue>(&self, val: T, order: Ordering) {
+        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T`.
         unsafe { T::store_atomic(self.0, val, order) }
     }
 
@@ -89,22 +103,27 @@ impl MetadataSlot {
         success: Ordering,
         failure: Ordering,
     ) -> std::result::Result<T, T> {
+        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T`.
         unsafe { T::compare_exchange(self.0, old, new, success, failure) }
     }
 
     pub(crate) fn fetch_add_val<T: MetadataValue>(&self, val: T, order: Ordering) -> T {
+        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T`.
         unsafe { T::fetch_add(self.0, val, order) }
     }
 
     pub(crate) fn fetch_sub_val<T: MetadataValue>(&self, val: T, order: Ordering) -> T {
+        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T`.
         unsafe { T::fetch_sub(self.0, val, order) }
     }
 
     pub(crate) fn fetch_and_val<T: MetadataValue>(&self, val: T, order: Ordering) -> T {
+        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T`.
         unsafe { T::fetch_and(self.0, val, order) }
     }
 
     pub(crate) fn fetch_or_val<T: MetadataValue>(&self, val: T, order: Ordering) -> T {
+        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T`.
         unsafe { T::fetch_or(self.0, val, order) }
     }
 
@@ -112,6 +131,7 @@ impl MetadataSlot {
     where
         F: FnMut(T) -> Option<T>,
     {
+        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T`.
         unsafe { T::fetch_update(self.0, set_order, fetch_order, f) }
     }
 }
