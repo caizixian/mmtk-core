@@ -10,7 +10,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: `src/vm/slot.rs:285` — Document safety invariants for raw memory copy in `MemorySlice::copy` — expected Δ: 0
+1. 🟢 LOW: `src/util/metadata/side_metadata/ranges.rs:1` — Verify safety invariants and documentation — expected Δ: 0
 
 ## Patterns Discovered
 - Refactored `SFTWrapper` to hold a reference instead of a raw pointer, eliminating `unsafe impl Send` and `Sync` for the wrapper and reducing unsafe count.
@@ -70,9 +70,4 @@
 - `src/vm/tests/mock_tests/mock_test_doc_avoid_resolving_allocator.rs` — Test file demonstrating low-level hack for performance. Verified safety comment. [Phase 3 confirmed]
 - `src/util/heap/space_descriptor.rs` — Completely safe after deriving `Zeroable`. [Phase 3 confirmed]
 
-## Abstraction Proposals (for Phase 2)
-### SFTWrapper for SFTMap
-- Target files: `src/policy/sft_map.rs`
-- Expected Δ: 3 (potential reduction if we can eliminate transmutes)
-- Design sketch: Store `*const SFTWrapper` in `AtomicPtr` instead of transmuting fat pointer to `DoubleWord`. `SFTWrapper` contains `&'static dyn SFT`.
-- Status: proposed
+
