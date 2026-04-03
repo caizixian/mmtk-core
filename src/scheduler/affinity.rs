@@ -36,22 +36,10 @@ impl AffinityKind {
     }
 }
 
-#[cfg(target_os = "linux")]
 /// Bind the current thread to the specified core.
 fn bind_current_thread_to_core(cpu: CoreId) {
-    use std::mem::MaybeUninit;
-    unsafe {
-        let mut cs = MaybeUninit::zeroed().assume_init();
-        CPU_ZERO(&mut cs);
-        CPU_SET(cpu as usize, &mut cs);
-        sched_setaffinity(0, std::mem::size_of::<cpu_set_t>(), &cs);
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-/// Bind the current thread to the specified core.
-fn bind_current_thread_to_core(_cpu: CoreId) {
-    unimplemented!()
+    let core_id = core_affinity::CoreId { id: cpu as usize };
+    core_affinity::set_for_current(core_id);
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
