@@ -307,27 +307,19 @@ impl Block {
     fn simple_sweep<VM: VMBinding>(&self) {
         let cell_size = self.load_block_cell_size();
         debug_assert_ne!(cell_size, 0);
-        let mut cell = self.start();
         let mut last = Address::zero();
-        while cell + cell_size <= self.start() + Block::BYTES {
-            // The invariants we checked earlier ensures that we can use cell and object reference interchangably
-            // We may not really have an object in this cell, but if we do, this object reference is correct.
-            // About unsafe: We know `cell` is non-zero here.
-            let potential_object = ObjectReference::from_raw_address(cell).unwrap();
+        
+        for cell in self.cells(cell_size) {
+            let potential_object = ObjectReference::from_raw_address(cell.address()).unwrap();
 
             if !VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
                 .is_marked::<VM>(potential_object, Ordering::SeqCst)
             {
-                // clear VO bit if it is ever set. It is possible that the VO bit is never set for this cell (i.e. there was no object in this cell before this GC),
-                // we unset the bit anyway.
                 #[cfg(feature = "vo_bit")]
                 crate::util::metadata::vo_bit::unset_vo_bit_nocheck(potential_object);
-                unsafe {
-                    cell.store::<Address>(last);
-                }
-                last = cell;
+                cell.store_link(last);
+                last = cell.address();
             }
-            cell += cell_size;
         }
 
         self.store_free_list(last);
@@ -340,66 +332,50 @@ impl Block {
     fn naive_brute_force_sweep<VM: VMBinding>(&self) {
         use crate::util::constants::MIN_OBJECT_SIZE;
 
-        // Cell size for this block.
         let cell_size = self.load_block_cell_size();
-        // Current cell
-        let mut cell = self.start();
-        // Last free cell in the free list
         let mut last = Address::ZERO;
-        // Current cursor
-        let mut cursor = cell;
 
         debug!("Sweep block {:?}, cell size {}", self, cell_size);
 
-        while cell + cell_size <= self.end() {
-            // possible object ref
-            // We know cursor plus an offset cannot be 0.
-            let potential_object_ref = ObjectReference::from_raw_address(
-                cursor + VM::VMObjectModel::OBJECT_REF_OFFSET_LOWER_BOUND,
-            )
-            .unwrap();
-            trace!(
-                "{:?}: cell = {}, last cell in free list = {}, cursor = {}, potential object = {}",
-                self,
-                cell,
-                last,
-                cursor,
-                potential_object_ref
+        'cell_loop: for cell in self.cells(cell_size) {
+            let mut cursor = cell.address();
+            
+            while cursor < cell.address() + cell_size {
+                let potential_object_ref = ObjectReference::from_raw_address(
+                    cursor + VM::VMObjectModel::OBJECT_REF_OFFSET_LOWER_BOUND,
+                )
+                .unwrap();
+                
+                trace!(
+                    "{:?}: cell = {}, last cell in free list = {}, cursor = {}, potential object = {}",
+                    self,
+                    cell.address(),
+                    last,
+                    cursor,
+                    potential_object_ref
+                );
+
+                if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
+                    .is_marked::<VM>(potential_object_ref, Ordering::SeqCst)
+                {
+                    debug!("{:?} Live cell: {}", self, cell.address());
+                    continue 'cell_loop;
+                }
+                
+                cursor += MIN_OBJECT_SIZE;
+            }
+
+            debug!(
+                "{:?} Free cell: {}, last cell in freelist is {}",
+                self, cell.address(), last
             );
 
-            if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
-                .is_marked::<VM>(potential_object_ref, Ordering::SeqCst)
-            {
-                debug!("{:?} Live cell: {}", self, cell);
-                // If the mark bit is set, the cell is alive.
-                // We directly jump to the end of the cell.
-                cell += cell_size;
-                cursor = cell;
-            } else {
-                // If the mark bit is not set, we don't know if the cell is alive or not. We keep search for the mark bit.
-                cursor += MIN_OBJECT_SIZE;
+            #[cfg(feature = "vo_bit")]
+            crate::util::metadata::vo_bit::bzero_vo_bit(cell.address(), cell_size);
 
-                if cursor >= cell + cell_size {
-                    // We now stepped to the next cell. This means we did not find mark bit in the current cell, and we can add this cell to free list.
-                    debug!(
-                        "{:?} Free cell: {}, last cell in freelist is {}",
-                        self, cell, last
-                    );
-
-                    // Clear VO bit: we don't know where the object reference actually is, so we bulk zero the cell.
-                    #[cfg(feature = "vo_bit")]
-                    crate::util::metadata::vo_bit::bzero_vo_bit(cell, cell_size);
-
-                    // store the previous cell to make the free list
-                    debug_assert!(last.is_zero() || (last >= self.start() && last < self.end()));
-                    unsafe {
-                        cell.store::<Address>(last);
-                    }
-                    last = cell;
-                    cell += cell_size;
-                    debug_assert_eq!(cursor, cell);
-                }
-            }
+            debug_assert!(last.is_zero() || (last >= self.start() && last < self.end()));
+            cell.store_link(last);
+            last = cell.address();
         }
 
         self.store_free_list(last);
@@ -418,6 +394,14 @@ impl Block {
     /// Deinitalize a block before releasing.
     pub fn deinit(&self) {
         self.set_state(BlockState::Unallocated);
+    }
+
+    pub fn cells(&self, cell_size: usize) -> CellIter {
+        CellIter {
+            current: self.start(),
+            end: self.end(),
+            cell_size,
+        }
     }
 }
 
@@ -458,6 +442,40 @@ impl From<BlockState> for u8 {
             BlockState::Unallocated => BlockState::MARK_UNALLOCATED,
             BlockState::Unmarked => BlockState::MARK_UNMARKED,
             BlockState::Marked => BlockState::MARK_MARKED,
+        }
+    }
+}
+
+pub struct BlockCell(Address);
+
+impl BlockCell {
+    pub fn address(&self) -> Address {
+        self.0
+    }
+
+    pub fn store_link(&self, next: Address) {
+        unsafe {
+            self.0.store::<Address>(next);
+        }
+    }
+}
+
+pub struct CellIter {
+    current: Address,
+    end: Address,
+    cell_size: usize,
+}
+
+impl Iterator for CellIter {
+    type Item = BlockCell;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current + self.cell_size <= self.end {
+            let cell = BlockCell(self.current);
+            self.current += self.cell_size;
+            Some(cell)
+        } else {
+            None
         }
     }
 }
