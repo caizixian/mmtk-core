@@ -2,7 +2,6 @@
 
 use atomic::Ordering;
 use std::fmt;
-use std::sync::atomic::AtomicU8;
 
 use crate::util::constants::{BITS_IN_BYTE, LOG_BITS_IN_BYTE};
 use crate::util::metadata::metadata_val_traits::*;
@@ -284,13 +283,13 @@ impl HeaderMetadataSpec {
         if self.num_of_bits < 8 {
             let byte_addr = self.meta_addr(header);
             unsafe {
-                let real_old_byte = byte_addr.atomic_load::<AtomicU8>(success_order);
+                let slot = MetadataSlot::<u8>::new_unchecked(byte_addr);
+                let real_old_byte = slot.load_atomic(success_order);
                 let expected_old_byte =
                     self.set_bits_to_u8(real_old_byte, old_metadata.to_u8().unwrap());
                 let expected_new_byte =
                     self.set_bits_to_u8(expected_old_byte, new_metadata.to_u8().unwrap());
-                byte_addr
-                    .compare_exchange::<AtomicU8>(
+                slot.compare_exchange(
                         expected_old_byte,
                         expected_new_byte,
                         success_order,
@@ -302,7 +301,7 @@ impl HeaderMetadataSpec {
         } else {
             let addr = self.meta_addr(header);
             let (old_metadata, new_metadata) = if let Some(mask) = optional_mask {
-                let old_byte = unsafe { T::load_atomic(addr, success_order) };
+                let old_byte = unsafe { MetadataSlot::<T>::new_unchecked(addr).load_atomic(success_order) };
                 let expected_new_byte = old_byte.bitand(mask.inv()).bitor(new_metadata);
                 let expected_old_byte = old_byte.bitand(mask.inv()).bitor(old_metadata);
                 (expected_old_byte, expected_new_byte)
@@ -311,8 +310,7 @@ impl HeaderMetadataSpec {
             };
 
             unsafe {
-                T::compare_exchange(
-                    addr,
+                MetadataSlot::<T>::new_unchecked(addr).compare_exchange(
                     old_metadata,
                     new_metadata,
                     success_order,
@@ -359,7 +357,7 @@ impl HeaderMetadataSpec {
             }))
             .unwrap()
         } else {
-            unsafe { T::fetch_add(self.meta_addr(header), val, order) }
+            unsafe { MetadataSlot::<T>::new_unchecked(self.meta_addr(header)).fetch_add(val, order) }
         }
     }
 
@@ -373,7 +371,7 @@ impl HeaderMetadataSpec {
             }))
             .unwrap()
         } else {
-            unsafe { T::fetch_sub(self.meta_addr(header), val, order) }
+            unsafe { MetadataSlot::<T>::new_unchecked(self.meta_addr(header)).fetch_sub(val, order) }
         }
     }
 
@@ -386,11 +384,11 @@ impl HeaderMetadataSpec {
             let new_val = (val.to_u8().unwrap() << lshift) | !mask;
             // We do not need to use fetch_ops_on_bits(), we can just set irrelavent bits to 1, and do fetch_and
             let old_raw_byte =
-                unsafe { <u8 as MetadataValue>::fetch_and(self.meta_addr(header), new_val, order) };
+                unsafe { MetadataSlot::<u8>::new_unchecked(self.meta_addr(header)).fetch_and(new_val, order) };
             let old_val = self.get_bits_from_u8(old_raw_byte);
             FromPrimitive::from_u8(old_val).unwrap()
         } else {
-            unsafe { T::fetch_and(self.meta_addr(header), val, order) }
+            unsafe { MetadataSlot::<T>::new_unchecked(self.meta_addr(header)).fetch_and(val, order) }
         }
     }
 
@@ -403,11 +401,11 @@ impl HeaderMetadataSpec {
             let new_val = (val.to_u8().unwrap() << lshift) & mask;
             // We do not need to use fetch_ops_on_bits(), we can just set irrelavent bits to 0, and do fetch_or
             let old_raw_byte =
-                unsafe { <u8 as MetadataValue>::fetch_or(self.meta_addr(header), new_val, order) };
+                unsafe { MetadataSlot::<u8>::new_unchecked(self.meta_addr(header)).fetch_or(new_val, order) };
             let old_val = self.get_bits_from_u8(old_raw_byte);
             FromPrimitive::from_u8(old_val).unwrap()
         } else {
-            unsafe { T::fetch_or(self.meta_addr(header), val, order) }
+            unsafe { MetadataSlot::<T>::new_unchecked(self.meta_addr(header)).fetch_or(val, order) }
         }
     }
 
@@ -425,8 +423,7 @@ impl HeaderMetadataSpec {
         if self.num_of_bits < 8 {
             let byte_addr = self.meta_addr(header);
             unsafe {
-                <u8 as MetadataValue>::fetch_update(
-                    byte_addr,
+                MetadataSlot::<u8>::new_unchecked(byte_addr).fetch_update(
                     set_order,
                     fetch_order,
                     |raw_byte: u8| {
@@ -441,7 +438,7 @@ impl HeaderMetadataSpec {
             .map(|raw_byte| FromPrimitive::from_u8(self.get_bits_from_u8(raw_byte)).unwrap())
             .map_err(|raw_byte| FromPrimitive::from_u8(self.get_bits_from_u8(raw_byte)).unwrap())
         } else {
-            unsafe { T::fetch_update(self.meta_addr(header), set_order, fetch_order, f) }
+            unsafe { MetadataSlot::<T>::new_unchecked(self.meta_addr(header)).fetch_update(set_order, fetch_order, f) }
         }
     }
 }
