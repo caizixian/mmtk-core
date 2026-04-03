@@ -6,9 +6,7 @@
 use super::MapState;
 use crate::util::heap::layout::mmapper::csm::{ChunkRange, MapStateStorage};
 use crate::util::heap::layout::vm_layout::*;
-use crate::util::rust_util::atomic_box::OnceOptionBox;
 use crate::util::rust_util::rev_group::RevisitableGroupByForIterator;
-use crate::util::rust_util::zeroed_alloc::new_zeroed_vec;
 use crate::util::Address;
 use atomic::{Atomic, Ordering};
 use std::fmt;
@@ -60,11 +58,8 @@ type Slab = [Atomic<MapState>; MMAP_CHUNKS_PER_SLAB];
 /// user intends to write into one of its `MapState`.
 pub struct TwoLevelStateStorage {
     /// Slabs
-    slabs: Vec<OnceOptionBox<Slab>>,
+    slabs: Vec<std::sync::OnceLock<Box<Slab>>>,
 }
-
-unsafe impl Send for TwoLevelStateStorage {}
-unsafe impl Sync for TwoLevelStateStorage {}
 
 impl fmt::Debug for TwoLevelStateStorage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -161,9 +156,11 @@ impl MapStateStorage for TwoLevelStateStorage {
 
 impl TwoLevelStateStorage {
     pub fn new() -> Self {
-        Self {
-            slabs: new_zeroed_vec(MAX_SLABS),
+        let mut slabs = Vec::with_capacity(MAX_SLABS);
+        for _ in 0..MAX_SLABS {
+            slabs.push(std::sync::OnceLock::new());
         }
+        Self { slabs }
     }
 
     fn new_slab() -> Slab {
@@ -173,19 +170,16 @@ impl TwoLevelStateStorage {
     fn slab_table(&self, addr: Address) -> Option<&Slab> {
         let index: usize = Self::slab_index(addr);
         let slot = self.slabs.get(index)?;
-        // Note: We don't need acquire here.  See `get_or_allocate_slab_table`.
-        slot.get(Ordering::Relaxed)
+        slot.get().map(|box_slab| &**box_slab)
     }
 
     fn get_or_allocate_slab_table(&self, addr: Address) -> &Slab {
         let index: usize = Self::slab_index(addr);
-        let Some(slot) = self.slabs.get(index) else {
+        let slot = self.slabs.get(index).unwrap_or_else(|| {
             panic!("Cannot allocate slab for address: {addr}");
-        };
-        // Note: We set both order_load and order_store to `Relaxed` because we never populate the
-        // content of the slab before making the `OnceOptionBox` point to the new slab. For this
-        // reason, the release-acquire relation is not needed here.
-        slot.get_or_init(Ordering::Relaxed, Ordering::Relaxed, Self::new_slab)
+        });
+        let box_slab = slot.get_or_init(|| Box::new(Self::new_slab()));
+        &**box_slab
     }
 
     fn slab_index(addr: Address) -> usize {
