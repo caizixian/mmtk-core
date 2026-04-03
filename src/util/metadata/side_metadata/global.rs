@@ -1063,7 +1063,7 @@ impl SideMetadataSpec {
                 return None;
             }
             // If we find non-zero value, just return it.
-            if !unsafe { self.load::<T>(cursor).is_zero() } {
+            if !self.load_atomic::<T>(cursor, Ordering::Relaxed).is_zero() {
                 return Some(cursor);
             }
             cursor -= region_bytes;
@@ -1084,7 +1084,7 @@ impl SideMetadataSpec {
             return None;
         }
         // Quick check if the current data_addr has a non zero value.
-        if !unsafe { self.load::<T>(data_addr).is_zero() } {
+        if !self.load_atomic::<T>(data_addr, Ordering::Relaxed).is_zero() {
             return Some(data_addr.align_down(1 << self.log_bytes_in_region));
         }
 
@@ -1205,7 +1205,7 @@ impl SideMetadataSpec {
             debug_assert!(cursor.is_mapped());
 
             // If we find non-zero value, just call back.
-            if !unsafe { self.load::<T>(cursor).is_zero() } {
+            if !self.load_atomic::<T>(cursor, Ordering::Relaxed).is_zero() {
                 visit_data(cursor);
             }
             cursor += region_bytes;

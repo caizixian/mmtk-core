@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 593 | Δ: -129
-- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout, util/copy, util/metadata/side_metadata (side_metadata_tests.rs load/store to load_atomic/store_atomic), util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs
+- Starting count: 722 | Current: 590 | Δ: -132
+- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout, util/copy, util/metadata/side_metadata (side_metadata_tests.rs load/store to load_atomic/store_atomic, global.rs load to load_atomic in search), util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs
 
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -38,7 +38,7 @@
 ## Refactoring Ideas
 - `src/util/metadata/side_metadata/helpers.rs`: Analyze remaining unsafe blocks (mostly tests/Address::from_usize and load/store).
 - `src/util/metadata/metadata_val_traits.rs`: Analyze 20 unsafe blocks (mostly trait methods for load/store).
-- `src/util/metadata/side_metadata/global.rs`: Analyze 89 unsafe blocks (likely many load/store or FFI).
+- `src/util/metadata/side_metadata/global.rs`: Analyze remaining unsafe blocks (74 count). Done load to load_atomic in search functions.
 - `src/policy/sft_map.rs`: Analyze remaining unsafe (20 count) for potential safe abstractions in SFT map access.
 
 ## Files NOT to Revisit
