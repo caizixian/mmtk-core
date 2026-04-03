@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 513 | Δ: -209
+- Starting count: 722 | Current: 504 | Δ: -218
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,8 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/heap/layout/map64.rs` — Apply same refactoring as `map32.rs` (replace `UnsafeCell` with `Mutex`) — expected Δ: ~6
-2. 🟡 MED: `src/util/metadata/side_metadata/global.rs:200-800` — Investigate raw loads/stores and `addr.as_ref` in side_metadata/global.rs. — expected Δ: ?
+1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs:200-800` — Investigate raw loads/stores and `addr.as_ref` in side_metadata/global.rs. — expected Δ: ?
+2. 🟡 MED: `src/util/heap/blockpageresource.rs` — Investigate `push_relaxed` and `assume_init`. — expected Δ: ?
 
 ## Patterns Discovered
 - `unsafe { MaybeUninit::uninit().assume_init() }` → `[MaybeUninit::uninit()]` when array size is 1. Works for initializing arrays of `MaybeUninit` safely.
@@ -25,7 +25,8 @@
 - Adding runtime checks (asserts) in `Mutator` to validate that allocators are initialized before accessing them allows removing `unsafe` from accessor methods and callers.
 - Using `store_atomic` to replace raw stores in metadata updates, allowing helper functions to be safe and eliminating `unsafe` blocks at call sites.
 - Using references instead of raw pointers in test slots when the slots borrow from local variables in tests. This eliminates unsafe dereferences and `unsafe impl Send`.
-- **New Pattern**: Replacing non-atomic `load`/`store` on `SideMetadataSpec` with `load_atomic`/`store_atomic` (with `Relaxed` or `SeqCst`) to remove `unsafe` blocks at call sites.
+- Replacing non-atomic `load`/`store` on `SideMetadataSpec` with `load_atomic`/`store_atomic` (with `Relaxed` or `SeqCst`) to remove `unsafe` blocks at call sites.
+- **New Pattern**: Replacing `UnsafeCell` with `Mutex` for global state that is accessed via shared references, eliminating unsafe mutable access.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/metadata/side_metadata/helpers.rs` — Irreducible raw loads from metadata addresses. [Phase 1 analysis]
