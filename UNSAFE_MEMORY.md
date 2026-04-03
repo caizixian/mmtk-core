@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 461 | Δ: -261
+- Starting count: 722 | Current: 459 | Δ: -263
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,9 +10,8 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/scheduler/gc_work.rs:59,139` — Eliminate raw pointer casting to `&mut PlanType` by using safe references or refactoring ownership. — expected Δ: 2
-2. 🟡 MED: `src/policy/marksweepspace/malloc_ms/global.rs:392,605` — Check if SFT_MAP updates can be safe (e.g. if they have been refactored in other files). — expected Δ: 2
-3. 🟢 LOW: `src/util/metadata/side_metadata/global.rs` — Check if remaining unsafe can be abstracted. — expected Δ: ?
+1. 🔴 HIGH: `src/policy/marksweepspace/malloc_ms/global.rs:392,605` — Check if SFT_MAP updates can be safe (e.g. if they have been refactored in other files). — expected Δ: 2
+2. 🟡 MED: `src/util/metadata/side_metadata/global.rs` — Check if remaining unsafe can be abstracted. — expected Δ: ?
 
 ## Patterns Discovered
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
@@ -31,6 +30,7 @@
 - Replacing non-atomic `load`/`store` on `SideMetadataSpec` with `load_atomic`/`store_atomic` (with `Relaxed` or `SeqCst`) to remove `unsafe` blocks at call sites.
 - Replacing `UnsafeCell` with `Mutex` for global state that is accessed via shared references, eliminating unsafe mutable access.
 - **New Pattern**: Extending `MetadataSlot` with generic methods for `MetadataValue` allows centralizing unsafe operations on types larger than `u8` (like `u16`, `u32`, `usize`) and removing unsafe blocks at call sites in `header_metadata.rs` and `global.rs`.
+- **New Pattern**: Removing raw pointers from work packets and using `mmtk.get_plan_mut()` eliminates the need for `unsafe impl Send` and raw pointer casts when the work packet only needs to call trait methods on the plan.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/metadata/side_metadata/helpers.rs` — All unsafe removed by using `MetadataSlot`. [Phase 2 confirmed]
