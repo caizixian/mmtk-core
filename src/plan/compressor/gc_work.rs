@@ -48,7 +48,7 @@ impl<VM: VMBinding> GCWork<VM> for UpdateReferences<VM> {
         for mutator in VM::VMActivePlan::mutators() {
             mmtk.scheduler.work_buckets[WorkBucketStage::SecondRoots].add(ScanMutatorRoots::<
                 CompressorForwardingWorkContext<VM>,
-            >(mutator));
+            >(Some(mutator)));
         }
 
         mmtk.scheduler.work_buckets[WorkBucketStage::SecondRoots]

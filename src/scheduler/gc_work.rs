@@ -230,7 +230,7 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
             }
             if !self.skip_mutator_roots {
                 mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
-                    .add(ScanMutatorRoots::<C>(mutator));
+                    .add(ScanMutatorRoots::<C>(Some(mutator)));
             }
         });
         trace!("stop_all_mutators end");
@@ -420,11 +420,12 @@ impl<VM: VMBinding> GCWork<VM> for VMPostForwarding<VM> {
     }
 }
 
-pub struct ScanMutatorRoots<C: GCWorkContext>(pub &'static mut Mutator<C::VM>);
+pub struct ScanMutatorRoots<C: GCWorkContext>(pub Option<&'static mut Mutator<C::VM>>);
 
 impl<C: GCWorkContext> GCWork<C::VM> for ScanMutatorRoots<C> {
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
-        trace!("ScanMutatorRoots for mutator {:?}", self.0.get_tls());
+        let mutator = self.0.take().expect("Mutator already scanned");
+        trace!("ScanMutatorRoots for mutator {:?}", mutator.get_tls());
         let mutators = <C::VM as VMBinding>::VMActivePlan::number_of_mutators();
         let factory = ProcessEdgesWorkRootsWorkFactory::<
             C::VM,
@@ -433,10 +434,10 @@ impl<C: GCWorkContext> GCWork<C::VM> for ScanMutatorRoots<C> {
         >::new(mmtk);
         <C::VM as VMBinding>::VMScanning::scan_roots_in_mutator_thread(
             worker.tls,
-            unsafe { &mut *(self.0 as *mut _) },
+            mutator,
             factory,
         );
-        self.0.flush();
+        mutator.flush();
 
         if mmtk.state.inform_stack_scanned(mutators) {
             <C::VM as VMBinding>::VMScanning::notify_initial_thread_scan_complete(
