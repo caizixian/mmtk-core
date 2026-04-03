@@ -319,20 +319,17 @@ impl HeaderMetadataSpec {
         fetch_order: Ordering,
         update: F,
     ) -> u8 {
-        let byte_addr = self.meta_addr(header);
-        let old_raw_byte = unsafe {
-            <u8 as MetadataValue>::fetch_update(
-                byte_addr,
-                set_order,
-                fetch_order,
-                |raw_byte: u8| {
-                    let old_metadata = self.get_bits_from_u8(raw_byte);
-                    let new_metadata = self.truncate_bits_in_u8(update(old_metadata));
-                    let new_byte = self.set_bits_to_u8(raw_byte, new_metadata);
-                    Some(new_byte)
-                },
-            )
-        }
+        let slot = self.slot_for::<u8>(header);
+        let old_raw_byte = slot.fetch_update(
+            set_order,
+            fetch_order,
+            |raw_byte: u8| {
+                let old_metadata = self.get_bits_from_u8(raw_byte);
+                let new_metadata = self.truncate_bits_in_u8(update(old_metadata));
+                let new_byte = self.set_bits_to_u8(raw_byte, new_metadata);
+                Some(new_byte)
+            },
+        )
         .unwrap();
         self.get_bits_from_u8(old_raw_byte)
     }
