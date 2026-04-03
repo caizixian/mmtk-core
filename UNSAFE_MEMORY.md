@@ -10,7 +10,7 @@ Architectural insights that affect ALL future safety decisions:
 - Static plan references are needed because plan types are generic and cannot be stored in global statics easily.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs:1-800` — consolidate raw pointer operations into MetadataSlot methods — expected Δ: -5
+1. 🔴 HIGH: `src/mmtk.rs:191` — investigate if we can remove fake static reference for plan — expected Δ: -1
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
@@ -42,6 +42,8 @@ Reusable refactoring patterns (recipe format):
 - `src/policy/copyspace.rs` — Remaining unsafe are irreducible FFI and lifetime extension. [Phase 2 confirmed]
 - `src/plan/global.rs` — Unsafe for SFT_MAP access and CommonPlan reference for work packet. [Phase 2 confirmed]
 - `src/util/alloc/allocator.rs` — Unsafe impl Sync for AllocationOptionsHolder and raw memory write in fill_alignment_gap. [Phase 2 confirmed]
+- `src/util/malloc/mod.rs` — Irreducible FFI wrappers. [Phase 2 confirmed]
+- `src/mmtk.rs` — Irreducible UnsafeCell access and circular initialization. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 ### StwProof for safe plan access
