@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 281 | Δ: -70
+- Starting count: 351 | Current: 279 | Δ: -72
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,7 @@ Architectural insights that affect ALL future safety decisions:
 - Static plan references are needed because plan types are generic and cannot be stored in global statics easily.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/alloc/free_list_allocator.rs:21` — investigate if we can make `FreeListCell` operations safe or use a safe wrapper — expected Δ: -2
-2. 🟡 MED: `src/util/metadata/side_metadata/global.rs:622` — investigate if we can use `StwProof` to make non-atomic `load`/`store` safe — expected Δ: -2
+1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs:622` — investigate if we can use `StwProof` to make non-atomic `load`/`store` safe — expected Δ: -2
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):

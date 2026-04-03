@@ -18,12 +18,12 @@ struct FreeListCell(Address);
 impl FreeListCell {
     #[inline(always)]
     fn load_next(&self) -> Address {
-        unsafe { self.0.load::<Address>() }
+        Address::from_usize(MetadataSlot(self.0).load_val::<usize>())
     }
 
     #[inline(always)]
     fn store_next(&self, next: Address) {
-        unsafe { self.0.store::<Address>(next) }
+        MetadataSlot(self.0).store_val::<usize>(next.as_usize())
     }
 }
 
