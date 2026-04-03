@@ -1,4 +1,3 @@
-use crate::util::metadata::side_metadata;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::metadata::vo_bit;
 use crate::util::Address;
@@ -86,15 +85,3 @@ pub(super) fn unset_page_mark(page_addr: Address) {
     ACTIVE_PAGE_METADATA_SPEC.store_atomic::<u8>(page_addr, 0, Ordering::Relaxed)
 }
 
-/// Load u128 bits of side metadata
-///
-/// # Safety
-/// unsafe as it can segfault if one tries to read outside the bounds of the mapped side metadata
-pub(super) unsafe fn load128(metadata_spec: &SideMetadataSpec, data_addr: Address) -> u128 {
-    let meta_addr = side_metadata::address_to_meta_address(metadata_spec, data_addr);
-
-    #[cfg(all(debug_assertions, feature = "extreme_assertions"))]
-    metadata_spec.assert_metadata_mapped(data_addr);
-
-    meta_addr.load::<u128>()
-}
