@@ -1336,7 +1336,7 @@ impl SideMetadataSpec {
 
             // If we find non-zero value, just call back.
             // SAFETY: The operation is safe because we assume that this scan is performed when no concurrent mutation of the same metadata is happening (e.g., during GC or with appropriate external synchronization).
-            if !unsafe { self.load::<T>(cursor).is_zero() } {
+            if !self.load_atomic::<T>(cursor, Ordering::Relaxed).is_zero() {
                 visit_data(cursor);
             }
             cursor += region_bytes;

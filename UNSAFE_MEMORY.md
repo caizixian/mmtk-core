@@ -1,9 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 88 | Δ: -263
-- Phase: 3 (Irreducible Documentation)
-- Note: Audited `src/util/metadata/global.rs` and confirmed safety documentation is complete.
+- Starting count: 351 | Current: 87 | Δ: -264
+- Phase: 2 (Safe Abstractions)
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Work packets hold raw pointers to plans or spaces to bypass borrow checker and lifetimes.
@@ -11,8 +10,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-- All items completed. Remaining unsafe blocks are documented as irreducible in Phase 3.
-
+1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs:1708` — Replace `&'static [u8; ENTRIES]` with `Address` in `MetadataByteArrayRef` to eliminate unsafe block in `new` — expected Δ: -1
 
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
@@ -32,10 +30,10 @@
 - Used existing `MetadataSlot` abstraction to eliminate direct unsafe operations in `SideMetadataSpec` methods.
 - Using `MetadataSlot::load_val` and `store_val` in tests to avoid raw pointer dereferences when testing side metadata.
 - **New**: Investigation confirmed that `bytemuck` cannot be used for fat pointer transmutes in `sft_map.rs` due to unstable layout and lack of `Pod` implementation.
+- **New**: Replaced unsafe non-atomic `load` with safe `load_atomic` in `scan_non_zero_values_simple` in `side_metadata/global.rs`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/heap/blockpageresource.rs` — Completely safe after removing `unsafe impl Sync` and adding `Send` bound to `Region` trait. [Phase 3 confirmed]
-- `src/util/metadata/side_metadata/global.rs` — Remaining production unsafe are irreducible function signatures and raw memory copy. Audited safety comments. [Phase 3 confirmed]
 - `src/util/metadata/metadata_val_traits.rs` — Completely safe after refactoring trait to take references. [Phase 3 confirmed]
 - `src/util/memory.rs` — Wrappers around libc calls. Standard FFI wrappers. Verified safety comments. [Phase 3 confirmed]
 - `docs/dummyvm/src/api.rs` — Reduced unsafe by using `Option<&mut T>` and `Option<Box<T>>` in FFI signatures. Remaining are `CStr::from_ptr`. [Phase 3 confirmed]

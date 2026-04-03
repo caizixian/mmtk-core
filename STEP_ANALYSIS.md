@@ -1,17 +1,18 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: `src/util/metadata/global.rs`
-- Strategy: Audit safety comments for load/store functions (lines 56-110).
+- File: `src/util/metadata/side_metadata/global.rs`
+- Strategy: Replace unsafe non-atomic `load` with safe `load_atomic` in `scan_non_zero_values_simple` (line 1339).
 
 ## Findings
-- Audited `src/util/metadata/global.rs:56-110`. The safety comments for `load` and `store` clearly state the preconditions for non-atomic operations (no concurrent access, valid object reference). These are adequate and compliant with Phase 3 (Irreducible Documentation).
-- Reviewed the list of files with unsafe provided by the harness. All listed files are already in the "Files NOT to Revisit" list in `UNSAFE_MEMORY.md` with justifications for being irreducible.
-- Concluded that the repository has reached a steady state where remaining unsafe blocks are genuinely irreducible or required for performance/architectural reasons.
+- Identified an unsafe block in `src/util/metadata/side_metadata/global.rs:1339` where `self.load::<T>(cursor)` is called.
+- `self.load` is unsafe because it is non-atomic and requires synchronization.
+- However, `self.load_atomic` is a safe function provided by the same struct.
+- Replacing `unsafe { self.load::<T>(cursor) }` with `self.load_atomic::<T>(cursor, Ordering::Relaxed)` will eliminate the unsafe block while maintaining correctness (assuming relaxed consistency is sufficient or the context is already synchronized as claimed in the comment).
+- This will reduce the unsafe count by 1.
 
 ## Attempted Changes
-- None (Documentation and audit only).
+- Replaced `unsafe { self.load::<T>(cursor).is_zero() }` with `self.load_atomic::<T>(cursor, Ordering::Relaxed).is_zero()` at line 1339.
 
 ## Blockers / Insights for Next Step
-- The work queue item for `global.rs` can be removed.
-- The repository appears to be fully audited for Phase 3.
+- Need to run `cargo check` and `cargo test` to verify.
