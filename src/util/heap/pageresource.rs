@@ -155,6 +155,8 @@ impl CommonPageResource {
     ) -> Address {
         let mut head_discontiguous_region = self.head_discontiguous_region.lock().unwrap();
 
+        // SAFETY: The implementations of `VMMap` (`Map32` and `Map64`) are thread-safe as they use a Mutex internally.
+        // Therefore, calling `allocate_contiguous_chunks` is safe even if called from multiple threads.
         let new_head: Address = unsafe {
             self.vm_map.allocate_contiguous_chunks(
                 space_descriptor,
@@ -179,6 +181,8 @@ impl CommonPageResource {
         if chunk == *head_discontiguous_region {
             *head_discontiguous_region = self.vm_map.get_next_contiguous_region(chunk);
         }
+        // SAFETY: The implementations of `VMMap` (`Map32` and `Map64`) are thread-safe as they use a Mutex internally.
+        // Therefore, calling `free_contiguous_chunks` is safe even if called from multiple threads.
         unsafe {
             self.vm_map.free_contiguous_chunks(chunk);
         }
