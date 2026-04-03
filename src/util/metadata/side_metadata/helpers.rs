@@ -291,7 +291,7 @@ pub fn find_last_non_zero_bit_in_metadata_bytes(
 
         if step == BYTES_IN_ADDRESS {
             // Load and check a usize word
-            let value = MetadataSlot(cur).load_usize_non_atomic();
+            let value = MetadataSlot(cur).load_usize_atomic(std::sync::atomic::Ordering::Relaxed);
             if value != 0 {
                 let bit = find_last_non_zero_bit::<usize>(value, 0, usize::BITS as u8).unwrap();
                 let byte_offset = bit >> LOG_BITS_IN_BYTE;
@@ -303,7 +303,7 @@ pub fn find_last_non_zero_bit_in_metadata_bytes(
             }
         } else {
             // Load and check a byte
-            let value = MetadataSlot(cur).load_non_atomic();
+            let value = MetadataSlot(cur).load(std::sync::atomic::Ordering::Relaxed);
             if let Some(bit) = find_last_non_zero_bit::<u8>(value, 0, 8) {
                 return FindMetaBitResult::Found { addr: cur, bit };
             }
@@ -321,7 +321,7 @@ pub fn find_last_non_zero_bit_in_metadata_bits(
     if !addr.is_mapped() {
         return FindMetaBitResult::UnmappedMetadata;
     }
-    let byte = MetadataSlot(addr).load_non_atomic();
+    let byte = MetadataSlot(addr).load(std::sync::atomic::Ordering::Relaxed);
     if let Some(bit) = find_last_non_zero_bit::<u8>(byte, start_bit, end_bit) {
         return FindMetaBitResult::Found { addr, bit };
     }

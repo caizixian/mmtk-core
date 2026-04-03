@@ -58,6 +58,10 @@ impl MetadataSlot {
         unsafe { self.0.load::<usize>() }
     }
 
+    pub(crate) fn load_usize_atomic(&self, order: Ordering) -> usize {
+        unsafe { self.0.atomic_load::<std::sync::atomic::AtomicUsize>(order) }
+    }
+
     pub(crate) fn store_non_atomic(&self, val: u8) {
         unsafe { self.0.store::<u8>(val) }
     }
@@ -1114,12 +1118,10 @@ impl SideMetadataSpec {
     /// This function returns an address that is aligned to the region of this side metadata (`log_bytes_per_region`), and the side metadata
     /// for the address is non zero.
     ///
-    /// # Safety
-    ///
-    /// This function uses non-atomic load for the side metadata. The user needs to make sure
-    /// that there is no other thread that is mutating the side metadata.
+    /// This function uses atomic loads for the side metadata. It is safe to call
+    /// concurrently with other threads mutating the side metadata.
     #[allow(clippy::let_and_return)]
-    pub unsafe fn find_prev_non_zero_value<T: MetadataValue>(
+    pub fn find_prev_non_zero_value<T: MetadataValue>(
         &self,
         data_addr: Address,
         search_limit_bytes: usize,
@@ -1163,7 +1165,7 @@ impl SideMetadataSpec {
                 return None;
             }
             // If we find non-zero value, just return it.
-            if !unsafe { self.load::<T>(cursor).is_zero() } {
+            if !self.load_atomic::<T>(cursor, Ordering::Relaxed).is_zero() {
                 return Some(cursor);
             }
             cursor -= region_bytes;
@@ -1184,7 +1186,7 @@ impl SideMetadataSpec {
             return None;
         }
         // Quick check if the current data_addr has a non zero value.
-        if !unsafe { self.load::<T>(data_addr).is_zero() } {
+        if !self.load_atomic::<T>(data_addr, Ordering::Relaxed).is_zero() {
             return Some(data_addr.align_down(1 << self.log_bytes_in_region));
         }
 
