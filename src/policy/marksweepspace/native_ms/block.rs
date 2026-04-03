@@ -454,6 +454,8 @@ impl BlockCell {
     }
 
     pub fn store_link(&self, next: Address) {
+        // SAFETY: The caller must ensure that `self.0` is a valid address for storing an `Address`.
+        // In this module, `BlockCell` is only created by `CellIter` which iterates over valid cells in a mapped block.
         unsafe {
             self.0.store::<Address>(next);
         }

@@ -2,7 +2,7 @@
 
 ## Progress
 - Starting count: 351 | Current: 164 | Δ: -187
-- Phase: 2 (Safe Abstractions)
+- Phase: 3 (Irreducible Documentation)
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Work packets hold raw pointers to plans or spaces to bypass borrow checker and lifetimes.
@@ -10,8 +10,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: `src/util/metadata/metadata_val_traits.rs:80-200` — Check if safety comments are present for all unsafe trait methods and implementations, and add them if missing.
-2. 🟡 MED: `src/util/metadata/side_metadata/global.rs` — Investigate if we can encapsulate `unsafe` in `MetadataSlot` methods by making the constructor unsafe or validating the address.
+1. 🟢 LOW: Audit remaining files in 'Files NOT to Revisit' to ensure all unsafe blocks have safety comments.
 
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
