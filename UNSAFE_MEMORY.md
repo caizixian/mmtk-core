@@ -11,7 +11,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/policy/sft_map.rs:136` — Investigate if `bytemuck` can replace `mem::transmute` for SFT fat pointers.
+1. 🟢 LOW: `src/util/metadata/global.rs:56-110` — Audit safety comments for load/store functions to ensure compliance with Phase 3.
 
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
@@ -29,7 +29,8 @@
 - Eliminated 8 unsafe blocks in `MetadataSlot` methods by using `self.get_ref::<T::Atomic>()` instead of direct unsafe casting.
 - Deriving `Zeroable` for `SpaceDescriptor` eliminated 1 unsafe block.
 - Used existing `MetadataSlot` abstraction to eliminate direct unsafe operations in `SideMetadataSpec` methods.
-- **New**: Using `MetadataSlot::load_val` and `store_val` in tests to avoid raw pointer dereferences when testing side metadata.
+- Using `MetadataSlot::load_val` and `store_val` in tests to avoid raw pointer dereferences when testing side metadata.
+- **New**: Investigation confirmed that `bytemuck` cannot be used for fat pointer transmutes in `sft_map.rs` due to unstable layout and lack of `Pod` implementation.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/heap/blockpageresource.rs` — Completely safe after removing `unsafe impl Sync` and adding `Send` bound to `Region` trait. [Phase 3 confirmed]
