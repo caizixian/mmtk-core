@@ -32,7 +32,6 @@ use crate::vm::VMBinding;
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use std::sync::atomic::AtomicBool;
 
-use atomic::Atomic;
 use atomic::Ordering;
 use enum_map::EnumMap;
 
@@ -49,8 +48,8 @@ pub struct ConcurrentImmix<VM: VMBinding> {
     #[parent]
     pub common: CommonPlan<VM>,
     last_gc_was_defrag: AtomicBool,
-    current_pause: Atomic<Option<Pause>>,
-    previous_pause: Atomic<Option<Pause>>,
+    current_pause: std::sync::atomic::AtomicU8,
+    previous_pause: std::sync::atomic::AtomicU8,
     should_do_full_gc: AtomicBool,
     concurrent_marking_active: AtomicBool,
 }
@@ -135,7 +134,7 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
             Pause::InitialMark
         };
 
-        self.current_pause.store(Some(pause), Ordering::SeqCst);
+        self.current_pause.store(Pause::to_u8(Some(pause)), Ordering::SeqCst);
 
         probe!(mmtk, concurrent_pause_determined, pause as usize);
 
@@ -224,8 +223,8 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
         if pause == Pause::InitialMark {
             self.set_concurrent_marking_state(true);
         }
-        self.previous_pause.store(Some(pause), Ordering::SeqCst);
-        self.current_pause.store(None, Ordering::SeqCst);
+        self.previous_pause.store(Pause::to_u8(Some(pause)), Ordering::SeqCst);
+        self.current_pause.store(0, Ordering::SeqCst);
         if pause != Pause::FinalMark {
             self.should_do_full_gc.store(false, Ordering::SeqCst);
         } else {
@@ -326,8 +325,8 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
             ),
             common: CommonPlan::new(plan_args),
             last_gc_was_defrag: AtomicBool::new(false),
-            current_pause: Atomic::new(None),
-            previous_pause: Atomic::new(None),
+            current_pause: std::sync::atomic::AtomicU8::new(0),
+            previous_pause: std::sync::atomic::AtomicU8::new(0),
             should_do_full_gc: AtomicBool::new(false),
             concurrent_marking_active: AtomicBool::new(false),
         };
@@ -434,13 +433,13 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
     }
 
     fn previous_pause(&self) -> Option<Pause> {
-        self.previous_pause.load(Ordering::SeqCst)
+        Pause::from_u8(self.previous_pause.load(Ordering::SeqCst))
     }
 }
 
 impl<VM: VMBinding> ConcurrentPlan for ConcurrentImmix<VM> {
     fn current_pause(&self) -> Option<Pause> {
-        self.current_pause.load(Ordering::SeqCst)
+        Pause::from_u8(self.current_pause.load(Ordering::SeqCst))
     }
 
     fn concurrent_work_in_progress(&self) -> bool {

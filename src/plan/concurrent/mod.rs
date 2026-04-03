@@ -24,6 +24,18 @@ pub enum Pause {
     FinalMark,
 }
 
-unsafe impl bytemuck::ZeroableInOption for Pause {}
+impl Pause {
+    pub fn to_u8(pause: Option<Pause>) -> u8 {
+        pause.map(|p| p as u8).unwrap_or(0)
+    }
 
-unsafe impl bytemuck::PodInOption for Pause {}
+    pub fn from_u8(val: u8) -> Option<Pause> {
+        match val {
+            0 => None,
+            1 => Some(Pause::Full),
+            2 => Some(Pause::InitialMark),
+            3 => Some(Pause::FinalMark),
+            _ => panic!("Invalid Pause value: {}", val),
+        }
+    }
+}
