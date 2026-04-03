@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 467 | Δ: -255
+- Starting count: 722 | Current: 461 | Δ: -261
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,9 +10,9 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/heap/freelistpageresource.rs` — Audit unsafe blocks and see if they can be replaced with safe abstractions. — expected Δ: ?
-2. 🟡 MED: `src/scheduler/gc_work.rs` — Audit unsafe blocks, especially `Send` impls and pointer derefs. — expected Δ: ?
-3. 🟢 LOW: `src/policy/marksweepspace/malloc_ms/global.rs` — Audit unsafe blocks. — expected Δ: ?
+1. 🔴 HIGH: `src/scheduler/gc_work.rs:59,139` — Eliminate raw pointer casting to `&mut PlanType` by using safe references or refactoring ownership. — expected Δ: 2
+2. 🟡 MED: `src/policy/marksweepspace/malloc_ms/global.rs:392,605` — Check if SFT_MAP updates can be safe (e.g. if they have been refactored in other files). — expected Δ: 2
+3. 🟢 LOW: `src/util/metadata/side_metadata/global.rs` — Check if remaining unsafe can be abstracted. — expected Δ: ?
 
 ## Patterns Discovered
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
@@ -51,6 +51,7 @@
 - `src/util/memory.rs` — Contains wrappers for FFI calls. The unsafe blocks are the FFI calls themselves. [Phase 2 confirmed]
 - `src/util/address.rs` — Primitives for address operations. Unsafe signatures are necessary. [Phase 2 confirmed]
 - `src/vm/slot.rs` — `SimpleSlot` is a safe abstraction. Unsafe operations inside it are irreducible without viral lifetimes. Tests use unsafe to check address iteration. [Phase 2 confirmed]
+- `src/util/heap/freelistpageresource.rs` — Remaining unsafe are `Send`/`Sync` impls for the type. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - Implemented `SideMetadataSpecBlockExt` in `src/policy/marksweepspace/native_ms/block.rs` to abstract metadata accesses.
