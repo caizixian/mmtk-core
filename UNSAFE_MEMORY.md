@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 473 | Δ: -249
+- Starting count: 722 | Current: 467 | Δ: -255
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,8 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/side_metadata/helpers.rs` — Use `MetadataSlot` to reduce unsafe blocks for raw loads. — expected Δ: 7
-2. 🟡 MED: `src/util/metadata/header_metadata.rs` — Check if remaining unsafe blocks can be reduced further. — expected Δ: ?
+1. 🔴 HIGH: `src/util/metadata/header_metadata.rs` — Check if remaining unsafe blocks can be reduced further using `MetadataSlot` or other abstractions. — expected Δ: ?
+2. 🟡 MED: `src/util/metadata/side_metadata/global.rs` — Centralize unsafe raw memory accesses or document as irreducible. — expected Δ: ?
 
 ## Patterns Discovered
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
@@ -31,7 +31,7 @@
 - **New Pattern**: Replacing `UnsafeCell` with `Mutex` for global state that is accessed via shared references, eliminating unsafe mutable access.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
-- `src/util/metadata/side_metadata/helpers.rs` — Irreducible raw loads from metadata addresses. [Phase 1 analysis] (Re-evaluating in Phase 2 for MetadataSlot)
+- `src/util/metadata/side_metadata/helpers.rs` — All unsafe removed by using `MetadataSlot`. [Phase 2 confirmed]
 - `src/util/metadata/header_metadata.rs` — Irreducible raw loads from header addresses. [Phase 1 analysis] (Re-evaluated in Phase 2, used MetadataSlot for some reductions)
 - `src/util/alloc/allocators.rs` — Irreducible `assume_init` for layout compatibility with VM bindings. [Phase 1 analysis]
 - `src/policy/sft_map.rs` — `SFTRefStorage` uses transmute for atomic fat pointers. [Phase 2 confirmed]

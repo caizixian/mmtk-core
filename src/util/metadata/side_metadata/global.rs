@@ -54,6 +54,10 @@ impl MetadataSlot {
         unsafe { self.0.load::<u8>() }
     }
 
+    pub(crate) fn load_usize_non_atomic(&self) -> usize {
+        unsafe { self.0.load::<usize>() }
+    }
+
     pub(crate) fn store_non_atomic(&self, val: u8) {
         unsafe { self.0.store::<u8>(val) }
     }
