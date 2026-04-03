@@ -177,7 +177,7 @@ mod space_map {
         space_address_end: Address,
     }
 
-    unsafe impl Sync for SFTSpaceMap {}
+    // unsafe impl Sync for SFTSpaceMap {}
 
     impl SFTMap for SFTSpaceMap {
         fn has_sft_entry(&self, addr: Address) -> bool {
@@ -201,7 +201,7 @@ mod space_map {
         }
 
         unsafe fn get_unchecked(&self, address: Address) -> &dyn SFT {
-            let cell = unsafe { self.sft.get_unchecked(Self::addr_to_index(address)) };
+            let cell = &self.sft[Self::addr_to_index(address)];
             cell.load()
         }
 
@@ -230,12 +230,12 @@ mod space_map {
                 );
             }
 
-            self.sft.get_unchecked(index).store(space);
+            self.sft[index].store(space);
         }
 
         unsafe fn clear(&self, addr: Address) {
             let index = Self::addr_to_index(addr);
-            self.sft.get_unchecked(index).store(&EMPTY_SPACE_SFT as _);
+            self.sft[index].store(&EMPTY_SPACE_SFT as _);
         }
     }
 
@@ -341,7 +341,7 @@ mod dense_chunk_map {
         index_map: HashMap<String, usize>,
     }
 
-    unsafe impl Sync for SFTDenseChunkMap {}
+    // unsafe impl Sync for SFTDenseChunkMap {}
 
     impl SFTMap for SFTDenseChunkMap {
         fn has_sft_entry(&self, addr: Address) -> bool {
@@ -467,7 +467,7 @@ mod sparse_chunk_map {
         sft: Vec<SFTRefStorage>,
     }
 
-    unsafe impl Sync for SFTSparseChunkMap {}
+    // unsafe impl Sync for SFTSparseChunkMap {}
 
     impl SFTMap for SFTSparseChunkMap {
         fn has_sft_entry(&self, addr: Address) -> bool {
@@ -487,7 +487,7 @@ mod sparse_chunk_map {
         }
 
         unsafe fn get_unchecked(&self, address: Address) -> &dyn SFT {
-            let cell = self.sft.get_unchecked(address.chunk_index());
+            let cell = &self.sft[address.chunk_index()];
             cell.load()
         }
 
@@ -604,7 +604,7 @@ mod sparse_chunk_map {
                     new
                 );
             }
-            unsafe { self.sft.get_unchecked(chunk).store(sft) };
+            self.sft[chunk].store(sft);
         }
     }
 }
