@@ -10,7 +10,8 @@
 - `SideMetadataOffset` is now a safe `enum` instead of a `union`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/mmtk.rs:187,189` — Check if raw pointer casts for plan/gc_trigger can be removed or made safe. — expected Δ: 2
+1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs` — Audit raw loads/stores and use `MetadataSlot` if possible. — expected Δ: 5
+2. 🟡 MED: `src/mmtk.rs:189` — Check if the `'static` cast for `plan` can be avoided or justified. — expected Δ: 1
 
 ## Patterns Discovered
 - Introducing `MetadataSlot` abstraction to encapsulate raw memory operations on metadata addresses behind a safe API.
@@ -31,6 +32,7 @@
 - **New Pattern**: Extending `MetadataSlot` with generic methods for `MetadataValue` allows centralizing unsafe operations on types larger than `u8` (like `u16`, `u32`, `usize`) and removing unsafe blocks at call sites in `header_metadata.rs` and `global.rs`.
 - **New Pattern**: Removing raw pointers from work packets and using `mmtk.get_plan_mut()` eliminates the need for `unsafe impl Send` and raw pointer casts when the work packet only needs to call trait methods on the plan.
 - **New Pattern**: Introduce `FreeListCell` abstraction to encapsulate raw memory operations on free list cells.
+- **New Pattern**: Refactor `GCTrigger` to use `OnceLock` instead of `MaybeUninit` to remove `unsafe` in `plan()` and avoid `&mut` cast in `MMTK::new`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/metadata/side_metadata/helpers.rs` — All unsafe removed by using `MetadataSlot`. [Phase 2 confirmed]

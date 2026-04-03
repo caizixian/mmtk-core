@@ -180,11 +180,8 @@ impl<VM: VMBinding> MMTK<VM> {
             },
         );
 
-        // We haven't finished creating MMTk. No one is using the GC trigger. We cast the arc into a mutable reference.
+        // We haven't finished creating MMTk. No one is using the GC trigger.
         {
-            // TODO: use Arc::get_mut_unchecked() when it is availble.
-            let gc_trigger: &mut GCTrigger<VM> =
-                unsafe { &mut *(Arc::as_ptr(&gc_trigger) as *mut _) };
             // We know the plan address will not change. Cast it to a static reference.
             let static_plan: &'static dyn Plan<VM = VM> = unsafe { &*(&*plan as *const _) };
             // Set the plan so we can trigger GC and check GC condition without using plan
