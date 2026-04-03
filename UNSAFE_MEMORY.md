@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 699 | Δ: -23
-- Completed subsystems: util/alloc (partial), policy/sft_map (partial), policy/marksweepspace (block.rs cleanup, BlockList::release_blocks safe removal), util/heap/layout (vm_layout.rs static mut), util/copy (array initialization)
+- Starting count: 722 | Current: 691 | Δ: -31
+- Completed subsystems: util/alloc (partial), policy/sft_map (partial), policy/marksweepspace (block.rs cleanup), util/heap/layout (vm_layout.rs static mut), util/copy (array initialization), util/metadata/side_metadata (side_metadata_tests.rs Address::from_usize(0) cleanup)
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - "Work packets are single-use — Option::take() is safe for extracting owned data"
@@ -26,8 +26,9 @@
 - `static mut` → `OnceLock` for write-once globals.
 
 ## Refactoring Ideas
-- `src/util/metadata/side_metadata/helpers.rs`: Analyze 34 unsafe blocks for potential safety improvements (mostly tests/Address::from_usize).
+- `src/util/metadata/side_metadata/helpers.rs`: Analyze remaining unsafe blocks (mostly tests/Address::from_usize and load/store).
 - `src/util/metadata/metadata_val_traits.rs`: Analyze 20 unsafe blocks (mostly trait methods for load/store).
+- `src/util/copy/mod.rs`: Consider replacing `MaybeUninit` with `Option` for `GCWorkerCopyContext` if performance overhead is acceptable.
 
 ## Files NOT to Revisit
 - `src/util/memory.rs` — FFI calls to libc (mmap, munmap, etc.).
