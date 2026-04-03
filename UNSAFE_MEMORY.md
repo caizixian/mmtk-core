@@ -24,6 +24,7 @@
 - Antigravity verified again in the current step that remaining unsafe blocks in `src/util/malloc/malloc_ms_util.rs` and `src/util/metadata/side_metadata/global.rs` are irreducible or well-encapsulated.
 - Antigravity verified safety comments for unsafe `dzmmap` call in `src/util/heap/layout/mmapper/csm/mod.rs:204` and confirmed it is irreducible.
 - Antigravity verified safety comments in `src/mmtk.rs` and confirmed all remaining unsafe is irreducible under strategy escalation.
+- Antigravity verified again in the current step (after 5 steps of zero reductions) and confirmed that remaining unsafe blocks in `src/util/raw_memory_freelist.rs` and `src/vm/slot.rs` are irreducible or well-encapsulated as documented. Attempted to refactor `raw_memory_freelist.rs` to use pointer arithmetic but found it would not reduce the count.
 
 
 ## Codebase Invariants (PROTECTED — do not prune)
