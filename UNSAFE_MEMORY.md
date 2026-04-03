@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 290 | Δ: -61
+- Starting count: 351 | Current: 286 | Δ: -65
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@ Architectural insights that affect ALL future safety decisions:
 - Static plan references are needed because plan types are generic and cannot be stored in global statics easily.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/policy/sft_map.rs:135` — investigate if we can avoid `transmute` for fat pointers — expected Δ: -3
+1. 🟡 MED: `src/plan/mutator_context.rs:293` — investigate if we can use safe wrappers for `get_allocator` calls — expected Δ: -2
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
@@ -44,6 +44,7 @@ Reusable refactoring patterns (recipe format):
 - `src/util/alloc/allocator.rs` — Unsafe impl Sync for AllocationOptionsHolder and raw memory write in fill_alignment_gap. [Phase 2 confirmed]
 - `src/util/malloc/mod.rs` — Irreducible FFI wrappers. [Phase 2 confirmed]
 - `src/mmtk.rs` — Irreducible UnsafeCell access and circular initialization. [Phase 2 confirmed]
+- `src/policy/sft_map.rs` — Transmutes are irreducible due to fat pointer provenance. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 ### StwProof for safe plan access
