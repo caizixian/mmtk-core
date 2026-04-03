@@ -213,16 +213,14 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
         addr.align_down(BYTES_IN_REGION)
     }
 
-    /// # Safety
-    /// TODO: I am not sure why this is unsafe.
-    pub unsafe fn reset(&self) {
+    pub fn reset(&self) {
         let mut guard = self.sync.lock().unwrap();
         self.common().accounting.reset();
         self.release_pages(&mut guard);
         drop(guard);
     }
 
-    pub unsafe fn get_current_chunk(&self) -> Address {
+    pub fn get_current_chunk(&self) -> Address {
         let guard = self.sync.lock().unwrap();
         guard.current_chunk
     }
@@ -309,7 +307,7 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
         }
     }
 
-    unsafe fn release_pages(&self, guard: &mut MutexGuard<MonotonePageResourceSync>) {
+    fn release_pages(&self, guard: &mut MutexGuard<MonotonePageResourceSync>) {
         // TODO: concurrent zeroing
         if self.common().contiguous {
             guard.cursor = match guard.conditional {

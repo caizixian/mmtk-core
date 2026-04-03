@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 286 | Δ: -65
+- Starting count: 351 | Current: 282 | Δ: -69
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@ Architectural insights that affect ALL future safety decisions:
 - Static plan references are needed because plan types are generic and cannot be stored in global statics easily.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/plan/mutator_context.rs:293` — investigate if we can use safe wrappers for `get_allocator` calls — expected Δ: -2
+1. 🔴 HIGH: `src/util/erase_vm.rs:24` — investigate if we can use safe abstractions or trait objects instead of raw pointer casting — expected Δ: -1
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
