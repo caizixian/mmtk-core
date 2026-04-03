@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 58 | Δ: -293
+- Starting count: 351 | Current: 57 | Δ: -294
 - Phase: 3 (Irreducible Documentation)
 - Status: Confirmed all remaining unsafe is irreducible or well-encapsulated. Moving to Phase 3. Verified again under strategy escalation (Step 10 of zero reductions). Re-verified and confirmed by multiple agents, including Antigravity.
 - Verified again under strategy escalation (10 steps of zero reductions) and confirmed all files with unsafe are listed in "Files NOT to Revisit" and their justifications are valid. Antigravity also specifically verified that `src/util/metadata/side_metadata/global.rs`, `src/util/metadata/global.rs`, and `src/util/address.rs` have proper `// SAFETY:` comments for their remaining unsafe blocks.
@@ -34,6 +34,7 @@
 - Antigravity combined 2 unsafe blocks in `align_offset_alloc` in `src/util/malloc/malloc_ms_util.rs`, reducing the count by 1.
 - Antigravity verified again in the current step and confirmed that remaining unsafe blocks in `src/util/malloc/malloc_ms_util.rs`, `src/util/raw_memory_freelist.rs`, `src/policy/sft_map.rs`, `src/vm/slot.rs`, and `src/mmtk.rs` are irreducible or well-encapsulated as documented.
 - Antigravity verified all remaining unsafe locations again in the current step and confirmed that they are irreducible or well-encapsulated. The codebase remains in a steady state for Phase 3.
+- Antigravity reused `get_ref` in `as_atomic_u8` in `src/util/metadata/side_metadata/global.rs`, reducing the unsafe block count by 1.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Work packets hold raw pointers to plans or spaces to bypass borrow checker and lifetimes.

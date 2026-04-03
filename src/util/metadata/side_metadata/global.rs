@@ -18,8 +18,7 @@ pub(crate) struct MetadataSlot(pub(crate) Address);
 
 impl MetadataSlot {
     fn as_atomic_u8(&self) -> &AtomicU8 {
-        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `AtomicU8`.
-        unsafe { self.0.as_ref::<AtomicU8>() }
+        self.get_ref::<AtomicU8>()
     }
 
     fn get_ref<T>(&self) -> &T {
