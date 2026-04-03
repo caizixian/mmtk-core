@@ -235,20 +235,6 @@ impl<B: Region> BlockQueue<B> {
         }
     }
 
-    /// Non-atomically push an element.
-    ///
-    /// It's unsafe unless the array is accessed by only one thread (i.e. used as a thread-local array).
-    unsafe fn push_relaxed(&self, block: B) -> Result<(), B> {
-        let i = self.cursor.load(Ordering::Relaxed);
-        if i < Self::CAPACITY {
-            self.set_entry(i, block);
-            self.cursor.store(i + 1, Ordering::Relaxed);
-            Ok(())
-        } else {
-            Err(block)
-        }
-    }
-
     /// Atomically pop an element from the array.
     fn pop(&self) -> Option<B> {
         let i = self
@@ -284,23 +270,6 @@ impl<B: Region> BlockQueue<B> {
             f(self.get_entry(i))
         }
     }
-
-    /// Replace the array with a new array.
-    ///
-    /// Return the old array
-    fn replace(&self, new_array: Self) -> Self {
-        // Swap cursor
-        let temp = self.cursor.load(Ordering::Relaxed);
-        self.cursor
-            .store(new_array.cursor.load(Ordering::Relaxed), Ordering::Relaxed);
-        new_array.cursor.store(temp, Ordering::Relaxed);
-        // Swap data
-        unsafe {
-            core::ptr::swap(self.data.get(), new_array.data.get());
-        }
-        // Return old array
-        new_array
-    }
 }
 
 /// A block queue which contains a global pool and a set of thread-local queues.
@@ -314,7 +283,7 @@ pub struct BlockPool<B: Region> {
     /// A list of BlockArray that is flushed to the global pool
     global_freed_blocks: RwLock<Vec<BlockQueue<B>>>,
     /// Thread-local block queues
-    worker_local_freed_blocks: Vec<BlockQueue<B>>,
+    worker_local_freed_blocks: Vec<Mutex<BlockQueue<B>>>,
     /// Total number of blocks in the whole BlockQueue
     count: AtomicUsize,
 }
@@ -325,7 +294,7 @@ impl<B: Region> BlockPool<B> {
         Self {
             head_global_freed_blocks: RwLock::new(None),
             global_freed_blocks: RwLock::new(vec![]),
-            worker_local_freed_blocks: (0..num_workers).map(|_| BlockQueue::new()).collect(),
+            worker_local_freed_blocks: (0..num_workers).map(|_| Mutex::new(BlockQueue::new())).collect(),
             count: AtomicUsize::new(0),
         }
     }
@@ -340,16 +309,13 @@ impl<B: Region> BlockPool<B> {
     pub fn push(&self, block: B) {
         self.count.fetch_add(1, Ordering::SeqCst);
         let id = crate::scheduler::current_worker_ordinal();
-        let failed = unsafe {
-            self.worker_local_freed_blocks[id]
-                .push_relaxed(block)
-                .is_err()
-        };
+        let mut queue = self.worker_local_freed_blocks[id].lock().unwrap();
+        let failed = queue.push(block).is_err();
         if failed {
-            let mut queue = BlockQueue::new();
-            let result = queue.push(block);
+            let mut new_queue = BlockQueue::new();
+            let result = new_queue.push(block);
             debug_assert!(result.is_ok());
-            let old_queue = self.worker_local_freed_blocks[id].replace(queue);
+            let old_queue = std::mem::replace(&mut *queue, new_queue);
             assert!(!old_queue.is_empty());
             self.global_freed_blocks.write().push(old_queue);
         }
@@ -389,10 +355,11 @@ impl<B: Region> BlockPool<B> {
 
     /// Flush a given thread-local queue to the global pool
     fn flush(&self, id: usize) {
-        if !self.worker_local_freed_blocks[id].is_empty() {
-            let queue = self.worker_local_freed_blocks[id].replace(BlockQueue::new());
-            if !queue.is_empty() {
-                self.global_freed_blocks.write().push(queue)
+        let mut queue = self.worker_local_freed_blocks[id].lock().unwrap();
+        if !queue.is_empty() {
+            let old_queue = std::mem::replace(&mut *queue, BlockQueue::new());
+            if !old_queue.is_empty() {
+                self.global_freed_blocks.write().push(old_queue)
             }
         }
     }
@@ -421,7 +388,7 @@ impl<B: Region> BlockPool<B> {
             array.iterate_blocks(f);
         }
         for array in &self.worker_local_freed_blocks {
-            array.iterate_blocks(f);
+            array.lock().unwrap().iterate_blocks(f);
         }
     }
 }
