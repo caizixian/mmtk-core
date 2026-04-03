@@ -38,10 +38,11 @@
 - `SideMetadataSpec::load` → `load_atomic` with `Ordering::Relaxed` for safe side metadata reads where single-threaded or relaxed consistency is sufficient.
 - `SideMetadataSpec::store` → `store_atomic` with `Ordering::SeqCst` (or `Relaxed` if safe) for safe side metadata writes.
 - `*mut T` → `&'a T` in test fixtures/mock types where lifetimes can be tracked, eliminating unsafe raw pointer dereferences (requires manual PartialEq/Eq/Hash for pointer equality).
-- `SimpleSlot` → `&Atomic<T>` in tests for direct access without raw pointers.
+- `as_ref::<AtomicU8>()` → `MetadataValue::fetch_and` / `fetch_or` / `load_atomic` / `store_atomic` — use standard trait abstractions instead of raw pointer casts.
+- `*mut T = val` in tests → `MetadataValue::store(meta_addr, val)` — use abstractions instead of raw pointers in tests.
 
 ## Refactoring Ideas
-- `src/util/metadata/side_metadata/global.rs`: Check if `as_ref::<AtomicU8>()` (e.g. line 207) can be replaced with a safer alternative or if `SideMetadataSpec` can encapsulate it.
+- `src/util/metadata/side_metadata/helpers.rs`: Check if `Address::load` calls can be replaced with `MetadataValue::load` or if they are irreducible `RawHeapAccess`.
 
 ## Files NOT to Revisit
 - `src/util/memory.rs` — FFI calls to libc (mmap, munmap, etc.).
