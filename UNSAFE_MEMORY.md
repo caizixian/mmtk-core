@@ -1,8 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 538 | Δ: -184
-- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout, util/copy, util/metadata/side_metadata, util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util, policy/sft_map (SFTMap update/eager_initialize take reference, remove unsafe in implementations), policy/marksweepspace/malloc_ms/global.rs (unnecessary SFT_MAP unsafe), policy/lockfreeimmortalspace.rs (unnecessary eager_initialize unsafe)
+- Starting count: 722 | Current: 537 | Δ: -185
+- Completed subsystems: util/alloc/allocator.rs, util/alloc/free_list_allocator.rs, policy/marksweepspace, util/heap/layout/map32.rs (removed unnecessary unsafe block), util/heap/layout, util/copy, util/metadata/side_metadata, util/heap/gc_trigger.rs, util/metadata/header_metadata.rs, util/heap/blockpageresource.rs, scheduler/gc_work.rs, util/metadata/vo_bit, util/linear_scan, vm/tests/mock_tests/mock_test_slots.rs, util/heap/freelistpageresource.rs, util/rust_util, policy/sft_map (SFTMap update/eager_initialize take reference, remove unsafe in implementations), policy/marksweepspace/malloc_ms/global.rs (unnecessary SFT_MAP unsafe), policy/lockfreeimmortalspace.rs (unnecessary eager_initialize unsafe)
 
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -41,10 +41,10 @@
 - `SimpleSlot` → `&Atomic<T>` in tests for direct access without raw pointers.
 
 ## Refactoring Ideas
-- `src/util/heap/layout/map32.rs`: Remove unnecessary `unsafe` block at call site of `SFT_MAP.clear` (line 257) - confirmed by cargo check warning.
+- `src/util/metadata/side_metadata/global.rs`: Check if `as_ref::<AtomicU8>()` (e.g. line 207) can be replaced with a safer alternative or if `SideMetadataSpec` can encapsulate it.
 
 ## Files NOT to Revisit
 - `src/util/memory.rs` — FFI calls to libc (mmap, munmap, etc.).
-- `src/util/heap/layout/map32.rs` — Remaining unsafe is SFT_MAP.clear (side metadata access).
+- src/util/heap/layout/map32.rs — Completed (no remaining unsafe blocks, only trait-required unsafe fn).
 - `src/util/heap/layout/map64.rs` — Remaining unsafe are trait methods or `Address::from_usize` (anti-pattern to replace with `ZERO.add`).
 - `src/util/heap/freelistpageresource.rs`: Remove `unsafe impl Send` and `unsafe impl Sync` for `FreeListPageResource` now that `FreeList` trait is `Send`.
