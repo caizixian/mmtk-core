@@ -459,16 +459,10 @@ impl<VM: VMBinding> MallocSpace<VM> {
     // XXX optimize: We pass the bytes in to free as otherwise there were multiple
     // indirect call instructions in the generated assembly
     fn free_internal(&self, addr: Address, bytes: usize, offset_malloc_bit: bool) {
+        trace!("Free memory {:x}", addr);
+        crate::util::malloc::malloc_ms_util::free(addr, offset_malloc_bit);
         if offset_malloc_bit {
-            trace!("Free memory {:x}", addr);
-            offset_free(addr);
             unset_offset_malloc_bit(addr);
-        } else {
-            let ptr = addr.to_mut_ptr();
-            trace!("Free memory {:?}", ptr);
-            unsafe {
-                free(ptr);
-            }
         }
 
         self.active_bytes.fetch_sub(bytes, Ordering::SeqCst);

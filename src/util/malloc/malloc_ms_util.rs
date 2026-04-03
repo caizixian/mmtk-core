@@ -56,10 +56,18 @@ pub fn offset_free(address: Address) {
     // SAFETY: The caller must ensure that `address` was returned by `align_offset_alloc`.
     let malloc_res = unsafe { malloc_res_ptr.read_unaligned() } as *mut libc::c_void;
     // SAFETY: malloc_res is a valid pointer returned by calloc and can be freed.
-    unsafe { free(malloc_res) };
+    unsafe { crate::util::malloc::library::free(malloc_res) };
 }
 
-pub use crate::util::malloc::library::free;
+/// Free an address allocated by `alloc`.
+pub fn free(address: Address, is_offset_malloc: bool) {
+    if is_offset_malloc {
+        offset_free(address);
+    } else {
+        // SAFETY: The caller must ensure that `address` is a valid pointer returned by malloc/calloc without offset.
+        unsafe { crate::util::malloc::library::free(address.to_mut_ptr()) }
+    }
+}
 
 /// get malloc usable size of an address
 /// is_offset_malloc: whether the address is allocated with some offset

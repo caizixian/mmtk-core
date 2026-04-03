@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 351 | Current: 212 | Δ: -139
+- Starting count: 351 | Current: 211 | Δ: -140
 - Phase: 3
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -11,7 +11,7 @@ Architectural insights that affect ALL future safety decisions:
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs:60-70` — Investigate if raw loads can use MetadataSlot — expected Δ: -2
+1. 🔴 HIGH: `src/util/rust_util/atomic_box.rs:38-72` — Investigate if `OnceOptionBox` can be replaced by `OnceLock` or a safer alternative if space overhead is acceptable — expected Δ: -5
 
 ## Patterns Discovered
 Reusable refactoring patterns (recipe format):
@@ -30,20 +30,21 @@ Reusable refactoring patterns (recipe format):
 - Using Generic Associated Types (GATs) in `ObjectTracerContext` to allow `TracerType` to borrow `GCWorker` without raw pointers.
 - Using `Box::leak` in test fixtures to avoid raw pointer management and lifetimes, making the fixture safe.
 - Changing `prepare_worker` in `Plan` trait to take `&'static self` can propagate the `'static` lifetime to `tospace()` and remove unsafe casts in `rebind`.
+- Creating a safe wrapper for C `free` that takes `(Address, bool)` to handle both offset and non-offset allocations, reducing unsafe in tests and spaces.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/plan/concurrent/concurrent_marking_work.rs` — Eliminated raw pointer from `ConcurrentTraceObjects` by using a temporary tracer type. Removed `unsafe impl Send` by using `PhantomData<fn() -> T>`. Remaining unsafe is the raw pointer in the tracer. [Phase 3 confirmed]
 - `src/util/metadata/metadata_val_traits.rs` — Irreducible raw loads from addresses in trait default impls. [Phase 2 confirmed]
 - `src/util/memory.rs` — Contains wrappers for FFI calls. [Phase 2 confirmed]
 - `docs/dummyvm/src/api.rs` — Irreducible FFI boundaries in dummy VM. [Phase 2 confirmed]
-- `src/util/malloc/malloc_ms_util.rs` — Irreducible FFI and raw pointer manipulation. Documented with SAFETY comments in Phase 3. [Phase 3 confirmed]
+- `src/util/malloc/malloc_ms_util.rs` — Irreducible FFI and raw pointer manipulation. Added safe `free` wrapper. Documented with SAFETY comments in Phase 3. [Phase 3 confirmed]
 - `src/util/address.rs` — Primitives for address operations. [Phase 2 confirmed]
 - `src/util/metadata/side_metadata/side_metadata_tests.rs` — Tests use unsafe to check address iteration. [Phase 2 confirmed]
 - `src/util/rust_util/atomic_box.rs` — Custom lock-free lazily initialized box. [Phase 2 confirmed]
 - `src/util/rust_util/mod.rs` — `InitializeOnce` is irreducible for performance. [Phase 2 confirmed]
 - `src/policy/marksweepspace/native_ms/block.rs` — Raw memory accesses for free list. [Phase 2 confirmed]
 - `src/util/metadata/side_metadata/global.rs` — Remaining unsafe are irreducible function signatures and raw memory copy. [Phase 2 confirmed]
-- `src/policy/marksweepspace/malloc_ms/global.rs` — Remaining unsafe are irreducible FFI and lifetime extension. [Phase 2 confirmed]
+- `src/policy/marksweepspace/malloc_ms/global.rs` — Remaining unsafe are irreducible FFI and lifetime extension. Removed one unsafe block in `free_internal` by using safe `free` wrapper. [Phase 2 confirmed]
 - `src/policy/copyspace.rs` — Remaining unsafe are irreducible FFI and lifetime extension. [Phase 2 confirmed]
 - `src/plan/global.rs` — Unsafe for SFT_MAP access and CommonPlan reference for work packet. [Phase 2 confirmed]
 - `src/util/alloc/allocator.rs` — Raw memory write in `fill_alignment_gap`. [Phase 2 confirmed]
