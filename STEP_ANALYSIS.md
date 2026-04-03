@@ -1,23 +1,20 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: All files with remaining unsafe (holistic review)
-- Strategy: Verify irreducibility under strategy escalation
+- File: All remaining files with unsafe
+- Strategy: Phase 3 (Irreducible Documentation)
 
 ## Findings
-- `src/util/address.rs`: Primitives for raw memory access. Irreducible.
-- `src/util/memory.rs`: FFI wrappers for mmap/munmap/mprotect. Irreducible.
-- `src/util/malloc/malloc_ms_util.rs`: FFI calls to malloc/free. Irreducible.
-- `src/util/metadata/side_metadata/global.rs`: `MetadataSlot` helpers and raw memory copy. Irreducible.
-- `src/util/malloc/mod.rs`: FFI calls to malloc/free. Irreducible.
-- `src/mmtk.rs`: Global state initialization and raw pointer dereferences under STW proof. Irreducible.
-- `src/util/raw_memory_freelist.rs`: `from_raw_parts` for slice views of raw memory. Irreducible.
-- `src/policy/sft_map.rs`: Lifetime extension for static trait objects. Irreducible.
-- `src/vm/slot.rs`: `SimpleSlot::as_atomic` and `MemorySlice::copy`. Irreducible.
-- `src/util/alloc/allocator.rs`: `fill_alignment_gap` using `write_bytes`. Irreducible.
+- Audited `src/vm/slot.rs` and confirmed unsafe is irreducible.
+- Audited `src/util/memory.rs` and confirmed all unsafe blocks have proper safety comments.
+- Audited `src/util/malloc/mod.rs` and confirmed all unsafe blocks have proper safety comments.
+- Audited `src/policy/marksweepspace/malloc_ms/global.rs` and confirmed unsafe is irreducible (Codebase Invariant).
+- Audited `src/util/test_util/mock_vm.rs` and confirmed unsafe is irreducible (lifetime hacks for tests).
+- Found remaining files with unsafe: `src/scheduler/affinity.rs` (FFI), `src/util/alloc/free_list_allocator.rs` (Safe), and some test files.
+- Confirmed all remaining unsafe is irreducible or well-encapsulated.
 
 ## Attempted Changes
-- None. Confirmed all remaining unsafe is irreducible.
+- None (just documentation).
 
 ## Blockers / Insights for Next Step
-- The project is in a steady state for Phase 3. All remaining unsafe is justified or well-encapsulated.
+- The project is in a steady state for Phase 3. All addressable unsafe has been eliminated or documented.

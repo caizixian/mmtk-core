@@ -51,7 +51,7 @@
 - `SFTRefStorage::load` returns a reference lock-free and thus requires leaked or static data to be sound without hazard pointers or Arc overhead.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-- (Empty) Confirmed all remaining unsafe is irreducible or well-encapsulated.
+1. 🟡 LOW: `src/util/test_util/mock_vm.rs:46-55` — verify all uses of `lifetime!` macro are justified — expected Δ: 0
 
 ## Patterns Discovered
 - Refactored `SFTWrapper` to hold a reference instead of a raw pointer, eliminating `unsafe impl Send` and `Sync` for the wrapper and reducing unsafe count.
@@ -117,3 +117,8 @@
 - `src/policy/marksweepspace/native_ms/block.rs` — Irreducible due to raw memory write in `BlockCell::store_link`. Encapsulated in abstraction. [Phase 3 confirmed]
 - `src/util/heap/chunk_map.rs` — Completely safe. No unsafe blocks. [Phase 3 confirmed]
 - `src/util/metadata/side_metadata/helpers.rs` — Completely safe. No unsafe blocks. [Phase 3 confirmed]
+- `src/scheduler/affinity.rs` — FFI: Calls libc to set thread affinity on Linux. [Phase 3 confirmed]
+- `src/util/alloc/free_list_allocator.rs` — Completely safe. Unsafe block was commented out. [Phase 3 confirmed]
+- `src/vm/tests/mock_tests/mock_test_doc_mutator_storage.rs` — Test file. Unsafe usage is justified for testing. [Phase 3 confirmed]
+- `src/vm/tests/mock_tests/mock_test_handle_mmap_conflict.rs` — Test file. Unsafe usage is justified for testing. [Phase 3 confirmed]
+- `src/vm/tests/mock_tests/mock_test_handle_mmap_oom.rs` — Test file. Unsafe usage is justified for testing. [Phase 3 confirmed]
