@@ -179,6 +179,8 @@ pub fn align_allocation_inner<VM: VMBinding>(
 pub fn fill_alignment_gap<VM: VMBinding>(start: Address, end: Address) {
     if VM::ALIGNMENT_VALUE != 0 {
         let start_ptr = start.to_mut_ptr::<u8>();
+        // SAFETY: The caller must ensure that the address range `[start, end)` is valid for writes.
+        // This is called during allocation to fill alignment gaps in newly acquired memory.
         unsafe {
             std::ptr::write_bytes(start_ptr, VM::ALIGNMENT_VALUE, end - start);
         }

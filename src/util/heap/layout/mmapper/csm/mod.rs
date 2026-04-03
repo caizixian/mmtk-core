@@ -200,6 +200,7 @@ impl Mmapper for ChunkStateMmapper {
                         Ok(Some(MapState::Mapped))
                     }
                     MapState::Quarantined => {
+                        // SAFETY: The caller ensures that the address range is currently quarantined and it is safe to map it now.
                         unsafe { dzmmap(group_start, group_bytes, strategy, anno) }?;
                         Ok(Some(MapState::Mapped))
                     }

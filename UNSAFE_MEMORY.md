@@ -10,7 +10,7 @@
 - `BlockQueue` in `BlockPageResource` was refactored to use `ArrayQueue` and `Mutex` for thread-local queues, eliminating custom lock-free code and associated unsafe blocks.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: `src/util/metadata/vo_bit/mod.rs:100-200` — review for potential unsafe reduction or documentation — expected Δ: 0
+1. 🟡 MED: `src/scheduler/affinity.rs:49-56` — refactor `MaybeUninit` usage and document FFI calls — expected Δ: 0
 
 ## Patterns Discovered
 - `InitializeOnce` provides unchecked read access on hot paths. Replacing with `OnceLock` adds overhead.
@@ -34,3 +34,10 @@
 - `src/util/metadata/global.rs` — Unsafe fns for load/store are necessary as they are non-atomic. [Phase 3 confirmed]
 - `src/util/heap/pageresource.rs` — Documented irreducible unsafe calls to VMMap with SAFETY comments. [Phase 3 confirmed]
 - `src/util/metadata/log_bit.rs` — Completely safe after replacing unsafe optimization with safe fallback. [Phase 3 confirmed]
+- `src/plan/concurrent/concurrent_marking_work.rs` — Irreducible due to overlapping borrows and API constraints. [Phase 3 confirmed]
+- `src/util/test_util/mock_vm.rs` — Irreducible due to lifetime hacks needed for mocking in tests. [Phase 3 confirmed]
+- `src/policy/marksweepspace/malloc_ms/global.rs` — Irreducible due to passing space reference to work packets (Codebase Invariant). [Phase 3 confirmed]
+- `src/policy/vmspace.rs` — Irreducible due to direct manipulation of SFT map. [Phase 3 confirmed]
+- `src/util/alloc/allocator.rs` — Irreducible due to raw memory write in `fill_alignment_gap`. Added safety comment. [Phase 3 confirmed]
+- `src/util/erase_vm.rs` — Irreducible due to type erasure macro storing reference as usize. [Phase 3 confirmed]
+- `src/util/heap/layout/mmapper/csm/mod.rs` — Irreducible due to calling unsafe `dzmmap` for memory mapping. [Phase 3 confirmed]
