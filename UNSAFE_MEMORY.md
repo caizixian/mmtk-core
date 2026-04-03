@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 493 | Current: 395 | Δ: -98
+- Starting count: 493 | Current: 388 | Δ: -105
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -47,6 +47,7 @@
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe removed.
+- `src/util/heap/monotonepageresource.rs` — All unsafe removed.
 - `src/policy/sft_map.rs` — Remaining unsafe are trait signatures and unavoidable transmutes for fat pointers in atomics.
 - `src/util/alloc/allocators.rs` — Remaining unsafe are centralized in `get_allocator` implementations using `assume_init_ref/mut` on `MaybeUninit` arrays, guarded by a runtime bitmap check.
 - `src/util/metadata/side_metadata/helpers.rs` — Remaining unsafe are raw loads in functions that scan metadata addresses directly without a spec. (Update: some removed by passing spec).

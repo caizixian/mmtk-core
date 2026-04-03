@@ -220,9 +220,7 @@ impl<VM: VMBinding> CopySpace<VM> {
             crate::util::metadata::vo_bit::bzero_vo_bit(start, size);
         }
 
-        unsafe {
-            self.pr.reset();
-        }
+        self.pr.reset();
         self.from_space.store(false, Ordering::SeqCst);
     }
 
