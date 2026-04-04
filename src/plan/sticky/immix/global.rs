@@ -87,6 +87,10 @@ impl<VM: VMBinding> Plan for StickyImmix<VM> {
         self.immix.common()
     }
 
+    fn get_immix_space(&self) -> Option<&crate::policy::immix::ImmixSpace<Self::VM>> {
+        Some(&self.immix.immix_space)
+    }
+
     fn schedule_collection(&'static self, scheduler: &crate::scheduler::GCWorkScheduler<Self::VM>) {
         let is_full_heap = self.requires_full_heap_collection();
         self.gc_full_heap.store(is_full_heap, Ordering::SeqCst);

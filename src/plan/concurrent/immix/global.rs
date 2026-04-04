@@ -289,6 +289,10 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
     fn concurrent(&self) -> Option<&dyn ConcurrentPlan<VM = VM>> {
         Some(self)
     }
+
+    fn get_immix_space(&self) -> Option<&crate::policy::immix::ImmixSpace<Self::VM>> {
+        Some(&self.immix_space)
+    }
 }
 
 impl<VM: VMBinding> ConcurrentImmix<VM> {

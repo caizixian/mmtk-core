@@ -209,6 +209,10 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
     fn generational(&self) -> Option<&dyn GenerationalPlan<VM = VM>> {
         Some(self)
     }
+
+    fn get_immix_space(&self) -> Option<&crate::policy::immix::ImmixSpace<Self::VM>> {
+        Some(&self.immix_space)
+    }
 }
 
 impl<VM: VMBinding> GenerationalPlan for GenImmix<VM> {
