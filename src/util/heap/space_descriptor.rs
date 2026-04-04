@@ -35,6 +35,14 @@ pub struct SpaceDescriptor(usize);
 impl SpaceDescriptor {
     pub const UNINITIALIZED: Self = SpaceDescriptor(0);
 
+    pub fn as_usize(self) -> usize {
+        self.0
+    }
+
+    pub fn from_usize(val: usize) -> Self {
+        SpaceDescriptor(val)
+    }
+
     pub fn create_descriptor_from_heap_range(start: Address, end: Address) -> SpaceDescriptor {
         let top = end == vm_layout().heap_end;
         if vm_layout().force_use_contiguous_spaces {

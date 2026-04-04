@@ -7,12 +7,14 @@ use crate::util::heap::layout::heap_parameters::*;
 use crate::util::heap::layout::vm_layout::*;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::int_array_freelist::IntArrayFreeList;
-use crate::util::rust_util::zeroed_alloc::new_zeroed_vec;
+
 use crate::util::Address;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub struct Map32 {
     inner: Mutex<Map32Inner>,
+    descriptor_map: Vec<AtomicUsize>,
 }
 
 #[doc(hidden)]
@@ -24,7 +26,6 @@ pub struct Map32Inner {
     shared_discontig_fl_count: usize,
     total_available_discontiguous_chunks: usize,
     finalized: bool,
-    descriptor_map: Vec<SpaceDescriptor>,
 }
 
 
@@ -32,6 +33,10 @@ pub struct Map32Inner {
 impl Map32 {
     pub fn new() -> Self {
         let max_chunks = vm_layout().max_chunks();
+        let mut descriptor_map = Vec::with_capacity(max_chunks);
+        for _ in 0..max_chunks {
+            descriptor_map.push(AtomicUsize::new(SpaceDescriptor::UNINITIALIZED.as_usize()));
+        }
         Map32 {
             inner: Mutex::new(Map32Inner {
                 prev_link: vec![0; max_chunks],
@@ -41,9 +46,8 @@ impl Map32 {
                 shared_discontig_fl_count: 0,
                 total_available_discontiguous_chunks: 0,
                 finalized: false,
-                // This can be big on 64-bit machines.  Use `new_zeroed_vec`.
-                descriptor_map: new_zeroed_vec(max_chunks),
             }),
+            descriptor_map,
         }
     }
 }
@@ -54,12 +58,12 @@ impl VMMap for Map32 {
     fn insert(&self, start: Address, extent: usize, descriptor: SpaceDescriptor) {
         // Each space will call this on exclusive address ranges. It is fine to mutate the descriptor map,
         // as each space will update different indices.
-        let mut inner = self.inner.lock().unwrap();
+        let _inner = self.inner.lock().unwrap();
         let mut e = 0;
         while e < extent {
             let index = (start + e).chunk_index();
             assert!(
-                inner.descriptor_map[index].is_empty(),
+                SpaceDescriptor::from_usize(self.descriptor_map[index].load(Ordering::Relaxed)).is_empty(),
                 "Conflicting virtual address request"
             );
             debug!(
@@ -67,7 +71,7 @@ impl VMMap for Map32 {
                 descriptor,
                 conversions::chunk_index_to_address(index)
             );
-            inner.descriptor_map[index] = descriptor;
+            self.descriptor_map[index].store(descriptor.as_usize(), Ordering::Relaxed);
             //   VM.barriers.objectArrayStoreNoGCBarrier(spaceMap, index, space);
             e += BYTES_IN_CHUNK;
         }
@@ -121,7 +125,7 @@ impl VMMap for Map32 {
         while e < extent {
             let index = (rtn + e).chunk_index();
             assert!(
-                inner.descriptor_map[index].is_empty(),
+                SpaceDescriptor::from_usize(self.descriptor_map[index].load(Ordering::Relaxed)).is_empty(),
                 "Conflicting virtual address request"
             );
             debug!(
@@ -129,7 +133,7 @@ impl VMMap for Map32 {
                 descriptor,
                 conversions::chunk_index_to_address(index)
             );
-            inner.descriptor_map[index] = descriptor;
+            self.descriptor_map[index].store(descriptor.as_usize(), Ordering::Relaxed);
             e += BYTES_IN_CHUNK;
         }
 
@@ -181,13 +185,13 @@ impl VMMap for Map32 {
             let chunk = any_chunk.chunk_index();
             while inner.next_link[chunk] != 0 {
                 let x = inner.next_link[chunk];
-                Self::free_contiguous_chunks_no_lock(&mut inner, x);
+                self.free_contiguous_chunks_no_lock(&mut inner, x);
             }
             while inner.prev_link[chunk] != 0 {
                 let x = inner.prev_link[chunk];
-                Self::free_contiguous_chunks_no_lock(&mut inner, x);
+                self.free_contiguous_chunks_no_lock(&mut inner, x);
             }
-            Self::free_contiguous_chunks_no_lock(&mut inner, chunk as _);
+            self.free_contiguous_chunks_no_lock(&mut inner, chunk as _);
         }
     }
 
@@ -196,7 +200,7 @@ impl VMMap for Map32 {
         let mut inner = self.inner.lock().unwrap();
         debug_assert!(start == conversions::chunk_align_down(start));
         let chunk = start.chunk_index();
-        Self::free_contiguous_chunks_no_lock(&mut inner, chunk as _)
+        self.free_contiguous_chunks_no_lock(&mut inner, chunk as _)
     }
 
     fn finalize_static_space_map(
@@ -250,15 +254,15 @@ impl VMMap for Map32 {
 
     fn get_descriptor_for_address(&self, address: Address) -> SpaceDescriptor {
         let index = address.chunk_index();
-        self.inner.lock().unwrap().descriptor_map
+        self.descriptor_map
             .get(index)
-            .copied()
+            .map(|a| SpaceDescriptor::from_usize(a.load(Ordering::Relaxed)))
             .unwrap_or(SpaceDescriptor::UNINITIALIZED)
     }
 }
 
 impl Map32 {
-    fn free_contiguous_chunks_no_lock(inner: &mut Map32Inner, chunk: i32) -> usize {
+    fn free_contiguous_chunks_no_lock(&self, inner: &mut Map32Inner, chunk: i32) -> usize {
         let chunks = inner.region_map.free(chunk, false);
         inner.total_available_discontiguous_chunks += chunks as usize;
         let next = inner.next_link[chunk as usize];
@@ -275,7 +279,7 @@ impl Map32 {
             let index = (chunk + offset) as usize;
             let chunk_start = conversions::chunk_index_to_address(index);
             debug!("Clear descriptor for Chunk {}", chunk_start);
-            inner.descriptor_map[index] = SpaceDescriptor::UNINITIALIZED;
+            self.descriptor_map[index].store(SpaceDescriptor::UNINITIALIZED.as_usize(), Ordering::Relaxed);
             SFT_MAP.clear(chunk_start);
         }
         chunks as _
