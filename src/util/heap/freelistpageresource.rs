@@ -1,4 +1,5 @@
 use std::sync::{Mutex, MutexGuard};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::layout::vm_layout::PAGES_IN_CHUNK;
 use super::layout::VMMap;
@@ -25,6 +26,7 @@ const UNINITIALIZED_WATER_MARK: i32 = -1;
 pub struct FreeListPageResource<VM: VMBinding> {
     common: CommonPageResource,
     sync: Mutex<FreeListPageResourceSync>,
+    pages_currently_on_freelist: AtomicUsize,
     _p: PhantomData<VM>,
     /// Protect memory on release, and unprotect on re-allocate.
     pub(crate) protect_memory_on_release: Option<memory::MmapProtection>,
@@ -34,7 +36,6 @@ pub struct FreeListPageResource<VM: VMBinding> {
 
 struct FreeListPageResourceSync {
     pub(crate) free_list: Box<dyn FreeList>,
-    pages_currently_on_freelist: usize,
     start: Address,
     highwater_mark: i32,
 }
@@ -57,10 +58,7 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
     }
 
     fn get_available_physical_pages(&self) -> usize {
-        let mut rtn = {
-            let sync = self.sync.lock().unwrap();
-            sync.pages_currently_on_freelist
-        };
+        let mut rtn = self.pages_currently_on_freelist.load(Ordering::Relaxed);
 
         if !self.common.contiguous {
             let chunks: usize = self
@@ -94,7 +92,7 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
         if page_offset == freelist::FAILURE {
             return Result::Err(PRAllocFail);
         } else {
-            sync.pages_currently_on_freelist -= required_pages;
+            self.pages_currently_on_freelist.fetch_sub(required_pages, Ordering::Relaxed);
             if page_offset > sync.highwater_mark {
                 if sync.highwater_mark == UNINITIALIZED_WATER_MARK
                     || (page_offset ^ sync.highwater_mark) > PAGES_IN_REGION as i32
@@ -160,10 +158,10 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
             common: CommonPageResource::new(true, growable, vm_map),
             sync: Mutex::new(FreeListPageResourceSync {
                 free_list,
-                pages_currently_on_freelist: if growable { 0 } else { pages },
                 start: actual_start,
                 highwater_mark: UNINITIALIZED_WATER_MARK,
             }),
+            pages_currently_on_freelist: AtomicUsize::new(if growable { 0 } else { pages }),
             _p: PhantomData,
             protect_memory_on_release: None,
         }
@@ -198,10 +196,10 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
             common: CommonPageResource::new(false, true, vm_map),
             sync: Mutex::new(FreeListPageResourceSync {
                 free_list,
-                pages_currently_on_freelist: 0,
                 start,
                 highwater_mark: UNINITIALIZED_WATER_MARK,
             }),
+            pages_currently_on_freelist: AtomicUsize::new(0),
             _p: PhantomData,
             protect_memory_on_release: None,
         }
@@ -252,7 +250,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         if page_offset == freelist::FAILURE {
             return Result::Err(PRAllocFail);
         } else {
-            sync.pages_currently_on_freelist -= PAGES_IN_CHUNK;
+            self.pages_currently_on_freelist.fetch_sub(PAGES_IN_CHUNK, Ordering::Relaxed);
             if page_offset > sync.highwater_mark {
                 sync.highwater_mark = page_offset;
             }
@@ -291,7 +289,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
                 }
                 let liberated = sync.free_list.free(p as _, true); // add chunk to our free list
                 debug_assert!(liberated as usize == PAGES_IN_CHUNK + (p - region_start));
-                sync.pages_currently_on_freelist += PAGES_IN_CHUNK;
+                self.pages_currently_on_freelist.fetch_add(PAGES_IN_CHUNK, Ordering::Relaxed);
             }
             rtn = sync.free_list.alloc(pages as _); // re-do the request which triggered this call
         }
@@ -312,7 +310,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
                 as usize; // then alloc the entire chunk
             debug_assert!(tmp == chunk_start);
             chunk_start += PAGES_IN_CHUNK;
-            sync.pages_currently_on_freelist -= PAGES_IN_CHUNK;
+            self.pages_currently_on_freelist.fetch_sub(PAGES_IN_CHUNK, Ordering::Relaxed);
         }
         /* now return the address space associated with the chunk for global reuse */
 
@@ -342,7 +340,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
 
         self.common.accounting.release(pages as _);
         let freed = sync.free_list.free(page_offset as _, true);
-        sync.pages_currently_on_freelist += pages as usize;
+        self.pages_currently_on_freelist.fetch_add(pages as usize, Ordering::Relaxed);
         if !self.common.contiguous {
             // only discontiguous spaces use chunks
             self.release_free_chunks(first, freed as _, &mut sync);

@@ -15,6 +15,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 pub struct Map32 {
     inner: Mutex<Map32Inner>,
     descriptor_map: Vec<AtomicUsize>,
+    shared_discontig_fl_count: AtomicUsize,
+    total_available_discontiguous_chunks: AtomicUsize,
 }
 
 #[doc(hidden)]
@@ -23,8 +25,6 @@ pub struct Map32Inner {
     next_link: Vec<i32>,
     region_map: IntArrayFreeList,
     global_page_map: IntArrayFreeList,
-    shared_discontig_fl_count: usize,
-    total_available_discontiguous_chunks: usize,
     finalized: bool,
 }
 
@@ -43,11 +43,11 @@ impl Map32 {
                 next_link: vec![0; max_chunks],
                 region_map: IntArrayFreeList::new(max_chunks, max_chunks as _, 1),
                 global_page_map: IntArrayFreeList::new(1, 1, MAX_SPACES),
-                shared_discontig_fl_count: 0,
-                total_available_discontiguous_chunks: 0,
                 finalized: false,
             }),
             descriptor_map,
+            shared_discontig_fl_count: AtomicUsize::new(0),
+            total_available_discontiguous_chunks: AtomicUsize::new(0),
         }
     }
 }
@@ -116,7 +116,7 @@ impl VMMap for Map32 {
         if chunk == -1 {
             return Address::zero();
         }
-        inner.total_available_discontiguous_chunks -= chunks;
+        self.total_available_discontiguous_chunks.fetch_sub(chunks, Ordering::Relaxed);
         let rtn = conversions::chunk_index_to_address(chunk as _);
         
         // Inline insert logic to avoid deadlock
@@ -170,11 +170,11 @@ impl VMMap for Map32 {
     }
 
     fn get_available_discontiguous_chunks(&self) -> usize {
-        self.inner.lock().unwrap().total_available_discontiguous_chunks
+        self.total_available_discontiguous_chunks.load(Ordering::Relaxed)
     }
 
     fn get_chunk_consumer_count(&self) -> usize {
-        self.inner.lock().unwrap().shared_discontig_fl_count
+        self.shared_discontig_fl_count.load(Ordering::Relaxed)
     }
     #[allow(clippy::while_immutable_condition)]
     fn free_all_chunks(&self, any_chunk: Address) {
@@ -238,7 +238,7 @@ impl VMMap for Map32 {
         /* set up the global page map and place chunks on free list */
         let mut first_page = 0;
         for chunk_index in first_chunk..=last_chunk {
-            inner.total_available_discontiguous_chunks += 1;
+            self.total_available_discontiguous_chunks.fetch_add(1, Ordering::Relaxed);
             inner.region_map.free(chunk_index as _, false); // put this chunk on the free list
             inner.global_page_map.set_uncoalescable(first_page);
             let alloced_pages = inner.global_page_map.alloc(PAGES_IN_CHUNK as _); // populate the global page map
@@ -264,7 +264,7 @@ impl VMMap for Map32 {
 impl Map32 {
     fn free_contiguous_chunks_no_lock(&self, inner: &mut Map32Inner, chunk: i32) -> usize {
         let chunks = inner.region_map.free(chunk, false);
-        inner.total_available_discontiguous_chunks += chunks as usize;
+        self.total_available_discontiguous_chunks.fetch_add(chunks as usize, Ordering::Relaxed);
         let next = inner.next_link[chunk as usize];
         let prev = inner.prev_link[chunk as usize];
         if next != 0 {
@@ -286,9 +286,7 @@ impl Map32 {
     }
 
     fn get_discontig_freelist_pr_ordinal(&self) -> usize {
-        let mut inner = self.inner.lock().unwrap();
-        inner.shared_discontig_fl_count += 1;
-        inner.shared_discontig_fl_count
+        self.shared_discontig_fl_count.fetch_add(1, Ordering::Relaxed) + 1
     }
 }
 
