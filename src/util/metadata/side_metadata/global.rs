@@ -321,7 +321,7 @@ impl SideMetadataSpec {
                     // Get a mask that the bits we need to zero are set to zero, and the other bits are 1.
                     let mask: u8 =
                         u8::MAX.checked_shl(bit_end as u32).unwrap_or(0) | !(u8::MAX << bit_start);
-                    unsafe { addr.as_ref::<AtomicU8>() }.fetch_and(mask, Ordering::SeqCst);
+                    MetadataSlot(addr).fetch_and(mask, Ordering::SeqCst);
                     false
                 }
             }
@@ -358,7 +358,7 @@ impl SideMetadataSpec {
                     // Get a mask that the bits we need to set are 1, and the other bits are 0.
                     let mask: u8 = !(u8::MAX.checked_shl(bit_end as u32).unwrap_or(0))
                         & (u8::MAX << bit_start);
-                    unsafe { addr.as_ref::<AtomicU8>() }.fetch_or(mask, Ordering::SeqCst);
+                    MetadataSlot(addr).fetch_or(mask, Ordering::SeqCst);
                     false
                 }
             }
@@ -554,10 +554,10 @@ impl SideMetadataSpec {
                     // we are setting selected bits in one byte
                     let mask: u8 = !(u8::MAX.checked_shl(bit_end as u32).unwrap_or(0))
                         & (u8::MAX << bit_start); // Get a mask that the bits we need to set are 1, and the other bits are 0.
-                    let old_src = unsafe { src.as_ref::<AtomicU8>() }.load(Ordering::Relaxed);
-                    let old_dst = unsafe { dst.as_ref::<AtomicU8>() }.load(Ordering::Relaxed);
+                    let old_src = MetadataSlot(src).load(Ordering::Relaxed);
+                    let old_dst = MetadataSlot(dst).load(Ordering::Relaxed);
                     let new = (old_src & mask) | (old_dst & !mask);
-                    unsafe { dst.as_ref::<AtomicU8>() }.store(new, Ordering::Relaxed);
+                    MetadataSlot(dst).store(new, Ordering::Relaxed);
                     false
                 }
             }
