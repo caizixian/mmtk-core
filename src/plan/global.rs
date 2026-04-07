@@ -677,7 +677,7 @@ impl<VM: VMBinding> BasePlan<VM> {
         );
         // Check if we reserved more pages (including the collection copy reserve)
         // than the heap's total pages. In that case, we will have to do a GC.
-        let heap_full = plan.base().gc_trigger.is_heap_full();
+        let heap_full = plan.base().gc_trigger.is_heap_full(plan);
 
         space_full || stress_force_gc || heap_full
     }

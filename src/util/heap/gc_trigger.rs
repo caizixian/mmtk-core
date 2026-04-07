@@ -10,7 +10,7 @@ use crate::util::options::{GCTriggerSelector, Options, DEFAULT_MAX_NURSERY, DEFA
 use crate::vm::Collection;
 use crate::vm::VMBinding;
 use crate::MMTK;
-use std::mem::MaybeUninit;
+
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
 
@@ -19,9 +19,6 @@ use std::sync::Arc;
 /// Depending on the actual policy, we may either forward the calls either to the plan
 /// or to the binding/runtime.
 pub struct GCTrigger<VM: VMBinding> {
-    /// The current plan. This is uninitialized when we create it, and later initialized
-    /// once we have a fixed address for the plan.
-    plan: MaybeUninit<&'static dyn Plan<VM = VM>>,
     /// The triggering policy.
     pub policy: Box<dyn GCTriggerPolicy<VM>>,
     /// Set by mutators to trigger GC.  It is atomic so that mutators can check if GC has already
@@ -39,7 +36,6 @@ impl<VM: VMBinding> GCTrigger<VM> {
         state: Arc<GlobalState>,
     ) -> Self {
         GCTrigger {
-            plan: MaybeUninit::uninit(),
             policy: match *options.gc_trigger {
                 GCTriggerSelector::FixedHeapSize(size) => Box::new(FixedHeapSizeTrigger {
                     total_pages: conversions::bytes_to_pages_up(size),
@@ -66,15 +62,6 @@ impl<VM: VMBinding> GCTrigger<VM> {
             scheduler,
             state,
         }
-    }
-
-    /// Set the plan. This is called in `create_plan()` after we created a boxed plan.
-    pub fn set_plan(&mut self, plan: &'static dyn Plan<VM = VM>) {
-        self.plan.write(plan);
-    }
-
-    fn plan(&self) -> &dyn Plan<VM = VM> {
-        unsafe { self.plan.assume_init() }
     }
 
     /// Request a GC.  Called by mutators when polling (during allocation) and when handling user
@@ -106,12 +93,11 @@ impl<VM: VMBinding> GCTrigger<VM> {
     /// Arguments:
     /// * `space_full`: Space request failed, must recover pages within 'space'.
     /// * `space`: The space that triggered the poll. This could `None` if the poll is not triggered by a space.
-    pub fn poll(&self, space_full: bool, space: Option<&dyn Space<VM>>) -> bool {
+    pub fn poll(&self, plan: &dyn Plan<VM = VM>, space_full: bool, space: Option<&dyn Space<VM>>) -> bool {
         if !VM::VMCollection::is_collection_enabled() {
             return false;
         }
 
-        let plan = self.plan();
         if self
             .policy
             .is_gc_required(space_full, space.map(|s| SpaceStats::new(s)), plan)
@@ -139,8 +125,8 @@ impl<VM: VMBinding> GCTrigger<VM> {
     /// # Arguments
     /// * `force`: If true, we force a collection regardless of the settings. If false, we only trigger a collection if the settings allow it.
     /// * `exhaustive`: If true, we try to make the collection exhaustive (e.g. full heap collection). If false, the collection kind is determined internally.
-    pub fn handle_user_collection_request(&self, force: bool, exhaustive: bool) -> bool {
-        if !self.plan().constraints().collects_garbage {
+    pub fn handle_user_collection_request(&self, plan: &dyn Plan<VM = VM>, force: bool, exhaustive: bool) -> bool {
+        if !plan.constraints().collects_garbage {
             warn!("User attempted a collection request, but the plan can not do GC. The request is ignored.");
             return false;
         }
@@ -149,7 +135,7 @@ impl<VM: VMBinding> GCTrigger<VM> {
             info!("User triggering collection");
             // TODO: this may not work reliably. If a GC has been triggered, this will not force it to be a full heap GC.
             if exhaustive {
-                if let Some(gen) = self.plan().generational() {
+                if let Some(gen) = plan.generational() {
                     gen.force_full_heap_collection();
                 }
             }
@@ -195,14 +181,14 @@ impl<VM: VMBinding> GCTrigger<VM> {
     }
 
     /// Check if the heap is full
-    pub fn is_heap_full(&self) -> bool {
-        self.policy.is_heap_full(self.plan())
+    pub fn is_heap_full(&self, plan: &dyn Plan<VM = VM>) -> bool {
+        self.policy.is_heap_full(plan)
     }
 
     /// Return upper bound of the nursery size (in number of bytes)
-    pub fn get_max_nursery_bytes(&self) -> usize {
+    pub fn get_max_nursery_bytes(&self, plan: &dyn Plan<VM = VM>) -> usize {
         use crate::util::options::NurserySize;
-        debug_assert!(self.plan().generational().is_some());
+        debug_assert!(plan.generational().is_some());
         match *self.options.nursery {
             NurserySize::Bounded { min: _, max } => max,
             NurserySize::ProportionalBounded { min: _, max } => {
@@ -222,9 +208,9 @@ impl<VM: VMBinding> GCTrigger<VM> {
     }
 
     /// Return lower bound of the nursery size (in number of bytes)
-    pub fn get_min_nursery_bytes(&self) -> usize {
+    pub fn get_min_nursery_bytes(&self, plan: &dyn Plan<VM = VM>) -> usize {
         use crate::util::options::NurserySize;
-        debug_assert!(self.plan().generational().is_some());
+        debug_assert!(plan.generational().is_some());
         match *self.options.nursery {
             NurserySize::Bounded { min, max: _ } => min,
             NurserySize::ProportionalBounded { min, max: _ } => {
@@ -245,13 +231,13 @@ impl<VM: VMBinding> GCTrigger<VM> {
     }
 
     /// Return upper bound of the nursery size (in number of pages)
-    pub fn get_max_nursery_pages(&self) -> usize {
-        crate::util::conversions::bytes_to_pages_up(self.get_max_nursery_bytes())
+    pub fn get_max_nursery_pages(&self, plan: &dyn Plan<VM = VM>) -> usize {
+        crate::util::conversions::bytes_to_pages_up(self.get_max_nursery_bytes(plan))
     }
 
     /// Return lower bound of the nursery size (in number of pages)
-    pub fn get_min_nursery_pages(&self) -> usize {
-        crate::util::conversions::bytes_to_pages_up(self.get_min_nursery_bytes())
+    pub fn get_min_nursery_pages(&self, plan: &dyn Plan<VM = VM>) -> usize {
+        crate::util::conversions::bytes_to_pages_up(self.get_min_nursery_bytes(plan))
     }
 }
 
@@ -582,7 +568,7 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for MemBalancerTrigger {
                         // We reserve an extra of min nursery. This ensures that we will not trigger
                         // a full heap GC in the next GC (if available pages is smaller than min nursery, we will force a full heap GC)
                         mmtk.get_plan().get_collection_reserved_pages()
-                            + mmtk.gc_trigger.get_min_nursery_pages(),
+                            + mmtk.gc_trigger.get_min_nursery_pages(mmtk.get_plan()),
                         stats,
                     );
                 }

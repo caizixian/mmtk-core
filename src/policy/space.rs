@@ -121,7 +121,8 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         // If we should not poll, GC is not triggered.
         let gc_triggered = should_poll && {
             trace!("Polling ..");
-            self.get_gc_trigger().poll(false, Some(self.as_space()))
+            let mutator = VM::VMActivePlan::mutator(VMMutatorThread(tls));
+            self.get_gc_trigger().poll(mutator.plan, false, Some(self.as_space()))
         };
 
         // We can try to get pages if
@@ -301,7 +302,8 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
 
         if attempted_allocation_and_failed {
             // We thought we had memory to allocate, but somehow failed the allocation. Will force a GC.
-            let gc_performed = self.get_gc_trigger().poll(true, Some(self.as_space()));
+            let mutator = VM::VMActivePlan::mutator(VMMutatorThread(tls));
+            let gc_performed = self.get_gc_trigger().poll(mutator.plan, true, Some(self.as_space()));
             debug_assert!(gc_performed, "GC not performed when forced.");
         }
 
