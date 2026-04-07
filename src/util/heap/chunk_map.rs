@@ -6,6 +6,7 @@ use crate::util::Address;
 use crate::vm::VMBinding;
 use spin::Mutex;
 use std::ops::Range;
+use std::sync::atomic::Ordering;
 
 /// Data structure to reference a MMTk 4 MB chunk.
 #[repr(transparent)]
@@ -145,7 +146,7 @@ impl ChunkMap {
             );
         }
         // Update alloc byte
-        unsafe { Self::ALLOC_TABLE.store::<u8>(chunk.start(), state.0) };
+        Self::ALLOC_TABLE.store_atomic::<u8>(chunk.start(), state.0, Ordering::SeqCst);
         // If this is a newly allcoated chunk, then expand the chunk range.
         if allocated {
             debug_assert!(!chunk.start().is_zero());
@@ -170,7 +171,7 @@ impl ChunkMap {
 
     /// Get chunk state, regardless of the space. This should always be private.
     fn get_internal(&self, chunk: Chunk) -> ChunkState {
-        let byte = unsafe { Self::ALLOC_TABLE.load::<u8>(chunk.start()) };
+        let byte = Self::ALLOC_TABLE.load_atomic::<u8>(chunk.start(), Ordering::SeqCst);
         ChunkState(byte)
     }
 
