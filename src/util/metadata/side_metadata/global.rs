@@ -169,41 +169,47 @@ impl SideMetadataSpec {
     /// Get the absolute offset for the spec.
     pub const fn get_absolute_offset(&self) -> Address {
         debug_assert!(self.is_absolute_offset());
-        unsafe { self.offset.addr }
+        match self.offset {
+            SideMetadataOffset::Addr(addr) => addr,
+            SideMetadataOffset::Rel(_) => Address::ZERO, // Should be unreachable
+        }
     }
 
     /// Get the relative offset for the spec.
     pub const fn get_rel_offset(&self) -> usize {
         debug_assert!(self.is_rel_offset());
-        unsafe { self.offset.rel_offset }
+        match self.offset {
+            SideMetadataOffset::Rel(rel) => rel,
+            SideMetadataOffset::Addr(_) => 0, // Should be unreachable
+        }
     }
 
     /// Return the upperbound offset for the side metadata. The next side metadata should be laid out at this offset.
     #[cfg(target_pointer_width = "64")]
     pub const fn upper_bound_offset(&self) -> SideMetadataOffset {
         debug_assert!(self.is_absolute_offset());
-        SideMetadataOffset {
-            addr: unsafe { self.offset.addr }
+        SideMetadataOffset::Addr(
+            self.get_absolute_offset()
                 .add(crate::util::metadata::side_metadata::metadata_address_range_size(self)),
-        }
+        )
     }
 
     /// Return the upperbound offset for the side metadata. The next side metadata should be laid out at this offset.
     #[cfg(target_pointer_width = "32")]
     pub const fn upper_bound_offset(&self) -> SideMetadataOffset {
         if self.is_absolute_offset() {
-            SideMetadataOffset {
-                addr: unsafe { self.offset.addr }
+            SideMetadataOffset::Addr(
+                self.get_absolute_offset()
                     .add(crate::util::metadata::side_metadata::metadata_address_range_size(self)),
-            }
+            )
         } else {
-            SideMetadataOffset {
-                rel_offset: unsafe { self.offset.rel_offset }
+            SideMetadataOffset::Rel(
+                self.get_rel_offset()
                     + crate::util::metadata::side_metadata::metadata_bytes_per_chunk(
                         self.log_bytes_in_region,
                         self.log_num_of_bits,
                     ),
-            }
+            )
         }
     }
 
@@ -213,7 +219,10 @@ impl SideMetadataSpec {
     /// as offset).
     pub const fn upper_bound_address_for_contiguous(&self) -> Address {
         debug_assert!(self.is_absolute_offset());
-        unsafe { self.upper_bound_offset().addr }
+        match self.upper_bound_offset() {
+            SideMetadataOffset::Addr(addr) => addr,
+            SideMetadataOffset::Rel(_) => Address::ZERO, // Should be unreachable
+        }
     }
 
     /// The upper bound address for metadata address computed for this global spec. The computed metadata address
@@ -223,7 +232,11 @@ impl SideMetadataSpec {
     #[cfg(target_pointer_width = "32")]
     pub const fn upper_bound_address_for_chunked(&self, data_addr: Address) -> Address {
         debug_assert!(self.is_rel_offset());
-        address_to_meta_chunk_addr(data_addr).add(unsafe { self.upper_bound_offset().rel_offset })
+        let rel_offset = match self.upper_bound_offset() {
+            SideMetadataOffset::Rel(rel) => rel,
+            SideMetadataOffset::Addr(_) => 0, // Should be unreachable
+        };
+        address_to_meta_chunk_addr(data_addr).add(rel_offset)
     }
 
     /// Used only for debugging.
@@ -1068,9 +1081,8 @@ impl SideMetadataSpec {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
 
-                    unsafe {
-                        <u8 as MetadataValue>::fetch_update(
-                            meta_addr,
+                    MetadataSlot(meta_addr)
+                        .fetch_update(
                             set_order,
                             fetch_order,
                             |raw_byte: u8| {
@@ -1081,11 +1093,10 @@ impl SideMetadataSpec {
                                 })
                             },
                         )
-                    }
-                    .map(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
-                    .map_err(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
+                        .map(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
+                        .map_err(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
                 } else {
-                    unsafe { T::fetch_update(meta_addr, set_order, fetch_order, f) }
+                    MetadataSlot(meta_addr).fetch_update_val(set_order, fetch_order, f)
                 }
             },
             |_result| {
@@ -1364,12 +1375,9 @@ impl fmt::Debug for SideMetadataSpec {
             }}",
             self.name,
             self.is_global,
-            unsafe {
-                if self.is_absolute_offset() {
-                    format!("0x{:x}", self.offset.addr)
-                } else {
-                    format!("0x{:x}", self.offset.rel_offset)
-                }
+            match self.offset {
+                SideMetadataOffset::Addr(addr) => format!("0x{:x}", addr),
+                SideMetadataOffset::Rel(rel) => format!("0x{:x}", rel),
             },
             self.log_num_of_bits,
             self.log_bytes_in_region
@@ -1377,61 +1385,58 @@ impl fmt::Debug for SideMetadataSpec {
     }
 }
 
-/// A union of Address or relative offset (usize) used to store offset for a side metadata spec.
-/// If a spec is contiguous side metadata, it uses address. Othrewise it uses usize.
-// The fields are made private on purpose. They can only be accessed from SideMetadata which knows whether it is Address or usize.
+/// An enum of Address or relative offset (usize) used to store offset for a side metadata spec.
+/// If a spec is contiguous side metadata, it uses address. Otherwise it uses usize.
 #[derive(Clone, Copy)]
-pub union SideMetadataOffset {
-    addr: Address,
-    rel_offset: usize,
+pub enum SideMetadataOffset {
+    Addr(Address),
+    Rel(usize),
 }
 
 impl SideMetadataOffset {
     /// Get an offset for a fixed address. This is usually used to set offset for the first spec (subsequent ones can be laid out with `layout_after`).
     pub const fn addr(addr: Address) -> Self {
-        SideMetadataOffset { addr }
+        SideMetadataOffset::Addr(addr)
     }
 
     /// Get an offset for a relative offset (usize). This is usually used to set offset for the first spec (subsequent ones can be laid out with `layout_after`).
     pub const fn rel(rel_offset: usize) -> Self {
-        SideMetadataOffset { rel_offset }
+        SideMetadataOffset::Rel(rel_offset)
     }
 
     /// Get an offset after a spec. This is used to layout another spec immediately after this one.
     pub const fn layout_after(spec: &SideMetadataSpec) -> SideMetadataOffset {
-        // Some metadata may be so small that its size is not a multiple of byte size.  One example
-        // is `CHUNK_MARK`.  It is one byte per chunk.  However, on 32-bit architectures, we
-        // allocate side metadata per chunk.  In that case, it will only occupy one byte.  If we
-        // do not align the upper bound offset up, subsequent local metadata that need to be
-        // accessed at, for example, word granularity will be misaligned.
-        // TODO: Currently we align metadata to word size so that it is safe to access the metadata
-        // one word at a time.  In the future, we may allow each metadata to specify its own
-        // alignment requirement.
         let upper_bound_offset = spec.upper_bound_offset();
-        if spec.is_absolute_offset() {
-            let addr = unsafe { upper_bound_offset.addr };
-            let aligned_addr = addr.align_up(BYTES_IN_WORD);
-            SideMetadataOffset::addr(aligned_addr)
-        } else {
-            let rel_offset = unsafe { upper_bound_offset.rel_offset };
-            let aligned_rel_offset = raw_align_up(rel_offset, BYTES_IN_WORD);
-            SideMetadataOffset::rel(aligned_rel_offset)
+        match upper_bound_offset {
+            SideMetadataOffset::Addr(addr) => {
+                let aligned_addr = addr.align_up(BYTES_IN_WORD);
+                SideMetadataOffset::Addr(aligned_addr)
+            }
+            SideMetadataOffset::Rel(rel_offset) => {
+                let aligned_rel_offset = raw_align_up(rel_offset, BYTES_IN_WORD);
+                SideMetadataOffset::Rel(aligned_rel_offset)
+            }
         }
     }
 }
 
-// Address and usize has the same layout, so we use usize for implementing these traits.
-
 impl PartialEq for SideMetadataOffset {
     fn eq(&self, other: &Self) -> bool {
-        unsafe { self.rel_offset == other.rel_offset }
+        match (self, other) {
+            (SideMetadataOffset::Addr(a1), SideMetadataOffset::Addr(a2)) => a1 == a2,
+            (SideMetadataOffset::Rel(r1), SideMetadataOffset::Rel(r2)) => r1 == r2,
+            _ => false,
+        }
     }
 }
 impl Eq for SideMetadataOffset {}
 
 impl std::hash::Hash for SideMetadataOffset {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        unsafe { self.rel_offset }.hash(state);
+        match self {
+            SideMetadataOffset::Addr(addr) => addr.hash(state),
+            SideMetadataOffset::Rel(rel_offset) => rel_offset.hash(state),
+        }
     }
 }
 
@@ -1716,7 +1721,7 @@ mod tests {
     use crate::util::metadata::side_metadata::SideMetadataContext;
 
     // offset is not used in these tests.
-    pub const ZERO_OFFSET: SideMetadataOffset = SideMetadataOffset { rel_offset: 0 };
+    pub const ZERO_OFFSET: SideMetadataOffset = SideMetadataOffset::rel(0);
 
     #[test]
     fn calculate_reserved_pages_one_spec() {
