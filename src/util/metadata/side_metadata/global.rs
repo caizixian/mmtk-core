@@ -13,6 +13,122 @@ use std::fmt;
 use std::io::Result;
 use std::sync::atomic::{AtomicU8, Ordering};
 
+#[derive(Clone, Copy)]
+pub(crate) struct MetadataSlot(pub(crate) Address);
+
+impl MetadataSlot {
+    fn as_atomic_u8(&self) -> &AtomicU8 {
+        self.get_ref::<AtomicU8>()
+    }
+
+    fn get_ref<T>(&self) -> &T {
+        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T`.
+        unsafe { self.0.as_ref::<T>() }
+    }
+
+    fn get_mut_ref<T>(&self) -> &mut T {
+        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T`.
+        unsafe { self.0.as_mut_ref::<T>() }
+    }
+
+    pub(crate) fn fetch_and(&self, mask: u8, order: Ordering) -> u8 {
+        self.as_atomic_u8().fetch_and(mask, order)
+    }
+
+    pub(crate) fn fetch_or(&self, mask: u8, order: Ordering) -> u8 {
+        self.as_atomic_u8().fetch_or(mask, order)
+    }
+
+    pub(crate) fn load(&self, order: Ordering) -> u8 {
+        self.as_atomic_u8().load(order)
+    }
+
+    pub(crate) fn store(&self, val: u8, order: Ordering) {
+        self.as_atomic_u8().store(val, order)
+    }
+
+    pub(crate) fn fetch_update<F>(&self, set_order: Ordering, fetch_order: Ordering, f: F) -> std::result::Result<u8, u8>
+    where
+        F: FnMut(u8) -> Option<u8>,
+    {
+        self.as_atomic_u8().fetch_update(set_order, fetch_order, f)
+    }
+
+    pub(crate) fn compare_exchange(
+        &self,
+        old: u8,
+        new: u8,
+        success: Ordering,
+        failure: Ordering,
+    ) -> std::result::Result<u8, u8> {
+        self.as_atomic_u8().compare_exchange(old, new, success, failure)
+    }
+
+    pub(crate) fn load_non_atomic(&self) -> u8 {
+        *self.get_ref::<u8>()
+    }
+
+    pub(crate) fn load_usize_non_atomic(&self) -> usize {
+        *self.get_ref::<usize>()
+    }
+
+    pub(crate) fn load_usize_atomic(&self, order: Ordering) -> usize {
+        self.get_ref::<std::sync::atomic::AtomicUsize>().load(order)
+    }
+    pub(crate) fn store_non_atomic(&self, val: u8) {
+        *self.get_mut_ref::<u8>() = val;
+    }
+
+    pub(crate) fn load_val<T: MetadataValue>(&self) -> T {
+        unsafe { T::load(self.0) }
+    }
+
+    pub(crate) fn load_atomic_val<T: MetadataValue>(&self, order: Ordering) -> T {
+        unsafe { T::load_atomic(self.0, order) }
+    }
+
+    pub(crate) fn store_val<T: MetadataValue>(&self, val: T) {
+        unsafe { T::store(self.0, val) }
+    }
+
+    pub(crate) fn store_atomic_val<T: MetadataValue>(&self, val: T, order: Ordering) {
+        unsafe { T::store_atomic(self.0, val, order) }
+    }
+
+    pub(crate) fn compare_exchange_val<T: MetadataValue>(
+        &self,
+        old: T,
+        new: T,
+        success: Ordering,
+        failure: Ordering,
+    ) -> std::result::Result<T, T> {
+        unsafe { T::compare_exchange(self.0, old, new, success, failure) }
+    }
+
+    pub(crate) fn fetch_add_val<T: MetadataValue>(&self, val: T, order: Ordering) -> T {
+        unsafe { T::fetch_add(self.0, val, order) }
+    }
+
+    pub(crate) fn fetch_sub_val<T: MetadataValue>(&self, val: T, order: Ordering) -> T {
+        unsafe { T::fetch_sub(self.0, val, order) }
+    }
+
+    pub(crate) fn fetch_and_val<T: MetadataValue>(&self, val: T, order: Ordering) -> T {
+        unsafe { T::fetch_and(self.0, val, order) }
+    }
+
+    pub(crate) fn fetch_or_val<T: MetadataValue>(&self, val: T, order: Ordering) -> T {
+        unsafe { T::fetch_or(self.0, val, order) }
+    }
+
+    pub(crate) fn fetch_update_val<T: MetadataValue, F>(&self, set_order: Ordering, fetch_order: Ordering, f: F) -> std::result::Result<T, T>
+    where
+        F: FnMut(T) -> Option<T>,
+    {
+        unsafe { T::fetch_update(self.0, set_order, fetch_order, f) }
+    }
+}
+
 /// This struct stores the specification of a side metadata bit-set.
 /// It is used as an input to the (inline) functions provided by the side metadata module.
 ///
@@ -511,11 +627,11 @@ impl SideMetadataSpec {
                 if bits_num_log < 3 {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
-                    let byte_val = meta_addr.load::<u8>();
+                    let byte_val = MetadataSlot(meta_addr).load_non_atomic();
 
                     FromPrimitive::from_u8((byte_val & mask) >> lshift).unwrap()
                 } else {
-                    meta_addr.load::<T>()
+                    MetadataSlot(meta_addr).load_val::<T>()
                 }
             },
             |_v| {
@@ -543,12 +659,12 @@ impl SideMetadataSpec {
                 if bits_num_log < 3 {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
-                    let old_val = meta_addr.load::<u8>();
+                    let old_val = MetadataSlot(meta_addr).load_non_atomic();
                     let new_val = (old_val & !mask) | (metadata.to_u8().unwrap() << lshift);
 
-                    meta_addr.store::<u8>(new_val);
+                    MetadataSlot(meta_addr).store_non_atomic(new_val);
                 } else {
-                    meta_addr.store::<T>(metadata);
+                    MetadataSlot(meta_addr).store_val::<T>(metadata);
                 }
             },
             |_| {
@@ -570,10 +686,10 @@ impl SideMetadataSpec {
                 if bits_num_log < 3 {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
-                    let byte_val = unsafe { meta_addr.atomic_load::<AtomicU8>(order) };
+                    let byte_val = MetadataSlot(meta_addr).load(order);
                     FromPrimitive::from_u8((byte_val & mask) >> lshift).unwrap()
                 } else {
-                    unsafe { T::load_atomic(meta_addr, order) }
+                    MetadataSlot(meta_addr).load_atomic_val::<T>(order)
                 }
             },
             |_v| {
@@ -596,15 +712,11 @@ impl SideMetadataSpec {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
                     let metadata_u8 = metadata.to_u8().unwrap();
-                    let _ = unsafe {
-                        <u8 as MetadataValue>::fetch_update(meta_addr, order, order, |v: u8| {
-                            Some((v & !mask) | (metadata_u8 << lshift))
-                        })
-                    };
+                    let _ = MetadataSlot(meta_addr).fetch_update(order, order, |v: u8| {
+                        Some((v & !mask) | (metadata_u8 << lshift))
+                    });
                 } else {
-                    unsafe {
-                        T::store_atomic(meta_addr, metadata, order);
-                    }
+                    MetadataSlot(meta_addr).store_atomic_val(metadata, order);
                 }
             },
             |_| {
@@ -669,7 +781,7 @@ impl SideMetadataSpec {
                     Some(1u8),
                     || {
                         let meta_addr = address_to_meta_address(self, data_addr);
-                        u8::store_atomic(meta_addr, 0xffu8, order);
+                        MetadataSlot(meta_addr).store_atomic_val(0xffu8, order);
                     },
                     |_| {}
                 )
@@ -691,7 +803,7 @@ impl SideMetadataSpec {
             None,
             || {
                 let meta_addr = address_to_meta_address(self, data_addr);
-                meta_addr.load::<u8>()
+                MetadataSlot(meta_addr).load_non_atomic()
             },
             |_| {},
         )
@@ -713,7 +825,7 @@ impl SideMetadataSpec {
             || {
                 let meta_addr = address_to_meta_address(self, data_addr);
                 let aligned_meta_addr = meta_addr.align_down(BYTES_IN_ADDRESS);
-                aligned_meta_addr.load::<usize>()
+                MetadataSlot(aligned_meta_addr).load_usize_non_atomic()
             },
             |_| {},
         )
@@ -741,32 +853,28 @@ impl SideMetadataSpec {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
 
-                    let real_old_byte = unsafe { meta_addr.atomic_load::<AtomicU8>(success_order) };
+                    let real_old_byte = MetadataSlot(meta_addr).load(success_order);
                     let expected_old_byte =
                         (real_old_byte & !mask) | ((old_metadata.to_u8().unwrap()) << lshift);
                     let expected_new_byte =
                         (expected_old_byte & !mask) | ((new_metadata.to_u8().unwrap()) << lshift);
 
-                    unsafe {
-                        meta_addr.compare_exchange::<AtomicU8>(
+                    MetadataSlot(meta_addr)
+                        .compare_exchange(
                             expected_old_byte,
                             expected_new_byte,
                             success_order,
                             failure_order,
                         )
-                    }
-                    .map(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
-                    .map_err(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
+                        .map(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
+                        .map_err(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
                 } else {
-                    unsafe {
-                        T::compare_exchange(
-                            meta_addr,
-                            old_metadata,
-                            new_metadata,
-                            success_order,
-                            failure_order,
-                        )
-                    }
+                    MetadataSlot(meta_addr).compare_exchange_val(
+                        old_metadata,
+                        new_metadata,
+                        success_order,
+                        failure_order,
+                    )
                 }
             },
             |_res| {
@@ -791,9 +899,8 @@ impl SideMetadataSpec {
         let lshift = meta_byte_lshift(self, data_addr);
         let mask = meta_byte_mask(self) << lshift;
 
-        let old_raw_byte = unsafe {
-            <u8 as MetadataValue>::fetch_update(
-                meta_addr,
+        let old_raw_byte = MetadataSlot(meta_addr)
+            .fetch_update(
                 set_order,
                 fetch_order,
                 |raw_byte: u8| {
@@ -803,8 +910,7 @@ impl SideMetadataSpec {
                     Some(new_raw_byte)
                 },
             )
-        }
-        .unwrap();
+            .unwrap();
         (old_raw_byte & mask) >> lshift
     }
 
@@ -833,7 +939,7 @@ impl SideMetadataSpec {
                     ))
                     .unwrap()
                 } else {
-                    unsafe { T::fetch_add(meta_addr, val, order) }
+                    MetadataSlot(meta_addr).fetch_add_val(val, order)
                 }
             },
             |_old_val| {
@@ -867,7 +973,7 @@ impl SideMetadataSpec {
                     ))
                     .unwrap()
                 } else {
-                    unsafe { T::fetch_sub(meta_addr, val, order) }
+                    MetadataSlot(meta_addr).fetch_sub_val(val, order)
                 }
             },
             |_old_val| {
@@ -896,12 +1002,11 @@ impl SideMetadataSpec {
                     let mask = meta_byte_mask(self) << lshift;
                     // We do not need to use fetch_ops_on_bits(), we can just set irrelavent bits to 1, and do fetch_and
                     let rhs = (val.to_u8().unwrap() << lshift) | !mask;
-                    let old_raw_byte =
-                        unsafe { <u8 as MetadataValue>::fetch_and(meta_addr, rhs, order) };
+                    let old_raw_byte = MetadataSlot(meta_addr).fetch_and_val(rhs, order);
                     let old_val = (old_raw_byte & mask) >> lshift;
                     FromPrimitive::from_u8(old_val).unwrap()
                 } else {
-                    unsafe { T::fetch_and(meta_addr, val, order) }
+                    MetadataSlot(meta_addr).fetch_and_val(val, order)
                 }
             },
             |_old_val| {
@@ -930,12 +1035,11 @@ impl SideMetadataSpec {
                     let mask = meta_byte_mask(self) << lshift;
                     // We do not need to use fetch_ops_on_bits(), we can just set irrelavent bits to 0, and do fetch_or
                     let rhs = (val.to_u8().unwrap() << lshift) & mask;
-                    let old_raw_byte =
-                        unsafe { <u8 as MetadataValue>::fetch_or(meta_addr, rhs, order) };
+                    let old_raw_byte = MetadataSlot(meta_addr).fetch_or_val(rhs, order);
                     let old_val = (old_raw_byte & mask) >> lshift;
                     FromPrimitive::from_u8(old_val).unwrap()
                 } else {
-                    unsafe { T::fetch_or(meta_addr, val, order) }
+                    MetadataSlot(meta_addr).fetch_or_val(val, order)
                 }
             },
             |_old_val| {
