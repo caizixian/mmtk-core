@@ -75,18 +75,18 @@ pub const VO_BIT_SIDE_METADATA_ADDR: Address = VO_BIT_SIDE_METADATA_SPEC.get_abs
 /// Atomically set the VO bit for an object.
 pub(crate) fn set_vo_bit(object: ObjectReference) {
     debug_assert!(!is_vo_bit_set(object), "{:x}: VO bit already set", object);
-    VO_BIT_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_raw_address(), 1, Ordering::SeqCst);
+    VO_BIT_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_raw_address(), 1, Ordering::Relaxed);
 }
 
 /// Atomically unset the VO bit for an object.
 pub(crate) fn unset_vo_bit(object: ObjectReference) {
     debug_assert!(is_vo_bit_set(object), "{:x}: VO bit not set", object);
-    VO_BIT_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_raw_address(), 0, Ordering::SeqCst);
+    VO_BIT_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_raw_address(), 0, Ordering::Relaxed);
 }
 
 /// Atomically unset the VO bit for an object, regardless whether the bit is set or not.
 pub(crate) fn unset_vo_bit_nocheck(object: ObjectReference) {
-    VO_BIT_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_raw_address(), 0, Ordering::SeqCst);
+    VO_BIT_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_raw_address(), 0, Ordering::Relaxed);
 }
 
 /// Non-atomically unset the VO bit for an object. The caller needs to ensure the side
@@ -102,7 +102,7 @@ pub(crate) unsafe fn unset_vo_bit_unsafe(object: ObjectReference) {
 
 /// Check if the VO bit is set for an object.
 pub(crate) fn is_vo_bit_set(object: ObjectReference) -> bool {
-    VO_BIT_SIDE_METADATA_SPEC.load_atomic::<u8>(object.to_raw_address(), Ordering::SeqCst) == 1
+    VO_BIT_SIDE_METADATA_SPEC.load_atomic::<u8>(object.to_raw_address(), Ordering::Relaxed) == 1
 }
 
 /// Check if an address can be turned directly into an object reference using the VO bit.
@@ -138,7 +138,7 @@ fn is_vo_bit_set_inner<const ATOMIC: bool>(addr: Address) -> Option<ObjectRefere
     }
 
     let vo_bit = if ATOMIC {
-        VO_BIT_SIDE_METADATA_SPEC.load_atomic::<u8>(addr, Ordering::SeqCst)
+        VO_BIT_SIDE_METADATA_SPEC.load_atomic::<u8>(addr, Ordering::Relaxed)
     } else {
         unsafe { VO_BIT_SIDE_METADATA_SPEC.load::<u8>(addr) }
     };
