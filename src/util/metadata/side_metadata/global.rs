@@ -712,6 +712,22 @@ impl SideMetadataSpec {
         )
     }
 
+    /// Load the raw word that includes the side metadata byte mapped to the data address atomically.
+    pub fn load_raw_word_atomic(&self, data_addr: Address, order: Ordering) -> usize {
+        use crate::util::constants::*;
+        debug_assert!(self.log_num_of_bits < (LOG_BITS_IN_BYTE + LOG_BYTES_IN_ADDRESS) as usize);
+        self.side_metadata_access::<false, usize, _, _, _>(
+            data_addr,
+            None,
+            || {
+                let meta_addr = address_to_meta_address(self, data_addr);
+                let aligned_meta_addr = meta_addr.align_down(BYTES_IN_ADDRESS);
+                MetadataSlot(aligned_meta_addr).load_usize_atomic(order)
+            },
+            |_| {},
+        )
+    }
+
     /// Store the given value to the side metadata for the given address.
     /// This method has similar semantics to `store` in Rust atomics.
     pub fn store_atomic<T: MetadataValue>(&self, data_addr: Address, metadata: T, order: Ordering) {
@@ -1122,7 +1138,7 @@ impl SideMetadataSpec {
     /// This function uses non-atomic load for the side metadata. The user needs to make sure
     /// that there is no other thread that is mutating the side metadata.
     #[allow(clippy::let_and_return)]
-    pub unsafe fn find_prev_non_zero_value<T: MetadataValue>(
+    pub fn find_prev_non_zero_value<T: MetadataValue>(
         &self,
         data_addr: Address,
         search_limit_bytes: usize,
@@ -1166,7 +1182,7 @@ impl SideMetadataSpec {
                 return None;
             }
             // If we find non-zero value, just return it.
-            if !unsafe { self.load::<T>(cursor).is_zero() } {
+            if !self.load_atomic::<T>(cursor, Ordering::Relaxed).is_zero() {
                 return Some(cursor);
             }
             cursor -= region_bytes;
@@ -1308,7 +1324,7 @@ impl SideMetadataSpec {
             debug_assert!(cursor.is_mapped());
 
             // If we find non-zero value, just call back.
-            if !unsafe { self.load::<T>(cursor).is_zero() } {
+            if !self.load_atomic::<T>(cursor, Ordering::Relaxed).is_zero() {
                 visit_data(cursor);
             }
             cursor += region_bytes;

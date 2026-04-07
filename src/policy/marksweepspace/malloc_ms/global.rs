@@ -623,7 +623,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
             // Free object
             self.free_internal(obj_start, bytes, offset_malloc);
             trace!("free object {}", object);
-            unsafe { unset_vo_bit_unsafe(object) };
+            unset_vo_bit_relaxed(object);
 
             true
         } else {
