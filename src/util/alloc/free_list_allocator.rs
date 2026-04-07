@@ -6,11 +6,26 @@ use crate::policy::marksweepspace::native_ms::*;
 use crate::util::alloc::allocator;
 use crate::util::alloc::Allocator;
 use crate::util::linear_scan::Region;
+use crate::util::metadata::side_metadata::MetadataSlot;
 use crate::util::Address;
 use crate::util::VMThread;
 use crate::vm::VMBinding;
 
 use super::allocator::AllocatorContext;
+
+struct FreeListCell(Address);
+
+impl FreeListCell {
+    #[inline(always)]
+    fn load_next(&self) -> Address {
+        unsafe { Address::from_usize(MetadataSlot(self.0).load_val::<usize>()) }
+    }
+
+    #[inline(always)]
+    fn store_next(&self, next: Address) {
+        MetadataSlot(self.0).store_val::<usize>(next.as_usize())
+    }
+}
 
 /// A MiMalloc free list allocator
 #[repr(C)]
@@ -152,9 +167,9 @@ impl<VM: VMBinding> FreeListAllocator<VM> {
         if cell.is_zero() {
             return cell; // return failed allocation
         }
-        let next_cell = unsafe { cell.load::<Address>() };
+        let next_cell = FreeListCell(cell).load_next();
         // Clear the link
-        unsafe { cell.store::<Address>(Address::ZERO) };
+        FreeListCell(cell).store_next(Address::ZERO);
         debug_assert!(
             next_cell.is_zero() || block.includes_address(next_cell),
             "next_cell {} is not in {:?}",
@@ -347,9 +362,7 @@ impl<VM: VMBinding> FreeListAllocator<VM> {
         let mut new_cell = block.start();
 
         let final_cell = loop {
-            unsafe {
-                new_cell.store::<Address>(old_cell);
-            }
+            FreeListCell(new_cell).store_next(old_cell);
             old_cell = new_cell;
             new_cell += cell_size;
             if new_cell + cell_size > block_end {
@@ -379,9 +392,7 @@ impl<VM: VMBinding> FreeListAllocator<VM> {
         if self.tls == block_tls {
             // same thread that allocated
             let local_free = block.load_local_free_list();
-            unsafe {
-                addr.store(local_free);
-            }
+            FreeListCell(addr).store_next(local_free);
             block.store_local_free_list(addr);
         } else {
             // different thread to allocator
