@@ -44,43 +44,41 @@ pub fn unlikely(b: bool) -> bool {
 }
 
 use std::cell::UnsafeCell;
-use std::mem::MaybeUninit;
-use std::sync::Once;
+use std::sync::OnceLock;
 
-/// InitializeOnce creates an uninitialized value that needs to be manually initialized later. InitializeOnce
-/// guarantees the value is only initialized once. This type is used to allow more efficient reads.
-/// Unlike the `lazy_static!` which checks whether the static is initialized
-/// in every read, InitializeOnce has no extra check for reads.
+/// InitializeOnce creates an uninitialized value that needs to be manually initialized later.
+/// InitializeOnce guarantees the value is only initialized once.
+///
+/// Internally uses `OnceLock` for thread-safe one-time initialization, wrapped in `UnsafeCell`
+/// to allow the `get_mut` path during single-threaded plan creation.
 pub struct InitializeOnce<T: 'static> {
-    v: UnsafeCell<MaybeUninit<T>>,
-    /// This is used to guarantee `init_fn` is only called once.
-    once: Once,
+    lock: UnsafeCell<OnceLock<T>>,
 }
 
 impl<T> InitializeOnce<T> {
     pub const fn new() -> Self {
         InitializeOnce {
-            v: UnsafeCell::new(MaybeUninit::uninit()),
-            once: Once::new(),
+            lock: UnsafeCell::new(OnceLock::new()),
         }
+    }
+
+    fn get_lock(&self) -> &OnceLock<T> {
+        // SAFETY: We only read the OnceLock through shared references.
+        // OnceLock's own synchronization handles thread-safe initialization.
+        unsafe { &*self.lock.get() }
     }
 
     /// Initialize the value. This should be called before ever using the struct.
     /// If this method is called by multiple threads, the first thread will
     /// initialize the value, and the other threads will be blocked until the
-    /// initialization is done (`Once` returns).
+    /// initialization is done.
     pub fn initialize_once(&self, init_fn: &'static dyn Fn() -> T) {
-        self.once.call_once(|| {
-            unsafe { &mut *self.v.get() }.write(init_fn());
-        });
-        debug_assert!(self.once.is_completed());
+        self.get_lock().get_or_init(init_fn);
     }
 
     /// Get the value. This should only be used after initialize_once()
     pub fn get_ref(&self) -> &T {
-        // We only assert in debug builds.
-        debug_assert!(self.once.is_completed());
-        unsafe { (*self.v.get()).assume_init_ref() }
+        self.get_lock().get().expect("InitializeOnce is not yet initialized")
     }
 
     /// Get a mutable reference to the value.
@@ -91,9 +89,11 @@ impl<T> InitializeOnce<T> {
     /// The caller needs to make sure there is no race when mutating the value.
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn get_mut(&self) -> &mut T {
-        // We only assert in debug builds.
-        debug_assert!(self.once.is_completed());
-        unsafe { (*self.v.get()).assume_init_mut() }
+        // SAFETY: UnsafeCell allows interior mutability. The caller guarantees
+        // no concurrent access. OnceLock::get_mut requires &mut self, but we
+        // bypass this because we have a stronger guarantee (single-threaded phase).
+        let lock = unsafe { &mut *self.lock.get() };
+        lock.get_mut().expect("InitializeOnce is not yet initialized")
     }
 }
 
@@ -104,21 +104,24 @@ impl<T> std::ops::Deref for InitializeOnce<T> {
     }
 }
 
+// SAFETY: InitializeOnce is safe to share between threads. OnceLock ensures
+// initialization is thread-safe. After initialization, the value is only
+// read (via get_ref/Deref) or mutated via unsafe get_mut which requires the
+// caller to ensure no races. The unsafe impl is needed because some T (e.g.,
+// Box<dyn SFTMap>) don't implement Sync, but we only store them once and
+// read immutably afterwards.
 unsafe impl<T> Sync for InitializeOnce<T> {}
 
-/// Create a formatted string that makes the best effort idenfying the current process and thread.
+/// Create a formatted string that makes the best effort identifying the current process and thread.
 pub fn debug_process_thread_id() -> String {
-    let pid = unsafe { libc::getpid() };
+    let pid = std::process::id();
     #[cfg(target_os = "linux")]
     {
-        // `gettid()` is Linux-specific.
-        let tid = unsafe { libc::gettid() };
-        format!("PID: {}, TID: {}", pid, tid)
+        let tid = std::thread::current().id();
+        format!("PID: {}, TID: {:?}", pid, tid)
     }
     #[cfg(not(target_os = "linux"))]
     {
-        // TODO: When we support other platforms, use platform-specific methods to get thread
-        // identifiers.
         format!("PID: {}", pid)
     }
 }
