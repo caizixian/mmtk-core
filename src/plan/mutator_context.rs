@@ -193,10 +193,8 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         offset: usize,
         allocator: AllocationSemantics,
     ) -> Address {
-        let allocator = unsafe {
-            self.allocators
-                .get_allocator_mut(self.config.allocator_mapping[allocator])
-        };
+        let allocator = self.allocators
+            .get_allocator_mut(self.config.allocator_mapping[allocator]);
         // The value should be default/unset at the beginning of an allocation request.
         debug_assert!(allocator.get_context().get_alloc_options().is_default());
         allocator.alloc(size, align, offset)
@@ -210,10 +208,8 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         allocator: AllocationSemantics,
         options: AllocationOptions,
     ) -> Address {
-        let allocator = unsafe {
-            self.allocators
-                .get_allocator_mut(self.config.allocator_mapping[allocator])
-        };
+        let allocator = self.allocators
+            .get_allocator_mut(self.config.allocator_mapping[allocator]);
         // The value should be default/unset at the beginning of an allocation request.
         debug_assert!(allocator.get_context().get_alloc_options().is_default());
         allocator.alloc_with_options(size, align, offset, options)
@@ -226,10 +222,8 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         offset: usize,
         allocator: AllocationSemantics,
     ) -> Address {
-        let allocator = unsafe {
-            self.allocators
-                .get_allocator_mut(self.config.allocator_mapping[allocator])
-        };
+        let allocator = self.allocators
+            .get_allocator_mut(self.config.allocator_mapping[allocator]);
         // The value should be default/unset at the beginning of an allocation request.
         debug_assert!(allocator.get_context().get_alloc_options().is_default());
         allocator.alloc_slow(size, align, offset)
@@ -243,10 +237,8 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         allocator: AllocationSemantics,
         options: AllocationOptions,
     ) -> Address {
-        let allocator = unsafe {
-            self.allocators
-                .get_allocator_mut(self.config.allocator_mapping[allocator])
-        };
+        let allocator = self.allocators
+            .get_allocator_mut(self.config.allocator_mapping[allocator]);
         // The value should be default/unset at the beginning of an allocation request.
         debug_assert!(allocator.get_context().get_alloc_options().is_default());
         allocator.alloc_slow_with_options(size, align, offset, options)
@@ -259,10 +251,8 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         _bytes: usize,
         allocator: AllocationSemantics,
     ) {
-        unsafe {
-            self.allocators
-                .get_allocator_mut(self.config.allocator_mapping[allocator])
-        }
+        self.allocators
+            .get_allocator_mut(self.config.allocator_mapping[allocator])
         .get_space()
         .initialize_object_metadata(refer)
     }
@@ -293,43 +283,31 @@ impl<VM: VMBinding> Mutator<VM> {
     /// Inform each allocator about destroying. Call allocator-specific on destroy methods.
     pub fn on_destroy(&mut self) {
         for selector in self.get_all_allocator_selectors() {
-            unsafe { self.allocators.get_allocator_mut(selector) }.on_mutator_destroy();
+            self.allocators.get_allocator_mut(selector).on_mutator_destroy();
         }
     }
 
     /// Get the allocator for the selector.
-    ///
-    /// # Safety
-    /// The selector needs to be valid, and points to an allocator that has been initialized.
-    /// [`crate::memory_manager::get_allocator_mapping`] can be used to get a selector.
-    pub unsafe fn allocator(&self, selector: AllocatorSelector) -> &dyn Allocator<VM> {
+    /// Panics if the allocator is not initialized.
+    pub fn allocator(&self, selector: AllocatorSelector) -> &dyn Allocator<VM> {
         self.allocators.get_allocator(selector)
     }
 
     /// Get the mutable allocator for the selector.
-    ///
-    /// # Safety
-    /// The selector needs to be valid, and points to an allocator that has been initialized.
-    /// [`crate::memory_manager::get_allocator_mapping`] can be used to get a selector.
-    pub unsafe fn allocator_mut(&mut self, selector: AllocatorSelector) -> &mut dyn Allocator<VM> {
+    /// Panics if the allocator is not initialized.
+    pub fn allocator_mut(&mut self, selector: AllocatorSelector) -> &mut dyn Allocator<VM> {
         self.allocators.get_allocator_mut(selector)
     }
 
     /// Get the allocator of a concrete type for the selector.
-    ///
-    /// # Safety
-    /// The selector needs to be valid, and points to an allocator that has been initialized.
-    /// [`crate::memory_manager::get_allocator_mapping`] can be used to get a selector.
-    pub unsafe fn allocator_impl<T: Allocator<VM>>(&self, selector: AllocatorSelector) -> &T {
+    /// Panics if the allocator is not initialized.
+    pub fn allocator_impl<T: Allocator<VM>>(&self, selector: AllocatorSelector) -> &T {
         self.allocators.get_typed_allocator(selector)
     }
 
     /// Get the mutable allocator of a concrete type for the selector.
-    ///
-    /// # Safety
-    /// The selector needs to be valid, and points to an allocator that has been initialized.
-    /// [`crate::memory_manager::get_allocator_mapping`] can be used to get a selector.
-    pub unsafe fn allocator_impl_mut<T: Allocator<VM>>(
+    /// Panics if the allocator is not initialized.
+    pub fn allocator_impl_mut<T: Allocator<VM>>(
         &mut self,
         selector: AllocatorSelector,
     ) -> &mut T {
