@@ -370,7 +370,7 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         }
 
         if new_chunk {
-            unsafe { SFT_MAP.update(self.as_sft(), start, bytes) };
+            SFT_MAP.update(self.as_sft(), start, bytes);
         }
     }
 
@@ -749,7 +749,7 @@ impl<VM: VMBinding> CommonSpace<VM> {
         // * change grow_space() so it sets SFT no matter what the new_chunks value is.
         // FIXME: eagerly initializing SFT is not a good idea.
         if self.contiguous {
-            unsafe { sft_map.eager_initialize(sft, self.start, self.extent) };
+            sft_map.eager_initialize(sft, self.start, self.extent);
         }
     }
 

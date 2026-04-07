@@ -20,11 +20,7 @@ pub trait SFTMap {
 
     /// Get SFT for the address. The address must have a valid SFT entry in the table (e.g. from an object reference, or from an address
     /// that is known to be in our spaces). Otherwise, use `get_checked()`.
-    ///
-    /// # Safety
-    /// The address must have a valid SFT entry in the map. Usually we know this if the address is from an object reference, or from our space address range.
-    /// Otherwise, the caller should check with `has_sft_entry()` before calling this method, or use `get_checked()`.
-    unsafe fn get_unchecked(&self, address: Address) -> &dyn SFT;
+    fn get_unchecked(&self, address: Address) -> &dyn SFT;
 
     /// Get SFT for the address. The address can be arbitrary. For out-of-bound access, an empty SFT will be returned.
     /// We only provide the checked version for `get()`, as it may be used to query arbitrary objects and addresses. Other methods like `update/clear/etc` are
@@ -32,11 +28,7 @@ pub trait SFTMap {
     fn get_checked(&self, address: Address) -> &dyn SFT;
 
     /// Set SFT for the address range. The address must have a valid SFT entry in the table.
-    ///
-    /// # Safety
-    /// The address must have a valid SFT entry in the map. Usually we know this if the address is from an object reference, or from our space address range.
-    /// Otherwise, the caller should check with `has_sft_entry()` before calling this method.
-    unsafe fn update(&self, space: SFTRawPointer, start: Address, bytes: usize);
+    fn update(&self, space: SFTRawPointer, start: Address, bytes: usize);
 
     /// Notify the SFT map for space creation. `DenseChunkMap` needs to create an entry for the space.
     fn notify_space_creation(&mut self, _space: SFTRawPointer) {}
@@ -44,13 +36,9 @@ pub trait SFTMap {
     /// Eagerly initialize the SFT table. For most implementations, it could be the same as update().
     /// However, we need this as a seprate method for SFTDenseChunkMap, as it needs to map side metadata first
     /// before setting the table.
-    ///
-    /// # Safety
-    /// The address must have a valid SFT entry in the map. Usually we know this if the address is from an object reference, or from our space address range.
-    /// Otherwise, the caller should check with `has_sft_entry()` before calling this method.
-    unsafe fn eager_initialize(
+    fn eager_initialize(
         &mut self,
-        space: *const (dyn SFT + Sync + 'static),
+        space: SFTRawPointer,
         start: Address,
         bytes: usize,
     ) {
@@ -58,11 +46,7 @@ pub trait SFTMap {
     }
 
     /// Clear SFT for the address. The address must have a valid SFT entry in the table.
-    ///
-    /// # Safety
-    /// The address must have a valid SFT entry in the map. Usually we know this if the address is from an object reference, or from our space address range.
-    /// Otherwise, the caller should check with `has_sft_entry()` before calling this method.
-    unsafe fn clear(&self, address: Address);
+    fn clear(&self, address: Address);
 }
 
 pub(crate) fn create_sft_map() -> Box<dyn SFTMap> {
@@ -136,8 +120,7 @@ impl SFTRefStorage {
         Self(AtomicDoubleWord::new(val))
     }
 
-    // Load with the acquire ordering.
-    pub fn load(&self) -> &dyn SFT {
+    pub fn load(&self) -> &'static dyn SFT {
         let val = self.0.load(Ordering::Acquire);
         // Provenance-related APIs were stabilized in Rust 1.84.
         // Rust 1.91 introduced the warn-by-default lint `integer_to_ptr_transmutes`.
@@ -194,20 +177,20 @@ mod space_map {
             if self.has_sft_entry(address) {
                 // We should be able to map the entire address range to indices in the table.
                 debug_assert!(Self::addr_to_index(address) < self.sft.len());
-                unsafe { self.get_unchecked(address) }
+                self.get_unchecked(address)
             } else {
                 &EMPTY_SPACE_SFT
             }
         }
 
-        unsafe fn get_unchecked(&self, address: Address) -> &dyn SFT {
-            let cell = unsafe { self.sft.get_unchecked(Self::addr_to_index(address)) };
+        fn get_unchecked(&self, address: Address) -> &dyn SFT {
+            let cell = &self.sft[Self::addr_to_index(address)];
             cell.load()
         }
 
-        unsafe fn update(
+        fn update(
             &self,
-            space: *const (dyn SFT + Sync + 'static),
+            space: SFTRawPointer,
             start: Address,
             bytes: usize,
         ) {
@@ -215,7 +198,7 @@ mod space_map {
             if cfg!(debug_assertions) {
                 // Make sure we only update from empty to a valid space, or overwrite the space
                 let old = self.sft[index].load();
-                assert!((*old).name() == EMPTY_SFT_NAME || (*old).name() == (*space).name());
+                assert!((*old).name() == EMPTY_SFT_NAME || (*old).name() == unsafe { (*space).name() });
                 // Make sure the range is in the space
                 let space_start = Self::index_to_space_start(index);
                 assert!(start >= space_start);
@@ -230,12 +213,12 @@ mod space_map {
                 );
             }
 
-            self.sft.get_unchecked(index).store(space);
+            self.sft[index].store(space);
         }
 
-        unsafe fn clear(&self, addr: Address) {
+        fn clear(&self, addr: Address) {
             let index = Self::addr_to_index(addr);
-            self.sft.get_unchecked(index).store(&EMPTY_SPACE_SFT as _);
+            self.sft[index].store(&EMPTY_SPACE_SFT as _);
         }
     }
 
@@ -360,23 +343,21 @@ mod dense_chunk_map {
 
         fn get_checked(&self, address: Address) -> &dyn SFT {
             if self.has_sft_entry(address) {
-                unsafe { self.get_unchecked(address) }
+                self.get_unchecked(address)
             } else {
                 &EMPTY_SPACE_SFT
             }
         }
 
-        unsafe fn get_unchecked(&self, address: Address) -> &dyn SFT {
-            let cell = self
-                .sft
-                .get_unchecked(Self::addr_to_index(address) as usize);
+        fn get_unchecked(&self, address: Address) -> &dyn SFT {
+            let cell = &self.sft[Self::addr_to_index(address) as usize];
             cell.load()
         }
 
-        fn notify_space_creation(&mut self, space: SFTRawPointer) {
+        fn notify_space_creation(&mut self, space: *const (dyn SFT + Sync + 'static)) {
             // Insert the space into the SFT table, and the SFT map.
 
-            let space_name = unsafe { &*space }.name().to_string();
+            let space_name = unsafe { (*space).name() }.to_string();
             // We shouldn't have this space in our map yet. Otherwise, this method is called multiple times for the same space.
             assert!(!self.index_map.contains_key(&space_name));
             // Index for the space
@@ -386,7 +367,7 @@ mod dense_chunk_map {
             self.index_map.insert(space_name, index);
         }
 
-        unsafe fn eager_initialize(&mut self, space: SFTRawPointer, start: Address, bytes: usize) {
+        fn eager_initialize(&mut self, space: *const (dyn SFT + Sync + 'static), start: Address, bytes: usize) {
             let context = SideMetadataContext {
                 global: vec![SFT_DENSE_CHUNK_MAP_INDEX],
                 local: vec![],
@@ -400,13 +381,13 @@ mod dense_chunk_map {
             self.update(space, start, bytes);
         }
 
-        unsafe fn update(
+        fn update(
             &self,
             space: *const (dyn SFT + Sync + 'static),
             start: Address,
             bytes: usize,
         ) {
-            let index: u8 = *self.index_map.get((*space).name()).unwrap() as u8;
+            let index: u8 = *self.index_map.get(unsafe { (*space).name() }).unwrap() as u8;
 
             // Iterate through the chunks and record the space index in the side metadata.
             let first_chunk = conversions::chunk_align_down(start);
@@ -427,7 +408,7 @@ mod dense_chunk_map {
             debug!("update done");
         }
 
-        unsafe fn clear(&self, address: Address) {
+        fn clear(&self, address: Address) {
             SFT_DENSE_CHUNK_MAP_INDEX.store_atomic::<u8>(
                 address,
                 Self::EMPTY_SFT_INDEX,
@@ -480,33 +461,33 @@ mod sparse_chunk_map {
 
         fn get_checked(&self, address: Address) -> &dyn SFT {
             if self.has_sft_entry(address) {
-                unsafe { self.get_unchecked(address) }
+                self.get_unchecked(address)
             } else {
                 &EMPTY_SPACE_SFT
             }
         }
 
-        unsafe fn get_unchecked(&self, address: Address) -> &dyn SFT {
-            let cell = self.sft.get_unchecked(address.chunk_index());
+        fn get_unchecked(&self, address: Address) -> &dyn SFT {
+            let cell = &self.sft[address.chunk_index()];
             cell.load()
         }
 
         /// Update SFT map for the given address range.
         /// It should be used when we acquire new memory and use it as part of a space. For example, the cases include:
         /// 1. when a space grows, 2. when initializing a contiguous space, 3. when ensure_mapped() is called on a space.
-        unsafe fn update(
+        fn update(
             &self,
-            space: *const (dyn SFT + Sync + 'static),
+            space: SFTRawPointer,
             start: Address,
             bytes: usize,
         ) {
             if DEBUG_SFT {
-                self.log_update(&*space, start, bytes);
+                self.log_update(unsafe { &*space }, start, bytes);
             }
             let first = start.chunk_index();
             let last = conversions::chunk_align_up(start + bytes).chunk_index();
             for chunk in first..last {
-                self.set(chunk, &*space);
+                self.set(chunk, space);
             }
             if DEBUG_SFT {
                 self.trace_sft_map();
@@ -515,7 +496,7 @@ mod sparse_chunk_map {
 
         // TODO: We should clear a SFT entry when a space releases a chunk.
         #[allow(dead_code)]
-        unsafe fn clear(&self, chunk_start: Address) {
+        fn clear(&self, chunk_start: Address) {
             if DEBUG_SFT {
                 debug!(
                     "Clear SFT for chunk {} (was {})",
@@ -578,7 +559,7 @@ mod sparse_chunk_map {
             res
         }
 
-        fn set(&self, chunk: usize, sft: &(dyn SFT + Sync + 'static)) {
+        fn set(&self, chunk: usize, sft: SFTRawPointer) {
             /*
              * This is safe (only) because a) this is only called during the
              * allocation and deallocation of chunks, which happens under a global
@@ -592,7 +573,7 @@ mod sparse_chunk_map {
             // It is okay to set empty to valid, or set valid to empty. It is wrong if we overwrite a valid value with another valid value.
             if cfg!(debug_assertions) {
                 let old = self.sft[chunk].load().name();
-                let new = sft.name();
+                let new = unsafe { (*sft).name() };
                 // Allow overwriting the same SFT pointer. E.g., if we have set SFT map for a space, then ensure_mapped() is called on the same,
                 // in which case, we still set SFT map again.
                 debug_assert!(
@@ -604,7 +585,7 @@ mod sparse_chunk_map {
                     new
                 );
             }
-            unsafe { self.sft.get_unchecked(chunk).store(sft) };
+            self.sft[chunk].store(sft);
         }
     }
 }
