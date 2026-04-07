@@ -107,7 +107,7 @@ impl VMMap for Map64 {
     /// # Safety
     ///
     /// Caller must ensure that only one thread is calling this method.
-    unsafe fn allocate_contiguous_chunks(
+    fn allocate_contiguous_chunks(
         &self,
         descriptor: SpaceDescriptor,
         chunks: usize,
@@ -166,7 +166,7 @@ impl VMMap for Map64 {
         unreachable!()
     }
 
-    unsafe fn free_contiguous_chunks(&self, _start: Address) -> usize {
+    fn free_contiguous_chunks(&self, _start: Address) -> usize {
         unreachable!()
     }
 
