@@ -1,6 +1,5 @@
 //! The module defines virutal memory layout parameters.
 
-use std::ptr::addr_of;
 use std::sync::atomic::AtomicBool;
 
 use atomic::Ordering;
@@ -166,9 +165,7 @@ impl VMLayout {
             );
         }
         constants.validate();
-        unsafe {
-            VM_LAYOUT = constants;
-        }
+        VM_LAYOUT.set(constants).expect("vm_layout is already been used before setup");
     }
 }
 
@@ -185,10 +182,7 @@ impl std::default::Default for VMLayout {
     }
 }
 
-#[cfg(target_pointer_width = "32")]
-static mut VM_LAYOUT: VMLayout = VMLayout::new_32bit();
-#[cfg(target_pointer_width = "64")]
-static mut VM_LAYOUT: VMLayout = VMLayout::new_64bit();
+static VM_LAYOUT: std::sync::OnceLock<VMLayout> = std::sync::OnceLock::new();
 
 static VM_LAYOUT_FETCHED: AtomicBool = AtomicBool::new(false);
 
@@ -199,5 +193,10 @@ pub fn vm_layout() -> &'static VMLayout {
     if cfg!(debug_assertions) {
         VM_LAYOUT_FETCHED.store(true, Ordering::SeqCst);
     }
-    unsafe { &*addr_of!(VM_LAYOUT) }
+    VM_LAYOUT.get_or_init(|| {
+        #[cfg(target_pointer_width = "32")]
+        return VMLayout::new_32bit();
+        #[cfg(target_pointer_width = "64")]
+        return VMLayout::new_64bit();
+    })
 }
