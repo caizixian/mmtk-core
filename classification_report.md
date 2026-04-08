@@ -7,10 +7,13 @@
 - **Total unsafe on new**: 53
 - **Total reduction**: 669
 - **Files processed**: 99/102
+- **Second Pass Files processed**: 102/102
 
 ## Categories
 
-### Safe Metadata Abstraction (MetadataSlot)
+### Metadata and SFT Abstractions
+
+#### Safe Metadata Abstraction (MetadataSlot)
 **Description**: Raw pointer metadata load/store replaced by a safe wrapper type `MetadataSlot` which encapsulates raw pointer dereferencing. The type is defined as:
 ```rust
 #[derive(Clone, Copy)]
@@ -24,8 +27,9 @@ pub(crate) struct MetadataSlot(pub(crate) Address);
 | `src/util/metadata/side_metadata/helpers.rs` | 7 | 0 | -7 |
 | `src/util/alloc/free_list_allocator.rs` | 5 | 0 | -5 |
 | `src/policy/markcompactspace.rs` | 2 | 0 | -2 |
+| `src/util/metadata/side_metadata/global.rs` | 89 | 5 | -84 |
 
-**Category Total**: Δ = -104
+**Category Total**: Δ = -188
 
 **Diff Snippets**:
 <details>
@@ -603,7 +607,744 @@ index 176a508f..cf5e11ca 100644
 ```
 </details>
 
-### Safe Address Constructors
+<details>
+<summary>src/util/metadata/side_metadata/global.rs</summary>
+
+```diff
+@@ -11,10 +11,126 @@
++#[derive(Clone, Copy)]
++pub(crate) struct MetadataSlot(pub(crate) Address);
++
++impl MetadataSlot {
++    fn as_atomic_u8(&self) -> &AtomicU8 {
++        self.get_ref::<AtomicU8>()
++    }
++
++    fn get_ref<T>(&self) -> &T {
++        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T`.
++        unsafe { self.0.as_ref::<T>() }
++    }
++
++    fn get_mut_ref<T>(&self) -> &mut T {
++        // SAFETY: The caller must ensure that `self.0` is a valid and properly aligned address for `T`.
++        unsafe { self.0.as_mut_ref::<T>() }
++    }
++...
+@@ -190,11 +325,11 @@
+-                    unsafe { addr.as_ref::<AtomicU8>() }.fetch_and(mask, Ordering::SeqCst);
++                    MetadataSlot(addr).fetch_and(mask, Ordering::SeqCst);
+```
+</details>
+
+
+#### Safe Metadata Abstraction (SideMetadataSpecBlockExt)
+**Description**: Introduced a trait extension `SideMetadataSpecBlockExt` for `SideMetadataSpec` that provides safe methods for loading and storing addresses and usizes, encapsulating atomic operations and raw pointer manipulations.
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `src/policy/marksweepspace/native_ms/block.rs` | 16 | 0 | -16 |
+
+**Category Total**: Δ = -16
+
+**Diff Snippets**:
+<details>
+<summary>src/policy/marksweepspace/native_ms/block.rs</summary>
+
+```rust
+trait SideMetadataSpecBlockExt {
+    fn load_address(&self, block: Block) -> Address;
+    fn store_address(&self, block: Block, value: Address);
+    fn load_address_atomic(&self, block: Block, order: Ordering) -> Address;
+    fn load_usize(&self, block: Block) -> usize;
+    fn store_usize(&self, block: Block, value: usize);
+    fn load_usize_atomic(&self, block: Block, order: Ordering) -> usize;
+}
+```
+
+```diff
+@@ -99,41 +133,35 @@ impl Block {
+     pub fn load_free_list(&self) -> Address {
+ -        unsafe { Address::from_usize(Block::FREE_LIST_TABLE.load::<usize>(self.start())) }
+ +        Block::FREE_LIST_TABLE.load_address(*self)
+     }
+ ```
+ </details>
+
+#### Atomic Side Metadata Access
+**Description**: Replaced non-atomic loads and stores on side metadata with atomic operations (typically using `Ordering::Relaxed`). This addresses potential data races at the language level and allows removing the `unsafe` qualifier from functions accessing side metadata.
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `src/util/metadata/vo_bit/mod.rs` | 8 | 0 | -8 |
+| `src/util/linear_scan.rs` | 1 | 0 | -1 |
+| `src/policy/largeobjectspace.rs` | 1 | 0 | -1 |
+
+**Category Total**: Δ = -10
+
+**Diff Snippets**:
+<details>
+<summary>src/util/metadata/vo_bit/mod.rs</summary>
+
+```diff
+@@ -87,19 +87,14 @@
+-pub(crate) unsafe fn unset_vo_bit_unsafe(object: ObjectReference) {
++pub(crate) fn unset_vo_bit_relaxed(object: ObjectReference) {
+     debug_assert!(is_vo_bit_set(object), "{:x}: VO bit not set", object);
+-    VO_BIT_SIDE_METADATA_SPEC.store::<u8>(object.to_raw_address(), 0);
++    VO_BIT_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_raw_address(), 0, Ordering::Relaxed);
+ }
+
+@@ -112,19 +107,15 @@
+-pub(crate) unsafe fn is_vo_bit_set_unsafe(address: Address) -> Option<ObjectReference> {
++pub(crate) fn is_vo_bit_set_relaxed(address: Address) -> Option<ObjectReference> {
+
+@@ -138,11 +129,11 @@
+     let vo_bit = if ATOMIC {
+         VO_BIT_SIDE_METADATA_SPEC.load_atomic::<u8>(addr, Ordering::SeqCst)
+     } else {
+-        unsafe { VO_BIT_SIDE_METADATA_SPEC.load::<u8>(addr) }
++        VO_BIT_SIDE_METADATA_SPEC.load_atomic::<u8>(addr, Ordering::Relaxed)
+     };
+
+@@ -176,11 +167,11 @@
+ pub(crate) fn get_raw_vo_bit_word(addr: Address) -> usize {
+-    unsafe { VO_BIT_SIDE_METADATA_SPEC.load_raw_word(addr) }
++    VO_BIT_SIDE_METADATA_SPEC.load_raw_word_atomic(addr, Ordering::Relaxed)
+ }
+
+@@ -188,25 +179,23 @@
+-    if let Some(vo_addr) = unsafe {
+-        VO_BIT_SIDE_METADATA_SPEC.find_prev_non_zero_value::<u8>(start, search_limit_bytes)
+-    } {
++    if let Some(vo_addr) = VO_BIT_SIDE_METADATA_SPEC.find_prev_non_zero_value::<u8>(start, search_limit_bytes) {
+
+@@ -206,3 +195,3 @@
+-    debug_assert!(unsafe { is_vo_addr(vo_addr) });
+-    unsafe { ObjectReference::from_raw_address_unchecked(vo_addr) }
++    debug_assert!(is_vo_addr(vo_addr));
++    ObjectReference::from_raw_address(vo_addr).unwrap()
+
+@@ -234,12 +221,9 @@
+-pub(crate) unsafe fn is_vo_addr(addr: Address) -> bool {
+-    VO_BIT_SIDE_METADATA_SPEC.load::<u8>(addr) != 0
++pub(crate) fn is_vo_addr(addr: Address) -> bool {
++    VO_BIT_SIDE_METADATA_SPEC.load_atomic::<u8>(addr, Ordering::Relaxed) != 0
+ }
+```
+</details>
+
+<details>
+<summary>src/util/linear_scan.rs (lines 52-63)</summary>
+
+```diff
+@@ -52,11 +52,11 @@ impl<VM: VMBinding, S: LinearScanObjectSize, const ATOMIC_LOAD_VO_BIT: bool> std
+     fn next(&mut self) -> Option<<Self as Iterator>::Item> {
+         while self.cursor < self.end {
+             let is_object = if ATOMIC_LOAD_VO_BIT {
+                 vo_bit::is_vo_bit_set_for_addr(self.cursor)
+             } else {
+-                unsafe { vo_bit::is_vo_bit_set_unsafe(self.cursor) }
++                vo_bit::is_vo_bit_set_relaxed(self.cursor)
+             };
+
+             if let Some(object) = is_object {
+```
+</details>
+
+<details>
+<summary>src/policy/largeobjectspace.rs (lines 161-174)</summary>
+
+```diff
+@@ -161,11 +161,11 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
+             // We assert this when we set VO bit for LOS.
+             if vo_bit::get_raw_vo_bit_word(cur_page) != 0 {
+                 // Find the exact address that has vo bit set
+                 for offset in 0..vo_bit::VO_BIT_WORD_TO_REGION {
+                     let addr = cur_page + offset;
+-                    if unsafe { vo_bit::is_vo_addr(addr) } {
++                    if vo_bit::is_vo_addr(addr) {
+                         return vo_bit::is_internal_ptr_from_vo_bit::<VM>(addr, ptr);
+                     }
+                 }
+                 unreachable!(
+                     "We found vo bit in the raw word, but we cannot find the exact address"
+```
+</details>        if let Some(object) = is_object {
+```
+</details>
+
+#### Safe Metadata API (Malloc MS)
+**Description**: Replaced unsafe metadata operations (like `is_marked_unsafe`, `unset_vo_bit_unsafe`, `unset_mark_bit`, `unset_page_mark`) with safe versions that encapsulate the unsafety.
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `src/policy/marksweepspace/malloc_ms/global.rs` | 8 | 0 | -8 |
+| `src/policy/marksweepspace/malloc_ms/metadata.rs` | 7 | 0 | -7 |
+
+**Category Total**: Δ = -15
+
+**Diff Snippets**:
+<details>
+<summary>src/policy/marksweepspace/malloc_ms/global.rs</summary>
+
+```diff
+@@ -349,25 +349,22 @@ impl<VM: VMBinding> MallocSpace<VM> {
+-    unsafe fn unset_page_mark(&self, start: Address, size: usize) {
++    fn unset_page_mark(&self, start: Address, size: usize) {
+...
+-            if is_page_marked_unsafe(page) {
++            if is_page_marked(page) {
+                 cleared_pages += 1;
+-                unset_page_mark_unsafe(page);
++                unset_page_mark(page);
+             }
+```
+```diff
+@@ -460,20 +457,14 @@ impl<VM: VMBinding> MallocSpace<VM> {
+         if offset_malloc_bit {
+-            trace!("Free memory {:x}", addr);
+-            offset_free(addr);
+-            unsafe { unset_offset_malloc_bit_unsafe(addr) };
++            unset_offset_malloc_bit(addr);
+         }
+```
+```diff
+@@ -603,29 +598,29 @@ impl<VM: VMBinding> MallocSpace<VM> {
+-        unsafe { self.unset_page_mark(chunk_start, BYTES_IN_CHUNK) };
++        self.unset_page_mark(chunk_start, BYTES_IN_CHUNK);
+```
+```diff
+@@ -619,13 +614,11 @@ impl<VM: VMBinding> MallocSpace<VM> {
+-        if !unsafe { is_marked_unsafe::<VM>(object) } {
++        if !is_marked::<VM>(object, Ordering::Relaxed) {
+...
+-            unsafe { unset_vo_bit_unsafe(object) };
++            unset_vo_bit(object);
+```
+```diff
+@@ -635,13 +630,11 @@ impl<VM: VMBinding> MallocSpace<VM> {
+                 if current_page > *empty_page_start {
+                     // we are the only GC thread that is accessing this chunk
+-                    unsafe {
+-                        self.unset_page_mark(*empty_page_start, current_page - *empty_page_start)
+-                    };
++                    self.unset_page_mark(*empty_page_start, current_page - *empty_page_start);
+                 }
+```
+```diff
+@@ -845,11 +725,11 @@ impl<VM: VMBinding> MallocSpace<VM> {
+-                unsafe { unset_mark_bit::<VM>(object) };
++                unset_mark_bit::<VM>(object);
+```
+```diff
+@@ -865,16 +745,14 @@ impl<VM: VMBinding> MallocSpace<VM> {
+-            unsafe {
+-                self.unset_page_mark(
+-                    empty_page_start,
+-                    chunk_start + BYTES_IN_CHUNK - empty_page_start,
+-                )
+-            };
++            self.unset_page_mark(
++                empty_page_start,
++                chunk_start + BYTES_IN_CHUNK - empty_page_start,
++            );
+```
+</details>
+
+<details>
+<summary>src/policy/marksweepspace/malloc_ms/metadata.rs</summary>
+
+```diff
+@@ -24,12 +24,12 @@
+-pub unsafe fn is_marked_unsafe<VM: VMBinding>(object: ObjectReference) -> bool {
+-    VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load::<VM, u8>(object, None) == 1
++pub fn is_marked_unsafe<VM: VMBinding>(object: ObjectReference) -> bool {
++    VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(object, None, Ordering::Relaxed) == 1
+ }
+@@ -42,14 +42,10 @@
+-#[allow(unused)]
+-pub(super) unsafe fn is_page_marked_unsafe(page_addr: Address) -> bool {
+-    ACTIVE_PAGE_METADATA_SPEC.load::<u8>(page_addr) == 1
+-}
+@@ -65,46 +61,35 @@
+ pub(super) fn is_offset_malloc(address: Address) -> bool {
+-    unsafe { OFFSET_MALLOC_METADATA_SPEC.load::<u8>(address) == 1 }
++    OFFSET_MALLOC_METADATA_SPEC.load_atomic::<u8>(address, Ordering::SeqCst) == 1
+ }
+...
+-pub(super) unsafe fn unset_offset_malloc_bit_unsafe(address: Address) {
+-    OFFSET_MALLOC_METADATA_SPEC.store::<u8>(address, 0);
++pub(super) fn unset_offset_malloc_bit(address: Address) {
++    OFFSET_MALLOC_METADATA_SPEC.store_atomic::<u8>(address, 0, Ordering::SeqCst);
+ }
+...
+-pub unsafe fn unset_vo_bit_unsafe(object: ObjectReference) {
+-    vo_bit::unset_vo_bit_unsafe(object);
+-}
+-
+-#[allow(unused)]
+-pub unsafe fn unset_mark_bit<VM: VMBinding>(object: ObjectReference) {
+-    VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.store::<VM, u8>(object, 0, None);
++pub fn unset_vo_bit_relaxed(object: ObjectReference) {
++    vo_bit::unset_vo_bit_relaxed(object);
+ }
+
+-#[allow(unused)]
+-pub(super) unsafe fn unset_page_mark_unsafe(page_addr: Address) {
+-    ACTIVE_PAGE_METADATA_SPEC.store::<u8>(page_addr, 0)
++pub fn unset_mark_bit<VM: VMBinding>(object: ObjectReference) {
++    VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.store_atomic::<VM, u8>(object, 0, None, Ordering::SeqCst);
+ }
+```
+</details>
+
+#### SFT Map Refactoring (AtomicPtr & Wrapper)
+**Description**: Replaced storage of fat pointers (`*const dyn SFT`) in double-word atomics (which required `unsafe` transmutes) with thin pointers (`AtomicPtr`) to a leaked wrapper struct `SFTWrapper`. This allows safe atomic operations and eliminates `unsafe` transmutes. The `SFTWrapper` is defined as:
+```rust
+pub(crate) struct SFTWrapper(pub &'static (dyn SFT + Sync));
+```
+Additionally, many SFT map operations were made safe, and `unsafe impl Sync` was removed for map implementations.
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `src/policy/sft_map.rs` | 26 | 2 | -24 |
+| `src/util/address.rs` | 8 | 2 | -6 |
+| `src/policy/marksweepspace/malloc_ms/global.rs` | 2 | 0 | -2 |
+| `src/scheduler/gc_work.rs` | 1 | 0 | -1 |
+| `src/policy/space.rs` | 2 | 0 | -2 |
+| `src/policy/vmspace.rs` | 2 | 0 | -2 |
+| `src/policy/lockfreeimmortalspace.rs` | 1 | 0 | -1 |
+
+**Category Total**: Δ = -38
+
+**Diff Snippets**:
+<details>
+<summary>src/policy/space.rs (lines 368-370, 747)</summary>
+
+```diff
+@@ -366,11 +368,11 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
+                 SFT_MAP.get_checked(start + bytes - 1).name()
+             );
+         }
+
+         if new_chunk {
+-            unsafe { SFT_MAP.update(self.as_sft(), start, bytes) };
++            SFT_MAP.update(self.as_sft(), start, bytes);
+         }
+     }
+```
+
+```diff
+@@ -745,11 +747,11 @@ impl<VM: VMBinding> CommonSpace<VM> {
+         // We can fix this by either of these:
+         // * fix page resource, so it propelry returns new_chunk
+         // * change grow_space() so it sets SFT no matter what the new_chunks value is.
+         // FIXME: eagerly initializing SFT is not a good idea.
+         if self.contiguous {
+-            unsafe { sft_map.eager_initialize(sft, self.start, self.extent) };
++            sft_map.eager_initialize(sft, self.start, self.extent);
+         }
+     }
+```
+</details>
+
+<details>
+<summary>src/policy/sft_map.rs</summary>
+
+```diff
+diff --git a/src/policy/sft_map.rs b/src/policy/sft_map.rs
+index 42ed3f3d..70847720 100644
+--- a/src/policy/sft_map.rs
++++ b/src/policy/sft_map.rs
+@@ -22,11 +22,11 @@ pub trait SFTMap {
+     /// that is known to be in our spaces). Otherwise, use `get_checked()`.
+     ///
+     /// # Safety
+     /// The address must have a valid SFT entry in the map. Usually we know this if the address is from an object reference, or from our space address range.
+     /// Otherwise, the caller should check with `has_sft_entry()` before calling this method, or use `get_checked()`.
+-    unsafe fn get_unchecked(&self, address: Address) -> &dyn SFT;
++    fn get_unchecked(&self, address: Address) -> &dyn SFT;
+
+     /// Get SFT for the address. The address can be arbitrary. For out-of-bound access, an empty SFT will be returned.
+     /// We only provide the checked version for `get()`, as it may be used to query arbitrary objects and addresses. Other methods like `update/clear/etc` are
+     /// mostly used inside MMTk, and in most cases, we know that they are within our space address range.
+     fn get_checked(&self, address: Address) -> &dyn SFT;
+@@ -34,25 +34,25 @@ pub trait SFTMap {
+     /// Set SFT for the address range. The address must have a valid SFT entry in the table.
+     ///
+     /// # Safety
+     /// The address must have a valid SFT entry in the map. Usually we know this if the address is from an object reference, or from our space address range.
+     /// Otherwise, the caller should check with `has_sft_entry()` before calling this method.
+-    unsafe fn update(&self, space: SFTRawPointer, start: Address, bytes: usize);
++    fn update(&self, space: &(dyn SFT + Sync + 'static), start: Address, bytes: usize);
+
+     /// Notify the SFT map for space creation. `DenseChunkMap` needs to create an entry for the space.
+-    fn notify_space_creation(&mut self, _space: SFTRawPointer) {}
++    fn notify_space_creation(&mut self, _space: &(dyn SFT + Sync + 'static)) {}
+
+     /// Eagerly initialize the SFT table. For most implementations, it could be the same as update().
+     /// However, we need this as a seprate method for SFTDenseChunkMap, as it needs to map side metadata first
+     /// before setting the table.
+     ///
+     /// # Safety
+     /// The address must have a valid SFT entry in the map. Usually we know this if the address is from an object reference, or from our space address range.
+     /// Otherwise, the caller should check with `has_sft_entry()` before calling this method.
+-    unsafe fn eager_initialize(
++    fn eager_initialize(
+         &mut self,
+-        space: *const (dyn SFT + Sync + 'static),
++        space: &(dyn SFT + Sync + 'static),
+         start: Address,
+         bytes: usize,
+     ) {
+         self.update(space, start, bytes);
+     }
+@@ -60,14 +60,14 @@ pub trait SFTMap {
+     /// Clear SFT for the address. The address must have a valid SFT entry in the table.
+     ///
+     /// # Safety
+     /// The address must have a valid SFT entry in the map. Usually we know this if the address is from an object reference, or from our space address range.
+     /// Otherwise, the caller should check with `has_sft_entry()` before calling this method.
+-    unsafe fn clear(&self, address: Address);
++    fn clear(&self, address: Address);
+ }
+ ```
+
+ ```diff
+ @@ -89,80 +89,67 @@ pub(crate) fn create_sft_map() -> Box<dyn SFTMap> {
+ -/// The raw pointer for SFT. We expect a space to provide this to SFT map.
+ -pub(crate) type SFTRawPointer = *const (dyn SFT + Sync + 'static);
+ -...
+ +pub(crate) struct SFTWrapper(pub &'static (dyn SFT + Sync));
+ +
+ +use std::sync::OnceLock;
+ +use std::sync::Mutex;
+ +use std::collections::HashMap;
+ +use std::sync::atomic::AtomicPtr;
+ +
+ +static SFT_WRAPPERS: OnceLock<Mutex<HashMap<usize, &'static SFTWrapper>>> = OnceLock::new();
+ +
+ +fn get_sft_wrapper(sft: &(dyn SFT + Sync + 'static)) -> &'static SFTWrapper {
+ +    let addr = sft as *const _ as *const () as usize;
+ +    let mutex = SFT_WRAPPERS.get_or_init(|| Mutex::new(HashMap::new()));
+ +    let mut map = mutex.lock().unwrap();
+ +    if let Some(wrapper) = map.get(&addr) {
+ +        return wrapper;
+ +    }
+ +    // SAFETY: We know that `sft` points to a space that lives forever.
+ +    let sft_static: &'static (dyn SFT + Sync) = unsafe { &*(sft as *const (dyn SFT + Sync)) };
+ +    let wrapper = Box::leak(Box::new(SFTWrapper(sft_static)));
+ +    map.insert(addr, wrapper);
+ +    wrapper
+ +}
+ +
+ +/// The type we store SFT raw pointer as. It basically just thin pointer sized atomic pointer.
+  /// This type provides an abstraction so we can access SFT easily.
+  #[repr(transparent)]
+ -pub(crate) struct SFTRefStorage(AtomicDoubleWord);
+ +pub(crate) struct SFTRefStorage(AtomicPtr<SFTWrapper>);
+ +
+ +impl SFTRefStorage {
+ ...
+ -    pub fn new(sft: SFTRawPointer) -> Self {
+ -        let val: DoubleWord = unsafe { std::mem::transmute(sft) };
+ -        Self(AtomicDoubleWord::new(val))
+ +    pub fn new(sft: &(dyn SFT + Sync + 'static)) -> Self {
+ +        let wrapper = get_sft_wrapper(sft);
+ +        Self(AtomicPtr::new(wrapper as *const _ as *mut _))
+      }
+
+      // Load with the acquire ordering.
+      pub fn load(&self) -> &dyn SFT {
+ -        let val = self.0.load(Ordering::Acquire);
+ -...
+ -        unsafe {
+ -            std::mem::transmute(val)
+ -        }
+ +        let ptr = self.0.load(Ordering::Acquire);
+ +        // SAFETY: The pointer was stored by `store` or `new` which obtain a valid `&'static SFTWrapper` from `get_sft_wrapper`.
+ +        // The wrapper is leaked and lives forever. The contained reference points to a space that lives forever.
+ +        unsafe { (*ptr).0 }
+      }
+
+      // Store a raw SFT pointer with the release ordering.
+ -    pub fn store(&self, sft: SFTRawPointer) {
+ -        let val: DoubleWord = unsafe { std::mem::transmute(sft) };
+ -        self.0.store(val, Ordering::Release)
+ +    pub fn store(&self, sft: &(dyn SFT + Sync + 'static)) {
+ +        let wrapper = get_sft_wrapper(sft);
+ +        self.0.store(wrapper as *const _ as *mut _, Ordering::Release)
+      }
+  }
+ ```
+
+ ```diff
+ @@ -175,11 +162,11 @@ mod space_map {
+ -    unsafe impl Sync for SFTSpaceMap {}
+ +
+ ...
+ -        unsafe { self.get_unchecked(address) }
+ +                self.get_unchecked(address)
+ ...
+ -        unsafe fn get_unchecked(&self, address: Address) -> &dyn SFT {
+ -            let cell = unsafe { self.sft.get_unchecked(Self::addr_to_index(address)) };
+ +        fn get_unchecked(&self, address: Address) -> &dyn SFT {
+ +            let cell = &self.sft[Self::addr_to_index(address)];
+              cell.load()
+          }
+ ```
+
+ <details>
+ <summary>src/policy/marksweepspace/malloc_ms/global.rs</summary>
+
+ ```diff
+ @@ -390,11 +387,11 @@ impl<VM: VMBinding> MallocSpace<VM> {
+              if !self.is_meta_space_mapped(address, actual_size) {
+                  // Map the metadata space for the associated chunk
+                  self.map_metadata_and_update_bound(address, actual_size);
+                  // Update SFT
+                  assert!(crate::mmtk::SFT_MAP.has_sft_entry(address)); // make sure the address is okay with our SFT map
+ -                unsafe { crate::mmtk::SFT_MAP.update(self, address, actual_size) };
+ +                crate::mmtk::SFT_MAP.update(self, address, actual_size);
+ ```
+ ```diff
+ @@ -603,29 +598,29 @@ impl<VM: VMBinding> MallocSpace<VM> {
+      fn clean_up_empty_chunk(&self, chunk_start: Address) {
+          // Clear the chunk map
+          self.chunk_map
+              .set_allocated(Chunk::from_aligned_address(chunk_start), false);
+          // Clear the SFT entry
+ -        unsafe { crate::mmtk::SFT_MAP.clear(chunk_start) };
+ +        crate::mmtk::SFT_MAP.clear(chunk_start);
+ ```
+ </details>
+
+<details>
+<summary>src/util/address.rs (SFT Map Access)</summary>
+
+```diff
+@@ -669,37 +669,37 @@ impl ObjectReference {
+     pub fn is_reachable(self) -> bool {
+-        unsafe { SFT_MAP.get_unchecked(self.to_raw_address()) }.is_reachable(self)
++        SFT_MAP.get_unchecked(self.to_raw_address()).is_reachable(self)
+     }
+
+     /// Is the object live, determined by the policy?
+     pub fn is_live(self) -> bool {
+-        unsafe { SFT_MAP.get_unchecked(self.to_raw_address()) }.is_live(self)
++        SFT_MAP.get_unchecked(self.to_raw_address()).is_live(self)
+     }
+
+     /// Can the object be moved?
+     pub fn is_movable(self) -> bool {
+-        unsafe { SFT_MAP.get_unchecked(self.to_raw_address()) }.is_movable()
++        SFT_MAP.get_unchecked(self.to_raw_address()).is_movable()
+     }
+
+     /// Get forwarding pointer if the object is forwarded.
+     pub fn get_forwarded_object(self) -> Option<Self> {
+-        unsafe { SFT_MAP.get_unchecked(self.to_raw_address()) }.get_forwarded_object(self)
++        SFT_MAP.get_unchecked(self.to_raw_address()).get_forwarded_object(self)
+     }
+
+     /// Is the object in any MMTk spaces?
+     pub fn is_in_any_space(self) -> bool {
+-        unsafe { SFT_MAP.get_unchecked(self.to_raw_address()) }.is_in_space(self)
++        SFT_MAP.get_unchecked(self.to_raw_address()).is_in_space(self)
+     }
+
+     /// Is the object sane?
+     #[cfg(feature = "sanity")]
+     pub fn is_sane(self) -> bool {
+-        unsafe { SFT_MAP.get_unchecked(self.to_raw_address()) }.is_sane()
++        SFT_MAP.get_unchecked(self.to_raw_address()).is_sane()
+     }
+ }
+```
+</details>
+
+<details>
+<summary>src/scheduler/gc_work.rs (SFT Map Access)</summary>
+
+```diff
+@@ -719,3 +719,3 @@
+-let sft = unsafe { crate::mmtk::SFT_MAP.get_unchecked(object.to_raw_address()) };
++let sft = crate::mmtk::SFT_MAP.get_unchecked(object.to_raw_address());
+```
+</details>
+
+<details>
+<summary>src/policy/vmspace.rs (lines 125-135, 251-261)</summary>
+
+```diff
+diff --git a/src/policy/vmspace.rs b/src/policy/vmspace.rs
+index 6d53f764..a0473bf0 100644
+--- a/src/policy/vmspace.rs
++++ b/src/policy/vmspace.rs
+@@ -125,13 +125,11 @@ impl<VM: VMBinding> Space<VM> for VMSpace<VM> {
+                 sft_map.get_checked(start).name(),
+                 crate::policy::sft::EMPTY_SFT_NAME
+             );
+             // Set SFT
+             assert!(sft_map.has_sft_entry(start), "The VM space start (aligned to {}) does not have a valid SFT entry. Possibly the address range is not in the address range we use.", start);
+-            unsafe {
+-                sft_map.eager_initialize(self.as_sft(), start, size);
+-            }
++            sft_map.eager_initialize(self.as_sft(), start, size);
+         }
+     }
+
+     fn release_multiple_pages(&mut self, _start: Address) {
+         unreachable!()
+@@ -251,13 +249,11 @@ impl<VM: VMBinding> VMSpace<VM> {
+         // Insert to vm map: it would be good if we can make VM map aware of the region. However, the region may be outside what we can map in our VM map implementation.
+         // self.common.vm_map.insert(chunk_start, chunk_size, self.common.descriptor);
+         // Set SFT if we should
+         if set_sft {
+             assert!(SFT_MAP.has_sft_entry(chunk_start), "The VM space start (aligned to {}) does not have a valid SFT entry. Possibly the address range is not in the address range we use.", chunk_start);
+-            unsafe {
+-                SFT_MAP.update(self.as_sft(), chunk_start, chunk_size);
+-            }
++            SFT_MAP.update(self.as_sft(), chunk_start, chunk_size);
+         }
+
+         self.pr.add_new_external_pages(ExternalPages {
+             start: start.align_down(BYTES_IN_PAGE),
+             end: end.align_up(BYTES_IN_PAGE),
+```
+</details>
+
+<details>
+<summary>src/policy/lockfreeimmortalspace.rs</summary>
+
+```diff
+@@ -125,11 +125,11 @@ impl<VM: VMBinding> Space<VM> for LockFreeImmortalSpace<VM> {
+     fn release_multiple_pages(&mut self, _start: Address) {
+         panic!("immortalspace only releases pages enmasse")
+     }
+
+     fn initialize_sft(&self, sft_map: &mut dyn crate::policy::sft_map::SFTMap) {
+-        unsafe { sft_map.eager_initialize(self.as_sft(), self.start, self.total_bytes) };
++        sft_map.eager_initialize(self.as_sft(), self.start, self.total_bytes);
+     }
+
+     fn estimate_side_meta_pages(&self, data_pages: usize) -> usize {
+         self.metadata.calculate_reserved_pages(data_pages)
+     }
+```
+</details>
+
+#### Removal of Complex Bulk Metadata Operations
+**Description**: Removed complex bulk XOR operations on metadata that required `load128` and manual pointer manipulation, reverting to simpler object-by-object sweeping.
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `src/policy/marksweepspace/malloc_ms/global.rs` | 3 | 0 | -3 |
+| `src/policy/marksweepspace/malloc_ms/metadata.rs` | 1 | 0 | -1 |
+
+**Category Total**: Δ = -4
+
+**Diff Snippets**:
+<details>
+<summary>src/policy/marksweepspace/malloc_ms/global.rs</summary>
+
+```diff
+@@ -719,127 +674,14 @@ impl<VM: VMBinding> MallocSpace<VM> {
+-                let alloc_128: u128 = unsafe {
+-                    load128(
+-                        &crate::util::metadata::vo_bit::VO_BIT_SIDE_METADATA_SPEC,
+-                        address,
+-                    )
+-                };
+-                let mark_128: u128 = unsafe { load128(&mark_bit_spec, address) };
+...
+-                    debug_assert!(
+-                        unsafe { is_marked_unsafe::<VM>(object) },
+-                        "Dead object = {} found after sweep",
+-                        object
+-                    );
+```
+</details>
+
+<details>
+<summary>src/policy/marksweepspace/malloc_ms/metadata.rs</summary>
+
+```diff
+@@ -103,25 +88,10 @@
+-/// Load u128 bits of side metadata
+-///
+-/// # Safety
+-/// unsafe as it can segfault if one tries to read outside the bounds of the mapped side metadata
+-pub(super) unsafe fn load128(metadata_spec: &SideMetadataSpec, data_addr: Address) -> u128 {
+-    let meta_addr = side_metadata::address_to_meta_address(metadata_spec, data_addr);
+-
+-    #[cfg(all(debug_assertions, feature = "extreme_assertions"))]
+-    metadata_spec.assert_metadata_mapped(data_addr);
+-
+-    meta_addr.load::<u128>()
+-}
+```
+</details>
+
+#### Safe Trait Abstraction for Atomics
+**Description**: Replaced trait methods that take raw `Address` and perform unsafe operations (like loading/storing atomics via pointer casting) with methods that take safe references to the value or its associated atomic type. This allows the use of standard safe atomic methods.
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `src/util/metadata/metadata_val_traits.rs` | 20 | 0 | -20 |
+
+**Category Total**: Δ = -20
+
+**Diff Snippets**:
+<details>
+<summary>src/util/metadata/metadata_val_traits.rs (lines 75-207)</summary>
+
+```diff
+@@ -75,9 +74,14 @@ pub trait MetadataValue:
+ {
+ +    /// The associated atomic type.
+ +    type Atomic;
+ +
+      /// Non atomic load
+ -    /// # Safety
+ -    /// The caller needs to guarantee that the address is valid, and can be used as a pointer to the type.
+ -    /// The caller also needs to be aware that the method is not thread safe, as it is a non-atomic operation.
+ -    unsafe fn load(addr: Address) -> Self;
+ +    fn load(non_atomic: &Self) -> Self {
+ +        *non_atomic
+ +    }
+
+      /// Atomic load
+ -    /// # Safety
+ -    /// The caller needs to guarantee that the address is valid, and can be used as a pointer to the type.
+ -    unsafe fn load_atomic(addr: Address, order: Ordering) -> Self;
+ +    fn load_atomic(atomic: &Self::Atomic, order: Ordering) -> Self;
+ ...
+ @@ -138,65 +115,65 @@ macro_rules! impl_metadata_value_trait {
+      ($non_atomic: ty, $atomic: ty) => {
+          impl MetadataValue for $non_atomic {
+ -            unsafe fn load(addr: Address) -> Self {
+ -                addr.load::<$non_atomic>()
+ -            }
+ +            type Atomic = $atomic;
+
+ -            unsafe fn load_atomic(addr: Address, order: Ordering) -> Self {
+ -                addr.as_ref::<$atomic>().load(order)
+ +            fn load_atomic(atomic: &Self::Atomic, order: Ordering) -> Self {
+ +                atomic.load(order)
+              }
+ ```
+ </details>
+
+### Address, Pointer, and Memory Abstractions
+
+#### Safe Address Constructors
 **Description**: `Address::from_usize()` was made a safe function, removing the need for `unsafe` blocks when creating addresses from raw integers.
 
 **Files and Unsafe Delta**:
@@ -639,8 +1380,9 @@ index 176a508f..cf5e11ca 100644
 | `src/policy/compressor/forwarding.rs` | 1 | 0 | -1 |
 | `src/util/api_util.rs` | 1 | 0 | -1 |
 | `src/util/metadata/side_metadata/ranges.rs` | 1 | 0 | -1 |
+| `src/util/metadata/side_metadata/side_metadata_tests.rs` | 39 | 0 | -39 |
 
-**Category Total**: Δ = -99
+**Category Total**: Δ = -138
 
 **Diff Snippets**:
 <details>
@@ -651,6 +1393,16 @@ index 176a508f..cf5e11ca 100644
 -        unsafe { Address::from_usize(addr) }
 +        Address::from_usize(addr)
      }
+```
+</details>
+
+<details>
+<summary>src/util/metadata/side_metadata/side_metadata_tests.rs (Address::from_usize)</summary>
+
+```diff
+@@ -42,3 +42,3 @@
+-            address_to_meta_address(&gspec, unsafe { Address::from_usize(0) }),
++            address_to_meta_address(&gspec, Address::from_usize(0)),
 ```
 </details>
 
@@ -1686,7 +2438,7 @@ index 658733f6..edc38935 100644
 -                heap_start: chunk_align_down(unsafe { Address::from_usize(start) }),
 -                heap_end: chunk_align_up(unsafe { Address::from_usize(end) }),
 +                heap_start: chunk_align_down(Address::from_usize(start)),
-                 heap_end: chunk_align_up(Address::from_usize(end)),
++                heap_end: chunk_align_up(Address::from_usize(end)),
                  log_space_extent: 31,
                  force_use_contiguous_spaces: false,
              };
@@ -1749,7 +2501,481 @@ index dc0922f3..0de1b0b3 100644
 ```
 </details>
 
-### Interior Mutability (UnsafeCell → Mutex)
+#### Safe Object Reference Creation
+**Description**: `ObjectReference::from_raw_address_unchecked` was replaced by `ObjectReference::from_raw_address(...).unwrap()` which is safe.
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `src/util/alloc/free_list_allocator.rs` | 1 | 0 | -1 |
+| `docs/dummyvm/src/lib.rs` | 1 | 0 | -1 |
+| `src/util/object_forwarding.rs` | 1 | 0 | -1 |
+
+**Category Total**: Δ = -3
+
+**Diff Snippets**:
+<details>
+<summary>src/util/object_forwarding.rs (lines 164-185)</summary>
+
+```diff
+@@ -164,22 +164,21 @@ pub fn read_forwarding_pointer<VM: VMBinding>(object: ObjectReference) -> Object
+         is_forwarded_or_being_forwarded::<VM>(object),
+         "read_forwarding_pointer called for object {:?} that has not started forwarding!",
+         object,
+     );
+
+-    // We write the forwarding poiner. We know it is an object reference.
+-    unsafe {
+-        // We use "unchecked" convertion becasue we guarantee the forwarding pointer we stored
+-        // previously is from a valid `ObjectReference` which is never zero.
+-        ObjectReference::from_raw_address_unchecked(crate::util::Address::from_usize(
+-            VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC.load_atomic::<VM, usize>(
+-                object,
+-                Some(FORWARDING_POINTER_MASK),
+-                Ordering::SeqCst,
+-            ),
+-        ))
+-    }
++    // We write the forwarding pointer. We know it is an object reference.
++    // We can safely unwrap because we guarantee the forwarding pointer we stored
++    // previously is from a valid `ObjectReference` which is never zero.
++    ObjectReference::from_raw_address(crate::util::Address::from_usize(
++        VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC.load_atomic::<VM, usize>(
++            object,
++            Some(FORWARDING_POINTER_MASK),
++            Ordering::SeqCst,
++        ),
++    ))
++    .unwrap()
+ }
+```
+</details>
+
+<details>
+<summary>src/util/alloc/free_list_allocator.rs (lines 404-423)</summary>
+
+```diff
+@@ -404,13 +417,13 @@ impl<VM: VMBinding> FreeListAllocator<VM> {
+         // unset allocation bit
+         // Note: We cannot use `unset_vo_bit_unsafe` because two threads may attempt to free
+         // objects at adjacent addresses, and they may share the same byte in the VO bit metadata.
+-        crate::util::metadata::vo_bit::unset_vo_bit(unsafe {
+-            ObjectReference::from_raw_address_unchecked(addr)
+-        })
++        crate::util::metadata::vo_bit::unset_vo_bit(
++            ObjectReference::from_raw_address(addr).unwrap()
++        )
+     }
+```
+</details>
+
+<details>
+<summary>docs/dummyvm/src/lib.rs (lines 32-46)</summary>
+
+```diff
+@@ -32,15 +32,13 @@
+ use mmtk::util::{Address, ObjectReference};
+
+ impl DummyVM {
+     pub fn object_start_to_ref(start: Address) -> ObjectReference {
+         // Safety: start is the allocation result, and it should not be zero with an offset.
+-        unsafe {
+-            ObjectReference::from_raw_address_unchecked(
+-                start + crate::object_model::OBJECT_REF_OFFSET,
+-            )
+-        }
++        ObjectReference::from_raw_address(
++            start + crate::object_model::OBJECT_REF_OFFSET,
++        ).unwrap()
+     }
+ }
+```
+</details>
+
+
+#### Safe Slot Abstraction (SimpleSlot)
+**Description**: Refactored `SimpleSlot` to hold a safe `Address` instead of a raw pointer to an atomic. Consolidated raw pointer dereferencing into a single internal helper `as_atomic(&self) -> &Atomic<Address>`, making `load` and `store` safe methods. Removed `unsafe impl Send` as `Address` is `Send`. Also removed the legacy `impl Slot for Address` to enforce type safety.
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `src/vm/slot.rs` | 7 | 2 | -5 |
+
+**Category Total**: Δ = -5
+
+**Diff Snippets**:
+<details>
+<summary>src/vm/slot.rs</summary>
+
+```diff
+--- a/src/vm/slot.rs
++++ b/src/vm/slot.rs
+@@ -149,42 +149,45 @@ pub trait Slot: Copy + Send + Debug + PartialEq + Eq + Hash {
+ ///
+ /// It is the default slot type, and should be suitable for most VMs.
+ #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+ #[repr(transparent)]
+ pub struct SimpleSlot {
+-    slot_addr: *mut Atomic<Address>,
++    slot_addr: Address,
+ }
+
+ impl SimpleSlot {
+     /// Create a simple slot from an address.
+     ///
+     /// Arguments:
+     /// *   `address`: The address in memory where an `ObjectReference` is stored.
+-    pub fn from_address(address: Address) -> Self {
++    pub const fn from_address(address: Address) -> Self {
+         Self {
+-            slot_addr: address.to_mut_ptr(),
++            slot_addr: address,
+         }
+     }
+
+     /// Get the address of the slot.
+     ///
+     /// Return the address at which the `ObjectReference` is stored.
+     pub fn as_address(&self) -> Address {
+-        Address::from_mut_ptr(self.slot_addr)
++        self.slot_addr
+     }
+-}
+
+-unsafe impl Send for SimpleSlot {}
++    fn as_atomic(&self) -> &Atomic<Address> {
++        // SAFETY: The caller must ensure that `self.slot_addr` is a valid and properly aligned address for `Atomic<Address>`.
++        unsafe { &*(self.slot_addr.to_ptr::<Atomic<Address>>()) }
++    }
++}
+
+ impl Slot for SimpleSlot {
+     fn load(&self) -> Option<ObjectReference> {
+-        let addr = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
++        let addr = self.as_atomic().load(atomic::Ordering::Relaxed);
+         ObjectReference::from_raw_address(addr)
+     }
+
+     fn store(&self, object: ObjectReference) {
+-        unsafe { (*self.slot_addr).store(object.to_raw_address(), atomic::Ordering::Relaxed) }
++        self.as_atomic().store(object.to_raw_address(), atomic::Ordering::Relaxed)
+     }
+ }
+
+-impl Slot for Address {
+-    fn load(&self) -> Option<ObjectReference> {
+-        let addr = unsafe { Address::load(*self) };
+-        ObjectReference::from_raw_address(addr)
+-    }
+-
+-    fn store(&self, object: ObjectReference) {
+-        unsafe { Address::store(*self, object) }
+-    }
+-}
+```
+
+```diff
+@@ -342,13 +337,13 @@ mod tests {
+     use super::*;
+
+     #[test]
+     fn address_range_iteration() {
+         let src: Vec<usize> = (0..32).collect();
+-        let src_slice = Address::from_ptr(&src[0])..Address::from_ptr(&src[0]) + src.len();
++        let src_slice = Address::from_ptr(&src[0])..Address::from_ptr(&src[0]) + (src.len() * std::mem::size_of::<usize>());
+         for (i, v) in src_slice.iter_slots().enumerate() {
+-            assert_eq!(i, unsafe { v.load::<usize>() })
++            assert_eq!(v, SimpleSlot::from_address(Address::from_ptr(&src[i])));
+         }
+     }
+```
+</details>
+
+#### Slice Abstraction (Raw Pointer to Slice)
+**Description**: Replacing raw pointer arithmetic and direct dereferencing with a safe slice created from raw parts. This encapsulates the unsafe memory access behind Rust's safe slice types, providing bounds checks.
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `src/util/raw_memory_freelist.rs` | 2 | 1 | -1 |
+
+**Category Total**: Δ = -1
+
+**Diff Snippets**:
+<details>
+<summary>src/util/raw_memory_freelist.rs (lines 24-158)</summary>
+
+```diff
+@@ -24,7 +24,8 @@ pub struct RawMemoryFreeList {
+     max_units: i32,
+     grain: i32,
+     current_units: i32,
+     pages_per_block: i32,
+     strategy: MmapStrategy,
++    slice: &'static mut [i32],
+ }
+ ```
+
+```diff
+@@ -36,12 +37,12 @@ impl FreeList for RawMemoryFreeList {
+     fn head(&self) -> i32 {
+         self.head
+     }
+     fn heads(&self) -> i32 {
+         self.heads
+     }
+     fn get_entry(&self, index: i32) -> i32 {
+-        let offset = (index << LOG_BYTES_IN_ENTRY) as usize;
+-        debug_assert!(self.base + offset >= self.base && self.base + offset < self.high_water);
+-        unsafe { (self.base + offset).load() }
++        let len = (self.high_water - self.base) >> LOG_BYTES_IN_ENTRY;
++        assert!((index as usize) < len, "index out of bounds: the len is {} but the index is {}", len, index);
++        self.slice[index as usize]
+     }
+ ```
+
+```diff
+@@ -49,12 +50,8 @@ impl FreeList for RawMemoryFreeList {
+     fn set_entry(&mut self, index: i32, value: i32) {
+-        let offset = (index << LOG_BYTES_IN_ENTRY) as usize;
+-        debug_assert!(
+-            self.base + offset >= self.base && self.base + offset < self.high_water,
+-            "base={:?} offset={:?} index={:?} high_water={:?}",
+-            self.base,
+-            offset,
+-            self.base + offset,
+-            self.high_water
+-        );
+-        unsafe { (self.base + offset).store(value) }
++        let len = (self.high_water - self.base) >> LOG_BYTES_IN_ENTRY;
++        assert!((index as usize) < len, "index out of bounds: the len is {} but the index is {}", len, index);
++        self.slice[index as usize] = value;
+     }
+ ```
+
+```diff
+@@ -143,5 +139,9 @@ impl RawMemoryFreeList {
+         if blocks > 0 {
+             // Allocate more VM from the OS
+             self.raise_high_water(blocks);
+         }
+
++        let len = (self.high_water - self.base) >> LOG_BYTES_IN_ENTRY;
++        // SAFETY: The memory is mapped and valid.
++        self.slice = unsafe { std::slice::from_raw_parts_mut(self.base.to_mut_ptr::<i32>(), len) };
++
+         let old_max = self.current_units;
+ ```
+</details>
+
+
+#### Mock Slots: Raw Pointers to References
+**Description**: Replaced raw pointers to atomics with safe Rust references with lifetimes in mock slot implementations. This eliminates unsafe pointer dereferences for load/store operations and removes the need for `unsafe impl Send`.
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `src/vm/tests/mock_tests/mock_test_slots.rs` | 11 | 0 | -11 |
+
+**Category Total**: Δ = -11
+
+**Diff Snippets**:
+<details>
+<summary>src/vm/tests/mock_tests/mock_test_slots.rs</summary>
+
+```diff
+@@ -61,38 +61,34 @@ mod compressed_oop {
+     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+-    pub struct CompressedOopSlot {
+-        slot_addr: *mut Atomic<u32>,
++    pub struct CompressedOopSlot<'a> {
++        slot_addr: &'a Atomic<u32>,
+     }
+
+-    unsafe impl Send for CompressedOopSlot {}
+...
+         fn load(&self) -> Option<ObjectReference> {
+-            let compressed = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
++            let compressed = self.slot_addr.load(atomic::Ordering::Relaxed);
+             let expanded = (compressed as usize) << 3;
+...
+         fn store(&self, object: ObjectReference) {
+             let expanded = object.to_raw_address().as_usize();
+             let compressed = (expanded >> 3) as u32;
+-            unsafe { (*self.slot_addr).store(compressed, atomic::Ordering::Relaxed) }
++            self.slot_addr.store(compressed, atomic::Ordering::Relaxed)
+         }
+...
+     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+-    pub struct OffsetSlot {
+-        slot_addr: *mut Atomic<Address>,
++    pub struct OffsetSlot<'a> {
++        slot_addr: &'a Atomic<Address>,
+         offset: usize,
+     }
+
+-    unsafe impl Send for OffsetSlot {}
+...
+         fn load(&self) -> Option<ObjectReference> {
+-            let middle = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
++            let middle = self.slot_addr.load(atomic::Ordering::Relaxed);
+             let begin = middle - self.offset;
+...
+         fn store(&self, object: ObjectReference) {
+             let begin = object.to_raw_address();
+             let middle = begin + self.offset;
+-            unsafe { (*self.slot_addr).store(middle, atomic::Ordering::Relaxed) }
++            self.slot_addr.store(middle, atomic::Ordering::Relaxed)
+         }
+...
+     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+-    pub struct TaggedSlot {
+-        slot_addr: *mut Atomic<usize>,
++    pub struct TaggedSlot<'a> {
++        slot_addr: &'a Atomic<usize>,
+     }
+
+-    unsafe impl Send for TaggedSlot {}
+...
+         fn load(&self) -> Option<ObjectReference> {
+-            let tagged = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
++            let tagged = self.slot_addr.load(atomic::Ordering::Relaxed);
+             let untagged = tagged & !Self::TAG_BITS_MASK;
+...
+         fn store(&self, object: ObjectReference) {
+-            let old_tagged = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
++            let old_tagged = self.slot_addr.load(atomic::Ordering::Relaxed);
+             let new_untagged = object.to_raw_address().as_usize();
+             let new_tagged = new_untagged | (old_tagged & Self::TAG_BITS_MASK);
+-            unsafe { (*self.slot_addr).store(new_tagged, atomic::Ordering::Relaxed) }
++            self.slot_addr.store(new_tagged, atomic::Ordering::Relaxed)
+         }
+...
+     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+-    pub enum DummyVMSlot {
++    pub enum DummyVMSlot<'a> {
+         Simple(SimpleSlot),
+         #[cfg(target_pointer_width = "64")]
+-        Compressed(compressed_oop::CompressedOopSlot),
+-        Offset(OffsetSlot),
+-        Tagged(TaggedSlot),
++        Compressed(compressed_oop::CompressedOopSlot<'a>),
++        Offset(OffsetSlot<'a>),
++        Tagged(TaggedSlot<'a>),
+     }
+
+-    unsafe impl Send for DummyVMSlot {}
+```
+</details>
+
+#### API Refactoring (Safe References)
+**Description**: Passing references instead of raw pointers to methods, removing the need to dereference raw pointers within the method.
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `src/policy/marksweepspace/native_ms/block.rs` | 1 | 0 | -1 |
+| `src/scheduler/gc_work.rs` | 3 | 0 | -3 |
+
+**Category Total**: Δ = -4
+
+**Diff Snippets**:
+<details>
+<summary>src/policy/marksweepspace/native_ms/block.rs</summary>
+
+```diff
+@@ -230,27 +246,32 @@ impl Block {
+ -    pub fn attempt_release<VM: VMBinding>(self, space: &MarkSweepSpace<VM>) -> bool {
+ +    pub fn attempt_release<VM: VMBinding>(self, block_list: &mut BlockList, inner: &super::MarkSweepSpaceInner<VM>) -> bool {
+          match self.get_state() {
+              BlockState::Unallocated => unreachable!(),
+              BlockState::Unmarked => {
+ -                let block_list = self.load_block_list();
+ -                unsafe { &mut *block_list }.remove(self);
+ -                space.release_block(self);
+ +                #[cfg(debug_assertions)]
+ +                {
+ +                    let loaded_block_list = self.load_block_list();
+ +                    debug_assert_eq!(loaded_block_list, block_list as *mut BlockList, "BlockList mismatch for block {:?}", self);
+ +                }
+ +                block_list.remove(self);
+ +                inner.release_block(self);
+                  true
+              }
+ ```
+ </details>
+
+<details>
+<summary>src/scheduler/gc_work.rs (ProcessEdgesBase and ScanMutatorRoots)</summary>
+
+```diff
+@@ -420,27 +418,28 @@
+-pub struct ScanMutatorRoots<C: GCWorkContext>(pub &'static mut Mutator<C::VM>);
++pub struct ScanMutatorRoots<C: GCWorkContext>(pub Option<&'static mut Mutator<C::VM>>);
+
+ impl<C: GCWorkContext> GCWork<C::VM> for ScanMutatorRoots<C> {
+     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
+-        trace!("ScanMutatorRoots for mutator {:?}", self.0.get_tls());
++        let mutator = self.0.take().expect("Mutator already scanned");
++        trace!("ScanMutatorRoots for mutator {:?}", mutator.get_tls());
+         let mutators = <C::VM as VMBinding>::VMActivePlan::number_of_mutators();
+         let factory = ProcessEdgesWorkRootsWorkFactory::<
+             C::VM,
+             C::DefaultProcessEdges,
+             C::PinningProcessEdges,
+         >::new(mmtk);
++        mutator.flush();
+         <C::VM as VMBinding>::VMScanning::scan_roots_in_mutator_thread(
+             worker.tls,
+-            unsafe { &mut *(self.0 as *mut _) },
++            mutator,
+             factory,
+         );
+-        self.0.flush();
+```
+
+```diff
+@@ -472,19 +471,14 @@
+ pub struct ProcessEdgesBase<VM: VMBinding> {
+     pub slots: Vec<VM::VMSlot>,
+     pub nodes: VectorObjectQueue,
+     mmtk: &'static MMTK<VM>,
+-    // Use raw pointer for fast pointer dereferencing, instead of using `Option<&'static mut GCWorker<E::VM>>`.
+-    // Because a copying gc will dereference this pointer at least once for every object copy.
+-    worker: *mut GCWorker<VM>,
+     pub roots: bool,
+     pub bucket: WorkBucketStage,
+ }
+
+-unsafe impl<VM: VMBinding> Send for ProcessEdgesBase<VM> {}
+-
+ impl<VM: VMBinding> ProcessEdgesBase<VM> {
+```
+
+```diff
+@@ -501,22 +495,15 @@
+         Self {
+             slots,
+             nodes: VectorObjectQueue::new(),
+             mmtk,
+-            worker: std::ptr::null_mut(),
+             roots,
+             bucket,
+         }
+     }
+-    pub fn set_worker(&mut self, worker: &mut GCWorker<VM>) {
+-        self.worker = worker;
+-    }
+
+-    pub fn worker(&self) -> &'static mut GCWorker<VM> {
+-        unsafe { &mut *self.worker }
+-    }
+```
+</details>
+
+### Concurrency and Synchronization
+
+#### Interior Mutability (UnsafeCell → Mutex)
 **Description**: `UnsafeCell` combined with a manual `Mutex<()>` was replaced by a proper `Mutex<T>` that safely protects the inner data. This eliminates the need for unsafe manual locking patterns and `UnsafeCell::get()` calls. Additionally, some shared fields were moved to `AtomicUsize` to allow safe concurrent access without full locks.
 
 **Files and Unsafe Delta**:
@@ -1980,344 +3206,7 @@ index 128e5752..ae390742 100644
 ```
 </details>
 
-### SFT Map Refactoring (AtomicPtr & Wrapper)
-**Description**: Replaced storage of fat pointers (`*const dyn SFT`) in double-word atomics (which required `unsafe` transmutes) with thin pointers (`AtomicPtr`) to a leaked wrapper struct `SFTWrapper`. This allows safe atomic operations and eliminates `unsafe` transmutes. The `SFTWrapper` is defined as:
-```rust
-pub(crate) struct SFTWrapper(pub &'static (dyn SFT + Sync));
-```
-Additionally, many SFT map operations were made safe, and `unsafe impl Sync` was removed for map implementations.
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `src/policy/sft_map.rs` | 26 | 2 | -24 |
-| `src/util/address.rs` | 8 | 2 | -6 |
-| `src/policy/marksweepspace/malloc_ms/global.rs` | 2 | 0 | -2 |
-| `src/scheduler/gc_work.rs` | 1 | 0 | -1 |
-| `src/policy/space.rs` | 2 | 0 | -2 |
-| `src/policy/vmspace.rs` | 2 | 0 | -2 |
-| `src/policy/lockfreeimmortalspace.rs` | 1 | 0 | -1 |
-
-**Category Total**: Δ = -38
-
-**Diff Snippets**:
-<details>
-<summary>src/policy/space.rs (lines 368-370, 747)</summary>
-
-```diff
-@@ -366,11 +368,11 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
-                 SFT_MAP.get_checked(start + bytes - 1).name()
-             );
-         }
-
-         if new_chunk {
--            unsafe { SFT_MAP.update(self.as_sft(), start, bytes) };
-+            SFT_MAP.update(self.as_sft(), start, bytes);
-         }
-     }
-```
-
-```diff
-@@ -745,11 +747,11 @@ impl<VM: VMBinding> CommonSpace<VM> {
-         // We can fix this by either of these:
-         // * fix page resource, so it propelry returns new_chunk
-         // * change grow_space() so it sets SFT no matter what the new_chunks value is.
-         // FIXME: eagerly initializing SFT is not a good idea.
-         if self.contiguous {
--            unsafe { sft_map.eager_initialize(sft, self.start, self.extent) };
-+            sft_map.eager_initialize(sft, self.start, self.extent);
-         }
-     }
-```
-</details>
-
-<details>
-<summary>src/policy/sft_map.rs</summary>
-
-```diff
-diff --git a/src/policy/sft_map.rs b/src/policy/sft_map.rs
-index 42ed3f3d..70847720 100644
---- a/src/policy/sft_map.rs
-+++ b/src/policy/sft_map.rs
-@@ -22,11 +22,11 @@ pub trait SFTMap {
-     /// that is known to be in our spaces). Otherwise, use `get_checked()`.
-     ///
-     /// # Safety
-     /// The address must have a valid SFT entry in the map. Usually we know this if the address is from an object reference, or from our space address range.
-     /// Otherwise, the caller should check with `has_sft_entry()` before calling this method, or use `get_checked()`.
--    unsafe fn get_unchecked(&self, address: Address) -> &dyn SFT;
-+    fn get_unchecked(&self, address: Address) -> &dyn SFT;
-
-     /// Get SFT for the address. The address can be arbitrary. For out-of-bound access, an empty SFT will be returned.
-     /// We only provide the checked version for `get()`, as it may be used to query arbitrary objects and addresses. Other methods like `update/clear/etc` are
-     /// mostly used inside MMTk, and in most cases, we know that they are within our space address range.
-     fn get_checked(&self, address: Address) -> &dyn SFT;
-@@ -34,25 +34,25 @@ pub trait SFTMap {
-     /// Set SFT for the address range. The address must have a valid SFT entry in the table.
-     ///
-     /// # Safety
-     /// The address must have a valid SFT entry in the map. Usually we know this if the address is from an object reference, or from our space address range.
-     /// Otherwise, the caller should check with `has_sft_entry()` before calling this method.
--    unsafe fn update(&self, space: SFTRawPointer, start: Address, bytes: usize);
-+    fn update(&self, space: &(dyn SFT + Sync + 'static), start: Address, bytes: usize);
-
-     /// Notify the SFT map for space creation. `DenseChunkMap` needs to create an entry for the space.
--    fn notify_space_creation(&mut self, _space: SFTRawPointer) {}
-+    fn notify_space_creation(&mut self, _space: &(dyn SFT + Sync + 'static)) {}
-
-     /// Eagerly initialize the SFT table. For most implementations, it could be the same as update().
-     /// However, we need this as a seprate method for SFTDenseChunkMap, as it needs to map side metadata first
-     /// before setting the table.
-     ///
-     /// # Safety
-     /// The address must have a valid SFT entry in the map. Usually we know this if the address is from an object reference, or from our space address range.
-     /// Otherwise, the caller should check with `has_sft_entry()` before calling this method.
--    unsafe fn eager_initialize(
-+    fn eager_initialize(
-         &mut self,
--        space: *const (dyn SFT + Sync + 'static),
-+        space: &(dyn SFT + Sync + 'static),
-         start: Address,
-         bytes: usize,
-     ) {
-         self.update(space, start, bytes);
-     }
-@@ -60,14 +60,14 @@ pub trait SFTMap {
-     /// Clear SFT for the address. The address must have a valid SFT entry in the table.
-     ///
-     /// # Safety
-     /// The address must have a valid SFT entry in the map. Usually we know this if the address is from an object reference, or from our space address range.
-     /// Otherwise, the caller should check with `has_sft_entry()` before calling this method.
--    unsafe fn clear(&self, address: Address);
-+    fn clear(&self, address: Address);
- }
- ```
-
- ```diff
- @@ -89,80 +89,67 @@ pub(crate) fn create_sft_map() -> Box<dyn SFTMap> {
- -/// The raw pointer for SFT. We expect a space to provide this to SFT map.
- -pub(crate) type SFTRawPointer = *const (dyn SFT + Sync + 'static);
- -...
- +pub(crate) struct SFTWrapper(pub &'static (dyn SFT + Sync));
- +
- +use std::sync::OnceLock;
- +use std::sync::Mutex;
- +use std::collections::HashMap;
- +use std::sync::atomic::AtomicPtr;
- +
- +static SFT_WRAPPERS: OnceLock<Mutex<HashMap<usize, &'static SFTWrapper>>> = OnceLock::new();
- +
- +fn get_sft_wrapper(sft: &(dyn SFT + Sync + 'static)) -> &'static SFTWrapper {
- +    let addr = sft as *const _ as *const () as usize;
- +    let mutex = SFT_WRAPPERS.get_or_init(|| Mutex::new(HashMap::new()));
- +    let mut map = mutex.lock().unwrap();
- +    if let Some(wrapper) = map.get(&addr) {
- +        return wrapper;
- +    }
- +    // SAFETY: We know that `sft` points to a space that lives forever.
- +    let sft_static: &'static (dyn SFT + Sync) = unsafe { &*(sft as *const (dyn SFT + Sync)) };
- +    let wrapper = Box::leak(Box::new(SFTWrapper(sft_static)));
- +    map.insert(addr, wrapper);
- +    wrapper
- +}
- +
- +/// The type we store SFT raw pointer as. It basically just thin pointer sized atomic pointer.
-  /// This type provides an abstraction so we can access SFT easily.
-  #[repr(transparent)]
- -pub(crate) struct SFTRefStorage(AtomicDoubleWord);
- +pub(crate) struct SFTRefStorage(AtomicPtr<SFTWrapper>);
- +
- +impl SFTRefStorage {
- ...
- -    pub fn new(sft: SFTRawPointer) -> Self {
- -        let val: DoubleWord = unsafe { std::mem::transmute(sft) };
- -        Self(AtomicDoubleWord::new(val))
- +    pub fn new(sft: &(dyn SFT + Sync + 'static)) -> Self {
- +        let wrapper = get_sft_wrapper(sft);
- +        Self(AtomicPtr::new(wrapper as *const _ as *mut _))
-      }
-
-      // Load with the acquire ordering.
-      pub fn load(&self) -> &dyn SFT {
- -        let val = self.0.load(Ordering::Acquire);
- -...
- -        unsafe {
- -            std::mem::transmute(val)
- -        }
- +        let ptr = self.0.load(Ordering::Acquire);
- +        // SAFETY: The pointer was stored by `store` or `new` which obtain a valid `&'static SFTWrapper` from `get_sft_wrapper`.
- +        // The wrapper is leaked and lives forever. The contained reference points to a space that lives forever.
- +        unsafe { (*ptr).0 }
-      }
-
-      // Store a raw SFT pointer with the release ordering.
- -    pub fn store(&self, sft: SFTRawPointer) {
- -        let val: DoubleWord = unsafe { std::mem::transmute(sft) };
- -        self.0.store(val, Ordering::Release)
- +    pub fn store(&self, sft: &(dyn SFT + Sync + 'static)) {
- +        let wrapper = get_sft_wrapper(sft);
- +        self.0.store(wrapper as *const _ as *mut _, Ordering::Release)
-      }
-  }
- ```
-
- ```diff
- @@ -175,11 +162,11 @@ mod space_map {
- -    unsafe impl Sync for SFTSpaceMap {}
- +
- ...
- -        unsafe { self.get_unchecked(address) }
- +                self.get_unchecked(address)
- ...
- -        unsafe fn get_unchecked(&self, address: Address) -> &dyn SFT {
- -            let cell = unsafe { self.sft.get_unchecked(Self::addr_to_index(address)) };
- +        fn get_unchecked(&self, address: Address) -> &dyn SFT {
- +            let cell = &self.sft[Self::addr_to_index(address)];
-              cell.load()
-          }
- ```
-
- <details>
- <summary>src/policy/marksweepspace/malloc_ms/global.rs</summary>
-
- ```diff
- @@ -390,11 +387,11 @@ impl<VM: VMBinding> MallocSpace<VM> {
-              if !self.is_meta_space_mapped(address, actual_size) {
-                  // Map the metadata space for the associated chunk
-                  self.map_metadata_and_update_bound(address, actual_size);
-                  // Update SFT
-                  assert!(crate::mmtk::SFT_MAP.has_sft_entry(address)); // make sure the address is okay with our SFT map
- -                unsafe { crate::mmtk::SFT_MAP.update(self, address, actual_size) };
- +                crate::mmtk::SFT_MAP.update(self, address, actual_size);
- ```
- ```diff
- @@ -603,29 +598,29 @@ impl<VM: VMBinding> MallocSpace<VM> {
-      fn clean_up_empty_chunk(&self, chunk_start: Address) {
-          // Clear the chunk map
-          self.chunk_map
-              .set_allocated(Chunk::from_aligned_address(chunk_start), false);
-          // Clear the SFT entry
- -        unsafe { crate::mmtk::SFT_MAP.clear(chunk_start) };
- +        crate::mmtk::SFT_MAP.clear(chunk_start);
- ```
- </details>
-
-<details>
-<summary>src/util/address.rs (SFT Map Access)</summary>
-
-```diff
-@@ -669,37 +669,37 @@ impl ObjectReference {
-     pub fn is_reachable(self) -> bool {
--        unsafe { SFT_MAP.get_unchecked(self.to_raw_address()) }.is_reachable(self)
-+        SFT_MAP.get_unchecked(self.to_raw_address()).is_reachable(self)
-     }
-
-     /// Is the object live, determined by the policy?
-     pub fn is_live(self) -> bool {
--        unsafe { SFT_MAP.get_unchecked(self.to_raw_address()) }.is_live(self)
-+        SFT_MAP.get_unchecked(self.to_raw_address()).is_live(self)
-     }
-
-     /// Can the object be moved?
-     pub fn is_movable(self) -> bool {
--        unsafe { SFT_MAP.get_unchecked(self.to_raw_address()) }.is_movable()
-+        SFT_MAP.get_unchecked(self.to_raw_address()).is_movable()
-     }
-
-     /// Get forwarding pointer if the object is forwarded.
-     pub fn get_forwarded_object(self) -> Option<Self> {
--        unsafe { SFT_MAP.get_unchecked(self.to_raw_address()) }.get_forwarded_object(self)
-+        SFT_MAP.get_unchecked(self.to_raw_address()).get_forwarded_object(self)
-     }
-
-     /// Is the object in any MMTk spaces?
-     pub fn is_in_any_space(self) -> bool {
--        unsafe { SFT_MAP.get_unchecked(self.to_raw_address()) }.is_in_space(self)
-+        SFT_MAP.get_unchecked(self.to_raw_address()).is_in_space(self)
-     }
-
-     /// Is the object sane?
-     #[cfg(feature = "sanity")]
-     pub fn is_sane(self) -> bool {
--        unsafe { SFT_MAP.get_unchecked(self.to_raw_address()) }.is_sane()
-+        SFT_MAP.get_unchecked(self.to_raw_address()).is_sane()
-     }
- }
-```
-</details>
-
-<details>
-<summary>src/scheduler/gc_work.rs (SFT Map Access)</summary>
-
-```diff
-@@ -719,3 +719,3 @@
--let sft = unsafe { crate::mmtk::SFT_MAP.get_unchecked(object.to_raw_address()) };
-+let sft = crate::mmtk::SFT_MAP.get_unchecked(object.to_raw_address());
-```
-</details>
-
-<details>
-<summary>src/policy/vmspace.rs (lines 125-135, 251-261)</summary>
-
-```diff
-diff --git a/src/policy/vmspace.rs b/src/policy/vmspace.rs
-index 6d53f764..a0473bf0 100644
---- a/src/policy/vmspace.rs
-+++ b/src/policy/vmspace.rs
-@@ -125,13 +125,11 @@ impl<VM: VMBinding> Space<VM> for VMSpace<VM> {
-                 sft_map.get_checked(start).name(),
-                 crate::policy::sft::EMPTY_SFT_NAME
-             );
-             // Set SFT
-             assert!(sft_map.has_sft_entry(start), "The VM space start (aligned to {}) does not have a valid SFT entry. Possibly the address range is not in the address range we use.", start);
--            unsafe {
--                sft_map.eager_initialize(self.as_sft(), start, size);
--            }
-+            sft_map.eager_initialize(self.as_sft(), start, size);
-         }
-     }
-
-     fn release_multiple_pages(&mut self, _start: Address) {
-         unreachable!()
-@@ -251,13 +249,11 @@ impl<VM: VMBinding> VMSpace<VM> {
-         // Insert to vm map: it would be good if we can make VM map aware of the region. However, the region may be outside what we can map in our VM map implementation.
-         // self.common.vm_map.insert(chunk_start, chunk_size, self.common.descriptor);
-         // Set SFT if we should
-         if set_sft {
-             assert!(SFT_MAP.has_sft_entry(chunk_start), "The VM space start (aligned to {}) does not have a valid SFT entry. Possibly the address range is not in the address range we use.", chunk_start);
--            unsafe {
--                SFT_MAP.update(self.as_sft(), chunk_start, chunk_size);
--            }
-+            SFT_MAP.update(self.as_sft(), chunk_start, chunk_size);
-         }
-
-         self.pr.add_new_external_pages(ExternalPages {
-             start: start.align_down(BYTES_IN_PAGE),
-             end: end.align_up(BYTES_IN_PAGE),
-```
-</details>
-
-<details>
-<summary>src/policy/lockfreeimmortalspace.rs</summary>
-
-```diff
-@@ -125,11 +125,11 @@ impl<VM: VMBinding> Space<VM> for LockFreeImmortalSpace<VM> {
-     fn release_multiple_pages(&mut self, _start: Address) {
-         panic!("immortalspace only releases pages enmasse")
-     }
-
-     fn initialize_sft(&self, sft_map: &mut dyn crate::policy::sft_map::SFTMap) {
--        unsafe { sft_map.eager_initialize(self.as_sft(), self.start, self.total_bytes) };
-+        sft_map.eager_initialize(self.as_sft(), self.start, self.total_bytes);
-     }
-
-     fn estimate_side_meta_pages(&self, data_pages: usize) -> usize {
-         self.metadata.calculate_reserved_pages(data_pages)
-     }
-```
-</details>
-
-### Proof Token and StwProtected Abstraction
+#### Proof Token and StwProtected Abstraction
 **Description**: Guarded access to global state (like the Plan) by a zero-sized proof token (`StwProof`) that encodes the "Stop The World" invariant at the type level, or by standard Rust borrow rules on `StwProtected` wrappers. This allows safe access to mutable state without raw pointers or manual locking.
 
 **Files and Unsafe Delta**:
@@ -2497,307 +3386,371 @@ index 6d53f764..a0473bf0 100644
 ```
 </details>
 
-### Removal of Self-Reference Casts
-**Description**: Removal of unsafe casts from `self` to a raw pointer and back to a reference (often with an extended lifetime) to pass to work packets or closures. This is resolved by refactoring the work packets to not require the reference or to acquire it safely.
+#### Safe Shared State via Arc/RwLock
+**Description**: Replaced unsafe raw pointers (`NonNull`) used for sharing state between parent and child instances with safe reference counting and read-write locks (`Arc<RwLock<T>>`). This eliminates the need for manual pointer dereferencing and custom `unsafe impl Send/Sync`.
 
 **Files and Unsafe Delta**:
 | File | Base | New | Δ |
 |------|------|-----|---|
-| `src/plan/global.rs` | 1 | 0 | -1 |
-
-**Category Total**: Δ = -1
-
-**Diff Snippets**:
-<details>
-<summary>src/plan/global.rs (lines 755-778)</summary>
-
-```diff
-@@ -755,22 +761,19 @@ impl<VM: VMBinding> CommonPlan<VM> {
-         self.base.release(tls, full_heap)
-     }
-
-     pub(crate) fn schedule_unlog_bits_op(&mut self, unlog_bits_op: UnlogBitsOperation) {
-         if VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.is_on_side() {
--            // # Safety: CommonPlan reference is always valid within this collection cycle.
--            let common_plan = unsafe { &*(self as *const CommonPlan<VM>) };
--
-             match unlog_bits_op {
-                 UnlogBitsOperation::NoOp => {}
-                 UnlogBitsOperation::BulkSet => {
-                     self.base.scheduler.work_buckets[WorkBucketStage::Prepare]
--                        .add(SetCommonPlanUnlogBits { common_plan });
-+                        .add(SetCommonPlanUnlogBits::new());
-                 }
-                 UnlogBitsOperation::BulkClear => {
-                     self.base.scheduler.work_buckets[WorkBucketStage::Release]
--                        .add(ClearCommonPlanUnlogBits { common_plan });
-+                        .add(ClearCommonPlanUnlogBits::new());
-                 }
-             }
-         }
-     }
-```
-</details>
-
-### Safe Metadata Abstraction (SideMetadataSpecBlockExt)
-**Description**: Introduced a trait extension `SideMetadataSpecBlockExt` for `SideMetadataSpec` that provides safe methods for loading and storing addresses and usizes, encapsulating atomic operations and raw pointer manipulations.
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `src/policy/marksweepspace/native_ms/block.rs` | 16 | 0 | -16 |
-
-**Category Total**: Δ = -16
-
-**Diff Snippets**:
-<details>
-<summary>src/policy/marksweepspace/native_ms/block.rs</summary>
-
-```rust
-trait SideMetadataSpecBlockExt {
-    fn load_address(&self, block: Block) -> Address;
-    fn store_address(&self, block: Block, value: Address);
-    fn load_address_atomic(&self, block: Block, order: Ordering) -> Address;
-    fn load_usize(&self, block: Block) -> usize;
-    fn store_usize(&self, block: Block, value: usize);
-    fn load_usize_atomic(&self, block: Block, order: Ordering) -> usize;
-}
-```
-
-```diff
-@@ -99,41 +133,35 @@ impl Block {
-     pub fn load_free_list(&self) -> Address {
- -        unsafe { Address::from_usize(Block::FREE_LIST_TABLE.load::<usize>(self.start())) }
- +        Block::FREE_LIST_TABLE.load_address(*self)
-     }
- ```
- </details>
-
-### Safe Iterator Abstraction (Block Cells)
-**Description**: Replaced manual pointer arithmetic and unchecked object creation in sweeping loops with a safe `CellIter` and safe `ObjectReference` creation. One unsafe operation (storing the link) was moved to a helper method `BlockCell::store_link`.
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `src/policy/marksweepspace/native_ms/block.rs` | 5 | 1 | -4 |
+| `src/util/int_array_freelist.rs` | 4 | 0 | -4 |
 
 **Category Total**: Δ = -4
 
 **Diff Snippets**:
 <details>
-<summary>src/policy/marksweepspace/native_ms/block.rs</summary>
+<summary>src/util/int_array_freelist.rs (lines 1-80)</summary>
 
 ```diff
-@@ -284,31 +305,23 @@ impl Block {
-     fn simple_sweep<VM: VMBinding>(&self) {
-          let cell_size = self.load_block_cell_size();
-          debug_assert_ne!(cell_size, 0);
- -        let mut cell = self.start();
- -        let mut last = unsafe { Address::zero() };
- -        while cell + cell_size <= self.start() + Block::BYTES {
- -            let potential_object = unsafe { ObjectReference::from_raw_address_unchecked(cell) };
- +        let mut last = Address::zero();
- +
- +        for cell in self.cells(cell_size) {
- +            let potential_object = ObjectReference::from_raw_address(cell.address()).unwrap();
+@@ -1,80 +1,66 @@
+ use super::freelist::*;
+-use std::ptr::NonNull;
++use std::sync::{Arc, RwLock};
 
-              if !VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
-                  .is_marked::<VM>(potential_object, Ordering::SeqCst)
-              {
- -                unsafe {
- -                    cell.store::<Address>(last);
- -                }
- -                last = cell;
- +                cell.store_link(last);
- +                last = cell.address();
-              }
- -            cell += cell_size;
-          }
- ```
- </details>
-
-### Safe Initialization (NonZeroUsize)
-**Description**: Replaced `NonZeroUsize::new_unchecked` with `NonZeroUsize::new(...).expect(...)` to ensure safety during initialization.
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `src/policy/marksweepspace/native_ms/block.rs` | 1 | 0 | -1 |
-
-**Category Total**: Δ = -1
-
-**Diff Snippets**:
-<details>
-<summary>src/policy/marksweepspace/native_ms/block.rs</summary>
-
-```diff
-@@ -39,5 +38,5 @@ impl Region for Block {
-     fn from_aligned_address(address: Address) -> Self {
-         debug_assert!(address.is_aligned_to(Self::BYTES));
-         debug_assert!(!address.is_zero());
- -        Self(unsafe { NonZeroUsize::new_unchecked(address.as_usize()) })
- +        Self(NonZeroUsize::new(address.as_usize()).expect("address is zero"))
-     }
- ```
- </details>
-
-### API Refactoring (Safe References)
-**Description**: Passing references instead of raw pointers to methods, removing the need to dereference raw pointers within the method.
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `src/policy/marksweepspace/native_ms/block.rs` | 1 | 0 | -1 |
-| `src/scheduler/gc_work.rs` | 3 | 0 | -3 |
-
-**Category Total**: Δ = -4
-
-**Diff Snippets**:
-<details>
-<summary>src/policy/marksweepspace/native_ms/block.rs</summary>
-
-```diff
-@@ -230,27 +246,32 @@ impl Block {
- -    pub fn attempt_release<VM: VMBinding>(self, space: &MarkSweepSpace<VM>) -> bool {
- +    pub fn attempt_release<VM: VMBinding>(self, block_list: &mut BlockList, inner: &super::MarkSweepSpaceInner<VM>) -> bool {
-          match self.get_state() {
-              BlockState::Unallocated => unreachable!(),
-              BlockState::Unmarked => {
- -                let block_list = self.load_block_list();
- -                unsafe { &mut *block_list }.remove(self);
- -                space.release_block(self);
- +                #[cfg(debug_assertions)]
- +                {
- +                    let loaded_block_list = self.load_block_list();
- +                    debug_assert_eq!(loaded_block_list, block_list as *mut BlockList, "BlockList mismatch for block {:?}", self);
- +                }
- +                block_list.remove(self);
- +                inner.release_block(self);
-                  true
-              }
- ```
- </details>
-
-<details>
-<summary>src/scheduler/gc_work.rs (ProcessEdgesBase and ScanMutatorRoots)</summary>
-
-```diff
-@@ -420,27 +418,28 @@
--pub struct ScanMutatorRoots<C: GCWorkContext>(pub &'static mut Mutator<C::VM>);
-+pub struct ScanMutatorRoots<C: GCWorkContext>(pub Option<&'static mut Mutator<C::VM>>);
-
- impl<C: GCWorkContext> GCWork<C::VM> for ScanMutatorRoots<C> {
-     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
--        trace!("ScanMutatorRoots for mutator {:?}", self.0.get_tls());
-+        let mutator = self.0.take().expect("Mutator already scanned");
-+        trace!("ScanMutatorRoots for mutator {:?}", mutator.get_tls());
-         let mutators = <C::VM as VMBinding>::VMActivePlan::number_of_mutators();
-         let factory = ProcessEdgesWorkRootsWorkFactory::<
-             C::VM,
-             C::DefaultProcessEdges,
-             C::PinningProcessEdges,
-         >::new(mmtk);
-+        mutator.flush();
-         <C::VM as VMBinding>::VMScanning::scan_roots_in_mutator_thread(
-             worker.tls,
--            unsafe { &mut *(self.0 as *mut _) },
-+            mutator,
-             factory,
-         );
--        self.0.flush();
-```
-
-```diff
-@@ -472,19 +471,14 @@
- pub struct ProcessEdgesBase<VM: VMBinding> {
-     pub slots: Vec<VM::VMSlot>,
-     pub nodes: VectorObjectQueue,
-     mmtk: &'static MMTK<VM>,
--    // Use raw pointer for fast pointer dereferencing, instead of using `Option<&'static mut GCWorker<E::VM>>`.
--    // Because a copying gc will dereference this pointer at least once for every object copy.
--    worker: *mut GCWorker<VM>,
-     pub roots: bool,
-     pub bucket: WorkBucketStage,
+ #[derive(Debug)]
+ pub struct IntArrayFreeList {
+     pub head: i32,
+     pub heads: i32,
+-    pub table: Option<Vec<i32>>,
+-    parent: Option<NonNull<IntArrayFreeList>>,
++    pub table: Arc<RwLock<Vec<i32>>>,
  }
 
--unsafe impl<VM: VMBinding> Send for ProcessEdgesBase<VM> {}
+-unsafe impl Send for IntArrayFreeList {}
+-unsafe impl Sync for IntArrayFreeList {}
 -
- impl<VM: VMBinding> ProcessEdgesBase<VM> {
-```
-
-```diff
-@@ -501,22 +495,15 @@
-         Self {
-             slots,
-             nodes: VectorObjectQueue::new(),
-             mmtk,
--            worker: std::ptr::null_mut(),
-             roots,
-             bucket,
-         }
+ impl FreeList for IntArrayFreeList {
+     fn head(&self) -> i32 {
+         self.head
      }
--    pub fn set_worker(&mut self, worker: &mut GCWorker<VM>) {
--        self.worker = worker;
--    }
+     fn heads(&self) -> i32 {
+         self.heads
+     }
+     fn get_entry(&self, index: i32) -> i32 {
+-        self.table()[index as usize]
++        self.table.read().unwrap()[index as usize]
+     }
+     fn set_entry(&mut self, index: i32, value: i32) {
+-        self.table_mut()[index as usize] = value;
++        self.table.write().unwrap()[index as usize] = value;
+     }
+ }
 
--    pub fn worker(&self) -> &'static mut GCWorker<VM> {
--        unsafe { &mut *self.worker }
+ impl IntArrayFreeList {
+     pub fn new(units: usize, grain: i32, heads: usize) -> Self {
+         debug_assert!(units <= MAX_UNITS as usize && heads <= MAX_HEADS as usize);
+         // allocate the data structure, including space for top & bottom sentinels
+         let len = (units + 1 + heads) << 1;
++
++        // We need to initialize the heap after creation.
++        // Since we need to call initialize_heap which is a trait method,
++        // and we need to pass a &mut reference, we can do it if we have exclusive access.
++        // Wait, initialize_heap takes &mut self.
++        // But here we just created iafl, so we have exclusive access!
++        // Wait, iafl is not mut in my draft!
++        // Let's make it mut.
+         let mut iafl = IntArrayFreeList {
+             head: -1,
+             heads: heads as _,
+-            table: Some(vec![0; len]), // len=2052
+-            parent: None,
++            table: Arc::new(RwLock::new(vec![0; len])),
+         };
+         iafl.initialize_heap(units as _, grain);
+         iafl
+     }
+     pub fn from_parent(parent: &IntArrayFreeList, ordinal: i32) -> Self {
+-        let parent_ptr = std::ptr::NonNull::from(parent);
+         let iafl = IntArrayFreeList {
+             head: -(1 + ordinal),
+             heads: parent.heads,
+-            table: None,
+-            parent: Some(parent_ptr),
++            table: parent.table.clone(),
+         };
+         debug_assert!(-iafl.head <= iafl.heads);
+         iafl
+     }
+     pub(crate) fn get_ordinal(&self) -> i32 {
+         -self.head - 1
+     }
+-    fn table(&self) -> &Vec<i32> {
+-        match self.parent {
+-            Some(p) => unsafe { p.as_ref().table() },
+-            None => self.table.as_ref().unwrap(),
+-        }
 -    }
+-
+-    // FIXME: We need a safe implementation
+-
+-    fn table_mut(&mut self) -> &mut Vec<i32> {
+-        match self.parent {
+-            Some(mut p) => unsafe { p.as_mut().table_mut() },
+-            None => self.table.as_mut().unwrap(),
+-        }
+-    }
+     pub fn resize_freelist(&mut self, units: usize, grain: i32) {
+         // debug_assert!(self.parent.is_none() && !selected_plan::PLAN.is_initialized());
+-        *self.table_mut() = vec![0; (units + 1 + self.heads as usize) << 1];
++        *self.table.write().unwrap() = vec![0; (units + 1 + self.heads as usize) << 1];
+         self.initialize_heap(units as _, grain);
+     }
+ }
 ```
-</details>
 
-### Safe Trait Abstraction for Atomics
-**Description**: Replaced trait methods that take raw `Address` and perform unsafe operations (like loading/storing atomics via pointer casting) with methods that take safe references to the value or its associated atomic type. This allows the use of standard safe atomic methods.
+
+#### Safe Concurrent Data Structures (Crossbeam ArrayQueue)
+**Description**: Replaced custom unsafe lock-free queue implementation `BlockQueue` (which used `UnsafeCell` and `MaybeUninit` with unsafe operations like `push_relaxed` and `assume_init`) with a safe concurrent queue `ArrayQueue` from the `crossbeam` crate.
 
 **Files and Unsafe Delta**:
 | File | Base | New | Δ |
 |------|------|-----|---|
-| `src/util/metadata/metadata_val_traits.rs` | 20 | 0 | -20 |
+| `src/util/heap/blockpageresource.rs` | 8 | 0 | -8 |
 
-**Category Total**: Δ = -20
+**Category Total**: Δ = -8
 
 **Diff Snippets**:
 <details>
-<summary>src/util/metadata/metadata_val_traits.rs (lines 75-207)</summary>
+<summary>src/util/heap/blockpageresource.rs</summary>
 
 ```diff
-@@ -75,9 +74,14 @@ pub trait MetadataValue:
- {
- +    /// The associated atomic type.
- +    type Atomic;
- +
-      /// Non atomic load
- -    /// # Safety
- -    /// The caller needs to guarantee that the address is valid, and can be used as a pointer to the type.
- -    /// The caller also needs to be aware that the method is not thread safe, as it is a non-atomic operation.
- -    unsafe fn load(addr: Address) -> Self;
- +    fn load(non_atomic: &Self) -> Self {
- +        *non_atomic
- +    }
+@@ -120,15 +122,15 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
+         // 3. Push all remaining blocks to one or more block lists
+         let last_block = start + BYTES_IN_CHUNK;
+         let mut array = BlockQueue::new();
+         let mut cursor = start + B::BYTES;
+         while cursor < last_block {
+-            let result = unsafe { array.push_relaxed(B::from_aligned_address(cursor)) };
++            let result = array.push(B::from_aligned_address(cursor));
+             if let Err(block) = result {
+                 self.block_queue.add_global_array(array);
+                 array = BlockQueue::new();
+-                let result2 = unsafe { array.push_relaxed(block) };
++                let result2 = array.push(block);
+                 debug_assert!(result2.is_ok());
+             }
+             cursor += B::BYTES;
+         }
+...
+@@ -179,117 +181,55 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
+ struct BlockQueue<B: Region> {
+-    cursor: AtomicUsize,
+-    data: UnsafeCell<Box<[MaybeUninit<B>]>>,
++    inner: ArrayQueue<B>,
+ }
 
-      /// Atomic load
- -    /// # Safety
- -    /// The caller needs to guarantee that the address is valid, and can be used as a pointer to the type.
- -    unsafe fn load_atomic(addr: Address, order: Ordering) -> Self;
- +    fn load_atomic(atomic: &Self::Atomic, order: Ordering) -> Self;
- ...
- @@ -138,65 +115,65 @@ macro_rules! impl_metadata_value_trait {
-      ($non_atomic: ty, $atomic: ty) => {
-          impl MetadataValue for $non_atomic {
- -            unsafe fn load(addr: Address) -> Self {
- -                addr.load::<$non_atomic>()
- -            }
- +            type Atomic = $atomic;
+-    fn get_entry(&self, i: usize) -> B {
+-        unsafe { (*self.data.get())[i].assume_init() }
+-    }
+-
+-    unsafe fn set_entry(&self, i: usize, block: B) {
+-        (*self.data.get())[i].write(block);
+-    }
+-
+-    unsafe fn push_relaxed(&self, block: B) -> Result<(), B> {
+-        let i = self.cursor.load(Ordering::Relaxed);
+-        if i < Self::CAPACITY {
+-            self.set_entry(i, block);
+-            self.cursor.store(i + 1, Ordering::Relaxed);
+-            Ok(())
+-        } else {
+-            Err(block)
+-        }
+-    }
+...
+@@ -286,14 +240,10 @@ impl<B: Region> BlockQueue<B> {
+-        // Swap data
+-        unsafe {
+-            core::ptr::swap(self.data.get(), new_array.data.get());
+-        }
+...
+@@ -326,20 +266,16 @@ impl<VM: VMBinding, B: Region> BlockPool<B> {
+     pub fn push(&self, block: B) {
+         self.count.fetch_add(1, Ordering::SeqCst);
+         let id = crate::scheduler::current_worker_ordinal();
+-        let failed = unsafe {
+-            self.worker_local_freed_blocks[id]
+-                .push_relaxed(block)
+-                .is_err()
+-        };
+-        if failed {
+-            let queue = BlockQueue::new();
+-            let result = unsafe { queue.push_relaxed(block) };
++        let mut queue = self.worker_local_freed_blocks[id].lock().unwrap();
++        if queue.push(block).is_err() {
++            let new_queue = BlockQueue::new();
++            let result = new_queue.push(block);
+             debug_assert!(result.is_ok());
+-            let old_queue = self.worker_local_freed_blocks[id].replace(queue);
++            let old_queue = std::mem::replace(&mut *queue, new_queue);
+```
+</details>
 
- -            unsafe fn load_atomic(addr: Address, order: Ordering) -> Self {
- -                addr.as_ref::<$atomic>().load(order)
- +            fn load_atomic(atomic: &Self::Atomic, order: Ordering) -> Self {
- +                atomic.load(order)
-              }
+#### Atomic Operations (load_atomic/store_atomic)
+**Description**: Replaced unsafe raw memory access (via `load` and `store` on metadata tables) with safe atomic operations (`load_atomic` and `store_atomic`) provided by the abstraction.
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `src/plan/barriers.rs` | 1 | 0 | -1 |
+| `src/policy/immix/line.rs` | 2 | 0 | -2 |
+| `src/util/heap/chunk_map.rs` | 2 | 0 | -2 |
+| `src/util/metadata/pin_bit.rs` | 1 | 0 | -1 |
+| `src/vm/object_model.rs` | 2 | 0 | -2 |
+
+**Category Total**: Δ = -8
+
+**Diff Snippets**:
+<details>
+<summary>src/plan/barriers.rs (lines 193-203)</summary>
+
+```diff
+--- a/src/plan/barriers.rs
++++ b/src/plan/barriers.rs
+@@ -193,11 +193,11 @@ impl<S: BarrierSemantics> ObjectBarrier<S> {
+     }
+
+     /// Attempt to atomically log an object.
+     /// Returns true if the object is not logged previously.
+     fn object_is_unlogged(&self, object: ObjectReference) -> bool {
+-        unsafe { S::UNLOG_BIT_SPEC.load::<S::VM, u8>(object, None) != 0 }
++        S::UNLOG_BIT_SPEC.load_atomic::<S::VM, u8>(object, None, Ordering::Relaxed) != 0
+     }
+```
+</details>
+
+<details>
+<summary>src/policy/immix/line.rs (lines 50-69)</summary>
+
+```diff
+--- a/src/policy/immix/line.rs
++++ b/src/policy/immix/line.rs
+@@ -50,19 +50,17 @@ impl Line {
+     }
+
+     /// Mark the line. This will update the side line mark table.
+     pub fn mark(&self, state: u8) {
+         debug_assert!(!super::BLOCK_ONLY);
+-        unsafe {
+-            Self::MARK_TABLE.store::<u8>(self.start(), state);
+-        }
++        Self::MARK_TABLE.store_atomic::<u8>(self.start(), state, std::sync::atomic::Ordering::Relaxed);
+     }
+
+     /// Test line mark state.
+     pub fn is_marked(&self, state: u8) -> bool {
+         debug_assert!(!super::BLOCK_ONLY);
+-        unsafe { Self::MARK_TABLE.load::<u8>(self.start()) == state }
++        Self::MARK_TABLE.load_atomic::<u8>(self.start(), std::sync::atomic::Ordering::Relaxed) == state
+     }
+```
+</details>
+
+
+<details>
+<summary>src/util/heap/chunk_map.rs (lines 143-178)</summary>
+
+```diff
+--- a/src/util/heap/chunk_map.rs
++++ b/src/util/heap/chunk_map.rs
+@@ -143,11 +143,11 @@ impl ChunkMap {
+                 old_state,
+                 state
+             );
+         }
+         // Update alloc byte
+-        unsafe { Self::ALLOC_TABLE.store::<u8>(chunk.start(), state.0) };
++        Self::ALLOC_TABLE.store_atomic::<u8>(chunk.start(), state.0, std::sync::atomic::Ordering::Relaxed);
+         // If this is a newly allcoated chunk, then expand the chunk range.
+         if allocated {
+             debug_assert!(!chunk.start().is_zero());
+             let mut range = self.chunk_range.lock();
+             if range.start == Chunk::ZERO {
+@@ -168,11 +168,11 @@ impl ChunkMap {
+         (state.is_allocated() && state.get_space_index() == self.space_index).then_some(state)
+     }
+
+     /// Get chunk state, regardless of the space. This should always be private.
+     fn get_internal(&self, chunk: Chunk) -> ChunkState {
+-        let byte = unsafe { Self::ALLOC_TABLE.load::<u8>(chunk.start()) };
++        let byte = Self::ALLOC_TABLE.load_atomic::<u8>(chunk.start(), std::sync::atomic::Ordering::Relaxed);
+         ChunkState(byte)
+     }
  ```
- </details>
+</details>
 
-### Safe Initialization (MaybeUninit → Option)
+<details>
+<summary>src/util/metadata/pin_bit.rs (lines 34-46)</summary>
+
+```diff
+--- a/src/util/metadata/pin_bit.rs
++++ b/src/util/metadata/pin_bit.rs
+@@ -34,11 +34,11 @@ impl VMLocalPinningBitSpec {
+         res.is_ok()
+     }
+
+     /// Check if an object is pinned.
+     pub fn is_object_pinned<VM: VMBinding>(&self, object: ObjectReference) -> bool {
+-        if unsafe { self.load::<VM, u8>(object, None) == 1 } {
++        if self.load_atomic::<VM, u8>(object, None, Ordering::SeqCst) == 1 {
+             return true;
+         }
+
+         false
+     }
+```
+</details>
+
+<details>
+<summary>src/vm/object_model.rs (lines 150-205)</summary>
+
+```diff
+diff --git a/src/vm/object_model.rs b/src/vm/object_model.rs
+index 24bb105b..f88ec10e 100644
+--- a/src/vm/object_model.rs
++++ b/src/vm/object_model.rs
+@@ -150,16 +150,16 @@ pub trait ObjectModel<VM: VMBinding> {
+     /// * `object`: is a reference to the target object.
+     /// * `mask`: is an optional mask value for the metadata. This value is used in cases like the forwarding pointer metadata, where some of the bits are reused by other metadata such as the forwarding bits.
+     ///
+     /// # Safety
+     /// This is a non-atomic load, thus not thread-safe.
+-    unsafe fn load_metadata<T: MetadataValue>(
++    fn load_metadata<T: MetadataValue>(
+         metadata_spec: &HeaderMetadataSpec,
+         object: ObjectReference,
+         mask: Option<T>,
+     ) -> T {
+-        metadata_spec.load::<T>(object.to_header::<VM>(), mask)
++        metadata_spec.load_atomic::<T>(object.to_header::<VM>(), mask, Ordering::Relaxed)
+     }
+
+     /// A function to atomically load the specified per-object metadata's content.
+     /// The default implementation assumes the bits defined by the spec are always avilable for MMTk to use. If that is not the case, a binding should override this method, and provide their implementation.
+@@ -189,17 +189,17 @@ pub trait ObjectModel<VM: VMBinding> {
+     /// * `val`: is the new metadata value to be stored.
+     /// * `mask`: is an optional mask value for the metadata. This value is used in cases like the forwarding pointer metadata, where some of the bits are reused by other metadata such as the forwarding bits.
+     ///
+     /// # Safety
+     /// This is a non-atomic store, thus not thread-safe.
+-    unsafe fn store_metadata<T: MetadataValue>(
++    fn store_metadata<T: MetadataValue>(
+         metadata_spec: &HeaderMetadataSpec,
+         object: ObjectReference,
+         val: T,
+         mask: Option<T>,
+     ) {
+-        metadata_spec.store::<T>(object.to_header::<VM>(), val, mask)
++        metadata_spec.store_atomic::<T>(object.to_header::<VM>(), val, mask, Ordering::Relaxed)
+     }
+
+     /// A function to atomically store a value to the specified per-object metadata.
+     /// The default implementation assumes the bits defined by the spec are always avilable for MMTk to use. If that is not the case, a binding should override this method, and provide their implementation.
+```
+</details>
+
+### Initialization and Resource Management
+
+#### Safe Initialization (MaybeUninit → Option)
 **Description**: Replaced `MaybeUninit` arrays with `Option` arrays, removing the need for `unsafe` `assume_init_mut()` and `assume_init()` calls. The elements are accessed safely using `as_mut().expect(...)`.
 
 **Files and Unsafe Delta**:
@@ -3285,7 +4238,7 @@ index 9b070cc0..8dd0f28a 100644
 ```
 </details>
 
-### Safe Initialization (OnceLock)
+#### Safe Initialization (OnceLock)
 **Description**: Replaced `UnsafeCell<MaybeUninit<T>>`, `std::sync::Once`, or `static mut` with `std::sync::OnceLock<T>`, removing the need for `unsafe` blocks during initialization and reference retrieval.
 
 **Files and Unsafe Delta**:
@@ -3452,19 +4405,536 @@ diff --git a/src/util/rust_util/atomic_box.rs b/src/util/rust_util/atomic_box.rs
 ```
 </details>
 
-### Safe Precondition Enforcement (Runtime Checks)
-**Description**: Methods that previously relied on the caller to ensure safety invariants (such as valid indices or initialized state) were refactored to perform runtime checks (assertions) and panic on failure. This allows the methods to be safe and removes the need for `unsafe` blocks at call sites.
+#### Safe Initialization (NonZeroUsize)
+**Description**: Replaced `NonZeroUsize::new_unchecked` with `NonZeroUsize::new(...).expect(...)` to ensure safety during initialization.
 
 **Files and Unsafe Delta**:
 | File | Base | New | Δ |
 |------|------|-----|---|
-| `src/plan/concurrent/immix/mutator.rs` | 2 | 0 | -2 |
-| `src/plan/mutator_context.rs` | 15 | 0 | -15 |
-| `src/util/memory.rs` | 4 | 1 | -3 |
+| `src/policy/marksweepspace/native_ms/block.rs` | 1 | 0 | -1 |
 
-**Category Total**: Δ = -20
+**Category Total**: Δ = -1
 
 **Diff Snippets**:
+<details>
+<summary>src/policy/marksweepspace/native_ms/block.rs</summary>
+
+```diff
+@@ -39,5 +38,5 @@ impl Region for Block {
+     fn from_aligned_address(address: Address) -> Self {
+         debug_assert!(address.is_aligned_to(Self::BYTES));
+         debug_assert!(!address.is_zero());
+ -        Self(unsafe { NonZeroUsize::new_unchecked(address.as_usize()) })
+ +        Self(NonZeroUsize::new(address.as_usize()).expect("address is zero"))
+     }
+ ```
+ </details>
+
+#### Safe Initialization via Vector
+**Description**: Replaced manual allocation (`std::alloc::alloc_zeroed`) and raw pointer manipulation with a `Vec` that is initialized safely (e.g., using `vec![]` or `bytemuck::zeroed_vec`). This eliminates the need for unsafe allocation and raw pointer load/store during initialization. In some cases (like `bscan.rs`), the vector is leaked to provide a static-like buffer.
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `benches/regular_bench/bulk_meta/bscan.rs` | 3 | 0 | -3 |
+| `benches/regular_bench/bulk_meta/bzero_bset.rs` | 1 | 0 | -1 |
+| `src/util/rust_util/zeroed_alloc.rs` | 2 | 0 | -2 |
+
+**Category Total**: Δ = -6
+
+**Diff Snippets**:
+<details>
+<summary>benches/regular_bench/bulk_meta/bscan.rs</summary>
+
+```diff
+diff --git a/benches/regular_bench/bulk_meta/bscan.rs b/benches/regular_bench/bulk_meta/bscan.rs
+index b8d57187..5406a61a 100644
+--- a/benches/regular_bench/bulk_meta/bscan.rs
++++ b/benches/regular_bench/bulk_meta/bscan.rs
+@@ -5,16 +5,11 @@ use mmtk::util::{
+     constants::LOG_BITS_IN_WORD, test_private::scan_non_zero_bits_in_metadata_bytes, Address,
+ };
+ use rand::{seq::IteratorRandom, SeedableRng};
+ use rand_chacha::ChaCha8Rng;
+
+-fn allocate_aligned(size: usize) -> Address {
+-    let ptr = unsafe {
+-        std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(size, size).unwrap())
+-    };
+-    Address::from_mut_ptr(ptr)
+-}
++
+
+ const BLOCK_BYTES: usize = 32768usize; // Match an Immix block size.
+
+ // Asssume one-bit-per-word metadata (matching VO bits).
+ const BLOCK_META_BYTES: usize = BLOCK_BYTES >> LOG_BITS_IN_WORD;
+@@ -38,32 +33,37 @@ struct PreparedBitmap {
+     set_bits: Vec<(Address, u8)>,
+ }
+
+ /// Make a bitmap of the desired size and set bits.
+ fn make_standard_bitmap() -> PreparedBitmap {
+-    let start = allocate_aligned(BLOCK_META_BYTES);
+-    let end = start + BLOCK_META_BYTES;
++    let mut vec = vec![0usize; BLOCK_META_BYTES / std::mem::size_of::<usize>()];
+     let mut rng = get_rng();
+
+-    let mut set_bits = (0..(BLOCK_BYTES >> LOG_BITS_IN_WORD))
+-        .choose_multiple(&mut rng, NUM_OBJECTS)
+-        .iter()
++    let mut offsets = (0..(BLOCK_BYTES >> LOG_BITS_IN_WORD))
++        .choose_multiple(&mut rng, NUM_OBJECTS);
++    offsets.sort();
++
++    for &total_bit_offset in offsets.iter() {
++        let word_offset = total_bit_offset >> LOG_BITS_IN_WORD;
++        let bit_offset = total_bit_offset & ((1 << LOG_BITS_IN_WORD) - 1);
++        vec[word_offset] |= 1 << bit_offset;
++    }
++
++    let boxed_slice = vec.into_boxed_slice();
++    let leaked_slice = Box::leak(boxed_slice);
++    let start = Address::from_mut_ptr(leaked_slice.as_mut_ptr() as *mut u8);
++    let end = start + BLOCK_META_BYTES;
++
++    let set_bits = offsets
++        .into_iter()
+         .map(|total_bit_offset| {
+             let word_offset = total_bit_offset >> LOG_BITS_IN_WORD;
+             let bit_offset = total_bit_offset & ((1 << LOG_BITS_IN_WORD) - 1);
+             (start + (word_offset << LOG_BITS_IN_WORD), bit_offset as u8)
+         })
+         .collect::<Vec<_>>();
+
+-    set_bits.sort();
+-
+-    for (addr, bit) in set_bits.iter() {
+-        let word = unsafe { addr.load::<usize>() };
+-        let new_word = word | (1 << bit);
+-        unsafe { addr.store::<usize>(new_word) };
+-    }
+-
+     PreparedBitmap {
+         start,
+         end,
+         set_bits,
+     }
+```
+</details>
+
+<details>
+<summary>benches/regular_bench/bulk_meta/bzero_bset.rs (lines 7-13)</summary>
+
+```diff
+@@ -7,7 +7,7 @@ use mmtk::util::{constants::LOG_BITS_IN_WORD, test_private, Address};
+-fn allocate_aligned(size: usize) -> Address {
+-    let ptr = unsafe {
+-        std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(size, size).unwrap())
+-    };
+-    Address::from_mut_ptr(ptr)
+-}
+```
+</details>
+
+<details>
+<summary>src/util/rust_util/zeroed_alloc.rs</summary>
+
+```diff
+diff --git a/src/util/rust_util/zeroed_alloc.rs b/src/util/rust_util/zeroed_alloc.rs
+index 09346bf3..9c38e20d 100644
+--- a/src/util/rust_util/zeroed_alloc.rs
++++ b/src/util/rust_util/zeroed_alloc.rs
+@@ -37,12 +37,7 @@ use bytemuck::Zeroable;
+ /// -   `T`: The element type.
+ /// -   `size`: The length and capacity of the created vector.
+ ///
+ /// Returns the created vector.
+ pub(crate) fn new_zeroed_vec<T: Zeroable>(size: usize) -> Vec<T> {
+-    let layout = Layout::array::<T>(size).unwrap();
+-    let ptr = unsafe { alloc_zeroed(layout) } as *mut T;
+-    if ptr.is_null() {
+-        handle_alloc_error(layout);
+-    }
+-    unsafe { Vec::from_raw_parts(ptr, size, size) }
++    bytemuck::zeroed_vec(size)
+ }
+```
+</details>
+
+
+#### Safe Lifetime Enforcement
+**Description**: Removing unsafe lifetime erasure hacks (like casting a reference to a raw pointer and back to a reference with a different lifetime) by enforcing correct lifetimes in function signatures (e.g., requiring `'static` when needed).
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `src/policy/copyspace.rs` | 1 | 0 | -1 |
+
+**Category Total**: Δ = -1
+
+**Diff Snippets**:
+<details>
+<summary>src/policy/copyspace.rs (lines 369)</summary>
+
+```diff
+@@ -362,10 +352,10 @@ impl<VM: VMBinding> CopySpaceCopyContext<VM> {
+         CopySpaceCopyContext {
+             copy_allocator: BumpAllocator::new(tls.0, tospace, context),
+         }
+     }
+
+-    pub fn rebind(&mut self, space: &CopySpace<VM>) {
++    pub fn rebind(&mut self, space: &'static CopySpace<VM>) {
+         self.copy_allocator
+-            .rebind(unsafe { &*{ space as m: std::marker::PhantomData,
+             })
+         });
+```
+</details>
+
+#### Removal of Static Plan Hack
+**Description**: Removal of the unsafe hack that cast a local plan reference to a `'static` reference and used `Arc::as_ptr` to modify `GCTrigger`.
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `src/mmtk.rs` | 2 | 0 | -2 |
+| `src/util/heap/gc_trigger.rs` | 1 | 0 | -1 |
+
+**Category Total**: Δ = -3
+
+**Diff Snippets**:
+<details>
+<summary>src/mmtk.rs</summary>
+
+```diff
+--- a/src/mmtk.rs
++++ b/src/mmtk.rs
+@@ -176,22 +236,13 @@
+-        // We haven't finished creating MMTk. No one is using the GC trigger. We cast the arc into a mutable reference.
+-        {
+-            // TODO: use Arc::get_mut_unchecked() when it is availble.
+-            let gc_trigger: &mut GCTrigger<VM> =
+-                unsafe { &mut *(Arc::as_ptr(&gc_trigger) as *mut _) };
+-            // We know the plan address will not change. Cast it to a static reference.
+-            let static_plan: &'static dyn Plan<VM = VM> = unsafe { &*(&*plan as *const _) };
+-            // Set the plan so we can trigger GC and check GC condition without using plan
+-            gc_trigger.set_plan(static_plan);
+-        }
+```
+</details>
+
+<details>
+<summary>src/util/heap/gc_trigger.rs (line 77)</summary>
+
+```diff
+-    fn plan(&self) -> &dyn Plan<VM = VM> {
+-        unsafe { self.plan.assume_init() }
+-    }
+```
+</details>
+
+
+### Iterator and Collection Safety
+
+#### Safe Iterator Abstraction (Block Cells)
+**Description**: Replaced manual pointer arithmetic and unchecked object creation in sweeping loops with a safe `CellIter` and safe `ObjectReference` creation. One unsafe operation (storing the link) was moved to a helper method `BlockCell::store_link`.
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `src/policy/marksweepspace/native_ms/block.rs` | 5 | 1 | -4 |
+
+**Category Total**: Δ = -4
+
+**Diff Snippets**:
+<details>
+<summary>src/policy/marksweepspace/native_ms/block.rs</summary>
+
+```diff
+@@ -284,31 +305,23 @@ impl Block {
+     fn simple_sweep<VM: VMBinding>(&self) {
+          let cell_size = self.load_block_cell_size();
+          debug_assert_ne!(cell_size, 0);
+ -        let mut cell = self.start();
+ -        let mut last = unsafe { Address::zero() };
+ -        while cell + cell_size <= self.start() + Block::BYTES {
+ -            let potential_object = unsafe { ObjectReference::from_raw_address_unchecked(cell) };
+ +        let mut last = Address::zero();
+ +
+ +        for cell in self.cells(cell_size) {
+ +            let potential_object = ObjectReference::from_raw_address(cell.address()).unwrap();
+
+              if !VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
+                  .is_marked::<VM>(potential_object, Ordering::SeqCst)
+              {
+ -                unsafe {
+ -                    cell.store::<Address>(last);
+ -                }
+ -                last = cell;
+ +                cell.store_link(last);
+ +                last = cell.address();
+              }
+ -            cell += cell_size;
+          }
+ ```
+ </details>
+
+#### Safe Slice/Array Access
+**Description**: Replacing unsafe raw pointer dereferencing to access slice or array elements with safe alternatives like `as_bytes().first()`.
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `src/scheduler/worker.rs` | 1 | 0 | -1 |
+
+**Category Total**: Δ = -1
+
+**Diff Snippets**:
+<details>
+<summary>src/scheduler/worker.rs (lines 249-261)</summary>
+
+```diff
+@@ -249,11 +248,11 @@ impl<VM: VMBinding> GCWorker<VM> {
+
+             #[cfg(feature = "bpftrace_workaround")]
+             // Workaround a problem where bpftrace script cannot see the work packet names,
+             // by force loading from the packet name.
+             // See the "Known issues" section in `tools/tracing/timeline/README.md`
+-            std::hint::black_box(unsafe { *(typename.as_ptr()) });
++            std::hint::black_box(typename.as_bytes().first().copied().unwrap_or(0));
+
+             probe!(mmtk, work, typename.as_ptr(), typename.len());
+```
+</details>
+
+### API and Trait Refinements
+
+#### Safe Method Signatures (Internal Helpers)
+**Description**: Marking internal methods that manipulate the heap or free list as safe, as they do not perform unsafe memory operations directly and their safety invariants are either handled or represent logic correctness rather than memory safety.
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `src/util/heap/freelistpageresource.rs` | 5 | 0 | -5 |
+| `src/util/heap/monotonepageresource.rs` | 3 | 0 | -3 |
+| `src/policy/copyspace.rs` | 1 | 0 | -1 |
+
+**Category Total**: Δ = -9
+
+**Diff Snippets**:
+<details>
+<summary>src/util/heap/freelistpageresource.rs (lines 91, 253, 272, 305, 382)</summary>
+
+```diff
+@@ -86,20 +83,18 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
+     ) -> Result<PRAllocResult, PRAllocFail> {
+...
+-            page_offset = unsafe {
+-                self.allocate_contiguous_chunks(space_descriptor, required_pages, &mut sync)
+-            };
++            page_offset = self.allocate_contiguous_chunks(space_descriptor, required_pages, &mut sync);
+```
+
+```diff
+@@ -248,16 +243,23 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
+...
+-            unsafe { self.allocate_contiguous_chunks(space_descriptor, PAGES_IN_CHUNK, &mut sync) };
++            self.allocate_contiguous_chunks(space_descriptor, PAGES_IN_CHUNK, &mut sync);
+```
+
+```diff
+@@ -267,11 +262,11 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
+...
+-    unsafe fn allocate_contiguous_chunks(
++    fn allocate_contiguous_chunks(
+```
+
+```diff
+@@ -292,19 +287,19 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
+...
+-    unsafe fn free_contiguous_chunk(&self, chunk: Address, sync: &mut FreeListPageResourceSync) {
++    fn free_contiguous_chunk(&self, chunk: Address, sync: &mut FreeListPageResourceSync) {
+```
+
+```diff
+@@ -377,15 +372,13 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
+...
+-                unsafe {
+-                    self.free_contiguous_chunk(
+-                        start + conversions::pages_to_bytes(region_start),
+-                        sync,
+-                    );
+-                }
++                self.free_contiguous_chunk(
++                    start + conversions::pages_to_bytes(region_start),
++                    sync,
++                );
+```
+</details>
+
+<details>
+<summary>src/util/heap/monotonepageresource.rs (Method Signatures)</summary>
+
+```diff
+@@ -211,20 +211,18 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
+
+     fn get_region_start(addr: Address) -> Address {
+         addr.align_down(BYTES_IN_REGION)
+     }
+
+-    /// # Safety
+-    /// TODO: I am not sure why this is unsafe.
+-    pub unsafe fn reset(&self) {
++    pub fn reset(&self) {
+         let mut guard = self.sync.lock().unwrap();
+         self.common().accounting.reset();
+         self.release_pages(&mut guard);
+         drop(guard);
+     }
+
+-    pub unsafe fn get_current_chunk(&self) -> Address {
++    pub fn get_current_chunk(&self) -> Address {
+         let guard = self.sync.lock().unwrap();
+         guard.current_chunk
+     }
+
+     /*/**
+@@ -307,11 +305,11 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
+             self.common.accounting.reset();
+             self.common.accounting.reserve_and_commit(pages);
+         }
+     }
+
+-    unsafe fn release_pages(&self, guard: &mut MutexGuard<MonotonePageResourceSync>) {
++    fn release_pages(&self, guard: &mut MutexGuard<MonotonePageResourceSync>) {
+         // TODO: concurrent zeroing
+         if self.common().contiguous {
+             guard.cursor = match guard.conditional {
+```
+</details>
+
+<details>
+<summary>src/policy/copyspace.rs (lines 223)</summary>
+
+```diff
+@@ -218,13 +218,11 @@ impl<VM: VMBinding> CopySpace<VM> {
+             // Clear VO bits because all objects in the space are dead.
+             #[cfg(feature = "vo_bit")]
+             crate::util::metadata::vo_bit::bzero_vo_bit(start, size);
+         }
+
+-        unsafe {
+-            self.pr.reset();
+-        }
++        self.pr.reset();
+         self.from_space.store(false, Ordering::SeqCst);
+     }
+```
+</details>
+
+#### Safe API: VMMap Methods
+**Description**: The `VMMap` trait methods `allocate_contiguous_chunks` and `free_contiguous_chunks` were made safe, allowing callers to remove `unsafe` blocks. This was enabled by adding internal synchronization (Mutex) in the implementations (`Map32` and `Map64`).
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `src/util/heap/pageresource.rs` | 2 | 0 | -2 |
+
+**Category Total**: Δ = -2
+
+**Diff Snippets**:
+<details>
+<summary>src/util/heap/pageresource.rs</summary>
+
+```diff
+@@ -153,18 +153,16 @@ impl CommonPageResource {
+         chunks: usize,
+         freelist: Option<&mut dyn FreeList>,
+     ) -> Address {
+         let mut head_discontiguous_region = self.head_discontiguous_region.lock().unwrap();
+
+-        let new_head: Address = unsafe {
+-            self.vm_map.allocate_contiguous_chunks(
+-                space_descriptor,
+-                chunks,
+-                *head_discontiguous_region,
+-                freelist,
+-            )
+-        };
++        let new_head: Address = self.vm_map.allocate_contiguous_chunks(
++            space_descriptor,
++            chunks,
++            *head_discontiguous_region,
++            freelist,
++        );
+         if new_head.is_zero() {
+             return Address::ZERO;
+         }
+
+         *head_discontiguous_region = new_head;
+@@ -177,13 +175,11 @@ impl CommonPageResource {
+         let mut head_discontiguous_region = self.head_discontiguous_region.lock().unwrap();
+         debug_assert!(chunk == conversions::chunk_align_down(chunk));
+         if chunk == *head_discontiguous_region {
+             *head_discontiguous_region = self.vm_map.get_next_contiguous_region(chunk);
+         }
+-        unsafe {
+-            self.vm_map.free_contiguous_chunks(chunk);
+-        }
++        self.vm_map.free_contiguous_chunks(chunk);
+     }
+```
+</details>
+
+
+#### Encapsulated Allocator Access
+**Description**: Replaced direct unsafe access to allocators and subsequent downcasting with a safe wrapper method `allocator_impl_mut_for_semantic` on `Mutator`.
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `src/plan/compressor/mutator.rs` | 1 | 0 | -1 |
+| `src/plan/concurrent/immix/mutator.rs` | 2 | 0 | -2 |
+| `src/plan/generational/copying/mutator.rs` | 1 | 0 | -1 |
+| `src/plan/generational/immix/mutator.rs` | 1 | 0 | -1 |
+| `src/plan/immix/mutator.rs` | 1 | 0 | -1 |
+| `src/plan/markcompact/mutator.rs` | 1 | 0 | -1 |
+| `src/plan/marksweep/mutator.rs` | 1 | 0 | -1 |
+| `src/plan/semispace/mutator.rs` | 1 | 0 | -1 |
+
+**Category Total**: Δ = -9
+
+**Diff Snippets**:
+<details>
+<summary>src/plan/compressor/mutator.rs</summary>
+
+```diff
+diff --git a/src/plan/compressor/mutator.rs b/src/plan/compressor/mutator.rs
+index 4beeac31..23c56b35 100644
+--- a/src/plan/compressor/mutator.rs
++++ b/src/plan/compressor/mutator.rs
+@@ -59,15 +59,9 @@ pub fn create_compressor_mutator<VM: VMBinding>(
+     builder.build()
+ }
+
+ pub fn compressor_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWorkerThread) {
+     // reset the thread-local allocation bump pointer
+-    let bump_allocator = unsafe {
+-        mutator
+-            .allocators
+-            .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
+-    }
+-    .downcast_mut::<BumpAllocator<VM>>()
+-    .unwrap();
++    let bump_allocator = mutator.allocator_impl_mut_for_semantic::<BumpAllocator<VM>>(AllocationSemantics::Default);
+     bump_allocator.reset();
+     common_release_func(mutator, tls);
+ }
+```
+</details>
+
 <details>
 <summary>src/plan/concurrent/immix/mutator.rs</summary>
 
@@ -3509,1316 +4979,220 @@ diff --git a/src/util/rust_util/atomic_box.rs b/src/util/rust_util/atomic_box.rs
 </details>
 
 <details>
-<summary>src/plan/mutator_context.rs</summary>
+<summary>src/plan/generational/copying/mutator.rs</summary>
 
 ```diff
-@@ -31,15 +31,13 @@ pub(crate) fn unreachable_prepare_func<VM: VMBinding>(
- /// An mutator prepare implementation for plans that use [`crate::plan::global::CommonPlan`].
- #[allow(unused_variables)]
- pub(crate) fn common_prepare_func<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
-     // Prepare the free list allocator used for non moving
-     #[cfg(feature = "marksweep_as_nonmoving")]
--    unsafe {
--        mutator.allocator_impl_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(
--            AllocationSemantics::NonMoving,
--        )
+diff --git a/src/plan/generational/copying/mutator.rs b/src/plan/generational/copying/mutator.rs
+index eb7e8c15..38119487 100644
+--- a/src/plan/generational/copying/mutator.rs
++++ b/src/plan/generational/copying/mutator.rs
+@@ -14,17 +14,11 @@ use crate::util::{VMMutatorThread, VMWorkerThread};
+ use crate::vm::VMBinding;
+ use crate::MMTK;
+
+ pub fn gencopy_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWorkerThread) {
+     // reset nursery allocator
+-    let bump_allocator = unsafe {
+-        mutator
+-            .allocators
+-            .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
 -    }
-+    mutator.allocator_impl_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(
-+        AllocationSemantics::NonMoving,
-+    )
-     .prepare();
+-    .downcast_mut::<BumpAllocator<VM>>()
+-    .unwrap();
++    let bump_allocator = mutator.allocator_impl_mut_for_semantic::<BumpAllocator<VM>>(AllocationSemantics::Default);
+     bump_allocator.reset();
+
+     common_release_func(mutator, tls);
+ }
+```
+</details>
+
+<details>
+<summary>src/plan/generational/immix/mutator.rs (lines 14-31)</summary>
+
+```diff
+diff --git a/src/plan/generational/immix/mutator.rs b/src/plan/generational/immix/mutator.rs
+index e3d93469..36ccd2cc 100644
+--- a/src/plan/generational/immix/mutator.rs
++++ b/src/plan/generational/immix/mutator.rs
+@@ -14,17 +14,11 @@ use crate::util::{VMMutatorThread, VMWorkerThread};
+ use crate::vm::VMBinding;
+ use crate::MMTK;
+
+ pub fn genimmix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWorkerThread) {
+     // reset nursery allocator
+-    let bump_allocator = unsafe {
+-        mutator
+-            .allocators
+-            .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
+-    }
+-    .downcast_mut::<BumpAllocator<VM>>()
+-    .unwrap();
++    let bump_allocator = mutator.allocator_impl_mut_for_semantic::<BumpAllocator<VM>>(AllocationSemantics::Default);
+     bump_allocator.reset();
+
+     common_release_func(mutator, tls);
+ }
+```
+</details>
+
+<details>
+<summary>src/plan/immix/mutator.rs (lines 14-31)</summary>
+
+```diff
+diff --git a/src/plan/immix/mutator.rs b/src/plan/immix/mutator.rs
+index aa6354eb..be2a3304 100644
+--- a/src/plan/immix/mutator.rs
++++ b/src/plan/immix/mutator.rs
+@@ -14,17 +14,11 @@ use crate::util::opaque_pointer::{VMMutatorThread, VMWorkerThread};
+ use crate::vm::VMBinding;
+ use crate::MMTK;
+ use enum_map::EnumMap;
+
+ pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWorkerThread) {
+-    let immix_allocator = unsafe {
+-        mutator
+-            .allocators
+-            .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
+-    }
+-    .downcast_mut::<ImmixAllocator<VM>>()
+-    .unwrap();
++    let immix_allocator = mutator.allocator_impl_mut_for_semantic::<ImmixAllocator<VM>>(AllocationSemantics::Default);
+     immix_allocator.reset();
+
+     common_release_func(mutator, tls);
+ }
+```
+</details>
+
+<details>
+<summary>src/plan/markcompact/mutator.rs</summary>
+
+```diff
+diff --git a/src/plan/markcompact/mutator.rs b/src/plan/markcompact/mutator.rs
+index 4e40743a..1419769d 100644
+--- a/src/plan/markcompact/mutator.rs
++++ b/src/plan/markcompact/mutator.rs
+@@ -47,16 +47,10 @@ pub fn create_markcompact_mutator<VM: VMBinding>(
+     builder.build()
  }
 
- /// A place-holder implementation for `MutatorConfig::release_func` that should not be called.
-@@ -54,20 +52,20 @@ pub(crate) fn unreachable_release_func<VM: VMBinding>(
- #[allow(unused_variables)]
- pub(crate) fn common_release_func<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
-     cfg_if::cfg_if! {
-         if #[cfg(feature = "marksweep_as_nonmoving")] {
-             // Release the free list allocator used for non moving
--            unsafe { mutator.allocator_impl_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(
-+            mutator.allocator_impl_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(
-                 AllocationSemantics::NonMoving,
--            )}.release();
-+            ).release();
-         } else if #[cfg(feature = "immortal_as_nonmoving")] {
-             // Do nothig for the bump pointer allocator
-         } else {
-             // Reset the Immix allocator
--            unsafe { mutator.allocator_impl_mut_for_semantic::<crate::util::alloc::ImmixAllocator<VM>>(
-+            mutator.allocator_impl_mut_for_semantic::<crate::util::alloc::ImmixAllocator<VM>>(
-                 AllocationSemantics::NonMoving,
--            )}.reset();
-+            ).reset();
-         }
-     }
+ pub fn markcompact_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWorkerThread) {
+     // reset the thread-local allocation bump pointer
+-    let markcompact_allocator = unsafe {
+-        mutator
+-            .allocators
+-            .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
+-    }
+-    .downcast_mut::<MarkCompactAllocator<VM>>()
+-    .unwrap();
++    let markcompact_allocator = mutator.allocator_impl_mut_for_semantic::<MarkCompactAllocator<VM>>(AllocationSemantics::Default);
+     markcompact_allocator.reset();
+
+     common_release_func(mutator, tls);
  }
+```
+</details>
 
-@@ -191,14 +189,11 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
-         size: usize,
-         align: usize,
-         offset: usize,
-         allocator: AllocationSemantics,
-     ) -> Address {
--        let allocator = unsafe {
--            self.allocators
--                .get_allocator_mut(self.config.allocator_mapping[allocator])
--        };
-+        let allocator = self.allocator_mut(self.config.allocator_mapping[allocator]);
-         // The value should be default/unset at the beginning of an allocation request.
-         debug_assert!(allocator.get_context().get_alloc_options().is_default());
-         allocator.alloc(size, align, offset)
-     }
+<details>
+<summary>src/plan/marksweep/mutator.rs</summary>
 
-@@ -208,14 +203,11 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
-         align: usize,
-         offset: usize,
-         allocator: AllocationSemantics,
-         options: AllocationOptions,
-     ) -> Address {
--        let allocator = unsafe {
--            self.allocators
--                .get_allocator_mut(self.config.allocator_mapping[allocator])
--        };
-+        let allocator = self.allocator_mut(self.config.allocator_mapping[allocator]);
-         // The value should be default/unset at the beginning of an allocation request.
-         debug_assert!(allocator.get_context().get_alloc_options().is_default());
-         allocator.alloc_with_options(size, align, offset, options)
-     }
+```diff
+diff --git a/src/plan/marksweep/mutator.rs b/src/plan/marksweep/mutator.rs
+index 8d5b045e..c5114afc 100644
+--- a/src/plan/marksweep/mutator.rs
++++ b/src/plan/marksweep/mutator.rs
+@@ -61,17 +61,11 @@ mod native_mark_sweep {
+     use crate::util::alloc::FreeListAllocator;
 
-@@ -224,14 +216,11 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
-         size: usize,
-         align: usize,
-         offset: usize,
-         allocator: AllocationSemantics,
-     ) -> Address {
--        let allocator = unsafe {
--            self.allocators
--                .get_allocator_mut(self.config.allocator_mapping[allocator])
--        };
-+        let allocator = self.allocator_mut(self.config.allocator_mapping[allocator]);
-         // The value should be default/unset at the beginning of an allocation request.
-         debug_assert!(allocator.get_context().get_alloc_options().is_default());
-         allocator.alloc_slow(size, align, offset)
-     }
-
-@@ -241,14 +230,11 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
-         align: usize,
-         offset: usize,
-         allocator: AllocationSemantics,
-         options: AllocationOptions,
-     ) -> Address {
--        let allocator = unsafe {
--            self.allocators
--                .get_allocator_mut(self.config.allocator_mapping[allocator])
--        };
-+        let allocator = self.allocator_mut(self.config.allocator_mapping[allocator]);
-         // The value should be default/unset at the beginning of an allocation request.
-         debug_assert!(allocator.get_context().get_alloc_options().is_default());
-         allocator.alloc_slow_with_options(size, align, offset, options)
-     }
-
-@@ -257,14 +243,11 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
-         &mut self,
-         refer: ObjectReference,
-         _bytes: usize,
-         allocator: AllocationSemantics,
-     ) -> Address {
+     fn get_freelist_allocator_mut<VM: VMBinding>(
+         mutator: &mut Mutator<VM>,
+     ) -> &mut FreeListAllocator<VM> {
 -        unsafe {
--            self.allocators
--                .get_allocator_mut(self.config.allocator_mapping[allocator])
+-            mutator
+-                .allocators
+-                .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
 -        }
-+        self.allocator_mut(self.config.allocator_mapping[allocator])
-         .get_space()
-         .initialize_object_metadata(refer)
+-        .downcast_mut::<FreeListAllocator<VM>>()
+-        .unwrap()
++        mutator.allocator_impl_mut_for_semantic::<FreeListAllocator<VM>>(AllocationSemantics::Default)
      }
 
-     fn get_tls(&self) -> VMMutatorThread {
-@@ -291,69 +274,85 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
-     }
+     // We forward calls to the allocator prepare and release
 
-     /// Inform each allocator about destroying. Call allocator-specific on destroy methods.
-     pub fn on_destroy(&mut self) {
-         for selector in self.get_all_allocator_selectors() {
--            unsafe { self.allocators.get_allocator_mut(selector) }.on_mutator_destroy();
-+            self.allocator_mut(selector).on_mutator_destroy();
-         }
-     }
-
-     /// Get the allocator for the selector.
-     ///
--    /// # Safety
--    /// The selector needs to be valid, and points to an allocator that has been initialized.
--    /// [`crate::memory_manager::get_allocator_mapping`] can be used to get a selector.
--    pub unsafe fn allocator(&self, selector: AllocatorSelector) -> &dyn Allocator<VM> {
-+    /// # Panics
-+    /// Panics if the selector is not initialized.
-+    pub fn allocator(&self, selector: AllocatorSelector) -> &dyn Allocator<VM> {
-+        assert!(
-+            self.config.space_mapping.iter().any(|(s, _)| *s == selector),
-+            "Allocator not initialized for selector {:?}",
-+            selector
-+        );
-         self.allocators.get_allocator(selector)
-     }
-
-     /// Get the mutable allocator for the selector.
-     ///
--    /// # Safety
--    /// The selector needs to be valid, and points to an allocator that has been initialized.
--    /// [`crate::memory_manager::get_allocator_mapping`] can be used to get a selector.
--    pub unsafe fn allocator_mut(&mut self, selector: AllocatorSelector) -> &mut dyn Allocator<VM> {
-+    /// # Panics
-+    /// Panics if the selector is not initialized.
-+    pub fn allocator_mut(&mut self, selector: AllocatorSelector) -> &mut dyn Allocator<VM> {
-+        assert!(
-+            self.config.space_mapping.iter().any(|(s, _)| *s == selector),
-+            "Allocator not initialized for selector {:?}",
-+            selector
-+        );
-         self.allocators.get_allocator_mut(selector)
-     }
-
-     /// Get the allocator of a concrete type for the selector.
-     ///
--    /// # Safety
--    /// The selector needs to be valid, and points to an allocator that has been initialized.
--    /// [`crate::memory_manager::get_allocator_mapping`] can be used to get a selector.
--    pub unsafe fn allocator_impl<T: Allocator<VM>>(&self, selector: AllocatorSelector) -> &T {
-+    /// # Panics
-+    /// Panics if the selector is not initialized or the type is wrong.
-+    pub fn allocator_impl<T: Allocator<VM>>(&self, selector: AllocatorSelector) -> &T {
-+        assert!(
-+            self.config.space_mapping.iter().any(|(s, _)| *s == selector),
-+            "Allocator not initialized for selector {:?}",
-+            selector
-+        );
-         self.allocators.get_typed_allocator(selector)
-     }
-
-     /// Get the mutable allocator of a concrete type for the selector.
-     ///
--    /// # Safety
--    /// The selector needs to be valid, and points to an allocator that has been initialized.
--    /// [`crate::memory_manager::get_allocator_mapping`] can be used to get a selector.
--    pub unsafe fn allocator_impl_mut<T: Allocator<VM>>(
-+    /// # Panics
-+    /// Panics if the selector is not initialized or the type is wrong.
-+    pub fn allocator_impl_mut<T: Allocator<VM>>(
-         &mut self,
-         selector: AllocatorSelector,
-     ) -> &mut T {
-+        assert!(
-+            self.config.space_mapping.iter().any(|(s, _)| *s == selector),
-+            "Allocator not initialized for selector {:?}",
-+            selector
-+        );
-         self.allocators.get_typed_allocator_mut(selector)
-     }
-
-     /// Get the allocator of a concrete type for the semantic.
-     ///
--    /// # Safety
--    /// The semantic needs to match the allocator type.
--    pub unsafe fn allocator_impl_for_semantic<T: Allocator<VM>>(
-+    /// # Panics
-+    /// Panics if the allocator is not initialized or the type is wrong.
-+    pub fn allocator_impl_for_semantic<T: Allocator<VM>>(
-         &self,
-         semantic: AllocationSemantics,
-     ) -> &T {
-         self.allocator_impl::<T>(self.config.allocator_mapping[semantic])
-     }
-
-     /// Get the mutable allocator of a concrete type for the semantic.
-     ///
--    /// # Safety
--    /// The semantic needs to match the allocator type.
--    pub unsafe fn allocator_impl_mut_for_semantic<T: Allocator<VM>>(
-+    /// # Panics
-+    /// Panics if the allocator is not initialized or the type is wrong.
-+    pub fn allocator_impl_mut_for_semantic<T: Allocator<VM>>(
-         &mut self,
-         semantic: AllocationSemantics,
-     ) -> &mut T {
-         self.allocator_impl_mut::<T>(self.config.allocator_mapping[semantic])
-     }
+     #[cfg(not(feature = "malloc_mark_sweep"))]
 ```
 </details>
 
 <details>
-<summary>src/util/memory.rs (lines 489-570)</summary>
+<summary>src/plan/semispace/mutator.rs</summary>
 
 ```diff
-@@ -489,23 +498,26 @@ mod tests {
-     use crate::util::test_util::{serial_test, with_cleanup};
+diff --git a/src/plan/semispace/mutator.rs b/src/plan/semispace/mutator.rs
+index 2a190a31..0fd8ab8f 100644
+--- a/src/plan/semispace/mutator.rs
++++ b/src/plan/semispace/mutator.rs
+@@ -15,24 +15,13 @@ use crate::vm::VMBinding;
+ use crate::MMTK;
+ use enum_map::EnumMap;
 
-     // In the tests, we will mmap this address. This address should not be in our heap (in case we mess up with other tests)
-     const START: Address = MEMORY_TEST_REGION.start;
-
-+    fn test_dzmmap(start: Address, size: usize, strategy: MmapStrategy, anno: &MmapAnnotation) -> Result<()> {
-+        assert!(start >= MEMORY_TEST_REGION.start);
-+        assert!(start + size <= MEMORY_TEST_REGION.start + MEMORY_TEST_REGION.size);
-+        // SAFETY: This is a safe wrapper for tests that ensures we only mmap within the test region.
-+        unsafe { dzmmap(start, size, strategy, anno) }
-+    }
-+
-     #[test]
-     fn test_mmap() {
-         serial_test(|| {
-             with_cleanup(
-                 || {
--                    let res = unsafe {
--                        dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!())
--                    };
-+                    let res = test_dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!());
-                     assert!(res.is_ok());
-                     // We can overwrite with dzmmap
--                    let res = unsafe {
--                        dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!())
--                    };
-+                    let res = test_dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!());
-                     assert!(res.is_ok());
-                 },
-                 || {
-                     assert!(munmap(START, BYTES_IN_PAGE).is_ok());
-                 },
-@@ -534,13 +543,11 @@ mod tests {
-     fn test_mmap_noreplace() {
-         serial_test(|| {
-             with_cleanup(
-                 || {
-                     // Make sure we mmapped the memory
--                    let res = unsafe {
--                        dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!())
--                    };
-+                    let res = test_dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!());
-                     assert!(res.is_ok());
-                     // Use dzmmap_noreplace will fail
-                     let res = dzmmap_noreplace(
-                         START,
-                         BYTES_IN_PAGE,
-@@ -558,13 +570,11 @@ mod tests {
-                 || {
-                     let res =
-                         mmap_noreserve(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!());
-                     assert!(res.is_ok());
-                     // Try reserve it
--                    let res = unsafe {
--                        dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!())
--                    };
-+                    let res = test_dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!());
-                     assert!(res.is_ok());
-                 },
-                 || {
-                     assert!(munmap(START, BYTES_IN_PAGE).is_ok());
-                 },
-```
-</details>
-
-### Safe Metadata API (Malloc MS)
-**Description**: Replaced unsafe metadata operations (like `is_marked_unsafe`, `unset_vo_bit_unsafe`, `unset_mark_bit`, `unset_page_mark`) with safe versions that encapsulate the unsafety.
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `src/policy/marksweepspace/malloc_ms/global.rs` | 8 | 0 | -8 |
-| `src/policy/marksweepspace/malloc_ms/metadata.rs` | 7 | 0 | -7 |
-
-**Category Total**: Δ = -15
-
-**Diff Snippets**:
-<details>
-<summary>src/policy/marksweepspace/malloc_ms/global.rs</summary>
-
-```diff
-@@ -349,25 +349,22 @@ impl<VM: VMBinding> MallocSpace<VM> {
--    unsafe fn unset_page_mark(&self, start: Address, size: usize) {
-+    fn unset_page_mark(&self, start: Address, size: usize) {
-...
--            if is_page_marked_unsafe(page) {
-+            if is_page_marked(page) {
-                 cleared_pages += 1;
--                unset_page_mark_unsafe(page);
-+                unset_page_mark(page);
-             }
-```
-```diff
-@@ -460,20 +457,14 @@ impl<VM: VMBinding> MallocSpace<VM> {
-         if offset_malloc_bit {
--            trace!("Free memory {:x}", addr);
--            offset_free(addr);
--            unsafe { unset_offset_malloc_bit_unsafe(addr) };
-+            unset_offset_malloc_bit(addr);
-         }
-```
-```diff
-@@ -603,29 +598,29 @@ impl<VM: VMBinding> MallocSpace<VM> {
--        unsafe { self.unset_page_mark(chunk_start, BYTES_IN_CHUNK) };
-+        self.unset_page_mark(chunk_start, BYTES_IN_CHUNK);
-```
-```diff
-@@ -619,13 +614,11 @@ impl<VM: VMBinding> MallocSpace<VM> {
--        if !unsafe { is_marked_unsafe::<VM>(object) } {
-+        if !is_marked::<VM>(object, Ordering::Relaxed) {
-...
--            unsafe { unset_vo_bit_unsafe(object) };
-+            unset_vo_bit(object);
-```
-```diff
-@@ -635,13 +630,11 @@ impl<VM: VMBinding> MallocSpace<VM> {
-                 if current_page > *empty_page_start {
-                     // we are the only GC thread that is accessing this chunk
--                    unsafe {
--                        self.unset_page_mark(*empty_page_start, current_page - *empty_page_start)
--                    };
-+                    self.unset_page_mark(*empty_page_start, current_page - *empty_page_start);
-                 }
-```
-```diff
-@@ -845,11 +725,11 @@ impl<VM: VMBinding> MallocSpace<VM> {
--                unsafe { unset_mark_bit::<VM>(object) };
-+                unset_mark_bit::<VM>(object);
-```
-```diff
-@@ -865,16 +745,14 @@ impl<VM: VMBinding> MallocSpace<VM> {
--            unsafe {
--                self.unset_page_mark(
--                    empty_page_start,
--                    chunk_start + BYTES_IN_CHUNK - empty_page_start,
--                )
--            };
-+            self.unset_page_mark(
-+                empty_page_start,
-+                chunk_start + BYTES_IN_CHUNK - empty_page_start,
-+            );
-```
-</details>
-
-<details>
-<summary>src/policy/marksweepspace/malloc_ms/metadata.rs</summary>
-
-```diff
-@@ -24,12 +24,12 @@
--pub unsafe fn is_marked_unsafe<VM: VMBinding>(object: ObjectReference) -> bool {
--    VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load::<VM, u8>(object, None) == 1
-+pub fn is_marked_unsafe<VM: VMBinding>(object: ObjectReference) -> bool {
-+    VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(object, None, Ordering::Relaxed) == 1
- }
-@@ -42,14 +42,10 @@
--#[allow(unused)]
--pub(super) unsafe fn is_page_marked_unsafe(page_addr: Address) -> bool {
--    ACTIVE_PAGE_METADATA_SPEC.load::<u8>(page_addr) == 1
--}
-@@ -65,46 +61,35 @@
- pub(super) fn is_offset_malloc(address: Address) -> bool {
--    unsafe { OFFSET_MALLOC_METADATA_SPEC.load::<u8>(address) == 1 }
-+    OFFSET_MALLOC_METADATA_SPEC.load_atomic::<u8>(address, Ordering::SeqCst) == 1
- }
-...
--pub(super) unsafe fn unset_offset_malloc_bit_unsafe(address: Address) {
--    OFFSET_MALLOC_METADATA_SPEC.store::<u8>(address, 0);
-+pub(super) fn unset_offset_malloc_bit(address: Address) {
-+    OFFSET_MALLOC_METADATA_SPEC.store_atomic::<u8>(address, 0, Ordering::SeqCst);
- }
-...
--pub unsafe fn unset_vo_bit_unsafe(object: ObjectReference) {
--    vo_bit::unset_vo_bit_unsafe(object);
--}
--
--#[allow(unused)]
--pub unsafe fn unset_mark_bit<VM: VMBinding>(object: ObjectReference) {
--    VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.store::<VM, u8>(object, 0, None);
-+pub fn unset_vo_bit_relaxed(object: ObjectReference) {
-+    vo_bit::unset_vo_bit_relaxed(object);
- }
-
--#[allow(unused)]
--pub(super) unsafe fn unset_page_mark_unsafe(page_addr: Address) {
--    ACTIVE_PAGE_METADATA_SPEC.store::<u8>(page_addr, 0)
-+pub fn unset_mark_bit<VM: VMBinding>(object: ObjectReference) {
-+    VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.store_atomic::<VM, u8>(object, 0, None, Ordering::SeqCst);
- }
-```
-</details>
-
-### Removal of Complex Bulk Metadata Operations
-**Description**: Removed complex bulk XOR operations on metadata that required `load128` and manual pointer manipulation, reverting to simpler object-by-object sweeping.
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `src/policy/marksweepspace/malloc_ms/global.rs` | 3 | 0 | -3 |
-| `src/policy/marksweepspace/malloc_ms/metadata.rs` | 1 | 0 | -1 |
-
-**Category Total**: Δ = -4
-
-**Diff Snippets**:
-<details>
-<summary>src/policy/marksweepspace/malloc_ms/global.rs</summary>
-
-```diff
-@@ -719,127 +674,14 @@ impl<VM: VMBinding> MallocSpace<VM> {
--                let alloc_128: u128 = unsafe {
--                    load128(
--                        &crate::util::metadata::vo_bit::VO_BIT_SIDE_METADATA_SPEC,
--                        address,
--                    )
--                };
--                let mark_128: u128 = unsafe { load128(&mark_bit_spec, address) };
-...
--                    debug_assert!(
--                        unsafe { is_marked_unsafe::<VM>(object) },
--                        "Dead object = {} found after sweep",
--                        object
--                    );
-```
-</details>
-
-<details>
-<summary>src/policy/marksweepspace/malloc_ms/metadata.rs</summary>
-
-```diff
-@@ -103,25 +88,10 @@
--/// Load u128 bits of side metadata
--///
--/// # Safety
--/// unsafe as it can segfault if one tries to read outside the bounds of the mapped side metadata
--pub(super) unsafe fn load128(metadata_spec: &SideMetadataSpec, data_addr: Address) -> u128 {
--    let meta_addr = side_metadata::address_to_meta_address(metadata_spec, data_addr);
--
--    #[cfg(all(debug_assertions, feature = "extreme_assertions"))]
--    metadata_spec.assert_metadata_mapped(data_addr);
--
--    meta_addr.load::<u128>()
--}
-```
-</details>
-
-### Safe Malloc/Calloc Wrappers
-**Description**: Replaced raw C allocator calls (like `free` and `calloc`) with safe wrappers in `crate::util::malloc`.
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `src/policy/marksweepspace/malloc_ms/global.rs` | 1 | 0 | -1 |
-| `src/util/malloc/malloc_ms_util.rs` | 4 | 2 | -2 |
-| `src/vm/tests/mock_tests/mock_test_malloc_ms.rs` | 2 | 0 | -2 |
-
-**Category Total**: Δ = -5
-
-**Diff Snippets**:
-<details>
-<summary>src/policy/marksweepspace/malloc_ms/global.rs</summary>
-
-```diff
-@@ -460,20 +457,14 @@ impl<VM: VMBinding> MallocSpace<VM> {
-     fn free_internal(&self, addr: Address, bytes: usize, offset_malloc_bit: bool) {
-+        trace!("Free memory {:x}", addr);
-+        crate::util::malloc::malloc_ms_util::free(addr, offset_malloc_bit);
-         if offset_malloc_bit {
--            trace!("Free memory {:x}", addr);
--            offset_free(addr);
--            unsafe { unset_offset_malloc_bit_unsafe(addr) };
--        } else {
--            let ptr = addr.to_mut_ptr();
--            trace!("Free memory {:?}", ptr);
--            unsafe {
--                free(ptr);
--            }
-         }
-```
-</details>
-
-<details>
-<summary>src/util/malloc/malloc_ms_util.rs (calloc replacement)</summary>
-
-```diff
-@@ -23,4 +24,3 @@ pub fn align_offset_alloc<VM: VMBinding>(size: usize, align: usize, offset: usiz
--    let raw = unsafe { calloc(1, actual_size) };
--    let address = Address::from_mut_ptr(raw);
-+    let address = crate::util::malloc::calloc(1, actual_size);
-@@ -73,4 +90,3 @@ pub fn alloc<VM: VMBinding>(size: usize, align: usize, offset: usize) -> (Addres
--        let raw = unsafe { calloc(1, size) };
--        address = Address::from_mut_ptr(raw);
-+        address = crate::util::malloc::calloc(1, size);
-```
-</details>
-
-<details>
-<summary>src/vm/tests/mock_tests/mock_test_malloc_ms.rs (lines 25-40)</summary>
-
-```diff
-@@ -25,16 +25,12 @@ fn test_malloc() {
-             assert!(malloc_ms_util::get_malloc_usable_size(address1, bool1) >= 16);
-             assert!(malloc_ms_util::get_malloc_usable_size(address2, bool2) >= 16);
-             assert!(malloc_ms_util::get_malloc_usable_size(address3, bool3) >= 16);
-             assert!(malloc_ms_util::get_malloc_usable_size(address4, bool4) >= 32);
-
--            unsafe {
--                malloc_ms_util::free(address1.to_mut_ptr());
--            }
--            unsafe {
--                malloc_ms_util::free(address2.to_mut_ptr());
--            }
-+            malloc_ms_util::free(address1, bool1);
-+            malloc_ms_util::free(address2, bool2);
-             malloc_ms_util::offset_free(address3);
-             malloc_ms_util::offset_free(address4);
-         },
-         no_cleanup,
-     )
-```
-</details>
-
-### Consolidation of Unsafe Blocks
-**Description**: Merging adjacent unsafe blocks or moving operations into a single unsafe block to improve readability and reduce the count of unsafe blocks, without removing the need for unsafe.
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `src/util/malloc/malloc_ms_util.rs` | 5 | 3 | -2 |
-
-**Category Total**: Δ = -2
-
-**Diff Snippets**:
-<details>
-<summary>src/util/malloc/malloc_ms_util.rs (merging blocks)</summary>
-
-```diff
-@@ -35,18 +37,25 @@ pub fn align_offset_alloc<VM: VMBinding>(size: usize, align: usize, offset: usiz
- pub fn offset_malloc_usable_size(address: Address) -> usize {
-     let malloc_res_ptr: *mut usize = (address - BYTES_IN_ADDRESS).to_mut_ptr();
--    let malloc_res = unsafe { malloc_res_ptr.read_unaligned() } as *mut libc::c_void;
--    unsafe { malloc_usable_size(malloc_res) }
-+    // SAFETY: The caller must ensure that `address` was returned by `align_offset_alloc`, so that `malloc_res_ptr` points to the stored original malloc result.
-+    // malloc_res is a valid pointer returned by calloc.
-+    unsafe {
-+        let malloc_res = malloc_res_ptr.read_unaligned() as *mut libc::c_void;
-+        malloc_usable_size(malloc_res)
-+    }
- }
-
- /// Free an address that is allocated with an offset (returned by [`crate::util::malloc::malloc_ms_util::align_offset_alloc`]).
- pub fn offset_free(address: Address) {
-     let malloc_res_ptr: *mut usize = (address - BYTES_IN_ADDRESS).to_mut_ptr();
--    let malloc_res = unsafe { malloc_res_ptr.read_unaligned() } as *mut libc::c_void;
--    unsafe { free(malloc_res) };
-+    // SAFETY: The caller must ensure that `address` was returned by `align_offset_alloc`.
-+    // malloc_res is a valid pointer returned by calloc and can be freed.
-+    unsafe {
-+        let malloc_res = malloc_res_ptr.read_unaligned() as *mut libc::c_void;
-+        crate::util::malloc::library::free(malloc_res);
-+    }
- }
-```
-</details>
-
-
-### Redundant Unsafe Cleanup
-**Description**: Removal of `unsafe` blocks that were not actually required for the operation, such as around safe function calls like `Address::zero()`.
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `src/policy/marksweepspace/malloc_ms/global.rs` | 1 | 0 | -1 |
-| `src/util/alloc/free_list_allocator.rs` | 1 | 0 | -1 |
-
-**Category Total**: Δ = -2
-
-**Diff Snippets**:
-<details>
-<summary>src/policy/marksweepspace/malloc_ms/global.rs</summary>
-
-```diff
-@@ -375,14 +372,14 @@ impl<VM: VMBinding> MallocSpace<VM> {
-     pub fn alloc(&self, tls: VMThread, size: usize, align: usize, offset: usize) -> Address {
-         // TODO: Should refactor this and Space.acquire()
--        if self.get_gc_trigger().poll(false, Some(self)) {
-+        if self.get_gc_trigger().poll(VM::VMActivePlan::mutator(VMMutatorThread(tls)).plan, false, Some(self as &dyn Space<VM>)) {
-             assert!(VM::VMActivePlan::is_mutator(tls), "Polling in GC worker");
-             VM::VMCollection::block_for_gc(VMMutatorThread(tls));
--            return unsafe { Address::zero() };
-+            return Address::zero();
-         }
-```
-</details>
-
-<details>
-<summary>src/util/alloc/free_list_allocator.rs (lines 341-359)</summary>
-
-```diff
-@@ -341,17 +358,15 @@ impl<VM: VMBinding> FreeListAllocator<VM> {
-         // construct free list
-         let block_end = block.start() + Block::BYTES;
--        let mut old_cell = unsafe { Address::zero() };
-+        let mut old_cell = Address::zero();
-         let mut new_cell = block.start();
-```
-</details>
-
-### Safe Object Reference Creation
-**Description**: `ObjectReference::from_raw_address_unchecked` was replaced by `ObjectReference::from_raw_address(...).unwrap()` which is safe.
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `src/util/alloc/free_list_allocator.rs` | 1 | 0 | -1 |
-| `docs/dummyvm/src/lib.rs` | 1 | 0 | -1 |
-| `src/util/object_forwarding.rs` | 1 | 0 | -1 |
-
-**Category Total**: Δ = -3
-
-**Diff Snippets**:
-<details>
-<summary>src/util/object_forwarding.rs (lines 164-185)</summary>
-
-```diff
-@@ -164,22 +164,21 @@ pub fn read_forwarding_pointer<VM: VMBinding>(object: ObjectReference) -> Object
-         is_forwarded_or_being_forwarded::<VM>(object),
-         "read_forwarding_pointer called for object {:?} that has not started forwarding!",
-         object,
-     );
-
--    // We write the forwarding poiner. We know it is an object reference.
--    unsafe {
--        // We use "unchecked" convertion becasue we guarantee the forwarding pointer we stored
--        // previously is from a valid `ObjectReference` which is never zero.
--        ObjectReference::from_raw_address_unchecked(crate::util::Address::from_usize(
--            VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC.load_atomic::<VM, usize>(
--                object,
--                Some(FORWARDING_POINTER_MASK),
--                Ordering::SeqCst,
--            ),
--        ))
+ pub fn ss_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWorkerThread) {
+     // rebind the allocation bump pointer to the appropriate semispace
+-    let bump_allocator = unsafe {
+-        mutator
+-            .allocators
+-            .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
 -    }
-+    // We write the forwarding pointer. We know it is an object reference.
-+    // We can safely unwrap because we guarantee the forwarding pointer we stored
-+    // previously is from a valid `ObjectReference` which is never zero.
-+    ObjectReference::from_raw_address(crate::util::Address::from_usize(
-+        VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC.load_atomic::<VM, usize>(
-+            object,
-+            Some(FORWARDING_POINTER_MASK),
-+            Ordering::SeqCst,
-+        ),
-+    ))
-+    .unwrap()
- }
-```
-</details>
+-    .downcast_mut::<BumpAllocator<VM>>()
+-    .unwrap();
+-    bump_allocator.rebind(
+-        mutator
+-            .plan
+-            .downcast_ref::<SemiSpace<VM>>()
+-            .unwrap()
+-            .tospace(),
+-    );
++    let tospace = mutator.plan.downcast_ref::<SemiSpace<VM>>().unwrap().tospace();
++    let bump_allocator = mutator.allocator_impl_mut_for_semantic::<BumpAllocator<VM>>(AllocationSemantics::Default);
++    bump_allocator.rebind(tospace);
 
-<details>
-<summary>src/util/alloc/free_list_allocator.rs (lines 404-423)</summary>
-
-```diff
-@@ -404,13 +417,13 @@ impl<VM: VMBinding> FreeListAllocator<VM> {
-         // unset allocation bit
-         // Note: We cannot use `unset_vo_bit_unsafe` because two threads may attempt to free
-         // objects at adjacent addresses, and they may share the same byte in the VO bit metadata.
--        crate::util::metadata::vo_bit::unset_vo_bit(unsafe {
--            ObjectReference::from_raw_address_unchecked(addr)
--        })
-+        crate::util::metadata::vo_bit::unset_vo_bit(
-+            ObjectReference::from_raw_address(addr).unwrap()
-+        )
-     }
-```
-</details>
-
-<details>
-<summary>docs/dummyvm/src/lib.rs (lines 32-46)</summary>
-
-```diff
-@@ -32,15 +32,13 @@
- use mmtk::util::{Address, ObjectReference};
-
- impl DummyVM {
-     pub fn object_start_to_ref(start: Address) -> ObjectReference {
-         // Safety: start is the allocation result, and it should not be zero with an offset.
--        unsafe {
--            ObjectReference::from_raw_address_unchecked(
--                start + crate::object_model::OBJECT_REF_OFFSET,
--            )
--        }
-+        ObjectReference::from_raw_address(
-+            start + crate::object_model::OBJECT_REF_OFFSET,
-+        ).unwrap()
-     }
+     common_release_func(mutator, tls);
  }
 ```
 </details>
 
 
-### Mock Slots: Raw Pointers to References
-**Description**: Replaced raw pointers to atomics with safe Rust references with lifetimes in mock slot implementations. This eliminates unsafe pointer dereferences for load/store operations and removes the need for `unsafe impl Send`.
+#### Safe Trait Implementation (Derive)
+**Description**: `unsafe` trait implementations (such as `unsafe impl Zeroable`) were replaced by using derive macros (e.g., `#[derive(Zeroable)]`), allowing the compiler or macro to guarantee safety based on the types of the fields.
 
 **Files and Unsafe Delta**:
 | File | Base | New | Δ |
 |------|------|-----|---|
-| `src/vm/tests/mock_tests/mock_test_slots.rs` | 11 | 0 | -11 |
-
-**Category Total**: Δ = -11
-
-**Diff Snippets**:
-<details>
-<summary>src/vm/tests/mock_tests/mock_test_slots.rs</summary>
-
-```diff
-@@ -61,38 +61,34 @@ mod compressed_oop {
-     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
--    pub struct CompressedOopSlot {
--        slot_addr: *mut Atomic<u32>,
-+    pub struct CompressedOopSlot<'a> {
-+        slot_addr: &'a Atomic<u32>,
-     }
-
--    unsafe impl Send for CompressedOopSlot {}
-...
-         fn load(&self) -> Option<ObjectReference> {
--            let compressed = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
-+            let compressed = self.slot_addr.load(atomic::Ordering::Relaxed);
-             let expanded = (compressed as usize) << 3;
-...
-         fn store(&self, object: ObjectReference) {
-             let expanded = object.to_raw_address().as_usize();
-             let compressed = (expanded >> 3) as u32;
--            unsafe { (*self.slot_addr).store(compressed, atomic::Ordering::Relaxed) }
-+            self.slot_addr.store(compressed, atomic::Ordering::Relaxed)
-         }
-...
-     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
--    pub struct OffsetSlot {
--        slot_addr: *mut Atomic<Address>,
-+    pub struct OffsetSlot<'a> {
-+        slot_addr: &'a Atomic<Address>,
-         offset: usize,
-     }
-
--    unsafe impl Send for OffsetSlot {}
-...
-         fn load(&self) -> Option<ObjectReference> {
--            let middle = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
-+            let middle = self.slot_addr.load(atomic::Ordering::Relaxed);
-             let begin = middle - self.offset;
-...
-         fn store(&self, object: ObjectReference) {
-             let begin = object.to_raw_address();
-             let middle = begin + self.offset;
--            unsafe { (*self.slot_addr).store(middle, atomic::Ordering::Relaxed) }
-+            self.slot_addr.store(middle, atomic::Ordering::Relaxed)
-         }
-...
-     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
--    pub struct TaggedSlot {
--        slot_addr: *mut Atomic<usize>,
-+    pub struct TaggedSlot<'a> {
-+        slot_addr: &'a Atomic<usize>,
-     }
-
--    unsafe impl Send for TaggedSlot {}
-...
-         fn load(&self) -> Option<ObjectReference> {
--            let tagged = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
-+            let tagged = self.slot_addr.load(atomic::Ordering::Relaxed);
-             let untagged = tagged & !Self::TAG_BITS_MASK;
-...
-         fn store(&self, object: ObjectReference) {
--            let old_tagged = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
-+            let old_tagged = self.slot_addr.load(atomic::Ordering::Relaxed);
-             let new_untagged = object.to_raw_address().as_usize();
-             let new_tagged = new_untagged | (old_tagged & Self::TAG_BITS_MASK);
--            unsafe { (*self.slot_addr).store(new_tagged, atomic::Ordering::Relaxed) }
-+            self.slot_addr.store(new_tagged, atomic::Ordering::Relaxed)
-         }
-...
-     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
--    pub enum DummyVMSlot {
-+    pub enum DummyVMSlot<'a> {
-         Simple(SimpleSlot),
-         #[cfg(target_pointer_width = "64")]
--        Compressed(compressed_oop::CompressedOopSlot),
--        Offset(OffsetSlot),
--        Tagged(TaggedSlot),
-+        Compressed(compressed_oop::CompressedOopSlot<'a>),
-+        Offset(OffsetSlot<'a>),
-+        Tagged(TaggedSlot<'a>),
-     }
-
--    unsafe impl Send for DummyVMSlot {}
-```
-</details>
-
-### Safe FFI Signatures
-**Description**: Replaced raw pointers (`*mut T`) with `Option<&mut T>` or `Option<Box<T>>` in `extern "C"` function signatures. Since these types are ABI-compatible with nullable pointers in C, this removes the need for `unsafe` dereferencing and `Box::from_raw` calls at the FFI boundary.
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `docs/dummyvm/src/api.rs` | 10 | 1 | -9 |
-
-**Category Total**: Δ = -9
-
-**Diff Snippets**:
-<details>
-<summary>docs/dummyvm/src/api.rs</summary>
-
-```diff
-@@ -16,40 +16,42 @@ use std::ffi::CStr;
-
- // This file exposes MMTk Rust API to the native code. This is not an exhaustive list of all the APIs.
- // Most commonly used APIs are listed in https://docs.mmtk.io/api/mmtk/memory_manager/index.html. The binding can expose them here.
-
- #[no_mangle]
--pub extern "C" fn mmtk_create_builder() -> *mut MMTKBuilder {
--    Box::into_raw(Box::new(mmtk::MMTKBuilder::new()))
-+pub extern "C" fn mmtk_create_builder() -> Option<Box<MMTKBuilder>> {
-+    Some(Box::new(mmtk::MMTKBuilder::new()))
- }
-
- #[no_mangle]
- pub extern "C" fn mmtk_set_option_from_string(
--    builder: *mut MMTKBuilder,
-+    builder: Option<&mut MMTKBuilder>,
-     name: *const c_char,
-     value: *const c_char,
- ) -> bool {
--    let builder = unsafe { &mut *builder };
--    let name_str: &CStr = unsafe { CStr::from_ptr(name) };
--    let value_str: &CStr = unsafe { CStr::from_ptr(value) };
-+    let builder = builder.expect("builder is null");
-+    // SAFETY: The caller must ensure that `name` and `value` are valid null-terminated C strings.
-+    let (name_str, value_str): (&CStr, &CStr) = unsafe {
-+        (CStr::from_ptr(name), CStr::from_ptr(value))
-+    };
-     builder.set_option(name_str.to_str().unwrap(), value_str.to_str().unwrap())
- }
-
- #[no_mangle]
--pub extern "C" fn mmtk_set_fixed_heap_size(builder: *mut MMTKBuilder, heap_size: usize) -> bool {
--    let builder = unsafe { &mut *builder };
-+pub extern "C" fn mmtk_set_fixed_heap_size(builder: Option<&mut MMTKBuilder>, heap_size: usize) -> bool {
-+    let builder = builder.expect("builder is null");
-     builder
-         .options
-         .gc_trigger
-         .set(mmtk::util::options::GCTriggerSelector::FixedHeapSize(
-             heap_size,
-         ))
- }
-
- #[no_mangle]
--pub fn mmtk_init(builder: *mut MMTKBuilder) {
--    let builder = unsafe { Box::from_raw(builder) };
-+pub extern "C" fn mmtk_init(builder: Option<Box<MMTKBuilder>>) {
-+    let builder = builder.expect("builder is null");
-
-     // Create MMTK instance.
-     let mmtk = memory_manager::mmtk_init::<DummyVM>(&builder);
-
-     // Set SINGLETON to the instance.
-@@ -57,25 +59,26 @@ pub fn mmtk_init(builder: *mut MMTKBuilder) {
-         panic!("Failed to set SINGLETON");
-     });
- }
-
- #[no_mangle]
--pub extern "C" fn mmtk_bind_mutator(tls: VMMutatorThread) -> *mut Mutator<DummyVM> {
--    Box::into_raw(memory_manager::bind_mutator(mmtk(), tls))
-+pub extern "C" fn mmtk_bind_mutator(tls: VMMutatorThread) -> Option<Box<Mutator<DummyVM>>> {
-+    Some(memory_manager::bind_mutator(mmtk(), tls))
- }
-
- #[no_mangle]
--pub extern "C" fn mmtk_destroy_mutator(mutator: *mut Mutator<DummyVM>) {
-+pub extern "C" fn mmtk_destroy_mutator(mutator: Option<Box<Mutator<DummyVM>>>) {
-+    let mut mutator = mutator.expect("mutator is null");
-     // notify mmtk-core about destroyed mutator
--    memory_manager::destroy_mutator(unsafe { &mut *mutator });
-+    memory_manager::destroy_mutator(&mut mutator);
-     // turn the ptr back to a box, and let Rust properly reclaim it
--    let _ = unsafe { Box::from_raw(mutator) };
-+    // The box will be dropped here and reclaimed.
- }
-
- #[no_mangle]
- pub extern "C" fn mmtk_alloc(
--    mutator: *mut Mutator<DummyVM>,
-+    mutator: Option<&mut Mutator<DummyVM>>,
-     size: usize,
-     align: usize,
-     offset: usize,
-     mut semantics: AllocationSemantics,
- ) -> Address {
-@@ -88,16 +91,16 @@ pub extern "C" fn mmtk_alloc(
-             .constraints()
-             .max_non_los_default_alloc_bytes
-     {
-         semantics = AllocationSemantics::Los;
-     }
--    memory_manager::alloc::<DummyVM>(unsafe { &mut *mutator }, size, align, offset, semantics)
-+    memory_manager::alloc::<DummyVM>(mutator.expect("mutator is null"), size, align, offset, semantics)
- }
-
- #[no_mangle]
- pub extern "C" fn mmtk_post_alloc(
--    mutator: *mut Mutator<DummyVM>,
-+    mutator: Option<&mut Mutator<DummyVM>>,
-     refer: ObjectReference,
-     bytes: usize,
-     mut semantics: AllocationSemantics,
- ) {
-     // This just demonstrates that the binding should check against `max_non_los_default_alloc_bytes` to allocate large objects.
-@@ -109,16 +112,16 @@ pub extern "C" fn mmtk_post_alloc(
-             .constraints()
-             .max_non_los_default_alloc_bytes
-     {
-         semantics = AllocationSemantics::Los;
-     }
--    memory_manager::post_alloc::<DummyVM>(unsafe { &mut *mutator }, refer, bytes, semantics)
-+    memory_manager::post_alloc::<DummyVM>(mutator.expect("mutator is null"), refer, bytes, semantics)
- }
-
- #[no_mangle]
--pub extern "C" fn mmtk_start_worker(tls: VMWorkerThread, worker: *mut GCWorker<DummyVM>) {
--    let worker = unsafe { Box::from_raw(worker) };
-+pub extern "C" fn mmtk_start_worker(tls: VMWorkerThread, worker: Option<Box<GCWorker<DummyVM>>>) {
-+    let worker = worker.expect("worker is null");
-     memory_manager::start_worker::<DummyVM>(mmtk(), tls, worker)
- }
-```
-</details>
-
-### Safe Standard Library Alternatives
-**Description**: Replaced direct calls to unsafe FFI functions (from `libc`) with safe methods provided by the Rust standard library (e.g., `std::process`, `std::thread`, and `slice::fill`).
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `src/util/rust_util/mod.rs` | 2 | 0 | -2 |
-| `benches/regular_bench/bulk_meta/bzero_bset.rs` | 2 | 0 | -2 |
-| `src/scheduler/affinity.rs` | 1 | 0 | -1 |
-
-**Category Total**: Δ = -5
-
-**Diff Snippets**:
-<details>
-<summary>src/util/rust_util/mod.rs (lines 110-125)</summary>
-
-```diff
-@@ -105,18 +80,8 @@
- /// Create a formatted string that makes the best effort idenfying the current process and thread.
- pub fn debug_process_thread_id() -> String {
--    let pid = unsafe { libc::getpid() };
--    #[cfg(target_os = "linux")]
--    {
--        // `gettid()` is Linux-specific.
--        let tid = unsafe { libc::gettid() };
--        format!("PID: {}, TID: {}", pid, tid)
--    }
--    #[cfg(not(target_os = "linux"))]
--    {
--        // TODO: When we support other platforms, use platform-specific methods to get thread
--        // identifiers.
--        format!("PID: {}", pid)
--    }
-+    let pid = std::process::id();
-+    let tid = std::thread::current().id();
-+    format!("PID: {}, TID: {:?}", pid, tid)
- }
-```
-</details>
-
-<details>
-<summary>benches/regular_bench/bulk_meta/bzero_bset.rs (lines 37-60)</summary>
-
-```diff
-@@ -35,6 +35,6 @@ pub fn bench(c: &mut Criterion) {
--        b.iter(|| unsafe {
--            libc::memset(start.as_mut_ref() as *mut c_void, 0xff, end - start);
--            libc::memset(start.as_mut_ref() as *mut c_void, 0x00, end - start);
-+        b.iter(|| {
-+            data.fill(0xff);
-+            data.fill(0x00);
-         })
-```
-</details>
-
-<details>
-<summary>src/scheduler/affinity.rs (get_total_num_cpus)</summary>
-
-```diff
-@@ -7,25 +7,14 @@
--#[cfg(target_os = "linux")]
- /// Return the total number of cores allocated to the program.
- pub fn get_total_num_cpus() -> u16 {
--    use std::mem::MaybeUninit;
--    unsafe {
--        let mut cs = MaybeUninit::zeroed().assume_init();
--        CPU_ZERO(&mut cs);
--        sched_getaffinity(0, std::mem::size_of::<cpu_set_t>(), &mut cs);
--        CPU_COUNT(&cs) as u16
--    }
--}
--
--#[cfg(not(target_os = "linux"))]
--/// Return the total number of cores allocated to the program.
--pub fn get_total_num_cpus() -> u16 {
--    unimplemented!()
-+    std::thread::available_parallelism()
-+        .map(|n| n.get() as u16)
-+        .unwrap_or(1)
- }
-```
-</details>
-
-### Safe OS Abstractions (core_affinity)
-**Description**: Replaced raw libc FFI calls for setting thread affinity with the safe `core_affinity` crate.
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `src/scheduler/affinity.rs` | 2 | 1 | -1 |
+| `src/util/heap/space_descriptor.rs` | 1 | 0 | -1 |
 
 **Category Total**: Δ = -1
 
 **Diff Snippets**:
 <details>
-<summary>src/scheduler/affinity.rs (bind_current_thread)</summary>
+<summary>src/util/heap/space_descriptor.rs (lines 25-35)</summary>
 
 ```diff
-@@ -45,35 +34,26 @@
--#[cfg(target_os = "linux")]
- /// Bind the current thread to the specified core.
- fn bind_current_thread_to_core(cpu: CoreId) {
--    use std::mem::MaybeUninit;
--    unsafe {
--        let mut cs = MaybeUninit::zeroed().assume_init();
--        CPU_ZERO(&mut cs);
--        CPU_SET(cpu as usize, &mut cs);
--        sched_setaffinity(0, std::mem::size_of::<cpu_set_t>(), &cs);
--    }
--}
--
--#[cfg(not(target_os = "linux"))]
--/// Bind the current thread to the specified core.
--fn bind_current_thread_to_core(_cpu: CoreId) {
--    unimplemented!()
-+    let core_id = core_affinity::CoreId { id: cpu as usize };
-+    core_affinity::set_for_current(core_id);
- }
+@@ -25,19 +25,26 @@ const INDEX_MASK: usize = !TYPE_MASK;
+ const INDEX_SHIFT: usize = TYPE_BITS;
 
- #[cfg(any(target_os = "linux", target_os = "android"))]
- /// Bind the current thread to the specified core.
- fn bind_current_thread_to_cpuset(cpuset: &[CoreId]) {
-     use std::mem::MaybeUninit;
-+    // SAFETY: We are calling libc FFI functions to set thread affinity.
-+    // The `cpu_set_t` is initialized by `CPU_ZERO` before use.
-     unsafe {
--        let mut cs = MaybeUninit::zeroed().assume_init();
--        CPU_ZERO(&mut cs);
-+        let mut cs = MaybeUninit::<cpu_set_t>::uninit();
-+        CPU_ZERO(&mut *cs.as_mut_ptr());
-+        let mut cs = cs.assume_init();
-         for cpu in cpuset {
-             CPU_SET(*cpu as usize, &mut cs);
-         }
-         sched_setaffinity(0, std::mem::size_of::<cpu_set_t>(), &cs);
-     }
+ static DISCONTIGUOUS_SPACE_INDEX: AtomicUsize = AtomicUsize::new(DISCONTIG_INDEX_INCREMENT);
+ const DISCONTIG_INDEX_INCREMENT: usize = 1 << TYPE_BITS;
+
+-#[derive(Copy, Clone, PartialEq, Debug)]
++#[derive(Copy, Clone, PartialEq, Debug, Zeroable)]
+ #[repr(transparent)]
+ pub struct SpaceDescriptor(usize);
+
+-unsafe impl Zeroable for SpaceDescriptor {}
 ```
 </details>
 
-### Safe Concurrent Data Structures (Crossbeam ArrayQueue)
-**Description**: Replaced custom unsafe lock-free queue implementation `BlockQueue` (which used `UnsafeCell` and `MaybeUninit` with unsafe operations like `push_relaxed` and `assume_init`) with a safe concurrent queue `ArrayQueue` from the `crossbeam` crate.
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `src/util/heap/blockpageresource.rs` | 8 | 0 | -8 |
-
-**Category Total**: Δ = -8
-
-**Diff Snippets**:
-<details>
-<summary>src/util/heap/blockpageresource.rs</summary>
-
-```diff
-@@ -120,15 +122,15 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
-         // 3. Push all remaining blocks to one or more block lists
-         let last_block = start + BYTES_IN_CHUNK;
-         let mut array = BlockQueue::new();
-         let mut cursor = start + B::BYTES;
-         while cursor < last_block {
--            let result = unsafe { array.push_relaxed(B::from_aligned_address(cursor)) };
-+            let result = array.push(B::from_aligned_address(cursor));
-             if let Err(block) = result {
-                 self.block_queue.add_global_array(array);
-                 array = BlockQueue::new();
--                let result2 = unsafe { array.push_relaxed(block) };
-+                let result2 = array.push(block);
-                 debug_assert!(result2.is_ok());
-             }
-             cursor += B::BYTES;
-         }
-...
-@@ -179,117 +181,55 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
- struct BlockQueue<B: Region> {
--    cursor: AtomicUsize,
--    data: UnsafeCell<Box<[MaybeUninit<B>]>>,
-+    inner: ArrayQueue<B>,
- }
-
--    fn get_entry(&self, i: usize) -> B {
--        unsafe { (*self.data.get())[i].assume_init() }
--    }
--
--    unsafe fn set_entry(&self, i: usize, block: B) {
--        (*self.data.get())[i].write(block);
--    }
--
--    unsafe fn push_relaxed(&self, block: B) -> Result<(), B> {
--        let i = self.cursor.load(Ordering::Relaxed);
--        if i < Self::CAPACITY {
--            self.set_entry(i, block);
--            self.cursor.store(i + 1, Ordering::Relaxed);
--            Ok(())
--        } else {
--            Err(block)
--        }
--    }
-...
-@@ -286,14 +240,10 @@ impl<B: Region> BlockQueue<B> {
--        // Swap data
--        unsafe {
--            core::ptr::swap(self.data.get(), new_array.data.get());
--        }
-...
-@@ -326,20 +266,16 @@ impl<VM: VMBinding, B: Region> BlockPool<B> {
-     pub fn push(&self, block: B) {
-         self.count.fetch_add(1, Ordering::SeqCst);
-         let id = crate::scheduler::current_worker_ordinal();
--        let failed = unsafe {
--            self.worker_local_freed_blocks[id]
--                .push_relaxed(block)
--                .is_err()
--        };
--        if failed {
--            let queue = BlockQueue::new();
--            let result = unsafe { queue.push_relaxed(block) };
-+        let mut queue = self.worker_local_freed_blocks[id].lock().unwrap();
-+        if queue.push(block).is_err() {
-+            let new_queue = BlockQueue::new();
-+            let result = new_queue.push(block);
-             debug_assert!(result.is_ok());
--            let old_queue = self.worker_local_freed_blocks[id].replace(queue);
-+            let old_queue = std::mem::replace(&mut *queue, new_queue);
-```
-</details>
-
-### Atomic Side Metadata Access
-**Description**: Replaced non-atomic loads and stores on side metadata with atomic operations (typically using `Ordering::Relaxed`). This addresses potential data races at the language level and allows removing the `unsafe` qualifier from functions accessing side metadata.
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `src/util/metadata/vo_bit/mod.rs` | 8 | 0 | -8 |
-| `src/util/linear_scan.rs` | 1 | 0 | -1 |
-| `src/policy/largeobjectspace.rs` | 1 | 0 | -1 |
-
-**Category Total**: Δ = -10
-
-**Diff Snippets**:
-<details>
-<summary>src/util/metadata/vo_bit/mod.rs</summary>
-
-```diff
-@@ -87,19 +87,14 @@
--pub(crate) unsafe fn unset_vo_bit_unsafe(object: ObjectReference) {
-+pub(crate) fn unset_vo_bit_relaxed(object: ObjectReference) {
-     debug_assert!(is_vo_bit_set(object), "{:x}: VO bit not set", object);
--    VO_BIT_SIDE_METADATA_SPEC.store::<u8>(object.to_raw_address(), 0);
-+    VO_BIT_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_raw_address(), 0, Ordering::Relaxed);
- }
-
-@@ -112,19 +107,15 @@
--pub(crate) unsafe fn is_vo_bit_set_unsafe(address: Address) -> Option<ObjectReference> {
-+pub(crate) fn is_vo_bit_set_relaxed(address: Address) -> Option<ObjectReference> {
-
-@@ -138,11 +129,11 @@
-     let vo_bit = if ATOMIC {
-         VO_BIT_SIDE_METADATA_SPEC.load_atomic::<u8>(addr, Ordering::SeqCst)
-     } else {
--        unsafe { VO_BIT_SIDE_METADATA_SPEC.load::<u8>(addr) }
-+        VO_BIT_SIDE_METADATA_SPEC.load_atomic::<u8>(addr, Ordering::Relaxed)
-     };
-
-@@ -176,11 +167,11 @@
- pub(crate) fn get_raw_vo_bit_word(addr: Address) -> usize {
--    unsafe { VO_BIT_SIDE_METADATA_SPEC.load_raw_word(addr) }
-+    VO_BIT_SIDE_METADATA_SPEC.load_raw_word_atomic(addr, Ordering::Relaxed)
- }
-
-@@ -188,25 +179,23 @@
--    if let Some(vo_addr) = unsafe {
--        VO_BIT_SIDE_METADATA_SPEC.find_prev_non_zero_value::<u8>(start, search_limit_bytes)
--    } {
-+    if let Some(vo_addr) = VO_BIT_SIDE_METADATA_SPEC.find_prev_non_zero_value::<u8>(start, search_limit_bytes) {
-
-@@ -206,3 +195,3 @@
--    debug_assert!(unsafe { is_vo_addr(vo_addr) });
--    unsafe { ObjectReference::from_raw_address_unchecked(vo_addr) }
-+    debug_assert!(is_vo_addr(vo_addr));
-+    ObjectReference::from_raw_address(vo_addr).unwrap()
-
-@@ -234,12 +221,9 @@
--pub(crate) unsafe fn is_vo_addr(addr: Address) -> bool {
--    VO_BIT_SIDE_METADATA_SPEC.load::<u8>(addr) != 0
-+pub(crate) fn is_vo_addr(addr: Address) -> bool {
-+    VO_BIT_SIDE_METADATA_SPEC.load_atomic::<u8>(addr, Ordering::Relaxed) != 0
- }
-```
-</details>
-
-<details>
-<summary>src/util/linear_scan.rs (lines 52-63)</summary>
-
-```diff
-@@ -52,11 +52,11 @@ impl<VM: VMBinding, S: LinearScanObjectSize, const ATOMIC_LOAD_VO_BIT: bool> std
-     fn next(&mut self) -> Option<<Self as Iterator>::Item> {
-         while self.cursor < self.end {
-             let is_object = if ATOMIC_LOAD_VO_BIT {
-                 vo_bit::is_vo_bit_set_for_addr(self.cursor)
-             } else {
--                unsafe { vo_bit::is_vo_bit_set_unsafe(self.cursor) }
-+                vo_bit::is_vo_bit_set_relaxed(self.cursor)
-             };
-
-             if let Some(object) = is_object {
-```
-</details>
-
-<details>
-<summary>src/policy/largeobjectspace.rs (lines 161-174)</summary>
-
-```diff
-@@ -161,11 +161,11 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
-             // We assert this when we set VO bit for LOS.
-             if vo_bit::get_raw_vo_bit_word(cur_page) != 0 {
-                 // Find the exact address that has vo bit set
-                 for offset in 0..vo_bit::VO_BIT_WORD_TO_REGION {
-                     let addr = cur_page + offset;
--                    if unsafe { vo_bit::is_vo_addr(addr) } {
-+                    if vo_bit::is_vo_addr(addr) {
-                         return vo_bit::is_internal_ptr_from_vo_bit::<VM>(addr, ptr);
-                     }
-                 }
-                 unreachable!(
-                     "We found vo bit in the raw word, but we cannot find the exact address"
-```
-</details>        if let Some(object) = is_object {
-```
-</details>
-
-### Trait Safety Relaxation (Auto-Traits)
+#### Trait Safety Relaxation (Auto-Traits)
 **Description**: Removal of explicit `unsafe impl Send` and `unsafe impl Sync` because the compiler can now automatically derive them. This often happens when fields are updated to use safe concurrent types or when raw pointers are removed.
 
 **Files and Unsafe Delta**:
@@ -4838,8 +5212,9 @@ diff --git a/src/util/rust_util/atomic_box.rs b/src/util/rust_util/atomic_box.rs
 | `src/scheduler/stat.rs` | 1 | 0 | -1 |
 | `src/util/alloc/allocator.rs` | 2 | 1 | -1 |
 | `src/util/slot_logger.rs` | 1 | 0 | -1 |
+| `src/util/test_util/mock_vm.rs` | 3 | 1 | -2 |
 
-**Category Total**: Δ = -23
+**Category Total**: Δ = -25
 
 **Diff Snippets**:
 <details>
@@ -5214,201 +5589,267 @@ index 7cb231d8..7eaab29b 100644
 ```
 </details>
 
-### Safe Trait Implementation (Derive)
-**Description**: `unsafe` trait implementations (such as `unsafe impl Zeroable`) were replaced by using derive macros (e.g., `#[derive(Zeroable)]`), allowing the compiler or macro to guarantee safety based on the types of the fields.
+<details>
+<summary>src/util/test_util/mock_vm.rs</summary>
+
+```diff
+@@ -370,15 +371,14 @@ impl Default for MockVM {
+-unsafe impl Sync for MockVM {}
+-unsafe impl Send for MockVM {}
++// MockVM is automatically Send and Sync because all its fields are Send and Sync.
+```
+</details>
+
+#### Safe Type Erasure (std::any::Any)
+**Description**: Replaced manual type erasure using raw pointers and `expose_provenance` with the safe `std::any::Any` trait and `downcast_mut` for dynamic type checking at runtime.
 
 **Files and Unsafe Delta**:
 | File | Base | New | Δ |
 |------|------|-----|---|
-| `src/util/heap/space_descriptor.rs` | 1 | 0 | -1 |
+| `src/util/erase_vm.rs` | 1 | 0 | -1 |
 
 **Category Total**: Δ = -1
 
 **Diff Snippets**:
 <details>
-<summary>src/util/heap/space_descriptor.rs (lines 25-35)</summary>
+<summary>src/util/erase_vm.rs</summary>
 
 ```diff
-@@ -25,19 +25,26 @@ const INDEX_MASK: usize = !TYPE_MASK;
- const INDEX_SHIFT: usize = TYPE_BITS;
+diff --git a/src/util/erase_vm.rs b/src/util/erase_vm.rs
+index adc092c7..d17b96e5 100644
+--- a/src/util/erase_vm.rs
++++ b/src/util/erase_vm.rs
+@@ -12,21 +12,19 @@
+ //!
+ //! `TErasedRef` has the same lifetime as `&T<VM>`.
 
- static DISCONTIGUOUS_SPACE_INDEX: AtomicUsize = AtomicUsize::new(DISCONTIG_INDEX_INCREMENT);
- const DISCONTIG_INDEX_INCREMENT: usize = 1 << TYPE_BITS;
-
--#[derive(Copy, Clone, PartialEq, Debug)]
-+#[derive(Copy, Clone, PartialEq, Debug, Zeroable)]
- #[repr(transparent)]
- pub struct SpaceDescriptor(usize);
-
--unsafe impl Zeroable for SpaceDescriptor {}
-```
-</details>
-
-### Safe Enum Conversion
-**Description**: Removed `unsafe impl` for `bytemuck` traits (`ZeroableInOption`, `PodInOption`) on an enum by providing explicit safe conversion methods (`to_u8`, `from_u8`) between `Option<Enum>` and primitive types. This avoids the need for unsafe transmutations or trait promises about memory layout.
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `src/plan/concurrent/mod.rs` | 2 | 0 | -2 |
-
-**Category Total**: Δ = -2
-
-**Diff Snippets**:
-<details>
-<summary>src/plan/concurrent/mod.rs (lines 22-30)</summary>
-
-```diff
-@@ -22,8 +22,20 @@ pub enum Pause {
-     InitialMark,
-     /// The pause after concurrent marking.
-     FinalMark,
+ macro_rules! define_erased_vm_mut_ref {
+     ($new_type: ident = $orig_type: ty) => {
+-        pub struct $new_type<'a>(usize, PhantomData<&'a ()>);
++        pub struct $new_type<'a>(&'a mut dyn std::any::Any);
+         impl<'a> $new_type<'a> {
+-            pub fn new<VM: VMBinding>(r: &'a mut $orig_type) -> Self {
+-                let worker_as_usize: usize = (r as *mut $orig_type).expose_provenance();
+-                Self(worker_as_usize, PhantomData)
++            pub fn new<VM: VMBinding>(r: &'a mut $orig_type) -> Self
++            where $orig_type: 'static {
++                Self(r)
+             }
+-            pub fn into_mut<VM: VMBinding>(self) -> &'a mut $orig_type {
+-                unsafe {
+-                    &mut *(std::ptr::with_exposed_provenance(self.0) as *const $orig_type
+-                        as *mut $orig_type)
+-                }
++            pub fn into_mut<VM: VMBinding>(self) -> &'a mut $orig_type
++            where $orig_type: 'static {
++                self.0.downcast_mut::<$orig_type>().expect("Type mismatch in erased VM ref")
+             }
+         }
+     };
  }
-
--unsafe impl bytemuck::ZeroableInOption for Pause {}
-+impl Pause {
-+    pub fn to_u8(pause: Option<Pause>) -> u8 {
-+        pause.map(|p| p as u8).unwrap_or(0)
-+    }
-
--unsafe impl bytemuck::PodInOption for Pause {}
-+    pub fn from_u8(val: u8) -> Option<Pause> {
-+        match val {
-+            0 => None,
-+            1 => Some(Pause::Full),
-+            2 => Some(Pause::InitialMark),
-+            3 => Some(Pause::FinalMark),
-+            _ => panic!("Invalid Pause value: {}", val),
-+        }
-+    }
-+}
 ```
 </details>
 
-### Safe Method Signatures (Internal Helpers)
-**Description**: Marking internal methods that manipulate the heap or free list as safe, as they do not perform unsafe memory operations directly and their safety invariants are either handled or represent logic correctness rather than memory safety.
+
+### FFI, OS, and Memory Allocators
+
+#### Safe FFI Signatures
+**Description**: Replaced raw pointers (`*mut T`) with `Option<&mut T>` or `Option<Box<T>>` in `extern "C"` function signatures. Since these types are ABI-compatible with nullable pointers in C, this removes the need for `unsafe` dereferencing and `Box::from_raw` calls at the FFI boundary.
 
 **Files and Unsafe Delta**:
 | File | Base | New | Δ |
 |------|------|-----|---|
-| `src/util/heap/freelistpageresource.rs` | 5 | 0 | -5 |
-| `src/util/heap/monotonepageresource.rs` | 3 | 0 | -3 |
-| `src/policy/copyspace.rs` | 1 | 0 | -1 |
+| `docs/dummyvm/src/api.rs` | 10 | 1 | -9 |
 
 **Category Total**: Δ = -9
 
 **Diff Snippets**:
 <details>
-<summary>src/util/heap/freelistpageresource.rs (lines 91, 253, 272, 305, 382)</summary>
+<summary>docs/dummyvm/src/api.rs</summary>
 
 ```diff
-@@ -86,20 +83,18 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
-     ) -> Result<PRAllocResult, PRAllocFail> {
-...
--            page_offset = unsafe {
--                self.allocate_contiguous_chunks(space_descriptor, required_pages, &mut sync)
--            };
-+            page_offset = self.allocate_contiguous_chunks(space_descriptor, required_pages, &mut sync);
-```
+@@ -16,40 +16,42 @@ use std::ffi::CStr;
 
-```diff
-@@ -248,16 +243,23 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
-...
--            unsafe { self.allocate_contiguous_chunks(space_descriptor, PAGES_IN_CHUNK, &mut sync) };
-+            self.allocate_contiguous_chunks(space_descriptor, PAGES_IN_CHUNK, &mut sync);
-```
+ // This file exposes MMTk Rust API to the native code. This is not an exhaustive list of all the APIs.
+ // Most commonly used APIs are listed in https://docs.mmtk.io/api/mmtk/memory_manager/index.html. The binding can expose them here.
 
-```diff
-@@ -267,11 +262,11 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
-...
--    unsafe fn allocate_contiguous_chunks(
-+    fn allocate_contiguous_chunks(
-```
+ #[no_mangle]
+-pub extern "C" fn mmtk_create_builder() -> *mut MMTKBuilder {
+-    Box::into_raw(Box::new(mmtk::MMTKBuilder::new()))
++pub extern "C" fn mmtk_create_builder() -> Option<Box<MMTKBuilder>> {
++    Some(Box::new(mmtk::MMTKBuilder::new()))
+ }
 
-```diff
-@@ -292,19 +287,19 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
-...
--    unsafe fn free_contiguous_chunk(&self, chunk: Address, sync: &mut FreeListPageResourceSync) {
-+    fn free_contiguous_chunk(&self, chunk: Address, sync: &mut FreeListPageResourceSync) {
-```
+ #[no_mangle]
+ pub extern "C" fn mmtk_set_option_from_string(
+-    builder: *mut MMTKBuilder,
++    builder: Option<&mut MMTKBuilder>,
+     name: *const c_char,
+     value: *const c_char,
+ ) -> bool {
+-    let builder = unsafe { &mut *builder };
+-    let name_str: &CStr = unsafe { CStr::from_ptr(name) };
+-    let value_str: &CStr = unsafe { CStr::from_ptr(value) };
++    let builder = builder.expect("builder is null");
++    // SAFETY: The caller must ensure that `name` and `value` are valid null-terminated C strings.
++    let (name_str, value_str): (&CStr, &CStr) = unsafe {
++        (CStr::from_ptr(name), CStr::from_ptr(value))
++    };
+     builder.set_option(name_str.to_str().unwrap(), value_str.to_str().unwrap())
+ }
 
-```diff
-@@ -377,15 +372,13 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
-...
--                unsafe {
--                    self.free_contiguous_chunk(
--                        start + conversions::pages_to_bytes(region_start),
--                        sync,
--                    );
--                }
-+                self.free_contiguous_chunk(
-+                    start + conversions::pages_to_bytes(region_start),
-+                    sync,
-+                );
+ #[no_mangle]
+-pub extern "C" fn mmtk_set_fixed_heap_size(builder: *mut MMTKBuilder, heap_size: usize) -> bool {
+-    let builder = unsafe { &mut *builder };
++pub extern "C" fn mmtk_set_fixed_heap_size(builder: Option<&mut MMTKBuilder>, heap_size: usize) -> bool {
++    let builder = builder.expect("builder is null");
+     builder
+         .options
+         .gc_trigger
+         .set(mmtk::util::options::GCTriggerSelector::FixedHeapSize(
+             heap_size,
+         ))
+ }
+
+ #[no_mangle]
+-pub fn mmtk_init(builder: *mut MMTKBuilder) {
+-    let builder = unsafe { Box::from_raw(builder) };
++pub extern "C" fn mmtk_init(builder: Option<Box<MMTKBuilder>>) {
++    let builder = builder.expect("builder is null");
+
+     // Create MMTK instance.
+     let mmtk = memory_manager::mmtk_init::<DummyVM>(&builder);
+
+     // Set SINGLETON to the instance.
+@@ -57,25 +59,26 @@ pub fn mmtk_init(builder: *mut MMTKBuilder) {
+         panic!("Failed to set SINGLETON");
+     });
+ }
+
+ #[no_mangle]
+-pub extern "C" fn mmtk_bind_mutator(tls: VMMutatorThread) -> *mut Mutator<DummyVM> {
+-    Box::into_raw(memory_manager::bind_mutator(mmtk(), tls))
++pub extern "C" fn mmtk_bind_mutator(tls: VMMutatorThread) -> Option<Box<Mutator<DummyVM>>> {
++    Some(memory_manager::bind_mutator(mmtk(), tls))
+ }
+
+ #[no_mangle]
+-pub extern "C" fn mmtk_destroy_mutator(mutator: *mut Mutator<DummyVM>) {
++pub extern "C" fn mmtk_destroy_mutator(mutator: Option<Box<Mutator<DummyVM>>>) {
++    let mut mutator = mutator.expect("mutator is null");
+     // notify mmtk-core about destroyed mutator
+-    memory_manager::destroy_mutator(unsafe { &mut *mutator });
++    memory_manager::destroy_mutator(&mut mutator);
+     // turn the ptr back to a box, and let Rust properly reclaim it
+-    let _ = unsafe { Box::from_raw(mutator) };
++    // The box will be dropped here and reclaimed.
+ }
+
+ #[no_mangle]
+ pub extern "C" fn mmtk_alloc(
+-    mutator: *mut Mutator<DummyVM>,
++    mutator: Option<&mut Mutator<DummyVM>>,
+     size: usize,
+     align: usize,
+     offset: usize,
+     mut semantics: AllocationSemantics,
+ ) -> Address {
+@@ -88,16 +91,16 @@ pub extern "C" fn mmtk_alloc(
+             .constraints()
+             .max_non_los_default_alloc_bytes
+     {
+         semantics = AllocationSemantics::Los;
+     }
+-    memory_manager::alloc::<DummyVM>(unsafe { &mut *mutator }, size, align, offset, semantics)
++    memory_manager::alloc::<DummyVM>(mutator.expect("mutator is null"), size, align, offset, semantics)
+ }
+
+ #[no_mangle]
+ pub extern "C" fn mmtk_post_alloc(
+-    mutator: *mut Mutator<DummyVM>,
++    mutator: Option<&mut Mutator<DummyVM>>,
+     refer: ObjectReference,
+     bytes: usize,
+     mut semantics: AllocationSemantics,
+ ) {
+     // This just demonstrates that the binding should check against `max_non_los_default_alloc_bytes` to allocate large objects.
+@@ -109,16 +112,16 @@ pub extern "C" fn mmtk_post_alloc(
+             .constraints()
+             .max_non_los_default_alloc_bytes
+     {
+         semantics = AllocationSemantics::Los;
+     }
+-    memory_manager::post_alloc::<DummyVM>(unsafe { &mut *mutator }, refer, bytes, semantics)
++    memory_manager::post_alloc::<DummyVM>(mutator.expect("mutator is null"), refer, bytes, semantics)
+ }
+
+ #[no_mangle]
+-pub extern "C" fn mmtk_start_worker(tls: VMWorkerThread, worker: *mut GCWorker<DummyVM>) {
+-    let worker = unsafe { Box::from_raw(worker) };
++pub extern "C" fn mmtk_start_worker(tls: VMWorkerThread, worker: Option<Box<GCWorker<DummyVM>>>) {
++    let worker = worker.expect("worker is null");
+     memory_manager::start_worker::<DummyVM>(mmtk(), tls, worker)
+ }
 ```
 </details>
 
+#### Safe OS Abstractions (core_affinity)
+**Description**: Replaced raw libc FFI calls for setting thread affinity with the safe `core_affinity` crate.
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `src/scheduler/affinity.rs` | 2 | 1 | -1 |
+
+**Category Total**: Δ = -1
+
+**Diff Snippets**:
 <details>
-<summary>src/util/heap/monotonepageresource.rs (Method Signatures)</summary>
+<summary>src/scheduler/affinity.rs (bind_current_thread)</summary>
 
 ```diff
-@@ -211,20 +211,18 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
+@@ -45,35 +34,26 @@
+-#[cfg(target_os = "linux")]
+ /// Bind the current thread to the specified core.
+ fn bind_current_thread_to_core(cpu: CoreId) {
+-    use std::mem::MaybeUninit;
+-    unsafe {
+-        let mut cs = MaybeUninit::zeroed().assume_init();
+-        CPU_ZERO(&mut cs);
+-        CPU_SET(cpu as usize, &mut cs);
+-        sched_setaffinity(0, std::mem::size_of::<cpu_set_t>(), &cs);
+-    }
+-}
+-
+-#[cfg(not(target_os = "linux"))]
+-/// Bind the current thread to the specified core.
+-fn bind_current_thread_to_core(_cpu: CoreId) {
+-    unimplemented!()
++    let core_id = core_affinity::CoreId { id: cpu as usize };
++    core_affinity::set_for_current(core_id);
+ }
 
-     fn get_region_start(addr: Address) -> Address {
-         addr.align_down(BYTES_IN_REGION)
-     }
-
--    /// # Safety
--    /// TODO: I am not sure why this is unsafe.
--    pub unsafe fn reset(&self) {
-+    pub fn reset(&self) {
-         let mut guard = self.sync.lock().unwrap();
-         self.common().accounting.reset();
-         self.release_pages(&mut guard);
-         drop(guard);
-     }
-
--    pub unsafe fn get_current_chunk(&self) -> Address {
-+    pub fn get_current_chunk(&self) -> Address {
-         let guard = self.sync.lock().unwrap();
-         guard.current_chunk
-     }
-
-     /*/**
-@@ -307,11 +305,11 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
-             self.common.accounting.reset();
-             self.common.accounting.reserve_and_commit(pages);
+ #[cfg(any(target_os = "linux", target_os = "android"))]
+ /// Bind the current thread to the specified core.
+ fn bind_current_thread_to_cpuset(cpuset: &[CoreId]) {
+     use std::mem::MaybeUninit;
++    // SAFETY: We are calling libc FFI functions to set thread affinity.
++    // The `cpu_set_t` is initialized by `CPU_ZERO` before use.
+     unsafe {
+-        let mut cs = MaybeUninit::zeroed().assume_init();
+-        CPU_ZERO(&mut cs);
++        let mut cs = MaybeUninit::<cpu_set_t>::uninit();
++        CPU_ZERO(&mut *cs.as_mut_ptr());
++        let mut cs = cs.assume_init();
+         for cpu in cpuset {
+             CPU_SET(*cpu as usize, &mut cs);
          }
-     }
-
--    unsafe fn release_pages(&self, guard: &mut MutexGuard<MonotonePageResourceSync>) {
-+    fn release_pages(&self, guard: &mut MutexGuard<MonotonePageResourceSync>) {
-         // TODO: concurrent zeroing
-         if self.common().contiguous {
-             guard.cursor = match guard.conditional {
-```
-</details>
-
-<details>
-<summary>src/policy/copyspace.rs (lines 223)</summary>
-
-```diff
-@@ -218,13 +218,11 @@ impl<VM: VMBinding> CopySpace<VM> {
-             // Clear VO bits because all objects in the space are dead.
-             #[cfg(feature = "vo_bit")]
-             crate::util::metadata::vo_bit::bzero_vo_bit(start, size);
-         }
-
--        unsafe {
--            self.pr.reset();
--        }
-+        self.pr.reset();
-         self.from_space.store(false, Ordering::SeqCst);
+         sched_setaffinity(0, std::mem::size_of::<cpu_set_t>(), &cs);
      }
 ```
 </details>
 
-### Encapsulation of OS Memory Management
+#### Encapsulation of OS Memory Management
 **Description**: Centralizing and consolidating unsafe calls to operating system memory management APIs (like `mmap`, `mprotect`, `munmap`). This reduces the number of distinct unsafe blocks by merging contiguous calls or delegating to internal helpers.
 
 **Files and Unsafe Delta**:
@@ -5628,178 +6069,414 @@ index 7cb231d8..7eaab29b 100644
 ```
 </details>
 
-### Safe Test Fixtures (Leaked References)
-**Description**: Replaced raw pointers with leaked static references in test fixtures (`MMTKFixture`). Since tests can afford to leak memory, this eliminates the need for unsafe dereferencing and manual `Drop` implementations that free the raw pointer. It also allows removing manual `unsafe impl Send`.
+#### Safe Malloc/Calloc Wrappers
+**Description**: Replaced raw C allocator calls (like `free` and `calloc`) with safe wrappers in `crate::util::malloc`.
 
 **Files and Unsafe Delta**:
 | File | Base | New | Δ |
 |------|------|-----|---|
-| `src/util/test_util/fixtures.rs` | 4 | 0 | -4 |
-
-**Category Total**: Δ = -4
-
-**Diff Snippets**:
-<details>
-<summary>src/util/test_util/fixtures.rs (MMTKFixture Raw Pointer to Reference)</summary>
-
-```diff
-@@ -113,11 +111,11 @@ impl<T: FixtureContent> Default for SerialFixture<T> {
-         Self::new()
-     }
- }
-
- pub struct MMTKFixture {
--    mmtk: *mut MMTK<MockVM>,
-+    mmtk: &'static mut MMTK<MockVM>,
- }
-
- impl FixtureContent for MMTKFixture {
-     fn create() -> Self {
-         Self::create_with_builder(
-@@ -140,35 +138,28 @@ impl MMTKFixture {
-     {
-         let mut builder = MMTKBuilder::new();
-         with_builder(&mut builder);
-
-         let mmtk = memory_manager::mmtk_init(&builder);
--        let mmtk_ptr = Box::into_raw(mmtk);
-+        let mmtk_ref = Box::leak(mmtk);
-
-         if initialize_collection {
--            let mmtk_static: &'static MMTK<MockVM> = unsafe { &*mmtk_ptr };
--            memory_manager::initialize_collection(mmtk_static, VMThread::UNINITIALIZED);
-+            memory_manager::initialize_collection(mmtk_ref, VMThread::UNINITIALIZED);
-         }
-
--        MMTKFixture { mmtk: mmtk_ptr }
-+        MMTKFixture { mmtk: mmtk_ref }
-     }
-
-     pub fn get_mmtk(&self) -> &'static MMTK<MockVM> {
--        unsafe { &*self.mmtk }
-+        self.mmtk
-     }
-
-     pub fn get_mmtk_mut(&mut self) -> &'static mut MMTK<MockVM> {
--        unsafe { &mut *self.mmtk }
-+        self.mmtk
-     }
- }
-
--impl Drop for MMTKFixture {
--    fn drop(&mut self) {
--        let mmtk_ptr: *const MMTK<MockVM> = self.mmtk as _;
--        let _ = unsafe { Box::from_raw(mmtk_ptr as *mut MMTK<MockVM>) };
--    }
--}
-```
-</details>
-
-### Safe Slot Abstraction (SimpleSlot)
-**Description**: Refactored `SimpleSlot` to hold a safe `Address` instead of a raw pointer to an atomic. Consolidated raw pointer dereferencing into a single internal helper `as_atomic(&self) -> &Atomic<Address>`, making `load` and `store` safe methods. Removed `unsafe impl Send` as `Address` is `Send`. Also removed the legacy `impl Slot for Address` to enforce type safety.
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `src/vm/slot.rs` | 7 | 2 | -5 |
+| `src/policy/marksweepspace/malloc_ms/global.rs` | 1 | 0 | -1 |
+| `src/util/malloc/malloc_ms_util.rs` | 4 | 2 | -2 |
+| `src/vm/tests/mock_tests/mock_test_malloc_ms.rs` | 2 | 0 | -2 |
 
 **Category Total**: Δ = -5
 
 **Diff Snippets**:
 <details>
-<summary>src/vm/slot.rs</summary>
+<summary>src/policy/marksweepspace/malloc_ms/global.rs</summary>
 
 ```diff
---- a/src/vm/slot.rs
-+++ b/src/vm/slot.rs
-@@ -149,42 +149,45 @@ pub trait Slot: Copy + Send + Debug + PartialEq + Eq + Hash {
- ///
- /// It is the default slot type, and should be suitable for most VMs.
- #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
- #[repr(transparent)]
- pub struct SimpleSlot {
--    slot_addr: *mut Atomic<Address>,
-+    slot_addr: Address,
- }
-
- impl SimpleSlot {
-     /// Create a simple slot from an address.
-     ///
-     /// Arguments:
-     /// *   `address`: The address in memory where an `ObjectReference` is stored.
--    pub fn from_address(address: Address) -> Self {
-+    pub const fn from_address(address: Address) -> Self {
-         Self {
--            slot_addr: address.to_mut_ptr(),
-+            slot_addr: address,
+@@ -460,20 +457,14 @@ impl<VM: VMBinding> MallocSpace<VM> {
+     fn free_internal(&self, addr: Address, bytes: usize, offset_malloc_bit: bool) {
++        trace!("Free memory {:x}", addr);
++        crate::util::malloc::malloc_ms_util::free(addr, offset_malloc_bit);
+         if offset_malloc_bit {
+-            trace!("Free memory {:x}", addr);
+-            offset_free(addr);
+-            unsafe { unset_offset_malloc_bit_unsafe(addr) };
+-        } else {
+-            let ptr = addr.to_mut_ptr();
+-            trace!("Free memory {:?}", ptr);
+-            unsafe {
+-                free(ptr);
+-            }
          }
-     }
-
-     /// Get the address of the slot.
-     ///
-     /// Return the address at which the `ObjectReference` is stored.
-     pub fn as_address(&self) -> Address {
--        Address::from_mut_ptr(self.slot_addr)
-+        self.slot_addr
-     }
--}
-
--unsafe impl Send for SimpleSlot {}
-+    fn as_atomic(&self) -> &Atomic<Address> {
-+        // SAFETY: The caller must ensure that `self.slot_addr` is a valid and properly aligned address for `Atomic<Address>`.
-+        unsafe { &*(self.slot_addr.to_ptr::<Atomic<Address>>()) }
-+    }
-+}
-
- impl Slot for SimpleSlot {
-     fn load(&self) -> Option<ObjectReference> {
--        let addr = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
-+        let addr = self.as_atomic().load(atomic::Ordering::Relaxed);
-         ObjectReference::from_raw_address(addr)
-     }
-
-     fn store(&self, object: ObjectReference) {
--        unsafe { (*self.slot_addr).store(object.to_raw_address(), atomic::Ordering::Relaxed) }
-+        self.as_atomic().store(object.to_raw_address(), atomic::Ordering::Relaxed)
-     }
- }
-
--impl Slot for Address {
--    fn load(&self) -> Option<ObjectReference> {
--        let addr = unsafe { Address::load(*self) };
--        ObjectReference::from_raw_address(addr)
--    }
--
--    fn store(&self, object: ObjectReference) {
--        unsafe { Address::store(*self, object) }
--    }
--}
-```
-
-```diff
-@@ -342,13 +337,13 @@ mod tests {
-     use super::*;
-
-     #[test]
-     fn address_range_iteration() {
-         let src: Vec<usize> = (0..32).collect();
--        let src_slice = Address::from_ptr(&src[0])..Address::from_ptr(&src[0]) + src.len();
-+        let src_slice = Address::from_ptr(&src[0])..Address::from_ptr(&src[0]) + (src.len() * std::mem::size_of::<usize>());
-         for (i, v) in src_slice.iter_slots().enumerate() {
--            assert_eq!(i, unsafe { v.load::<usize>() })
-+            assert_eq!(v, SimpleSlot::from_address(Address::from_ptr(&src[i])));
-         }
-     }
 ```
 </details>
 
-### Safe Lifetime Enforcement
-**Description**: Removing unsafe lifetime erasure hacks (like casting a reference to a raw pointer and back to a reference with a different lifetime) by enforcing correct lifetimes in function signatures (e.g., requiring `'static` when needed).
+<details>
+<summary>src/util/malloc/malloc_ms_util.rs (calloc replacement)</summary>
+
+```diff
+@@ -23,4 +24,3 @@ pub fn align_offset_alloc<VM: VMBinding>(size: usize, align: usize, offset: usiz
+-    let raw = unsafe { calloc(1, actual_size) };
+-    let address = Address::from_mut_ptr(raw);
++    let address = crate::util::malloc::calloc(1, actual_size);
+@@ -73,4 +90,3 @@ pub fn alloc<VM: VMBinding>(size: usize, align: usize, offset: usize) -> (Addres
+-        let raw = unsafe { calloc(1, size) };
+-        address = Address::from_mut_ptr(raw);
++        address = crate::util::malloc::calloc(1, size);
+```
+</details>
+
+<details>
+<summary>src/vm/tests/mock_tests/mock_test_malloc_ms.rs (lines 25-40)</summary>
+
+```diff
+@@ -25,16 +25,12 @@ fn test_malloc() {
+             assert!(malloc_ms_util::get_malloc_usable_size(address1, bool1) >= 16);
+             assert!(malloc_ms_util::get_malloc_usable_size(address2, bool2) >= 16);
+             assert!(malloc_ms_util::get_malloc_usable_size(address3, bool3) >= 16);
+             assert!(malloc_ms_util::get_malloc_usable_size(address4, bool4) >= 32);
+
+-            unsafe {
+-                malloc_ms_util::free(address1.to_mut_ptr());
+-            }
+-            unsafe {
+-                malloc_ms_util::free(address2.to_mut_ptr());
+-            }
++            malloc_ms_util::free(address1, bool1);
++            malloc_ms_util::free(address2, bool2);
+             malloc_ms_util::offset_free(address3);
+             malloc_ms_util::offset_free(address4);
+         },
+         no_cleanup,
+     )
+```
+</details>
+
+### Code Cleanup and Safety Enforcement
+
+#### Safe Precondition Enforcement (Runtime Checks)
+**Description**: Methods that previously relied on the caller to ensure safety invariants (such as valid indices or initialized state) were refactored to perform runtime checks (assertions) and panic on failure. This allows the methods to be safe and removes the need for `unsafe` blocks at call sites.
 
 **Files and Unsafe Delta**:
 | File | Base | New | Δ |
 |------|------|-----|---|
-| `src/policy/copyspace.rs` | 1 | 0 | -1 |
+| `src/plan/mutator_context.rs` | 15 | 0 | -15 |
+| `src/util/memory.rs` | 4 | 1 | -3 |
+
+**Category Total**: Δ = -18
+
+**Diff Snippets**:
+
+
+<details>
+<summary>src/plan/mutator_context.rs</summary>
+
+```diff
+@@ -31,15 +31,13 @@ pub(crate) fn unreachable_prepare_func<VM: VMBinding>(
+ /// An mutator prepare implementation for plans that use [`crate::plan::global::CommonPlan`].
+ #[allow(unused_variables)]
+ pub(crate) fn common_prepare_func<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
+     // Prepare the free list allocator used for non moving
+     #[cfg(feature = "marksweep_as_nonmoving")]
+-    unsafe {
+-        mutator.allocator_impl_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(
+-            AllocationSemantics::NonMoving,
+-        )
+-    }
++    mutator.allocator_impl_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(
++        AllocationSemantics::NonMoving,
++    )
+     .prepare();
+ }
+
+ /// A place-holder implementation for `MutatorConfig::release_func` that should not be called.
+@@ -54,20 +52,20 @@ pub(crate) fn unreachable_release_func<VM: VMBinding>(
+ #[allow(unused_variables)]
+ pub(crate) fn common_release_func<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
+     cfg_if::cfg_if! {
+         if #[cfg(feature = "marksweep_as_nonmoving")] {
+             // Release the free list allocator used for non moving
+-            unsafe { mutator.allocator_impl_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(
++            mutator.allocator_impl_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(
+                 AllocationSemantics::NonMoving,
+-            )}.release();
++            ).release();
+         } else if #[cfg(feature = "immortal_as_nonmoving")] {
+             // Do nothig for the bump pointer allocator
+         } else {
+             // Reset the Immix allocator
+-            unsafe { mutator.allocator_impl_mut_for_semantic::<crate::util::alloc::ImmixAllocator<VM>>(
++            mutator.allocator_impl_mut_for_semantic::<crate::util::alloc::ImmixAllocator<VM>>(
+                 AllocationSemantics::NonMoving,
+-            )}.reset();
++            ).reset();
+         }
+     }
+ }
+
+@@ -191,14 +189,11 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
+         size: usize,
+         align: usize,
+         offset: usize,
+         allocator: AllocationSemantics,
+     ) -> Address {
+-        let allocator = unsafe {
+-            self.allocators
+-                .get_allocator_mut(self.config.allocator_mapping[allocator])
+-        };
++        let allocator = self.allocator_mut(self.config.allocator_mapping[allocator]);
+         // The value should be default/unset at the beginning of an allocation request.
+         debug_assert!(allocator.get_context().get_alloc_options().is_default());
+         allocator.alloc(size, align, offset)
+     }
+
+@@ -208,14 +203,11 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
+         align: usize,
+         offset: usize,
+         allocator: AllocationSemantics,
+         options: AllocationOptions,
+     ) -> Address {
+-        let allocator = unsafe {
+-            self.allocators
+-                .get_allocator_mut(self.config.allocator_mapping[allocator])
+-        };
++        let allocator = self.allocator_mut(self.config.allocator_mapping[allocator]);
+         // The value should be default/unset at the beginning of an allocation request.
+         debug_assert!(allocator.get_context().get_alloc_options().is_default());
+         allocator.alloc_with_options(size, align, offset, options)
+     }
+
+@@ -224,14 +216,11 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
+         size: usize,
+         align: usize,
+         offset: usize,
+         allocator: AllocationSemantics,
+     ) -> Address {
+-        let allocator = unsafe {
+-            self.allocators
+-                .get_allocator_mut(self.config.allocator_mapping[allocator])
+-        };
++        let allocator = self.allocator_mut(self.config.allocator_mapping[allocator]);
+         // The value should be default/unset at the beginning of an allocation request.
+         debug_assert!(allocator.get_context().get_alloc_options().is_default());
+         allocator.alloc_slow(size, align, offset)
+     }
+
+@@ -241,14 +230,11 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
+         align: usize,
+         offset: usize,
+         allocator: AllocationSemantics,
+         options: AllocationOptions,
+     ) -> Address {
+-        let allocator = unsafe {
+-            self.allocators
+-                .get_allocator_mut(self.config.allocator_mapping[allocator])
+-        };
++        let allocator = self.allocator_mut(self.config.allocator_mapping[allocator]);
+         // The value should be default/unset at the beginning of an allocation request.
+         debug_assert!(allocator.get_context().get_alloc_options().is_default());
+         allocator.alloc_slow_with_options(size, align, offset, options)
+     }
+
+@@ -257,14 +243,11 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
+         &mut self,
+         refer: ObjectReference,
+         _bytes: usize,
+         allocator: AllocationSemantics,
+     ) -> Address {
+-        unsafe {
+-            self.allocators
+-                .get_allocator_mut(self.config.allocator_mapping[allocator])
+-        }
++        self.allocator_mut(self.config.allocator_mapping[allocator])
+         .get_space()
+         .initialize_object_metadata(refer)
+     }
+
+     fn get_tls(&self) -> VMMutatorThread {
+@@ -291,69 +274,85 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
+     }
+
+     /// Inform each allocator about destroying. Call allocator-specific on destroy methods.
+     pub fn on_destroy(&mut self) {
+         for selector in self.get_all_allocator_selectors() {
+-            unsafe { self.allocators.get_allocator_mut(selector) }.on_mutator_destroy();
++            self.allocator_mut(selector).on_mutator_destroy();
+         }
+     }
+
+     /// Get the allocator for the selector.
+     ///
+-    /// # Safety
+-    /// The selector needs to be valid, and points to an allocator that has been initialized.
+-    /// [`crate::memory_manager::get_allocator_mapping`] can be used to get a selector.
+-    pub unsafe fn allocator(&self, selector: AllocatorSelector) -> &dyn Allocator<VM> {
++    /// # Panics
++    /// Panics if the selector is not initialized.
++    pub fn allocator(&self, selector: AllocatorSelector) -> &dyn Allocator<VM> {
++        assert!(
++            self.config.space_mapping.iter().any(|(s, _)| *s == selector),
++            "Allocator not initialized for selector {:?}",
++            selector
++        );
+         self.allocators.get_allocator(selector)
+     }
+
+     /// Get the mutable allocator for the selector.
+     ///
+-    /// # Safety
+-    /// The selector needs to be valid, and points to an allocator that has been initialized.
+-    /// [`crate::memory_manager::get_allocator_mapping`] can be used to get a selector.
+-    pub unsafe fn allocator_mut(&mut self, selector: AllocatorSelector) -> &mut dyn Allocator<VM> {
++    /// # Panics
++    /// Panics if the selector is not initialized.
++    pub fn allocator_mut(&mut self, selector: AllocatorSelector) -> &mut dyn Allocator<VM> {
++        assert!(
++            self.config.space_mapping.iter().any(|(s, _)| *s == selector),
++            "Allocator not initialized for selector {:?}",
++            selector
++        );
+         self.allocators.get_allocator_mut(selector)
+     }
+
+     /// Get the allocator of a concrete type for the selector.
+     ///
+-    /// # Safety
+-    /// The selector needs to be valid, and points to an allocator that has been initialized.
+-    /// [`crate::memory_manager::get_allocator_mapping`] can be used to get a selector.
+-    pub unsafe fn allocator_impl<T: Allocator<VM>>(&self, selector: AllocatorSelector) -> &T {
++    /// # Panics
++    /// Panics if the selector is not initialized or the type is wrong.
++    pub fn allocator_impl<T: Allocator<VM>>(&self, selector: AllocatorSelector) -> &T {
++        assert!(
++            self.config.space_mapping.iter().any(|(s, _)| *s == selector),
++            "Allocator not initialized for selector {:?}",
++            selector
++        );
+         self.allocators.get_typed_allocator(selector)
+     }
+
+     /// Get the mutable allocator of a concrete type for the selector.
+     ///
+-    /// # Safety
+-    /// The selector needs to be valid, and points to an allocator that has been initialized.
+-    /// [`crate::memory_manager::get_allocator_mapping`] can be used to get a selector.
+-    pub unsafe fn allocator_impl_mut<T: Allocator<VM>>(
++    /// # Panics
++    /// Panics if the selector is not initialized or the type is wrong.
++    pub fn allocator_impl_mut<T: Allocator<VM>>(
+         &mut self,
+         selector: AllocatorSelector,
+     ) -> &mut T {
++        assert!(
++            self.config.space_mapping.iter().any(|(s, _)| *s == selector),
++            "Allocator not initialized for selector {:?}",
++            selector
++        );
+         self.allocators.get_typed_allocator_mut(selector)
+     }
+
+     /// Get the allocator of a concrete type for the semantic.
+     ///
+-    /// # Safety
+-    /// The semantic needs to match the allocator type.
+-    pub unsafe fn allocator_impl_for_semantic<T: Allocator<VM>>(
++    /// # Panics
++    /// Panics if the allocator is not initialized or the type is wrong.
++    pub fn allocator_impl_for_semantic<T: Allocator<VM>>(
+         &self,
+         semantic: AllocationSemantics,
+     ) -> &T {
+         self.allocator_impl::<T>(self.config.allocator_mapping[semantic])
+     }
+
+     /// Get the mutable allocator of a concrete type for the semantic.
+     ///
+-    /// # Safety
+-    /// The semantic needs to match the allocator type.
+-    pub unsafe fn allocator_impl_mut_for_semantic<T: Allocator<VM>>(
++    /// # Panics
++    /// Panics if the allocator is not initialized or the type is wrong.
++    pub fn allocator_impl_mut_for_semantic<T: Allocator<VM>>(
+         &mut self,
+         semantic: AllocationSemantics,
+     ) -> &mut T {
+         self.allocator_impl_mut::<T>(self.config.allocator_mapping[semantic])
+     }
+```
+</details>
+
+<details>
+<summary>src/util/memory.rs (lines 489-570)</summary>
+
+```diff
+@@ -489,23 +498,26 @@ mod tests {
+     use crate::util::test_util::{serial_test, with_cleanup};
+
+     // In the tests, we will mmap this address. This address should not be in our heap (in case we mess up with other tests)
+     const START: Address = MEMORY_TEST_REGION.start;
+
++    fn test_dzmmap(start: Address, size: usize, strategy: MmapStrategy, anno: &MmapAnnotation) -> Result<()> {
++        assert!(start >= MEMORY_TEST_REGION.start);
++        assert!(start + size <= MEMORY_TEST_REGION.start + MEMORY_TEST_REGION.size);
++        // SAFETY: This is a safe wrapper for tests that ensures we only mmap within the test region.
++        unsafe { dzmmap(start, size, strategy, anno) }
++    }
++
+     #[test]
+     fn test_mmap() {
+         serial_test(|| {
+             with_cleanup(
+                 || {
+-                    let res = unsafe {
+-                        dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!())
+-                    };
++                    let res = test_dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!());
+                     assert!(res.is_ok());
+                     // We can overwrite with dzmmap
+-                    let res = unsafe {
+-                        dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!())
+-                    };
++                    let res = test_dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!());
+                     assert!(res.is_ok());
+                 },
+                 || {
+                     assert!(munmap(START, BYTES_IN_PAGE).is_ok());
+                 },
+@@ -534,13 +543,11 @@ mod tests {
+     fn test_mmap_noreplace() {
+         serial_test(|| {
+             with_cleanup(
+                 || {
+                     // Make sure we mmapped the memory
+-                    let res = unsafe {
+-                        dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!())
+-                    };
++                    let res = test_dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!());
+                     assert!(res.is_ok());
+                     // Use dzmmap_noreplace will fail
+                     let res = dzmmap_noreplace(
+                         START,
+                         BYTES_IN_PAGE,
+@@ -558,13 +570,11 @@ mod tests {
+                 || {
+                     let res =
+                         mmap_noreserve(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!());
+                     assert!(res.is_ok());
+                     // Try reserve it
+-                    let res = unsafe {
+-                        dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!())
+-                    };
++                    let res = test_dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!());
+                     assert!(res.is_ok());
+                 },
+                 || {
+                     assert!(munmap(START, BYTES_IN_PAGE).is_ok());
+                 },
+```
+</details>
+
+#### Removal of Self-Reference Casts
+**Description**: Removal of unsafe casts from `self` to a raw pointer and back to a reference (often with an extended lifetime) to pass to work packets or closures. This is resolved by refactoring the work packets to not require the reference or to acquire it safely.
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `src/plan/global.rs` | 1 | 0 | -1 |
+| `src/policy/marksweepspace/malloc_ms/global.rs` | 1 | 1 | 0 |
 | `src/policy/marksweepspace/native_ms/global.rs` | 3 | 0 | -3 |
 | `src/policy/immix/immixspace.rs` | 2 | 0 | -2 |
 
@@ -5807,22 +6484,51 @@ index 7cb231d8..7eaab29b 100644
 
 **Diff Snippets**:
 <details>
-<summary>src/policy/copyspace.rs (lines 369)</summary>
+<summary>src/plan/global.rs (lines 755-778)</summary>
 
 ```diff
-@@ -362,10 +352,10 @@ impl<VM: VMBinding> CopySpaceCopyContext<VM> {
-         CopySpaceCopyContext {
-             copy_allocator: BumpAllocator::new(tls.0, tospace, context),
-         }
+@@ -755,22 +761,19 @@ impl<VM: VMBinding> CommonPlan<VM> {
+         self.base.release(tls, full_heap)
      }
 
--    pub fn rebind(&mut self, space: &CopySpace<VM>) {
-+    pub fn rebind(&mut self, space: &'static CopySpace<VM>) {
-         self.copy_allocator
--            .rebind(unsafe { &*{ space as *const _ } });
-+            .rebind(space);
+     pub(crate) fn schedule_unlog_bits_op(&mut self, unlog_bits_op: UnlogBitsOperation) {
+         if VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.is_on_side() {
+-            // # Safety: CommonPlan reference is always valid within this collection cycle.
+-            let common_plan = unsafe { &*(self as *const CommonPlan<VM>) };
+-
+             match unlog_bits_op {
+                 UnlogBitsOperation::NoOp => {}
+                 UnlogBitsOperation::BulkSet => {
+                     self.base.scheduler.work_buckets[WorkBucketStage::Prepare]
+-                        .add(SetCommonPlanUnlogBits { common_plan });
++                        .add(SetCommonPlanUnlogBits::new());
+                 }
+                 UnlogBitsOperation::BulkClear => {
+                     self.base.scheduler.work_buckets[WorkBucketStage::Release]
+-                        .add(ClearCommonPlanUnlogBits { common_plan });
++                        .add(ClearCommonPlanUnlogBits::new());
+                 }
+             }
+         }
      }
- }
+```
+</details>
+
+<details>
+<summary>src/policy/marksweepspace/malloc_ms/global.rs</summary>
+
+```diff
+@@ -555,10 +546,14 @@ impl<VM: VMBinding> MallocSpace<VM> {
+
+     pub fn prepare(&mut self, _full_heap: bool) {}
+
+     pub fn release(&mut self) {
+         use crate::scheduler::WorkBucketStage;
++        // SAFETY: We cast `&mut self` to `&'static Self` to pass it to work packets.
++        // This is safe because the work packets are executed during the GC release phase,
++        // and they will not outlive the space itself. This is a standard pattern in MMTk
++        // to bypass borrow checker for work packets.
+         let space = unsafe { &*(self as *const Self) };
 ```
 </details>
 
@@ -5920,899 +6626,93 @@ index 7cb231d8..7eaab29b 100644
 ```
 </details>
 
-### Safe Slice/Array Access
-**Description**: Replacing unsafe raw pointer dereferencing to access slice or array elements with safe alternatives like `as_bytes().first()`.
+#### Consolidation of Unsafe Blocks
+**Description**: Merging adjacent unsafe blocks or moving operations into a single unsafe block to improve readability and reduce the count of unsafe blocks, without removing the need for unsafe.
 
 **Files and Unsafe Delta**:
 | File | Base | New | Δ |
 |------|------|-----|---|
-| `src/scheduler/worker.rs` | 1 | 0 | -1 |
-
-**Category Total**: Δ = -1
-
-**Diff Snippets**:
-<details>
-<summary>src/scheduler/worker.rs (lines 249-261)</summary>
-
-```diff
-@@ -249,11 +248,11 @@ impl<VM: VMBinding> GCWorker<VM> {
-
-             #[cfg(feature = "bpftrace_workaround")]
-             // Workaround a problem where bpftrace script cannot see the work packet names,
-             // by force loading from the packet name.
-             // See the "Known issues" section in `tools/tracing/timeline/README.md`
--            std::hint::black_box(unsafe { *(typename.as_ptr()) });
-+            std::hint::black_box(typename.as_bytes().first().copied().unwrap_or(0));
-
-             probe!(mmtk, work, typename.as_ptr(), typename.len());
-```
-</details>
-
-### Slice Abstraction (Raw Pointer to Slice)
-**Description**: Replacing raw pointer arithmetic and direct dereferencing with a safe slice created from raw parts. This encapsulates the unsafe memory access behind Rust's safe slice types, providing bounds checks.
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `src/util/raw_memory_freelist.rs` | 2 | 1 | -1 |
-
-**Category Total**: Δ = -1
-
-**Diff Snippets**:
-<details>
-<summary>src/util/raw_memory_freelist.rs (lines 24-158)</summary>
-
-```diff
-@@ -24,7 +24,8 @@ pub struct RawMemoryFreeList {
-     max_units: i32,
-     grain: i32,
-     current_units: i32,
-     pages_per_block: i32,
-     strategy: MmapStrategy,
-+    slice: &'static mut [i32],
- }
- ```
-
-```diff
-@@ -36,12 +37,12 @@ impl FreeList for RawMemoryFreeList {
-     fn head(&self) -> i32 {
-         self.head
-     }
-     fn heads(&self) -> i32 {
-         self.heads
-     }
-     fn get_entry(&self, index: i32) -> i32 {
--        let offset = (index << LOG_BYTES_IN_ENTRY) as usize;
--        debug_assert!(self.base + offset >= self.base && self.base + offset < self.high_water);
--        unsafe { (self.base + offset).load() }
-+        let len = (self.high_water - self.base) >> LOG_BYTES_IN_ENTRY;
-+        assert!((index as usize) < len, "index out of bounds: the len is {} but the index is {}", len, index);
-+        self.slice[index as usize]
-     }
- ```
-
-```diff
-@@ -49,12 +50,8 @@ impl FreeList for RawMemoryFreeList {
-     fn set_entry(&mut self, index: i32, value: i32) {
--        let offset = (index << LOG_BYTES_IN_ENTRY) as usize;
--        debug_assert!(
--            self.base + offset >= self.base && self.base + offset < self.high_water,
--            "base={:?} offset={:?} index={:?} high_water={:?}",
--            self.base,
--            offset,
--            self.base + offset,
--            self.high_water
--        );
--        unsafe { (self.base + offset).store(value) }
-+        let len = (self.high_water - self.base) >> LOG_BYTES_IN_ENTRY;
-+        assert!((index as usize) < len, "index out of bounds: the len is {} but the index is {}", len, index);
-+        self.slice[index as usize] = value;
-     }
- ```
-
-```diff
-@@ -143,5 +139,9 @@ impl RawMemoryFreeList {
-         if blocks > 0 {
-             // Allocate more VM from the OS
-             self.raise_high_water(blocks);
-         }
-
-+        let len = (self.high_water - self.base) >> LOG_BYTES_IN_ENTRY;
-+        // SAFETY: The memory is mapped and valid.
-+        self.slice = unsafe { std::slice::from_raw_parts_mut(self.base.to_mut_ptr::<i32>(), len) };
-+
-         let old_max = self.current_units;
- ```
-</details>
-
-
-### Safe Shared State via Arc/RwLock
-**Description**: Replaced unsafe raw pointers (`NonNull`) used for sharing state between parent and child instances with safe reference counting and read-write locks (`Arc<RwLock<T>>`). This eliminates the need for manual pointer dereferencing and custom `unsafe impl Send/Sync`.
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `src/util/int_array_freelist.rs` | 4 | 0 | -4 |
-
-**Category Total**: Δ = -4
-
-**Diff Snippets**:
-<details>
-<summary>src/util/int_array_freelist.rs (lines 1-80)</summary>
-
-```diff
-@@ -1,80 +1,66 @@
- use super::freelist::*;
--use std::ptr::NonNull;
-+use std::sync::{Arc, RwLock};
-
- #[derive(Debug)]
- pub struct IntArrayFreeList {
-     pub head: i32,
-     pub heads: i32,
--    pub table: Option<Vec<i32>>,
--    parent: Option<NonNull<IntArrayFreeList>>,
-+    pub table: Arc<RwLock<Vec<i32>>>,
- }
-
--unsafe impl Send for IntArrayFreeList {}
--unsafe impl Sync for IntArrayFreeList {}
--
- impl FreeList for IntArrayFreeList {
-     fn head(&self) -> i32 {
-         self.head
-     }
-     fn heads(&self) -> i32 {
-         self.heads
-     }
-     fn get_entry(&self, index: i32) -> i32 {
--        self.table()[index as usize]
-+        self.table.read().unwrap()[index as usize]
-     }
-     fn set_entry(&mut self, index: i32, value: i32) {
--        self.table_mut()[index as usize] = value;
-+        self.table.write().unwrap()[index as usize] = value;
-     }
- }
-
- impl IntArrayFreeList {
-     pub fn new(units: usize, grain: i32, heads: usize) -> Self {
-         debug_assert!(units <= MAX_UNITS as usize && heads <= MAX_HEADS as usize);
-         // allocate the data structure, including space for top & bottom sentinels
-         let len = (units + 1 + heads) << 1;
-+
-+        // We need to initialize the heap after creation.
-+        // Since we need to call initialize_heap which is a trait method,
-+        // and we need to pass a &mut reference, we can do it if we have exclusive access.
-+        // Wait, initialize_heap takes &mut self.
-+        // But here we just created iafl, so we have exclusive access!
-+        // Wait, iafl is not mut in my draft!
-+        // Let's make it mut.
-         let mut iafl = IntArrayFreeList {
-             head: -1,
-             heads: heads as _,
--            table: Some(vec![0; len]), // len=2052
--            parent: None,
-+            table: Arc::new(RwLock::new(vec![0; len])),
-         };
-         iafl.initialize_heap(units as _, grain);
-         iafl
-     }
-     pub fn from_parent(parent: &IntArrayFreeList, ordinal: i32) -> Self {
--        let parent_ptr = std::ptr::NonNull::from(parent);
-         let iafl = IntArrayFreeList {
-             head: -(1 + ordinal),
-             heads: parent.heads,
--            table: None,
--            parent: Some(parent_ptr),
-+            table: parent.table.clone(),
-         };
-         debug_assert!(-iafl.head <= iafl.heads);
-         iafl
-     }
-     pub(crate) fn get_ordinal(&self) -> i32 {
-         -self.head - 1
-     }
--    fn table(&self) -> &Vec<i32> {
--        match self.parent {
--            Some(p) => unsafe { p.as_ref().table() },
--            None => self.table.as_ref().unwrap(),
--        }
--    }
--
--    // FIXME: We need a safe implementation
--
--    fn table_mut(&mut self) -> &mut Vec<i32> {
--        match self.parent {
--            Some(mut p) => unsafe { p.as_mut().table_mut() },
--            None => self.table.as_mut().unwrap(),
--        }
--    }
-     pub fn resize_freelist(&mut self, units: usize, grain: i32) {
-         // debug_assert!(self.parent.is_none() && !selected_plan::PLAN.is_initialized());
--        *self.table_mut() = vec![0; (units + 1 + self.heads as usize) << 1];
-+        *self.table.write().unwrap() = vec![0; (units + 1 + self.heads as usize) << 1];
-         self.initialize_heap(units as _, grain);
-     }
- }
-```
-
-
-### Safe Initialization via Vector
-**Description**: Replaced manual allocation (`std::alloc::alloc_zeroed`) and raw pointer manipulation with a `Vec` that is initialized safely (e.g., using `vec![]` or `bytemuck::zeroed_vec`). This eliminates the need for unsafe allocation and raw pointer load/store during initialization. In some cases (like `bscan.rs`), the vector is leaked to provide a static-like buffer.
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `benches/regular_bench/bulk_meta/bscan.rs` | 3 | 0 | -3 |
-| `benches/regular_bench/bulk_meta/bzero_bset.rs` | 1 | 0 | -1 |
-| `src/util/rust_util/zeroed_alloc.rs` | 2 | 0 | -2 |
-
-**Category Total**: Δ = -6
-
-**Diff Snippets**:
-<details>
-<summary>benches/regular_bench/bulk_meta/bscan.rs</summary>
-
-```diff
-diff --git a/benches/regular_bench/bulk_meta/bscan.rs b/benches/regular_bench/bulk_meta/bscan.rs
-index b8d57187..5406a61a 100644
---- a/benches/regular_bench/bulk_meta/bscan.rs
-+++ b/benches/regular_bench/bulk_meta/bscan.rs
-@@ -5,16 +5,11 @@ use mmtk::util::{
-     constants::LOG_BITS_IN_WORD, test_private::scan_non_zero_bits_in_metadata_bytes, Address,
- };
- use rand::{seq::IteratorRandom, SeedableRng};
- use rand_chacha::ChaCha8Rng;
-
--fn allocate_aligned(size: usize) -> Address {
--    let ptr = unsafe {
--        std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(size, size).unwrap())
--    };
--    Address::from_mut_ptr(ptr)
--}
-+
-
- const BLOCK_BYTES: usize = 32768usize; // Match an Immix block size.
-
- // Asssume one-bit-per-word metadata (matching VO bits).
- const BLOCK_META_BYTES: usize = BLOCK_BYTES >> LOG_BITS_IN_WORD;
-@@ -38,32 +33,37 @@ struct PreparedBitmap {
-     set_bits: Vec<(Address, u8)>,
- }
-
- /// Make a bitmap of the desired size and set bits.
- fn make_standard_bitmap() -> PreparedBitmap {
--    let start = allocate_aligned(BLOCK_META_BYTES);
--    let end = start + BLOCK_META_BYTES;
-+    let mut vec = vec![0usize; BLOCK_META_BYTES / std::mem::size_of::<usize>()];
-     let mut rng = get_rng();
-
--    let mut set_bits = (0..(BLOCK_BYTES >> LOG_BITS_IN_WORD))
--        .choose_multiple(&mut rng, NUM_OBJECTS)
--        .iter()
-+    let mut offsets = (0..(BLOCK_BYTES >> LOG_BITS_IN_WORD))
-+        .choose_multiple(&mut rng, NUM_OBJECTS);
-+    offsets.sort();
-+
-+    for &total_bit_offset in offsets.iter() {
-+        let word_offset = total_bit_offset >> LOG_BITS_IN_WORD;
-+        let bit_offset = total_bit_offset & ((1 << LOG_BITS_IN_WORD) - 1);
-+        vec[word_offset] |= 1 << bit_offset;
-+    }
-+
-+    let boxed_slice = vec.into_boxed_slice();
-+    let leaked_slice = Box::leak(boxed_slice);
-+    let start = Address::from_mut_ptr(leaked_slice.as_mut_ptr() as *mut u8);
-+    let end = start + BLOCK_META_BYTES;
-+
-+    let set_bits = offsets
-+        .into_iter()
-         .map(|total_bit_offset| {
-             let word_offset = total_bit_offset >> LOG_BITS_IN_WORD;
-             let bit_offset = total_bit_offset & ((1 << LOG_BITS_IN_WORD) - 1);
-             (start + (word_offset << LOG_BITS_IN_WORD), bit_offset as u8)
-         })
-         .collect::<Vec<_>>();
-
--    set_bits.sort();
--
--    for (addr, bit) in set_bits.iter() {
--        let word = unsafe { addr.load::<usize>() };
--        let new_word = word | (1 << bit);
--        unsafe { addr.store::<usize>(new_word) };
--    }
--
-     PreparedBitmap {
-         start,
-         end,
-         set_bits,
-     }
-```
-</details>
-
-<details>
-<summary>benches/regular_bench/bulk_meta/bzero_bset.rs (lines 7-13)</summary>
-
-```diff
-@@ -7,7 +7,7 @@ use mmtk::util::{constants::LOG_BITS_IN_WORD, test_private, Address};
--fn allocate_aligned(size: usize) -> Address {
--    let ptr = unsafe {
--        std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(size, size).unwrap())
--    };
--    Address::from_mut_ptr(ptr)
--}
-```
-</details>
-
-<details>
-<summary>src/util/rust_util/zeroed_alloc.rs</summary>
-
-```diff
-diff --git a/src/util/rust_util/zeroed_alloc.rs b/src/util/rust_util/zeroed_alloc.rs
-index 09346bf3..9c38e20d 100644
---- a/src/util/rust_util/zeroed_alloc.rs
-+++ b/src/util/rust_util/zeroed_alloc.rs
-@@ -37,12 +37,7 @@ use bytemuck::Zeroable;
- /// -   `T`: The element type.
- /// -   `size`: The length and capacity of the created vector.
- ///
- /// Returns the created vector.
- pub(crate) fn new_zeroed_vec<T: Zeroable>(size: usize) -> Vec<T> {
--    let layout = Layout::array::<T>(size).unwrap();
--    let ptr = unsafe { alloc_zeroed(layout) } as *mut T;
--    if ptr.is_null() {
--        handle_alloc_error(layout);
--    }
--    unsafe { Vec::from_raw_parts(ptr, size, size) }
-+    bytemuck::zeroed_vec(size)
- }
-```
-</details>
-
-
-### Removal of Static Plan Hack
-**Description**: Removal of the unsafe hack that cast a local plan reference to a `'static` reference and used `Arc::as_ptr` to modify `GCTrigger`.
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `src/mmtk.rs` | 2 | 0 | -2 |
-| `src/util/heap/gc_trigger.rs` | 1 | 0 | -1 |
-
-**Category Total**: Δ = -3
-
-**Diff Snippets**:
-<details>
-<summary>src/mmtk.rs</summary>
-
-```diff
---- a/src/mmtk.rs
-+++ b/src/mmtk.rs
-@@ -176,22 +236,13 @@
--        // We haven't finished creating MMTk. No one is using the GC trigger. We cast the arc into a mutable reference.
--        {
--            // TODO: use Arc::get_mut_unchecked() when it is availble.
--            let gc_trigger: &mut GCTrigger<VM> =
--                unsafe { &mut *(Arc::as_ptr(&gc_trigger) as *mut _) };
--            // We know the plan address will not change. Cast it to a static reference.
--            let static_plan: &'static dyn Plan<VM = VM> = unsafe { &*(&*plan as *const _) };
--            // Set the plan so we can trigger GC and check GC condition without using plan
--            gc_trigger.set_plan(static_plan);
--        }
-```
-</details>
-
-<details>
-<summary>src/util/heap/gc_trigger.rs (line 77)</summary>
-
-```diff
--    fn plan(&self) -> &dyn Plan<VM = VM> {
--        unsafe { self.plan.assume_init() }
--    }
-```
-</details>
-
-
-### Atomic Operations (load_atomic/store_atomic)
-**Description**: Replaced unsafe raw memory access (via `load` and `store` on metadata tables) with safe atomic operations (`load_atomic` and `store_atomic`) provided by the abstraction.
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `src/plan/barriers.rs` | 1 | 0 | -1 |
-| `src/policy/immix/line.rs` | 2 | 0 | -2 |
-| `src/util/heap/chunk_map.rs` | 2 | 0 | -2 |
-| `src/util/metadata/pin_bit.rs` | 1 | 0 | -1 |
-| `src/vm/object_model.rs` | 2 | 0 | -2 |
-
-**Category Total**: Δ = -8
-
-**Diff Snippets**:
-<details>
-<summary>src/plan/barriers.rs (lines 193-203)</summary>
-
-```diff
---- a/src/plan/barriers.rs
-+++ b/src/plan/barriers.rs
-@@ -193,11 +193,11 @@ impl<S: BarrierSemantics> ObjectBarrier<S> {
-     }
-
-     /// Attempt to atomically log an object.
-     /// Returns true if the object is not logged previously.
-     fn object_is_unlogged(&self, object: ObjectReference) -> bool {
--        unsafe { S::UNLOG_BIT_SPEC.load::<S::VM, u8>(object, None) != 0 }
-+        S::UNLOG_BIT_SPEC.load_atomic::<S::VM, u8>(object, None, Ordering::Relaxed) != 0
-     }
-```
-</details>
-
-<details>
-<summary>src/policy/immix/line.rs (lines 50-69)</summary>
-
-```diff
---- a/src/policy/immix/line.rs
-+++ b/src/policy/immix/line.rs
-@@ -50,19 +50,17 @@ impl Line {
-     }
-
-     /// Mark the line. This will update the side line mark table.
-     pub fn mark(&self, state: u8) {
-         debug_assert!(!super::BLOCK_ONLY);
--        unsafe {
--            Self::MARK_TABLE.store::<u8>(self.start(), state);
--        }
-+        Self::MARK_TABLE.store_atomic::<u8>(self.start(), state, std::sync::atomic::Ordering::Relaxed);
-     }
-
-     /// Test line mark state.
-     pub fn is_marked(&self, state: u8) -> bool {
-         debug_assert!(!super::BLOCK_ONLY);
--        unsafe { Self::MARK_TABLE.load::<u8>(self.start()) == state }
-+        Self::MARK_TABLE.load_atomic::<u8>(self.start(), std::sync::atomic::Ordering::Relaxed) == state
-     }
-```
-</details>
-
-
-<details>
-<summary>src/util/heap/chunk_map.rs (lines 143-178)</summary>
-
-```diff
---- a/src/util/heap/chunk_map.rs
-+++ b/src/util/heap/chunk_map.rs
-@@ -143,11 +143,11 @@ impl ChunkMap {
-                 old_state,
-                 state
-             );
-         }
-         // Update alloc byte
--        unsafe { Self::ALLOC_TABLE.store::<u8>(chunk.start(), state.0) };
-+        Self::ALLOC_TABLE.store_atomic::<u8>(chunk.start(), state.0, std::sync::atomic::Ordering::Relaxed);
-         // If this is a newly allcoated chunk, then expand the chunk range.
-         if allocated {
-             debug_assert!(!chunk.start().is_zero());
-             let mut range = self.chunk_range.lock();
-             if range.start == Chunk::ZERO {
-@@ -168,11 +168,11 @@ impl ChunkMap {
-         (state.is_allocated() && state.get_space_index() == self.space_index).then_some(state)
-     }
-
-     /// Get chunk state, regardless of the space. This should always be private.
-     fn get_internal(&self, chunk: Chunk) -> ChunkState {
--        let byte = unsafe { Self::ALLOC_TABLE.load::<u8>(chunk.start()) };
-+        let byte = Self::ALLOC_TABLE.load_atomic::<u8>(chunk.start(), std::sync::atomic::Ordering::Relaxed);
-         ChunkState(byte)
-     }
- ```
-</details>
-
-<details>
-<summary>src/util/metadata/pin_bit.rs (lines 34-46)</summary>
-
-```diff
---- a/src/util/metadata/pin_bit.rs
-+++ b/src/util/metadata/pin_bit.rs
-@@ -34,11 +34,11 @@ impl VMLocalPinningBitSpec {
-         res.is_ok()
-     }
-
-     /// Check if an object is pinned.
-     pub fn is_object_pinned<VM: VMBinding>(&self, object: ObjectReference) -> bool {
--        if unsafe { self.load::<VM, u8>(object, None) == 1 } {
-+        if self.load_atomic::<VM, u8>(object, None, Ordering::SeqCst) == 1 {
-             return true;
-         }
-
-         false
-     }
-```
-</details>
-
-<details>
-<summary>src/vm/object_model.rs (lines 150-205)</summary>
-
-```diff
-diff --git a/src/vm/object_model.rs b/src/vm/object_model.rs
-index 24bb105b..f88ec10e 100644
---- a/src/vm/object_model.rs
-+++ b/src/vm/object_model.rs
-@@ -150,16 +150,16 @@ pub trait ObjectModel<VM: VMBinding> {
-     /// * `object`: is a reference to the target object.
-     /// * `mask`: is an optional mask value for the metadata. This value is used in cases like the forwarding pointer metadata, where some of the bits are reused by other metadata such as the forwarding bits.
-     ///
-     /// # Safety
-     /// This is a non-atomic load, thus not thread-safe.
--    unsafe fn load_metadata<T: MetadataValue>(
-+    fn load_metadata<T: MetadataValue>(
-         metadata_spec: &HeaderMetadataSpec,
-         object: ObjectReference,
-         mask: Option<T>,
-     ) -> T {
--        metadata_spec.load::<T>(object.to_header::<VM>(), mask)
-+        metadata_spec.load_atomic::<T>(object.to_header::<VM>(), mask, Ordering::Relaxed)
-     }
-
-     /// A function to atomically load the specified per-object metadata's content.
-     /// The default implementation assumes the bits defined by the spec are always avilable for MMTk to use. If that is not the case, a binding should override this method, and provide their implementation.
-@@ -189,17 +189,17 @@ pub trait ObjectModel<VM: VMBinding> {
-     /// * `val`: is the new metadata value to be stored.
-     /// * `mask`: is an optional mask value for the metadata. This value is used in cases like the forwarding pointer metadata, where some of the bits are reused by other metadata such as the forwarding bits.
-     ///
-     /// # Safety
-     /// This is a non-atomic store, thus not thread-safe.
--    unsafe fn store_metadata<T: MetadataValue>(
-+    fn store_metadata<T: MetadataValue>(
-         metadata_spec: &HeaderMetadataSpec,
-         object: ObjectReference,
-         val: T,
-         mask: Option<T>,
-     ) {
--        metadata_spec.store::<T>(object.to_header::<VM>(), val, mask)
-+        metadata_spec.store_atomic::<T>(object.to_header::<VM>(), val, mask, Ordering::Relaxed)
-     }
-
-     /// A function to atomically store a value to the specified per-object metadata.
-     /// The default implementation assumes the bits defined by the spec are always avilable for MMTk to use. If that is not the case, a binding should override this method, and provide their implementation.
-```
-</details>
-
-### Safe API: VMMap Methods
-**Description**: The `VMMap` trait methods `allocate_contiguous_chunks` and `free_contiguous_chunks` were made safe, allowing callers to remove `unsafe` blocks. This was enabled by adding internal synchronization (Mutex) in the implementations (`Map32` and `Map64`).
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `src/util/heap/pageresource.rs` | 2 | 0 | -2 |
+| `src/util/malloc/malloc_ms_util.rs` | 5 | 3 | -2 |
 
 **Category Total**: Δ = -2
 
 **Diff Snippets**:
 <details>
-<summary>src/util/heap/pageresource.rs</summary>
+<summary>src/util/malloc/malloc_ms_util.rs (merging blocks)</summary>
 
 ```diff
-@@ -153,18 +153,16 @@ impl CommonPageResource {
-         chunks: usize,
-         freelist: Option<&mut dyn FreeList>,
-     ) -> Address {
-         let mut head_discontiguous_region = self.head_discontiguous_region.lock().unwrap();
+@@ -35,18 +37,25 @@ pub fn align_offset_alloc<VM: VMBinding>(size: usize, align: usize, offset: usiz
+ pub fn offset_malloc_usable_size(address: Address) -> usize {
+     let malloc_res_ptr: *mut usize = (address - BYTES_IN_ADDRESS).to_mut_ptr();
+-    let malloc_res = unsafe { malloc_res_ptr.read_unaligned() } as *mut libc::c_void;
+-    unsafe { malloc_usable_size(malloc_res) }
++    // SAFETY: The caller must ensure that `address` was returned by `align_offset_alloc`, so that `malloc_res_ptr` points to the stored original malloc result.
++    // malloc_res is a valid pointer returned by calloc.
++    unsafe {
++        let malloc_res = malloc_res_ptr.read_unaligned() as *mut libc::c_void;
++        malloc_usable_size(malloc_res)
++    }
+ }
 
--        let new_head: Address = unsafe {
--            self.vm_map.allocate_contiguous_chunks(
--                space_descriptor,
--                chunks,
--                *head_discontiguous_region,
--                freelist,
--            )
--        };
-+        let new_head: Address = self.vm_map.allocate_contiguous_chunks(
-+            space_descriptor,
-+            chunks,
-+            *head_discontiguous_region,
-+            freelist,
-+        );
-         if new_head.is_zero() {
-             return Address::ZERO;
-         }
-
-         *head_discontiguous_region = new_head;
-@@ -177,13 +175,11 @@ impl CommonPageResource {
-         let mut head_discontiguous_region = self.head_discontiguous_region.lock().unwrap();
-         debug_assert!(chunk == conversions::chunk_align_down(chunk));
-         if chunk == *head_discontiguous_region {
-             *head_discontiguous_region = self.vm_map.get_next_contiguous_region(chunk);
-         }
--        unsafe {
--            self.vm_map.free_contiguous_chunks(chunk);
--        }
-+        self.vm_map.free_contiguous_chunks(chunk);
-     }
+ /// Free an address that is allocated with an offset (returned by [`crate::util::malloc::malloc_ms_util::align_offset_alloc`]).
+ pub fn offset_free(address: Address) {
+     let malloc_res_ptr: *mut usize = (address - BYTES_IN_ADDRESS).to_mut_ptr();
+-    let malloc_res = unsafe { malloc_res_ptr.read_unaligned() } as *mut libc::c_void;
+-    unsafe { free(malloc_res) };
++    // SAFETY: The caller must ensure that `address` was returned by `align_offset_alloc`.
++    // malloc_res is a valid pointer returned by calloc and can be freed.
++    unsafe {
++        let malloc_res = malloc_res_ptr.read_unaligned() as *mut libc::c_void;
++        crate::util::malloc::library::free(malloc_res);
++    }
+ }
 ```
 </details>
 
 
-### Encapsulated Allocator Access
-**Description**: Replaced direct unsafe access to allocators and subsequent downcasting with a safe wrapper method `allocator_impl_mut_for_semantic` on `Mutator`.
+#### Redundant Unsafe Cleanup
+**Description**: Removal of `unsafe` blocks that were not actually required for the operation, such as around safe function calls like `Address::zero()`.
 
 **Files and Unsafe Delta**:
 | File | Base | New | Δ |
 |------|------|-----|---|
-| `src/plan/compressor/mutator.rs` | 1 | 0 | -1 |
-| `src/plan/generational/copying/mutator.rs` | 1 | 0 | -1 |
-| `src/plan/generational/immix/mutator.rs` | 1 | 0 | -1 |
-| `src/plan/immix/mutator.rs` | 1 | 0 | -1 |
-| `src/plan/markcompact/mutator.rs` | 1 | 0 | -1 |
-| `src/plan/marksweep/mutator.rs` | 1 | 0 | -1 |
-| `src/plan/semispace/mutator.rs` | 1 | 0 | -1 |
+| `src/policy/marksweepspace/malloc_ms/global.rs` | 1 | 0 | -1 |
+| `src/util/alloc/free_list_allocator.rs` | 1 | 0 | -1 |
 
-**Category Total**: Δ = -7
+**Category Total**: Δ = -2
 
 **Diff Snippets**:
 <details>
-<summary>src/plan/compressor/mutator.rs</summary>
+<summary>src/policy/marksweepspace/malloc_ms/global.rs</summary>
 
 ```diff
-diff --git a/src/plan/compressor/mutator.rs b/src/plan/compressor/mutator.rs
-index 4beeac31..23c56b35 100644
---- a/src/plan/compressor/mutator.rs
-+++ b/src/plan/compressor/mutator.rs
-@@ -59,15 +59,9 @@ pub fn create_compressor_mutator<VM: VMBinding>(
-     builder.build()
- }
-
- pub fn compressor_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWorkerThread) {
-     // reset the thread-local allocation bump pointer
--    let bump_allocator = unsafe {
--        mutator
--            .allocators
--            .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
--    }
--    .downcast_mut::<BumpAllocator<VM>>()
--    .unwrap();
-+    let bump_allocator = mutator.allocator_impl_mut_for_semantic::<BumpAllocator<VM>>(AllocationSemantics::Default);
-     bump_allocator.reset();
-     common_release_func(mutator, tls);
- }
-```
-</details>
-
-<details>
-<summary>src/plan/generational/copying/mutator.rs</summary>
-
-```diff
-diff --git a/src/plan/generational/copying/mutator.rs b/src/plan/generational/copying/mutator.rs
-index eb7e8c15..38119487 100644
---- a/src/plan/generational/copying/mutator.rs
-+++ b/src/plan/generational/copying/mutator.rs
-@@ -14,17 +14,11 @@ use crate::util::{VMMutatorThread, VMWorkerThread};
- use crate::vm::VMBinding;
- use crate::MMTK;
-
- pub fn gencopy_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWorkerThread) {
-     // reset nursery allocator
--    let bump_allocator = unsafe {
--        mutator
--            .allocators
--            .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
--    }
--    .downcast_mut::<BumpAllocator<VM>>()
--    .unwrap();
-+    let bump_allocator = mutator.allocator_impl_mut_for_semantic::<BumpAllocator<VM>>(AllocationSemantics::Default);
-     bump_allocator.reset();
-
-     common_release_func(mutator, tls);
- }
-```
-</details>
-
-<details>
-<summary>src/plan/generational/immix/mutator.rs (lines 14-31)</summary>
-
-```diff
-diff --git a/src/plan/generational/immix/mutator.rs b/src/plan/generational/immix/mutator.rs
-index e3d93469..36ccd2cc 100644
---- a/src/plan/generational/immix/mutator.rs
-+++ b/src/plan/generational/immix/mutator.rs
-@@ -14,17 +14,11 @@ use crate::util::{VMMutatorThread, VMWorkerThread};
- use crate::vm::VMBinding;
- use crate::MMTK;
-
- pub fn genimmix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWorkerThread) {
-     // reset nursery allocator
--    let bump_allocator = unsafe {
--        mutator
--            .allocators
--            .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
--    }
--    .downcast_mut::<BumpAllocator<VM>>()
--    .unwrap();
-+    let bump_allocator = mutator.allocator_impl_mut_for_semantic::<BumpAllocator<VM>>(AllocationSemantics::Default);
-     bump_allocator.reset();
-
-     common_release_func(mutator, tls);
- }
-```
-</details>
-
-<details>
-<summary>src/plan/immix/mutator.rs (lines 14-31)</summary>
-
-```diff
-diff --git a/src/plan/immix/mutator.rs b/src/plan/immix/mutator.rs
-index aa6354eb..be2a3304 100644
---- a/src/plan/immix/mutator.rs
-+++ b/src/plan/immix/mutator.rs
-@@ -14,17 +14,11 @@ use crate::util::opaque_pointer::{VMMutatorThread, VMWorkerThread};
- use crate::vm::VMBinding;
- use crate::MMTK;
- use enum_map::EnumMap;
-
- pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWorkerThread) {
--    let immix_allocator = unsafe {
--        mutator
--            .allocators
--            .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
--    }
--    .downcast_mut::<ImmixAllocator<VM>>()
--    .unwrap();
-+    let immix_allocator = mutator.allocator_impl_mut_for_semantic::<ImmixAllocator<VM>>(AllocationSemantics::Default);
-     immix_allocator.reset();
-
-     common_release_func(mutator, tls);
- }
-```
-</details>
-
-<details>
-<summary>src/plan/markcompact/mutator.rs</summary>
-
-```diff
-diff --git a/src/plan/markcompact/mutator.rs b/src/plan/markcompact/mutator.rs
-index 4e40743a..1419769d 100644
---- a/src/plan/markcompact/mutator.rs
-+++ b/src/plan/markcompact/mutator.rs
-@@ -47,16 +47,10 @@ pub fn create_markcompact_mutator<VM: VMBinding>(
-     builder.build()
- }
-
- pub fn markcompact_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWorkerThread) {
-     // reset the thread-local allocation bump pointer
--    let markcompact_allocator = unsafe {
--        mutator
--            .allocators
--            .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
--    }
--    .downcast_mut::<MarkCompactAllocator<VM>>()
--    .unwrap();
-+    let markcompact_allocator = mutator.allocator_impl_mut_for_semantic::<MarkCompactAllocator<VM>>(AllocationSemantics::Default);
-     markcompact_allocator.reset();
-
-     common_release_func(mutator, tls);
- }
-```
-</details>
-
-<details>
-<summary>src/plan/marksweep/mutator.rs</summary>
-
-```diff
-diff --git a/src/plan/marksweep/mutator.rs b/src/plan/marksweep/mutator.rs
-index 8d5b045e..c5114afc 100644
---- a/src/plan/marksweep/mutator.rs
-+++ b/src/plan/marksweep/mutator.rs
-@@ -61,17 +61,11 @@ mod native_mark_sweep {
-     use crate::util::alloc::FreeListAllocator;
-
-     fn get_freelist_allocator_mut<VM: VMBinding>(
-         mutator: &mut Mutator<VM>,
-     ) -> &mut FreeListAllocator<VM> {
--        unsafe {
--            mutator
--                .allocators
--                .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
--        }
--        .downcast_mut::<FreeListAllocator<VM>>()
--        .unwrap()
-+        mutator.allocator_impl_mut_for_semantic::<FreeListAllocator<VM>>(AllocationSemantics::Default)
-     }
-
-     // We forward calls to the allocator prepare and release
-
-     #[cfg(not(feature = "malloc_mark_sweep"))]
-```
-</details>
-
-<details>
-<summary>src/plan/semispace/mutator.rs</summary>
-
-```diff
-diff --git a/src/plan/semispace/mutator.rs b/src/plan/semispace/mutator.rs
-index 2a190a31..0fd8ab8f 100644
---- a/src/plan/semispace/mutator.rs
-+++ b/src/plan/semispace/mutator.rs
-@@ -15,24 +15,13 @@ use crate::vm::VMBinding;
- use crate::MMTK;
- use enum_map::EnumMap;
-
- pub fn ss_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWorkerThread) {
-     // rebind the allocation bump pointer to the appropriate semispace
--    let bump_allocator = unsafe {
--        mutator
--            .allocators
--            .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
--    }
--    .downcast_mut::<BumpAllocator<VM>>()
--    .unwrap();
--    bump_allocator.rebind(
--        mutator
--            .plan
--            .downcast_ref::<SemiSpace<VM>>()
--            .unwrap()
--            .tospace(),
--    );
-+    let tospace = mutator.plan.downcast_ref::<SemiSpace<VM>>().unwrap().tospace();
-+    let bump_allocator = mutator.allocator_impl_mut_for_semantic::<BumpAllocator<VM>>(AllocationSemantics::Default);
-+    bump_allocator.rebind(tospace);
-
-     common_release_func(mutator, tls);
- }
-```
-</details>
-
-
-### Safe Type Erasure (std::any::Any)
-**Description**: Replaced manual type erasure using raw pointers and `expose_provenance` with the safe `std::any::Any` trait and `downcast_mut` for dynamic type checking at runtime.
-
-**Files and Unsafe Delta**:
-| File | Base | New | Δ |
-|------|------|-----|---|
-| `src/util/erase_vm.rs` | 1 | 0 | -1 |
-
-**Category Total**: Δ = -1
-
-**Diff Snippets**:
-<details>
-<summary>src/util/erase_vm.rs</summary>
-
-```diff
-diff --git a/src/util/erase_vm.rs b/src/util/erase_vm.rs
-index adc092c7..d17b96e5 100644
---- a/src/util/erase_vm.rs
-+++ b/src/util/erase_vm.rs
-@@ -12,21 +12,19 @@
- //!
- //! `TErasedRef` has the same lifetime as `&T<VM>`.
-
- macro_rules! define_erased_vm_mut_ref {
-     ($new_type: ident = $orig_type: ty) => {
--        pub struct $new_type<'a>(usize, PhantomData<&'a ()>);
-+        pub struct $new_type<'a>(&'a mut dyn std::any::Any);
-         impl<'a> $new_type<'a> {
--            pub fn new<VM: VMBinding>(r: &'a mut $orig_type) -> Self {
--                let worker_as_usize: usize = (r as *mut $orig_type).expose_provenance();
--                Self(worker_as_usize, PhantomData)
-+            pub fn new<VM: VMBinding>(r: &'a mut $orig_type) -> Self
-+            where $orig_type: 'static {
-+                Self(r)
-             }
--            pub fn into_mut<VM: VMBinding>(self) -> &'a mut $orig_type {
--                unsafe {
--                    &mut *(std::ptr::with_exposed_provenance(self.0) as *const $orig_type
--                        as *mut $orig_type)
--                }
-+            pub fn into_mut<VM: VMBinding>(self) -> &'a mut $orig_type
-+            where $orig_type: 'static {
-+                self.0.downcast_mut::<$orig_type>().expect("Type mismatch in erased VM ref")
-             }
+@@ -375,14 +372,14 @@ impl<VM: VMBinding> MallocSpace<VM> {
+     pub fn alloc(&self, tls: VMThread, size: usize, align: usize, offset: usize) -> Address {
+         // TODO: Should refactor this and Space.acquire()
+-        if self.get_gc_trigger().poll(false, Some(self)) {
++        if self.get_gc_trigger().poll(VM::VMActivePlan::mutator(VMMutatorThread(tls)).plan, false, Some(self as &dyn Space<VM>)) {
+             assert!(VM::VMActivePlan::is_mutator(tls), "Polling in GC worker");
+             VM::VMCollection::block_for_gc(VMMutatorThread(tls));
+-            return unsafe { Address::zero() };
++            return Address::zero();
          }
-     };
- }
 ```
 </details>
 
+<details>
+<summary>src/util/alloc/free_list_allocator.rs (lines 341-359)</summary>
 
-### Removal of Unsafe Optimization
+```diff
+@@ -341,17 +358,15 @@ impl<VM: VMBinding> FreeListAllocator<VM> {
+         // construct free list
+         let block_end = block.start() + Block::BYTES;
+-        let mut old_cell = unsafe { Address::zero() };
++        let mut old_cell = Address::zero();
+         let mut new_cell = block.start();
+```
+</details>
+
+#### Removal of Unsafe Optimization
 **Description**: Removed an unsafe optimization that bypassed normal abstractions (e.g., setting raw bytes directly in side metadata), falling back to a safe method to ensure memory safety at the cost of potential performance.
 
 **Files and Unsafe Delta**:
@@ -6850,4 +6750,195 @@ index adc092c7..d17b96e5 100644
 ## Unclassified
 *(No unclassified files yet.)*
 
+
+#### Safe Enum Conversion
+**Description**: Removed `unsafe impl` for `bytemuck` traits (`ZeroableInOption`, `PodInOption`) on an enum by providing explicit safe conversion methods (`to_u8`, `from_u8`) between `Option<Enum>` and primitive types. This avoids the need for unsafe transmutations or trait promises about memory layout.
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `src/plan/concurrent/mod.rs` | 2 | 0 | -2 |
+
+**Category Total**: Δ = -2
+
+**Diff Snippets**:
+<details>
+<summary>src/plan/concurrent/mod.rs (lines 22-30)</summary>
+
+```diff
+@@ -22,8 +22,20 @@ pub enum Pause {
+     InitialMark,
+     /// The pause after concurrent marking.
+     FinalMark,
+ }
+
+-unsafe impl bytemuck::ZeroableInOption for Pause {}
++impl Pause {
++    pub fn to_u8(pause: Option<Pause>) -> u8 {
++        pause.map(|p| p as u8).unwrap_or(0)
++    }
+
+-unsafe impl bytemuck::PodInOption for Pause {}
++    pub fn from_u8(val: u8) -> Option<Pause> {
++        match val {
++            0 => None,
++            1 => Some(Pause::Full),
++            2 => Some(Pause::InitialMark),
++            3 => Some(Pause::FinalMark),
++            _ => panic!("Invalid Pause value: {}", val),
++        }
++    }
++}
+```
+</details>
+
+#### Safe Standard Library Alternatives
+**Description**: Replaced direct calls to unsafe FFI functions (from `libc`) with safe methods provided by the Rust standard library (e.g., `std::process`, `std::thread`, and `slice::fill`).
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `src/util/rust_util/mod.rs` | 2 | 0 | -2 |
+| `benches/regular_bench/bulk_meta/bzero_bset.rs` | 2 | 0 | -2 |
+| `src/scheduler/affinity.rs` | 1 | 0 | -1 |
+
+**Category Total**: Δ = -5
+
+**Diff Snippets**:
+<details>
+<summary>src/util/rust_util/mod.rs (lines 110-125)</summary>
+
+```diff
+@@ -105,18 +80,8 @@
+ /// Create a formatted string that makes the best effort idenfying the current process and thread.
+ pub fn debug_process_thread_id() -> String {
+-    let pid = unsafe { libc::getpid() };
+-    #[cfg(target_os = "linux")]
+-    {
+-        // `gettid()` is Linux-specific.
+-        let tid = unsafe { libc::gettid() };
+-        format!("PID: {}, TID: {}", pid, tid)
+-    }
+-    #[cfg(not(target_os = "linux"))]
+-    {
+-        // TODO: When we support other platforms, use platform-specific methods to get thread
+-        // identifiers.
+-        format!("PID: {}", pid)
+-    }
++    let pid = std::process::id();
++    let tid = std::thread::current().id();
++    format!("PID: {}, TID: {:?}", pid, tid)
+ }
+```
+</details>
+
+<details>
+<summary>benches/regular_bench/bulk_meta/bzero_bset.rs (lines 37-60)</summary>
+
+```diff
+@@ -35,6 +35,6 @@ pub fn bench(c: &mut Criterion) {
+-        b.iter(|| unsafe {
+-            libc::memset(start.as_mut_ref() as *mut c_void, 0xff, end - start);
+-            libc::memset(start.as_mut_ref() as *mut c_void, 0x00, end - start);
++        b.iter(|| {
++            data.fill(0xff);
++            data.fill(0x00);
+         })
+```
+</details>
+
+<details>
+<summary>src/scheduler/affinity.rs (get_total_num_cpus)</summary>
+
+```diff
+@@ -7,25 +7,14 @@
+-#[cfg(target_os = "linux")]
+ /// Return the total number of cores allocated to the program.
+ pub fn get_total_num_cpus() -> u16 {
+-    use std::mem::MaybeUninit;
+-    unsafe {
+-        let mut cs = MaybeUninit::zeroed().assume_init();
+-        CPU_ZERO(&mut cs);
+-        sched_getaffinity(0, std::mem::size_of::<cpu_set_t>(), &mut cs);
+-        CPU_COUNT(&cs) as u16
+-    }
+-}
+-
+-#[cfg(not(target_os = "linux"))]
+-/// Return the total number of cores allocated to the program.
+-pub fn get_total_num_cpus() -> u16 {
+-    unimplemented!()
++    std::thread::available_parallelism()
++        .map(|n| n.get() as u16)
++        .unwrap_or(1)
+ }
+```
+</details>
+
+#### Safe Test Fixtures (Leaked References)
+**Description**: Replaced raw pointers with leaked static references in test fixtures (`MMTKFixture`). Since tests can afford to leak memory, this eliminates the need for unsafe dereferencing and manual `Drop` implementations that free the raw pointer. It also allows removing manual `unsafe impl Send`.
+
+**Files and Unsafe Delta**:
+| File | Base | New | Δ |
+|------|------|-----|---|
+| `src/util/test_util/fixtures.rs` | 4 | 0 | -4 |
+
+**Category Total**: Δ = -4
+
+**Diff Snippets**:
+<details>
+<summary>src/util/test_util/fixtures.rs (MMTKFixture Raw Pointer to Reference)</summary>
+
+```diff
+@@ -113,11 +111,11 @@ impl<T: FixtureContent> Default for SerialFixture<T> {
+         Self::new()
+     }
+ }
+
+ pub struct MMTKFixture {
+-    mmtk: *mut MMTK<MockVM>,
++    mmtk: &'static mut MMTK<MockVM>,
+ }
+
+ impl FixtureContent for MMTKFixture {
+     fn create() -> Self {
+         Self::create_with_builder(
+@@ -140,35 +138,28 @@ impl MMTKFixture {
+     {
+         let mut builder = MMTKBuilder::new();
+         with_builder(&mut builder);
+
+         let mmtk = memory_manager::mmtk_init(&builder);
+-        let mmtk_ptr = Box::into_raw(mmtk);
++        let mmtk_ref = Box::leak(mmtk);
+
+         if initialize_collection {
+-            let mmtk_static: &'static MMTK<MockVM> = unsafe { &*mmtk_ptr };
+-            memory_manager::initialize_collection(mmtk_static, VMThread::UNINITIALIZED);
++            memory_manager::initialize_collection(mmtk_ref, VMThread::UNINITIALIZED);
+         }
+
+-        MMTKFixture { mmtk: mmtk_ptr }
++        MMTKFixture { mmtk: mmtk_ref }
+     }
+
+     pub fn get_mmtk(&self) -> &'static MMTK<MockVM> {
+-        unsafe { &*self.mmtk }
++        self.mmtk
+     }
+
+     pub fn get_mmtk_mut(&mut self) -> &'static mut MMTK<MockVM> {
+-        unsafe { &mut *self.mmtk }
++        self.mmtk
+     }
+ }
+
+-impl Drop for MMTKFixture {
+-    fn drop(&mut self) {
+-        let mmtk_ptr: *const MMTK<MockVM> = self.mmtk as _;
+-        let _ = unsafe { Box::from_raw(mmtk_ptr as *mut MMTK<MockVM>) };
+-    }
+-}
+```
+</details>
 
