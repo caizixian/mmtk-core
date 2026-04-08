@@ -771,8 +771,6 @@ trait SideMetadataSpecBlockExt {
                  unreachable!(
                      "We found vo bit in the raw word, but we cannot find the exact address"
 ```
-</details>        if let Some(object) = is_object {
-```
 </details>
 
 #### Safe Metadata API (Malloc MS)
@@ -1097,6 +1095,7 @@ index 42ed3f3d..70847720 100644
               cell.load()
           }
  ```
+</details>
 
  <details>
  <summary>src/policy/marksweepspace/malloc_ms/global.rs</summary>
@@ -3496,6 +3495,7 @@ index 128e5752..ae390742 100644
      }
  }
 ```
+</details>
 
 
 #### Safe Concurrent Data Structures (Crossbeam ArrayQueue)
