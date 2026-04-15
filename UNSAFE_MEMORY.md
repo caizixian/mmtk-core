@@ -10,7 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/mmtk.rs:436` — Use `ExclusivePlanAccessProof` to remove unsafe in plan access (requires adding `get_ref_with_proof` or similar) — expected Δ: -1
+1. 🟡 MED: `src/policy/marksweepspace/native_ms/global.rs:428` — Investigate if `unsafe { &*(self as *const Self) }` can be removed or if it is irreducible — expected Δ: 0
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -66,6 +66,11 @@
 - `src/util/test_util/mock_vm.rs` — Irreducible `transmute` in `lifetime!` macro to remove lifetimes in mock VM for testing. Unsafe impl Send/Sync removed by adding bounds to MockAny. [Phase 2 confirmed]
 - `src/util/heap/layout/vm_layout.rs` — All unsafe blocks removed by replacing static mut with OnceLock. [Phase 2 confirmed]
 - `src/util/test_util/fixtures.rs` — Remaining unsafe in `get_mmtk_mut` and `Drop` is required due to `Box::leak` and external API constraints. `unsafe impl Send` removed. [Phase 2 confirmed]
+- `src/policy/compressor/forwarding.rs` — Safe. No unsafe blocks found. [Phase 2 confirmed]
+- `src/policy/immortalspace.rs` — Safe. No unsafe blocks found. [Phase 2 confirmed]
+- `src/policy/largeobjectspace.rs` — Safe. No unsafe blocks found. [Phase 2 confirmed]
+- `src/util/alloc/bumpallocator.rs` — Safe. No unsafe blocks found. [Phase 2 confirmed]
+- `src/util/linear_scan.rs` — 1 unsafe justified for performance (non-atomic VO bit load). [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - `SweepProof` for `malloc_ms` (Implemented).
