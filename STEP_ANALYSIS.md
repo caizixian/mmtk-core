@@ -1,11 +1,13 @@
 # Step Analysis (auto-saved)
+[ignoring loop detection]
 
 ## Target
-- File: <file being analyzed>
+- <file being analyzed>
 - Strategy: <what you're attempting>
 
 ## Findings
 - Line X: <unsafe type> — <eliminable? why/why not>
+- Line Y: <unsafe type> — <eliminable? why/why not>
 
 ## Attempted Changes
 - <what you tried, what happened>

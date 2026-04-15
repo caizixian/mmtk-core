@@ -63,11 +63,8 @@ mod native_mark_sweep {
     fn get_freelist_allocator_mut<VM: VMBinding>(
         mutator: &mut Mutator<VM>,
     ) -> &mut FreeListAllocator<VM> {
-        unsafe {
-            mutator
-                .allocators
-                .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
-        }
+        mutator
+            .allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
         .downcast_mut::<FreeListAllocator<VM>>()
         .unwrap()
     }

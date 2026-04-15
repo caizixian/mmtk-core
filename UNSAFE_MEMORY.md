@@ -1,7 +1,8 @@
 # Unsafe Analysis Knowledge Base
+[ignoring loop detection]
 
 ## Progress
-- Starting count: 722 | Current: 609 | Δ: -12 (Refactored SideMetadataOffset to enum in previous step)
+- Starting count: 722 | Current: 586 | Δ: -19 (Made allocator retrieval safe and cleaned up call sites)
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +11,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/plan/mutator_context.rs:305` — Analyze if allocator retrieval methods can be made safe — expected Δ: unknown
+1. 🔴 HIGH: `src/util/alloc/` — Investigate other uses of `MaybeUninit` and `assume_init` to see if they can be made safe with runtime checks. — expected Δ: unknown
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -19,7 +20,8 @@
 - `unsafe { ObjectReference::from_raw_address_unchecked(x) }` → `ObjectReference::from_raw_address(x).unwrap()` when `x` is known to be non-zero.
 - Replace `self.sft.get_unchecked(index)` with normal indexing `self.sft[index]` when bounds are guaranteed by construction.
 - Use proof tokens (e.g., `SweepProof`) to encapsulate unsafe non-atomic operations when exclusive access is guaranteed by the phase.
-- **New**: Introduce internal cursor/wrapper types (like `MetadataCursor`) to encapsulate repetitive raw memory loads/stores and reduce unsafe blocks at call sites.
+- Introduce internal cursor/wrapper types (like `MetadataCursor`) to encapsulate repetitive raw memory loads/stores and reduce unsafe blocks at call sites.
+- **New**: Track initialization state of `MaybeUninit` arrays with boolean flags or bitmasks to allow safe retrieval methods that panic on uninitialized access instead of being `unsafe`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — remaining unsafe blocks are `assume_init_mut()` which are likely required for performance to avoid `Option` overhead in GC fast path.

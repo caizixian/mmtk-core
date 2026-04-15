@@ -38,61 +38,84 @@ pub struct Allocators<VM: VMBinding> {
     pub immix: [MaybeUninit<ImmixAllocator<VM>>; MAX_IMMIX_ALLOCATORS],
     pub free_list: [MaybeUninit<FreeListAllocator<VM>>; MAX_FREE_LIST_ALLOCATORS],
     pub markcompact: [MaybeUninit<MarkCompactAllocator<VM>>; MAX_MARK_COMPACT_ALLOCATORS],
+    // Track which allocators are initialized to ensure safety.
+    pub(crate) initialized_bump: [bool; MAX_BUMP_ALLOCATORS],
+    pub(crate) initialized_large_object: [bool; MAX_LARGE_OBJECT_ALLOCATORS],
+    pub(crate) initialized_malloc: [bool; MAX_MALLOC_ALLOCATORS],
+    pub(crate) initialized_immix: [bool; MAX_IMMIX_ALLOCATORS],
+    pub(crate) initialized_free_list: [bool; MAX_FREE_LIST_ALLOCATORS],
+    pub(crate) initialized_markcompact: [bool; MAX_MARK_COMPACT_ALLOCATORS],
 }
 
 impl<VM: VMBinding> Allocators<VM> {
-    /// # Safety
-    /// The selector needs to be valid, and points to an allocator that has been initialized.
-    pub unsafe fn get_allocator(&self, selector: AllocatorSelector) -> &dyn Allocator<VM> {
+    pub fn get_allocator(&self, selector: AllocatorSelector) -> &dyn Allocator<VM> {
         match selector {
             AllocatorSelector::BumpPointer(index) => {
-                self.bump_pointer[index as usize].assume_init_ref()
+                assert!(self.initialized_bump[index as usize], "Allocator not initialized");
+                unsafe { self.bump_pointer[index as usize].assume_init_ref() }
             }
             AllocatorSelector::LargeObject(index) => {
-                self.large_object[index as usize].assume_init_ref()
+                assert!(self.initialized_large_object[index as usize], "Allocator not initialized");
+                unsafe { self.large_object[index as usize].assume_init_ref() }
             }
-            AllocatorSelector::Malloc(index) => self.malloc[index as usize].assume_init_ref(),
-            AllocatorSelector::Immix(index) => self.immix[index as usize].assume_init_ref(),
-            AllocatorSelector::FreeList(index) => self.free_list[index as usize].assume_init_ref(),
+            AllocatorSelector::Malloc(index) => {
+                assert!(self.initialized_malloc[index as usize], "Allocator not initialized");
+                unsafe { self.malloc[index as usize].assume_init_ref() }
+            }
+            AllocatorSelector::Immix(index) => {
+                assert!(self.initialized_immix[index as usize], "Allocator not initialized");
+                unsafe { self.immix[index as usize].assume_init_ref() }
+            }
+            AllocatorSelector::FreeList(index) => {
+                assert!(self.initialized_free_list[index as usize], "Allocator not initialized");
+                unsafe { self.free_list[index as usize].assume_init_ref() }
+            }
             AllocatorSelector::MarkCompact(index) => {
-                self.markcompact[index as usize].assume_init_ref()
+                assert!(self.initialized_markcompact[index as usize], "Allocator not initialized");
+                unsafe { self.markcompact[index as usize].assume_init_ref() }
             }
             AllocatorSelector::None => panic!("Allocator mapping is not initialized"),
         }
     }
 
-    /// # Safety
-    /// The selector needs to be valid, and points to an allocator that has been initialized.
-    pub unsafe fn get_typed_allocator<T: Allocator<VM>>(&self, selector: AllocatorSelector) -> &T {
+    pub fn get_typed_allocator<T: Allocator<VM>>(&self, selector: AllocatorSelector) -> &T {
         self.get_allocator(selector).downcast_ref().unwrap()
     }
 
-    /// # Safety
-    /// The selector needs to be valid, and points to an allocator that has been initialized.
-    pub unsafe fn get_allocator_mut(
+    pub fn get_allocator_mut(
         &mut self,
         selector: AllocatorSelector,
     ) -> &mut dyn Allocator<VM> {
         match selector {
             AllocatorSelector::BumpPointer(index) => {
-                self.bump_pointer[index as usize].assume_init_mut()
+                assert!(self.initialized_bump[index as usize], "Allocator not initialized");
+                unsafe { self.bump_pointer[index as usize].assume_init_mut() }
             }
             AllocatorSelector::LargeObject(index) => {
-                self.large_object[index as usize].assume_init_mut()
+                assert!(self.initialized_large_object[index as usize], "Allocator not initialized");
+                unsafe { self.large_object[index as usize].assume_init_mut() }
             }
-            AllocatorSelector::Malloc(index) => self.malloc[index as usize].assume_init_mut(),
-            AllocatorSelector::Immix(index) => self.immix[index as usize].assume_init_mut(),
-            AllocatorSelector::FreeList(index) => self.free_list[index as usize].assume_init_mut(),
+            AllocatorSelector::Malloc(index) => {
+                assert!(self.initialized_malloc[index as usize], "Allocator not initialized");
+                unsafe { self.malloc[index as usize].assume_init_mut() }
+            }
+            AllocatorSelector::Immix(index) => {
+                assert!(self.initialized_immix[index as usize], "Allocator not initialized");
+                unsafe { self.immix[index as usize].assume_init_mut() }
+            }
+            AllocatorSelector::FreeList(index) => {
+                assert!(self.initialized_free_list[index as usize], "Allocator not initialized");
+                unsafe { self.free_list[index as usize].assume_init_mut() }
+            }
             AllocatorSelector::MarkCompact(index) => {
-                self.markcompact[index as usize].assume_init_mut()
+                assert!(self.initialized_markcompact[index as usize], "Allocator not initialized");
+                unsafe { self.markcompact[index as usize].assume_init_mut() }
             }
             AllocatorSelector::None => panic!("Allocator mapping is not initialized"),
         }
     }
 
-    /// # Safety
-    /// The selector needs to be valid, and points to an allocator that has been initialized.
-    pub unsafe fn get_typed_allocator_mut<T: Allocator<VM>>(
+    pub fn get_typed_allocator_mut<T: Allocator<VM>>(
         &mut self,
         selector: AllocatorSelector,
     ) -> &mut T {
@@ -111,6 +134,12 @@ impl<VM: VMBinding> Allocators<VM> {
             immix: [const { MaybeUninit::uninit() }; MAX_IMMIX_ALLOCATORS],
             free_list: [const { MaybeUninit::uninit() }; MAX_FREE_LIST_ALLOCATORS],
             markcompact: [const { MaybeUninit::uninit() }; MAX_MARK_COMPACT_ALLOCATORS],
+            initialized_bump: [false; MAX_BUMP_ALLOCATORS],
+            initialized_large_object: [false; MAX_LARGE_OBJECT_ALLOCATORS],
+            initialized_malloc: [false; MAX_MALLOC_ALLOCATORS],
+            initialized_immix: [false; MAX_IMMIX_ALLOCATORS],
+            initialized_free_list: [false; MAX_FREE_LIST_ALLOCATORS],
+            initialized_markcompact: [false; MAX_MARK_COMPACT_ALLOCATORS],
         };
         let context = Arc::new(AllocatorContext::new(mmtk));
 
@@ -122,6 +151,7 @@ impl<VM: VMBinding> Allocators<VM> {
                         space,
                         context.clone(),
                     ));
+                    ret.initialized_bump[index as usize] = true;
                 }
                 AllocatorSelector::LargeObject(index) => {
                     ret.large_object[index as usize].write(LargeObjectAllocator::new(
@@ -129,6 +159,7 @@ impl<VM: VMBinding> Allocators<VM> {
                         space.downcast_ref::<LargeObjectSpace<VM>>().unwrap(),
                         context.clone(),
                     ));
+                    ret.initialized_large_object[index as usize] = true;
                 }
                 AllocatorSelector::Malloc(index) => {
                     ret.malloc[index as usize].write(MallocAllocator::new(
@@ -136,6 +167,7 @@ impl<VM: VMBinding> Allocators<VM> {
                         space.downcast_ref::<MallocSpace<VM>>().unwrap(),
                         context.clone(),
                     ));
+                    ret.initialized_malloc[index as usize] = true;
                 }
                 AllocatorSelector::Immix(index) => {
                     ret.immix[index as usize].write(ImmixAllocator::new(
@@ -144,6 +176,7 @@ impl<VM: VMBinding> Allocators<VM> {
                         context.clone(),
                         false,
                     ));
+                    ret.initialized_immix[index as usize] = true;
                 }
                 AllocatorSelector::FreeList(index) => {
                     ret.free_list[index as usize].write(FreeListAllocator::new(
@@ -151,6 +184,7 @@ impl<VM: VMBinding> Allocators<VM> {
                         space.downcast_ref::<MarkSweepSpace<VM>>().unwrap(),
                         context.clone(),
                     ));
+                    ret.initialized_free_list[index as usize] = true;
                 }
                 AllocatorSelector::MarkCompact(index) => {
                     ret.markcompact[index as usize].write(MarkCompactAllocator::new(
@@ -158,6 +192,7 @@ impl<VM: VMBinding> Allocators<VM> {
                         space,
                         context.clone(),
                     ));
+                    ret.initialized_markcompact[index as usize] = true;
                 }
                 AllocatorSelector::None => panic!("Allocator mapping is not initialized"),
             }
