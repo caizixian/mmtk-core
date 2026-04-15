@@ -2,7 +2,7 @@
 use crate::global_state::{GcStatus, GlobalState};
 use crate::plan::CreateGeneralPlanArgs;
 use crate::plan::Plan;
-use crate::policy::sft_map::{create_sft_map, SFTMap};
+use crate::policy::sft_map::SFTMap;
 use crate::scheduler::GCWorkScheduler;
 
 #[cfg(feature = "vo_bit")]
@@ -138,10 +138,10 @@ impl<VM: VMBinding> MMTK<VM> {
         // Verify the Mmapper can handle the required address space size.
         vm_layout().validate_address_space();
 
-        // Initialize SFT first in case we need to use this in the constructor.
-        // The first call will initialize SFT map. Other calls will be blocked until SFT map is initialized.
+        // Check SFT storage before use.
+        // Initialization of SFT_MAP is delayed to create_plan in src/plan/global.rs
+        // when we have all spaces created.
         crate::policy::sft_map::SFTRefStorage::pre_use_check();
-        SFT_MAP.initialize_once(&create_sft_map);
 
         let num_workers = if cfg!(feature = "single_worker") {
             1

@@ -1,11 +1,11 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 142 | Δ: -189
+- Starting count: 331 | Current: 140 | Δ: -191
 - Phase: 3
 
 ## Codebase Invariants (PROTECTED — do not prune)
-- `SFT_MAP` is a global static `InitializeOnce` container. Accessing it mutably during plan initialization requires `unsafe` to bypass borrow checker.
+- Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
 - `GCWork` trait requires `'static` references for work packets, leading to lifetime extension unsafe blocks in space `prepare`/`release` methods.
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
@@ -59,7 +59,7 @@
 - `src/util/malloc/mod.rs` — Irreducible FFI calls to malloc/free [Phase 2 confirmed].
 - `src/plan/global.rs` — Irreducible lifetime extension for `GCWork` packets [Phase 2 confirmed].
 - `src/plan/concurrent/concurrent_marking_work.rs` — All unsafe removed or made safe by refactoring [Phase 2 confirmed].
-- `src/util/rust_util/mod.rs` — `InitializeOnce` is irreducible to maintain zero-cost reads and `get_mut(&self)` [Phase 2 confirmed].
+- `src/util/rust_util/mod.rs` — `InitializeOnce` is irreducible to maintain zero-cost reads [Phase 2 confirmed].
 - `src/util/rust_util/zeroed_alloc.rs` — `new_zeroed_vec` requires manual zeroed allocation and `Vec::from_raw_parts` for performance; `bytemuck::zeroed_vec` is not available in version 1.14.0 [Phase 2 confirmed].
 - `src/mmtk.rs` — `ProofCell::get_ref` in `get_plan` is irreducible without threading proof tokens. Threading proof tokens would require updating ~50 call sites of `.get_plan()` across the codebase. [Phase 2 confirmed]
 - `src/policy/immix/line.rs` — All unsafe blocks removed after making SideMetadataSpec methods safe [Phase 2 confirmed].

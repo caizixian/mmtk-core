@@ -69,7 +69,7 @@ impl<T> InitializeOnce<T> {
     /// If this method is called by multiple threads, the first thread will
     /// initialize the value, and the other threads will be blocked until the
     /// initialization is done (`Once` returns).
-    pub fn initialize_once(&self, init_fn: &'static dyn Fn() -> T) {
+    pub fn initialize_once<F: FnOnce() -> T>(&self, init_fn: F) {
         self.once.call_once(|| {
             // SAFETY: `Once` guarantees that this closure is called exactly once,
             // and no other threads can access the value concurrently during initialization.
@@ -87,19 +87,7 @@ impl<T> InitializeOnce<T> {
         unsafe { (*self.v.get()).assume_init_ref() }
     }
 
-    /// Get a mutable reference to the value.
-    /// This is currently only used for SFTMap during plan creation (single threaded),
-    /// and before the plan creation is done, the binding cannot use MMTK at all.
-    ///
-    /// # Safety
-    /// The caller needs to make sure there is no race when mutating the value.
-    #[allow(clippy::mut_from_ref)]
-    pub unsafe fn get_mut(&self) -> &mut T {
-        // We only assert in debug builds.
-        debug_assert!(self.once.is_completed());
-        // SAFETY: The value has been initialized, and the caller guarantees no races.
-        unsafe { (*self.v.get()).assume_init_mut() }
-    }
+
 }
 
 impl<T> std::ops::Deref for InitializeOnce<T> {

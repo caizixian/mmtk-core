@@ -110,12 +110,12 @@ pub fn create_plan<VM: VMBinding>(
 
     // We have created Plan in the heap, and we won't explicitly move it.
     // Each space now has a fixed address for its lifetime. It is safe now to initialize SFT.
-    let sft_map: &mut dyn crate::policy::sft_map::SFTMap =
-        unsafe { crate::mmtk::SFT_MAP.get_mut() }.as_mut();
+    let mut sft_map = crate::policy::sft_map::create_sft_map();
     plan.for_each_space(&mut |s| {
         sft_map.notify_space_creation(s.as_sft());
-        s.initialize_sft(sft_map);
+        s.initialize_sft(sft_map.as_mut());
     });
+    crate::mmtk::SFT_MAP.initialize_once(move || sft_map);
 
     plan
 }
