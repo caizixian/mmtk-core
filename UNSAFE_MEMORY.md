@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 525 | Δ: -10
+- Starting count: 535 | Current: 517 | Δ: -18
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,8 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/heap/layout/map32.rs` — Replace `UnsafeCell` + `Mutex` with `RwLock` — expected Δ: -11
-2. 🟡 MED: `src/util/metadata/side_metadata/global.rs` — Continue analyzing remaining unsafe blocks.
+1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs:515-550` — Analyze `load` and `store` to see if unsafe can be reduced or encapsulated.
+2. 🟡 MED: `src/util/metadata/metadata_val_traits.rs:84-131` — Analyze if trait methods can be made safe.
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -21,6 +21,7 @@
 - Use `MetadataCursor` to encapsulate raw memory access for `MetadataValue` types, centralizing unsafe operations.
 - Inline `MetadataCursor` loads with masking for sub-byte metadata to remove unsafe blocks in search functions.
 - Use `Vec` instead of manual allocation in tests to eliminate unsafe blocks.
+- Replace `UnsafeCell` + `Mutex` with `RwLock` to eliminate unsafe operations in `Map32`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — remaining unsafe blocks are `assume_init_mut()` which are likely required for performance to avoid `Option` overhead in GC fast path.
