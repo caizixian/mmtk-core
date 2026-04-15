@@ -246,7 +246,7 @@ pub enum FindMetaBitResult {
     UnmappedMetadata,
 }
 
-struct MetadataCursor(Address);
+pub(crate) struct MetadataCursor(pub(crate) Address);
 
 impl MetadataCursor {
     #[inline(always)]
@@ -257,6 +257,26 @@ impl MetadataCursor {
     #[inline(always)]
     fn load_u8(&self) -> u8 {
         unsafe { self.0.load::<u8>() }
+    }
+
+    #[inline(always)]
+    pub(crate) fn fetch_and_u8(&self, val: u8, order: std::sync::atomic::Ordering) -> u8 {
+        unsafe { self.0.as_ref::<std::sync::atomic::AtomicU8>().fetch_and(val, order) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn fetch_or_u8(&self, val: u8, order: std::sync::atomic::Ordering) -> u8 {
+        unsafe { self.0.as_ref::<std::sync::atomic::AtomicU8>().fetch_or(val, order) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn load_atomic_u8(&self, order: std::sync::atomic::Ordering) -> u8 {
+        unsafe { self.0.as_ref::<std::sync::atomic::AtomicU8>().load(order) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn store_atomic_u8(&self, val: u8, order: std::sync::atomic::Ordering) {
+        unsafe { self.0.as_ref::<std::sync::atomic::AtomicU8>().store(val, order) }
     }
 }
 
