@@ -30,10 +30,8 @@ pub trait VMMap: Sync {
         grain: i32,
     ) -> CreateFreeListResult;
 
-    /// # Safety
-    ///
-    /// Caller must ensure that only one thread is calling this method.
-    unsafe fn allocate_contiguous_chunks(
+    /// Allocate contiguous chunks.
+    fn allocate_contiguous_chunks(
         &self,
         descriptor: SpaceDescriptor,
         chunks: usize,
@@ -57,10 +55,8 @@ pub trait VMMap: Sync {
 
     fn free_all_chunks(&self, any_chunk: Address);
 
-    /// # Safety
-    ///
-    /// Caller must ensure that only one thread is calling this method.
-    unsafe fn free_contiguous_chunks(&self, start: Address) -> usize;
+    /// Free contiguous chunks.
+    fn free_contiguous_chunks(&self, start: Address) -> usize;
 
     /// Finalize the globlal maps in the implementations of `VMMap`.  This should be called after
     /// all spaces are created.

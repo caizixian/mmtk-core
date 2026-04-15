@@ -11,7 +11,6 @@
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
 1. 🔴 HIGH: `src/policy/marksweepspace/native_ms/block.rs:252` — Investigate if `Block::load_block_list` can return a safe reference or if the unsafe dereference in `attempt_release` can be encapsulated. — expected Δ: 1
-2. 🟡 MED: `src/util/heap/layout/map32.rs:123` — Investigate if `allocate_contiguous_chunks` and `free_contiguous_chunks` in `VMMap` trait can be made safe. — expected Δ: 2
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
@@ -27,6 +26,7 @@
 - **Refactoring**: Made `SFTMap::update` and `eager_initialize` safe by taking references instead of raw pointers, removing 6 unsafe blocks at call sites.
 - **Refactoring**: Used `MetadataCursor` in `src/policy/marksweepspace/native_ms/block.rs` to remove unsafe loads and stores of free cell links.
 - **Refactoring**: Removed redundant unsafe blocks in `global.rs` tests wrapping safe `load` and `store` calls.
+- **Safe Abstraction**: Made `VMMap::allocate_contiguous_chunks` and `free_contiguous_chunks` safe in the trait and implementations as they use internal locking.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/scheduler/worker.rs` — Remaining unsafe are trait impls for Send/Sync [Phase 2 confirmed].
@@ -55,6 +55,7 @@
 - `src/util/heap/chunk_map.rs` — All unsafe blocks removed after making SideMetadataSpec methods safe [Phase 2 confirmed].
 - `src/util/address.rs` — Irreducible primitive pointer operations (`load`, `store`, `as_ref`, etc.) [Phase 2 confirmed].
 - `src/util/raw_memory_freelist.rs` — Remaining unsafe is FFI call to `munmap` in `Drop` [Phase 2 confirmed].
+- `src/policy/copyspace.rs` — Irreducible FFI calls to `mprotect` and lifetime extension for `BumpAllocator` [Phase 2 confirmed].
 
 ## Abstraction Proposals (for Phase 2)
 ### MetadataCursor for side_metadata
