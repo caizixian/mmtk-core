@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 144 | Δ: -187
+- Starting count: 331 | Current: 142 | Δ: -189
 - Phase: 3
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -35,6 +35,7 @@
 - **Refactoring**: Removed redundant `unsafe impl Send` for `WorkerLocalStat` by using `PhantomData<fn() -> C>` to allow auto-deriving `Send`.
 - **Refactoring**: Replaced unsafe raw pointer dereference in `side_metadata/global.rs` tests with safe `MetadataValue::store` using `MetadataCursor`.
 - **API Cleanup**: Refactored `notify_space_creation` to take a reference instead of a raw pointer, removing 1 unsafe block in `sft_map.rs`.
+- **Refactoring**: Removed `impl Slot for Address` and updated `Range<Address>` to yield `SimpleSlot`, removing 2 unsafe blocks and moving towards recommended practice.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/plan/concurrent/mod.rs` — Irreducible manual unsafe impls for bytemuck traits to use niche [Phase 2 confirmed].
@@ -46,7 +47,7 @@
 - `src/util/metadata/side_metadata/ranges.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
 - `src/policy/sft_map.rs` — Irreducible transmute for atomic fat pointers in SFTRefStorage. Clear methods made safe. [Phase 2 confirmed].
 - `src/vm/tests/mock_tests/mock_test_doc_avoid_resolving_allocator.rs` — Irreducible manual offset arithmetic to demonstrate avoiding resolution in doc example [Phase 2 confirmed].
-- `src/vm/slot.rs` — Irreducible raw pointer dereferences in `SimpleSlot` and `Address` impls [Phase 2 confirmed].
+- `src/vm/slot.rs` — Removed `impl Slot for Address`. Remaining are irreducible raw pointer dereferences in `SimpleSlot` and raw memory copy. [Phase 2 confirmed].
 - `src/util/metadata/metadata_val_traits.rs` — Trait methods refactored to be safe, remaining unsafe in impls is encapsulated [Phase 2 confirmed].
 - `src/util/metadata/pin_bit.rs` — Fixed unsafe block by using load_atomic. Remaining code is safe [Phase 2 confirmed].
 - `src/util/memory.rs` — Irreducible FFI calls to mmap/munmap/mprotect/madvise. Cleaned up 2 unsafe blocks in tests. [Phase 2 confirmed].

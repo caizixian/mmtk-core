@@ -196,16 +196,7 @@ impl Slot for SimpleSlot {
 /// hand, `SimpleSlot` is all about how to access a field that holds a reference represented
 /// simply as an `ObjectReference`.  The intention and the semantics are clearer with
 /// `SimpleSlot`.
-impl Slot for Address {
-    fn load(&self) -> Option<ObjectReference> {
-        let addr = unsafe { Address::load(*self) };
-        ObjectReference::from_raw_address(addr)
-    }
 
-    fn store(&self, object: ObjectReference) {
-        unsafe { Address::store(*self, object) }
-    }
-}
 
 #[test]
 fn a_simple_slot_should_have_the_same_size_as_a_pointer() {
@@ -243,7 +234,7 @@ pub struct AddressRangeIterator {
 }
 
 impl Iterator for AddressRangeIterator {
-    type Item = Address;
+    type Item = SimpleSlot;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.cursor >= self.limit {
@@ -251,13 +242,13 @@ impl Iterator for AddressRangeIterator {
         } else {
             let slot = self.cursor;
             self.cursor += BYTES_IN_ADDRESS;
-            Some(slot)
+            Some(SimpleSlot::from_address(slot))
         }
     }
 }
 
 impl MemorySlice for Range<Address> {
-    type SlotType = Address;
+    type SlotType = SimpleSlot;
     type SlotIterator = AddressRangeIterator;
 
     fn iter_slots(&self) -> Self::SlotIterator {
@@ -346,7 +337,7 @@ mod tests {
         let src: Vec<usize> = (0..32).collect();
         let src_slice = Address::from_ptr(&src[0])..Address::from_ptr(&src[0]) + src.len();
         for (i, v) in src_slice.iter_slots().enumerate() {
-            assert_eq!(v, Address::from_ptr(&src[i]));
+            assert_eq!(v.as_address(), Address::from_ptr(&src[i]));
         }
     }
 

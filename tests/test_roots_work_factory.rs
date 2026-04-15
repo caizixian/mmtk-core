@@ -7,20 +7,20 @@ use std::sync::{Arc, Mutex};
 
 use mmtk::{
     util::{Address, ObjectReference},
-    vm::RootsWorkFactory,
+    vm::{RootsWorkFactory, slot::SimpleSlot},
 };
 
 #[derive(Default)]
 struct MockScanning {
-    roots: Vec<Address>,
+    roots: Vec<SimpleSlot>,
 }
 
 impl MockScanning {
     fn add_roots(&mut self, roots: &[Address]) {
-        self.roots.extend(roots);
+        self.roots.extend(roots.iter().map(|a| SimpleSlot::from_address(*a)));
     }
 
-    fn mock_scan_roots(&self, mut factory: impl mmtk::vm::RootsWorkFactory<Address>) {
+    fn mock_scan_roots(&self, mut factory: impl mmtk::vm::RootsWorkFactory<SimpleSlot>) {
         factory.create_process_roots_work(self.roots.clone());
     }
 }
@@ -41,9 +41,10 @@ struct MockFactory {
     a: Arc<Mutex<String>>,
 }
 
-impl RootsWorkFactory<Address> for MockFactory {
-    fn create_process_roots_work(&mut self, slots: Vec<Address>) {
-        assert_eq!(slots, SLOTS);
+impl RootsWorkFactory<SimpleSlot> for MockFactory {
+    fn create_process_roots_work(&mut self, slots: Vec<SimpleSlot>) {
+        let slot_addresses: Vec<Address> = slots.iter().map(|s: &SimpleSlot| s.as_address()).collect();
+        assert_eq!(slot_addresses, SLOTS);
         match self.round {
             1 => {
                 assert_eq!(self.v, "y");
