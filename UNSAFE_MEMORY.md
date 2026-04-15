@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 411 | Δ: -124
+- Starting count: 535 | Current: 406 | Δ: -129
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/heap/blockpageresource.rs:216` — use `Option<B>` instead of `MaybeUninit<B>` to eliminate `assume_init()` — expected Δ: 1
+1. 🔴 HIGH: `src/util/rust_util/mod.rs:74-107` — replace `InitializeOnce` with `std::sync::OnceLock` to eliminate unsafe blocks and trait impls — expected Δ: 5
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -28,6 +28,7 @@
 - Use `Box::leak` instead of `Box::into_raw` to get a reference directly when initializing lock-free structures, reducing unsafe blocks.
 - Replace `[MaybeUninit<T>; N]` with `[Option<T>; N]` for lazily initialized arrays if N is small or overhead is acceptable, eliminating `assume_init_mut()` unsafe calls.
 - Use `mmtk.get_plan_mut()` in `GCWork` implementations instead of passing raw plan pointers, when the scheduler guarantees exclusive access during the phase (e.g., `Prepare` and `Release`).
+- Replace `UnsafeCell<Box<[MaybeUninit<B>]>>` with `RwLock<Box<[Option<B>]>>` in lock-free queues where elements are `Copy` and lock overhead is acceptable, eliminating unsafe dereferences and `assume_init()`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe blocks removed by replacing MaybeUninit with Option. [Phase 2 confirmed]
@@ -53,6 +54,7 @@
 - `src/util/alloc/free_list_allocator.rs` — Remaining unsafe blocks are raw heap access for free list manipulation. [Phase 2 confirmed]
 - `src/policy/immix/immixspace.rs` — All unsafe blocks removed or moved to `schedule_collection` in previous steps. [Phase 2 confirmed]
 - `src/mmtk.rs` — Unsafe required for casting local plan to static reference for `gc_trigger` and dereferencing `UnsafeCell`. [Phase 2 confirmed]
+- `src/util/heap/blockpageresource.rs` — All unsafe blocks removed by replacing UnsafeCell with RwLock in BlockQueue. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - `SweepProof` for `malloc_ms` (Implemented).

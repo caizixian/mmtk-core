@@ -185,25 +185,16 @@ struct BlockQueue<B: Region> {
     cursor: AtomicUsize,
     /// The underlying data storage.
     ///
-    /// -   `UnsafeCell<T>`: It may be accessed by multiple threads.
-    /// -   `Box<[T]>`: It holds an array allocated on the heap.  It cannot be resized, but can be
-    ///     replaced with another array as a whole.
-    /// -   `MaybeUninit<T>`: It may contain uninitialized elements.
-    ///
-    /// The implementaiton of `BlockQueue` must ensure there is no data race, and it never reads
-    /// uninitialized elements.
-    data: UnsafeCell<Box<[MaybeUninit<B>]>>,
+    /// Using RwLock to allow safe access and replacement.
+    data: RwLock<Box<[Option<B>]>>,
 }
 
 impl<B: Region> BlockQueue<B> {
     /// Create an array
     fn new() -> Self {
-        let zeroed_vec = new_zeroed_vec(Self::CAPACITY);
-        let boxed_slice = zeroed_vec.into_boxed_slice();
-        let data = UnsafeCell::new(boxed_slice);
         Self {
             cursor: AtomicUsize::new(0),
-            data,
+            data: RwLock::new(vec![None; Self::CAPACITY].into_boxed_slice()),
         }
     }
 }
@@ -213,20 +204,16 @@ impl<B: Region> BlockQueue<B> {
 
     /// Get an entry
     fn get_entry(&self, i: usize) -> B {
-        unsafe { (*self.data.get())[i].assume_init() }
+        self.data.read()[i].unwrap()
     }
 
     /// Set an entry.
-    ///
-    /// It's unsafe unless the array is accessed by only one thread (i.e. used as a thread-local array).
-    unsafe fn set_entry(&self, i: usize, block: B) {
-        (*self.data.get())[i].write(block);
+    fn set_entry(&self, i: usize, block: B) {
+        self.data.write()[i] = Some(block);
     }
 
     /// Non-atomically push an element.
-    ///
-    /// It's unsafe unless the array is accessed by only one thread (i.e. used as a thread-local array).
-    unsafe fn push_relaxed(&self, block: B) -> Result<(), B> {
+    fn push_relaxed(&self, block: B) -> Result<(), B> {
         let i = self.cursor.load(Ordering::Relaxed);
         if i < Self::CAPACITY {
             self.set_entry(i, block);
@@ -241,7 +228,7 @@ impl<B: Region> BlockQueue<B> {
     fn push_mut(&mut self, block: B) -> Result<(), B> {
         let i = *self.cursor.get_mut();
         if i < Self::CAPACITY {
-            self.data.get_mut()[i].write(block);
+            self.data.get_mut()[i] = Some(block);
             *self.cursor.get_mut() = i + 1;
             Ok(())
         } else {
@@ -295,8 +282,10 @@ impl<B: Region> BlockQueue<B> {
             .store(new_array.cursor.load(Ordering::Relaxed), Ordering::Relaxed);
         new_array.cursor.store(temp, Ordering::Relaxed);
         // Swap data
-        unsafe {
-            core::ptr::swap(self.data.get(), new_array.data.get());
+        {
+            let mut self_data = self.data.write();
+            let mut new_data = new_array.data.write();
+            std::mem::swap(&mut *self_data, &mut *new_data);
         }
         // Return old array
         new_array
@@ -340,11 +329,9 @@ impl<B: Region> BlockPool<B> {
     pub fn push(&self, block: B) {
         self.count.fetch_add(1, Ordering::SeqCst);
         let id = crate::scheduler::current_worker_ordinal();
-        let failed = unsafe {
-            self.worker_local_freed_blocks[id]
-                .push_relaxed(block)
-                .is_err()
-        };
+        let failed = self.worker_local_freed_blocks[id]
+            .push_relaxed(block)
+            .is_err();
         if failed {
             let mut queue = BlockQueue::new();
             let result = queue.push_mut(block);
