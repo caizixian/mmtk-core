@@ -1,15 +1,19 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: <file being analyzed>
-- Strategy: <what you're attempting>
+- File: Multiple files involving `ProcessEdgesWork` and `ObjectTracerContext`.
+- Strategy: Refactor to remove `set_worker` and raw pointer `*mut GCWorker` by passing `&mut GCWorker` directly in methods.
 
 ## Findings
-- Line X: <unsafe type> — <eliminable? why/why not>
-- Line Y: <unsafe type> — <eliminable? why/why not>
+- Successfully updated `ObjectTracerContext` to use GATs in `src/vm/scanning.rs`.
+- Removed raw pointer from `ProcessEdgesBase` in `src/scheduler/gc_work.rs`.
+- Updated `ProcessEdgesWork` trait methods to take `&mut GCWorker`.
+- Updated implementations: `SFTProcessEdges`, `UnsupportedProcessEdges`, `SanityGCProcessEdges`, and `GenNurseryProcessEdges`.
+- Updated call sites in `finalizable_processor.rs` and `reference_processor.rs` to pass `worker` through the chain.
 
 ## Attempted Changes
-- <what you tried, what happened>
+- Made all the above changes. Now ready to verify with `cargo check`.
 
 ## Blockers / Insights for Next Step
-- <what prevented completion, what the next step should know>
+- The build might fail due to missed call sites or lifetime issues with the GAT implementation.
+- If the build fails, the next step will need to address the compile errors.

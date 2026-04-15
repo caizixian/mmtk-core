@@ -42,9 +42,7 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>, const KIND
         Self { plan, base }
     }
 
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        // We cannot borrow `self` twice in a call, so we extract `worker` as a local variable.
-        let worker = self.worker();
+    fn trace_object(&mut self, object: ObjectReference, worker: &mut GCWorker<Self::VM>) -> ObjectReference {
         self.plan.trace_object_nursery::<VectorObjectQueue, KIND>(
             &mut self.base.nodes,
             object,
@@ -52,12 +50,12 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>, const KIND
         )
     }
 
-    fn process_slot(&mut self, slot: SlotOf<Self>) {
+    fn process_slot(&mut self, slot: SlotOf<Self>, worker: &mut GCWorker<Self::VM>) {
         let Some(object) = slot.load() else {
             // Skip slots that are not holding an object reference.
             return;
         };
-        let new_object = self.trace_object(object);
+        let new_object = self.trace_object(object, worker);
         debug_assert!(!self.plan.is_object_in_nursery(new_object));
         // Note: If `object` is a mature object, `trace_object` will not call `space.trace_object`,
         // but will still return `object`.  In that case, we don't need to write it back.
