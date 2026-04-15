@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 654 | Δ: -68 (Removed 10 unsafe blocks in helpers.rs tests)
+- Starting count: 722 | Current: 648 | Δ: -74 (Removed 6 unsafe blocks in allocators.rs)
 - Phase: 1
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -15,7 +15,7 @@
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
-- Replace `unsafe { MaybeUninit::uninit().assume_init() }` with safe `[MaybeUninit::uninit(); N]` for array initialization when applicable.
+- Replace `unsafe { MaybeUninit::uninit().assume_init() }` with safe `[const { MaybeUninit::uninit() }; N]` for array initialization when the type is not `Copy`.
 - `unsafe { Address::zero() }` → `Address::ZERO`.
 - `unsafe { ObjectReference::from_raw_address_unchecked(x) }` → `ObjectReference::from_raw_address(x).unwrap()` when `x` is known to be non-zero.
 
