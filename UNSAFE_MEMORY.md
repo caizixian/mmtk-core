@@ -10,9 +10,10 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/util/memory.rs:175-589` — Document safety invariants for FFI calls to mmap/munmap/mprotect/madvise — expected Δ: 0
+1. 🟡 MED: `docs/dummyvm/src/api.rs:31-119` — Document safety invariants for FFI boundary operations — expected Δ: 0
 
 ## Patterns Discovered
+- Documented safety invariants for FFI calls in tests in `src/util/memory.rs`.
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
 - Using `MockObject` in tests to encapsulate unsafe `load`/`store` calls on `HeaderMetadataSpec`.
 - **Tightened bounds**: Added `T: Sync` bound to `InitializeOnce` to ensure soundness when shared across threads.
