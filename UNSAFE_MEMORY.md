@@ -109,6 +109,8 @@
 - `src/policy/compressor/compressorspace.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
 - `benches/regular_bench/bulk_meta/bscan.rs` — Clean: 0 unsafe blocks after using safe AlignedBuffer [Phase 2 confirmed].
 - `benches/regular_bench/bulk_meta/bzero_bset.rs` — Clean: 0 unsafe blocks after using AlignedBuffer and slice::fill [Phase 2 confirmed].
+- `src/plan/mutator_context.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
+- `src/util/alloc/bumpallocator.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
 
 ## Abstraction Proposals (for Phase 2)
 ### MetadataCursor for side_metadata
