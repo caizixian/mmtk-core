@@ -142,11 +142,11 @@ impl MMTKFixture {
         with_builder(&mut builder);
 
         let mmtk = memory_manager::mmtk_init(&builder);
-        let mmtk_ptr = Box::into_raw(mmtk);
+        let mmtk_ref = Box::leak(mmtk);
+        let mmtk_ptr = mmtk_ref as *mut MMTK<MockVM>;
 
         if initialize_collection {
-            let mmtk_static: &'static MMTK<MockVM> = unsafe { &*mmtk_ptr };
-            memory_manager::initialize_collection(mmtk_static, VMThread::UNINITIALIZED);
+            memory_manager::initialize_collection(mmtk_ref, VMThread::UNINITIALIZED);
         }
 
         MMTKFixture { mmtk: mmtk_ptr }
