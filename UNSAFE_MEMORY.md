@@ -1,17 +1,18 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 126 | Δ: -205
+- Starting count: 331 | Current: 125 | Δ: -206
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
 - `GCWork` trait requires `'static` references for work packets. We can avoid storing `'static` references by fetching the plan/space from `mmtk: &'static MMTK` in `do_work`.
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
+- `SimpleSlot` uses `Address` instead of raw pointers, avoiding `unsafe impl Send`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: Try to replace `*mut Atomic<Address>` with `NonNull<Atomic<Address>>` in `SimpleSlot` to remove `unsafe impl Send` in `src/vm/slot.rs:176`.
-2. 🟡 MED: Check if other trait objects in `src/util` need `Send` bound to allow removing more unsafe impls.
+1. 🔴 HIGH: Check if other trait objects in `src/util` need `Send` bound to allow removing more unsafe impls.
+2. 🟡 MED: `src/util/rust_util/mod.rs:117-131` — check if `ProofCell` unsafe impls can be removed — expected Δ: -2.
 
 ## Patterns Discovered
 - Removed redundant `unsafe impl Send` and `Sync` for `MMTK` as all its fields are automatically `Send` and `Sync`.
