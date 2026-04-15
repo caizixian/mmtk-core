@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 435 | Δ: -100
+- Starting count: 535 | Current: 434 | Δ: -101
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/alloc/free_list_allocator.rs:155-409` — analyze unsafe blocks in free list allocator — expected Δ: 0-3
+1. 🔴 HIGH: `src/util/copy/mod.rs:92-168` — re-evaluate assume_init_mut usage — expected Δ: 0-5
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -48,6 +48,7 @@
 - `src/util/memory.rs` — Irreducible FFI calls (`mmap`, `madvise`, `munmap`, `mprotect`) and core primitives (`ptr::write_bytes`). [Phase 2 confirmed]
 - `src/util/metadata/side_metadata/helpers.rs` — Implementation of `MetadataCursor` abstraction, irreducible without moving unsafe to call sites. [Phase 2 confirmed]
 - `docs/dummyvm/src/api.rs` — Irreducible FFI boundary operations (raw pointer dereferencing and Box::from_raw). [Phase 2 confirmed]
+- `src/util/alloc/free_list_allocator.rs` — Remaining unsafe blocks are raw heap access for free list manipulation. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - `SweepProof` for `malloc_ms` (Implemented).
