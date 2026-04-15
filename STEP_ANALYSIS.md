@@ -1,17 +1,19 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: src/util/rust_util/atomic_box.rs
-- Strategy: Re-evaluate OnceOptionBox for safe abstractions
+- File: Multiple (src/util/rust_util/mod.rs, src/util/metadata/side_metadata/helpers.rs, docs/dummyvm/src/api.rs, src/vm/slot.rs)
+- Strategy: Re-evaluate top unsafe files for potential new abstractions or local removals.
 
 ## Findings
-- `OnceOptionBox` in `atomic_box.rs` is used in a `Vec` in `two_level_storage.rs`. Replacing it with `OnceLock` would add space overhead and locks, violating the design intent (lock-free, low overhead for large arrays). It is genuinely irreducible.
-- Re-evaluated `src/policy/copyspace.rs` line 367 (lifetime extension for `BumpAllocator::rebind`). This is irreducible without adding lifetimes to `BumpAllocator`, which is a core type used extensively across the codebase. Such a change would be highly invasive and viral.
+- `src/util/rust_util/mod.rs`: `InitializeOnce` is used for `SFT_MAP` in `src/mmtk.rs`. This is a very hot path for GC lookups. The unsafe blocks in `InitializeOnce` are used to avoid checks on every read. Replacing it with `OnceLock` would introduce overhead that is likely unacceptable for performance. Thus, it is confirmed irreducible to maintain zero-cost reads.
+- `src/util/metadata/side_metadata/helpers.rs`: The unsafe blocks are in the implementation of `MetadataCursor` methods. These methods are safe wrappers around raw address loads and stores. Centralizing the unsafe operations here is the intended design for safe abstractions. They cannot be removed without making the methods unsafe, which would move unsafe to call sites.
+- `docs/dummyvm/src/api.rs`: This file implements the FFI boundary for a dummy VM. The unsafe blocks are necessary for converting raw pointers from C to Rust references or boxes. These are irreducible FFI operations.
+- `src/vm/slot.rs`: The unsafe blocks in `SimpleSlot` are the core implementation of raw memory reads and writes for object references. This is centralized unsafe behind a safe trait API.
 
 ## Attempted Changes
-- None. Analyzed the requested files and determined the remaining unsafe is irreducible or the abstraction proposals are not feasible without massive refactoring.
+- None. Analyzed the top files and determined that the unsafe code is either irreducible due to performance/FFI constraints or correctly encapsulated in safe abstractions.
 
 ## Blockers / Insights for Next Step
-- All top files with unsafe listed by the harness are already in the "Files NOT to Revisit" list or have been analyzed here as irreducible.
-- The Work Queue item for `atomic_box.rs` was stale and has been removed.
-- No actionable items remain in the Work Queue for now. The next step should focus on documented irreducible unsafe if that is the goal, or terminate if the user accepts the current state.
+- All files listed as having unsafe are already in the "Files NOT to Revisit" list or have been analyzed as irreducible/centralized.
+- The repository seems to have reached a state where most remaining unsafe is irreducible without massive architectural changes (like changing the FFI design or accepting performance overhead).
+- I recommend the user review the "Files NOT to Revisit" list to confirm if they accept the remaining unsafe code.
