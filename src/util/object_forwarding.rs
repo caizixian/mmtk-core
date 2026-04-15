@@ -167,17 +167,16 @@ pub fn read_forwarding_pointer<VM: VMBinding>(object: ObjectReference) -> Object
     );
 
     // We write the forwarding poiner. We know it is an object reference.
-    unsafe {
-        // We use "unchecked" convertion becasue we guarantee the forwarding pointer we stored
-        // previously is from a valid `ObjectReference` which is never zero.
-        ObjectReference::from_raw_address_unchecked(crate::util::Address::from_usize(
-            VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC.load_atomic::<VM, usize>(
-                object,
-                Some(FORWARDING_POINTER_MASK),
-                Ordering::SeqCst,
-            ),
-        ))
-    }
+    // We use "unchecked" convertion becasue we guarantee the forwarding pointer we stored
+    // previously is from a valid `ObjectReference` which is never zero.
+    ObjectReference::from_raw_address(crate::util::Address::from_usize(
+        VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC.load_atomic::<VM, usize>(
+            object,
+            Some(FORWARDING_POINTER_MASK),
+            Ordering::SeqCst,
+        ),
+    ))
+    .expect("Forwarding pointer should not be zero")
 }
 
 /// Write the forwarding pointer of an object.

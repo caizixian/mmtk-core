@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 266 | Δ: -65
+- Starting count: 331 | Current: 265 | Δ: -66
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,7 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/mmtk.rs:436` — Analyze if `ProofCell::get_ref` usage in `get_plan` can be made safer or if `ProofCell` can be replaced. — expected Δ: 0
-2. 🟡 MED: `src/util/rust_util/mod.rs:74-96` — Analyze if `InitializeOnce` can be replaced with `std::sync::OnceLock` — expected Δ: -4
+1. 🟢 LOW: `src/util/address.rs:594` — Analyze if `from_raw_address_unchecked` can be removed or deprecated since it is unused in mmtk-core. — expected Δ: -1
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
@@ -42,6 +41,8 @@
 - `src/util/malloc/mod.rs` — Irreducible FFI calls to malloc/free [Phase 2 confirmed].
 - `src/plan/global.rs` — Irreducible lifetime extension for `GCWork` packets [Phase 2 confirmed].
 - `src/plan/concurrent/concurrent_marking_work.rs` — All unsafe removed or made safe by refactoring [Phase 2 confirmed].
+- `src/util/rust_util/mod.rs` — `InitializeOnce` is irreducible to maintain zero-cost reads and `get_mut(&self)` [Phase 2 confirmed].
+- `src/mmtk.rs` — `ProofCell::get_ref` in `get_plan` is irreducible without threading proof tokens [Phase 2 confirmed].
 
 ## Abstraction Proposals (for Phase 2)
 ### MetadataCursor for side_metadata
