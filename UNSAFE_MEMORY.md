@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 364 | Δ: -171
+- Starting count: 535 | Current: 361 | Δ: -174
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/vm/slot.rs:180` — Investigate if we can replace raw pointer dereference with safe operations in SimpleSlot.
+1. 🟡 MED: `src/util/test_util/mock_vm.rs:375` — Investigate if `unsafe impl Sync` and `Send` can be removed by adding bounds to `MockAny` or `MockMethod`.
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -32,7 +32,7 @@
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe blocks removed by replacing MaybeUninit with Option. [Phase 2 confirmed]
 - `src/util/rust_util/atomic_box.rs` — implements a safe abstraction (`OnceOptionBox`). Unsafe is required for raw pointer manipulation and justified `Zeroable` impl. [Phase 2 confirmed]
-- `src/policy/sft_map.rs` — `transmute` of fat pointers is required for atomic trait object storage in `SFTRefStorage`. [Phase 2 confirmed]
+- `src/policy/sft_map.rs` — `transmute` of fat pointers is required for atomic trait object storage in `SFTRefStorage`. Redundant `unsafe impl Sync` for map implementations removed. [Phase 2 confirmed]
 - `src/util/malloc/malloc_ms_util.rs` — mostly FFI calls to `libc` (malloc, calloc, free, etc.). [Phase 2 confirmed]
 - `src/util/alloc/allocators.rs` — Layout constraints for VM bindings require `MaybeUninit` arrays with separate initialization flags. `assume_init_ref` and `assume_init_mut` are required and safe due to runtime checks, but must be marked unsafe by compiler. [Phase 2 confirmed]
 - `src/util/metadata/header_metadata.rs` — Production unsafe is irreducible (raw address access in `load`/`store`), tests refactored to use `Vec` and slice indexing. [Phase 2 confirmed]
