@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 457 | Δ: -78
+- Starting count: 535 | Current: 454 | Δ: -81
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,8 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/vm/tests/mock_tests/mock_test_conservatism.rs:113` — use `Address::from_ptr` instead of `from_usize` — expected Δ: -1
-2. 🟡 MED: `docs/dummyvm/src/api.rs:31-119` — analyze if raw pointer manipulation can be safe-wrapped or if it's irreducible FFI — expected Δ: 0-5
+1. 🔴 HIGH: `docs/dummyvm/src/api.rs:31-119` — analyze if raw pointer manipulation can be safe-wrapped or if it's irreducible FFI — expected Δ: 0-5
+2. 🟡 MED: `src/util/rust_util/atomic_box.rs:38-87` — analyze `Box::from_raw` and pointer derefs for potential safe wrapping — expected Δ: 1-3
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
