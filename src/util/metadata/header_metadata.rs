@@ -661,11 +661,40 @@ mod tests {
 
     impl<'a> MockObject<'a> {
         fn load<T: MetadataValue>(&self, spec: &HeaderMetadataSpec, optional_mask: Option<T>) -> T {
-            unsafe { spec.load::<T>(self.obj, optional_mask) }
+            let cursor = MetadataCursor(spec.meta_addr(self.obj));
+            let res: T = if spec.num_of_bits < 8 {
+                let byte_val = cursor.load::<u8>();
+                FromPrimitive::from_u8(spec.get_bits_from_u8(byte_val)).unwrap()
+            } else {
+                cursor.load()
+            };
+
+            if let Some(mask) = optional_mask {
+                res.bitand(mask)
+            } else {
+                res
+            }
         }
 
         fn store<T: MetadataValue>(&self, spec: &HeaderMetadataSpec, val: T, optional_mask: Option<T>) {
-            unsafe { spec.store::<T>(self.obj, val, optional_mask) }
+            if spec.num_of_bits < 8 {
+                let val_u8 = val.to_u8().unwrap();
+                let byte_addr = spec.meta_addr(self.obj);
+                let cursor = MetadataCursor(byte_addr);
+                let old_byte_val = cursor.load::<u8>();
+                let new_byte_val = spec.set_bits_to_u8(old_byte_val, val_u8);
+                cursor.store::<u8>(new_byte_val);
+            } else {
+                let addr = spec.meta_addr(self.obj);
+                let cursor = MetadataCursor(addr);
+                let val = if let Some(mask) = optional_mask {
+                    let old_val: T = cursor.load();
+                    old_val.bitand(mask.inv()).bitor(val.bitand(mask))
+                } else {
+                    val
+                };
+                cursor.store(val);
+            }
         }
     }
 

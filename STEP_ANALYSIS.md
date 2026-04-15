@@ -1,15 +1,15 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: <file being analyzed>
-- Strategy: <what you're attempting>
+- File: `src/util/metadata/header_metadata.rs`
+- Strategy: Eliminate unsafe blocks in tests calling `load`/`store` by using `MetadataCursor` directly in `MockObject`.
 
 ## Findings
-- Line X: <unsafe type> — <eliminable? why/why not>
-- Line Y: <unsafe type> — <eliminable? why/why not>
+- Line 664 (in file view): `unsafe { spec.load::<T>(self.obj, optional_mask) }` — Eliminable by replicating non-atomic `load_inner` logic using `MetadataCursor` safe methods.
+- Line 668 (in file view): `unsafe { spec.store::<T>(self.obj, val, optional_mask) }` — Eliminable by replicating non-atomic `store_inner` logic using `MetadataCursor` safe methods.
 
 ## Attempted Changes
-- <what you tried, what happened>
+- Plan to modify `MockObject` methods `load` and `store` to use `MetadataCursor` directly.
 
 ## Blockers / Insights for Next Step
-- <what prevented completion, what the next step should know>
+- None so far.
