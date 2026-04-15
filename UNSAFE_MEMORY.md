@@ -33,6 +33,7 @@
 - Note: Antigravity (this step) replaced raw pointers with `Box` in `docs/dummyvm/src/api.rs` to eliminate 3 unsafe blocks.
 - Note: Antigravity (this step) re-verified `src/util/alloc/allocators.rs` and `src/plan/concurrent/mod.rs` and confirmed irreducibility of remaining unsafe.
 - Note: Antigravity (this step) used MetadataCursor in `markcompactspace.rs` to remove 2 unsafe blocks for forwarding pointer.
+- Note: Antigravity (this step) re-verified `src/vm/object_model.rs` and confirmed that the trait default implementations are irreducible without moving unsafe to blocks, yielding no reduction.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
@@ -91,6 +92,7 @@
 - `src/policy/sft_map.rs` — Irreducible transmute for atomic fat pointers in SFTRefStorage. Clear methods made safe. [Phase 3 re-confirmed].
 - `src/vm/tests/mock_tests/mock_test_vm_layout_heap_start.rs` — Irreducible manual offset arithmetic to demonstrate avoiding resolution in doc example [Phase 2 confirmed].
 - `src/vm/slot.rs` — Removed `impl Slot for Address`. Remaining are irreducible raw pointer dereferences in `SimpleSlot` and raw memory copy. SAFETY comments added in Phase 3. [Phase 3 confirmed].
+- `src/vm/object_model.rs` — Trait default implementations `load_metadata` and `store_metadata` are irreducible without breaking API or moving unsafe to blocks [Phase 3 confirmed].
 - `src/util/metadata/metadata_val_traits.rs` — Clean: 0 unsafe blocks after refactoring to use `with_atomic` [Phase 3 confirmed].
 - `src/util/metadata/pin_bit.rs` — Fixed unsafe block by using load_atomic. Remaining code is safe [Phase 2 confirmed].
 - `src/util/memory.rs` — Irreducible FFI calls to mmap/munmap/mprotect/madvise. Re-evaluated Phase 2 abstraction (MmapRegion) but reverted as it didn't reduce count. [Phase 3 confirmed].
