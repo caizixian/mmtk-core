@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 681 | Δ: -41
+- Starting count: 722 | Current: 680 | Δ: -42
 - Phase: 1
 
 
@@ -12,7 +12,7 @@
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
 1. 🔴 HIGH: `src/util/metadata/header_metadata.rs:156` — Analyze raw loads in header metadata — expected Δ: unknown
-2. 🟡 MED: `src/policy/marksweepspace/native_ms/block.rs:300` — Address remaining raw stores to cell memory for free list — expected Δ: unknown
+2. 🟡 MED: `src/util/metadata/side_metadata/helpers.rs:293` — Analyze raw loads in side metadata helpers — expected Δ: unknown
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
