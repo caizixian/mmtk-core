@@ -61,8 +61,12 @@ impl<VM: VMBinding> Plan for MarkSweep<VM> {
         self.ms.prepare(true);
     }
 
-    fn release(&mut self, tls: VMWorkerThread) {
-        self.ms.release();
+    fn release(&mut self, _tls: VMWorkerThread) {
+        panic!("Call release_with_proof instead");
+    }
+
+    fn release_with_proof(&mut self, tls: VMWorkerThread, proof: &crate::scheduler::ExclusivePlanAccessProof) {
+        self.ms.release(proof);
         self.common.release(tls, true);
     }
 

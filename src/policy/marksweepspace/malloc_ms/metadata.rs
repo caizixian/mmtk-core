@@ -137,4 +137,9 @@ impl SweepProof {
     pub unsafe fn new_unchecked() -> Self {
         Self { _priv: () }
     }
+
+    /// Create a new proof from an ExclusivePlanAccessProof.
+    pub fn new(_proof: &crate::scheduler::ExclusivePlanAccessProof) -> Self {
+        Self { _priv: () }
+    }
 }

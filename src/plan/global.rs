@@ -221,6 +221,11 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     /// This is invoked once per GC by one worker thread. `tls` is the worker thread that executes this method.
     fn release(&mut self, tls: VMWorkerThread);
 
+    /// Release the plan after transitive closure with proof of exclusive access.
+    fn release_with_proof(&mut self, tls: VMWorkerThread, _proof: &crate::scheduler::ExclusivePlanAccessProof) {
+        self.release(tls);
+    }
+
     /// Inform the plan about the end of a GC. It is guaranteed that there is no further work for this GC.
     /// This is invoked once per GC by one worker thread. `tls` is the worker thread that executes this method.
     // TODO: This is actually called at the end of a pause/STW, rather than the end of a GC. It should be renamed.

@@ -139,7 +139,7 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
         // We assume this is the only running work packet that accesses plan at the point of execution
 
         let plan_mut = mmtk.get_plan_mut(&self._proof);
-        plan_mut.release(worker.tls);
+        plan_mut.release_with_proof(worker.tls, &self._proof);
 
         let release_mutator_packets = <C::VM as VMBinding>::VMActivePlan::mutators()
             .map(|mutator| Box::new(ReleaseMutator::<C::VM>::new(mutator)) as _)

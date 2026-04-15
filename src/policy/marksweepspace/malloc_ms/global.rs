@@ -552,14 +552,14 @@ impl<VM: VMBinding> MallocSpace<VM> {
 
     pub fn prepare(&mut self, _full_heap: bool) {}
 
-    pub fn release(&mut self) {
+    pub fn release(&mut self, proof: &crate::scheduler::ExclusivePlanAccessProof) {
         use crate::scheduler::WorkBucketStage;
         let space = unsafe { &*(self as *const Self) };
         let work_packets = self.chunk_map.generate_tasks(|chunk| {
             Box::new(MSSweepChunk {
                 ms: space,
                 chunk: chunk.start(),
-                proof: unsafe { SweepProof::new_unchecked() },
+                proof: SweepProof::new(proof),
             })
         });
 

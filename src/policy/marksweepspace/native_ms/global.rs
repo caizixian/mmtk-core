@@ -433,7 +433,7 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
             .bulk_add(work_packets);
     }
 
-    pub fn release(&mut self) {
+    pub fn release(&mut self, _proof: &crate::scheduler::ExclusivePlanAccessProof) {
         let num_mutators = VM::VMActivePlan::number_of_mutators();
         // all ReleaseMutator work packets plus the ReleaseMarkSweepSpace packet
         self.pending_release_packets
