@@ -176,12 +176,16 @@ impl SimpleSlot {
 impl Slot for SimpleSlot {
     fn load(&self) -> Option<ObjectReference> {
         let ptr = self.slot_addr.to_ptr::<Atomic<Address>>();
+        // SAFETY: SimpleSlot is constructed with a valid address pointing to a slot.
+        // We assume the pointer is valid and properly aligned.
         let addr = unsafe { (*ptr).load(atomic::Ordering::Relaxed) };
         ObjectReference::from_raw_address(addr)
     }
 
     fn store(&self, object: ObjectReference) {
         let ptr = self.slot_addr.to_mut_ptr::<Atomic<Address>>();
+        // SAFETY: SimpleSlot is constructed with a valid address pointing to a slot.
+        // We assume the pointer is valid and properly aligned for writes.
         unsafe { (*ptr).store(object.to_raw_address(), atomic::Ordering::Relaxed) }
     }
 }
@@ -277,7 +281,9 @@ impl MemorySlice for Range<Address> {
             0,
             "bytes are not a multiple of words"
         );
-        // Raw memory copy
+        // SAFETY: The caller must ensure that `src` and `tgt` are valid memory slices
+        // and that `tgt` has enough capacity for `src.bytes()`. The lengths are verified
+        // to be equal and word-aligned by debug asserts above.
         unsafe {
             let words = tgt.bytes() >> LOG_BYTES_IN_ADDRESS;
             let src = src.start().to_ptr::<usize>();
