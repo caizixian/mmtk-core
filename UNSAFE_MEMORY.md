@@ -35,7 +35,8 @@
 - Note: Antigravity (this step) used MetadataCursor in `markcompactspace.rs` to remove 2 unsafe blocks for forwarding pointer.
 - Note: Antigravity (this step) re-verified `src/vm/object_model.rs` and confirmed that the trait default implementations are irreducible without moving unsafe to blocks, yielding no reduction.
 - Note: Antigravity (this step) re-verified `src/vm/slot.rs`, `src/util/rust_util/mod.rs`, `src/util/alloc/allocators.rs`, and `src/policy/sft_map.rs` and confirmed they are irreducible. Work Queue remains empty.
-- Note: Antigravity (this step) holistically reviewed all remaining 70 unsafe locations under Strategy Escalation and confirmed they are irreducible or properly encapsulated.
+- Note: Antigravity (prior step) holistically reviewed all remaining 70 unsafe locations under Strategy Escalation and confirmed they are irreducible or properly encapsulated.
+- Note: Antigravity (this step) re-verified ProofCell, SimpleSlot, and FFI wrappers, confirming irreducibility under Strategy Escalation.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
