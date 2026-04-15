@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 77 | Δ: -254
+- Starting count: 331 | Current: 72 | Δ: -259
 - Phase: 3
 - Note: Consolidated FFI calls in `malloc_ms_util.rs` to safe wrappers in `mod.rs`, removing all 5 unsafe blocks in that file and adding 2 in `mod.rs`, yielding Δ-3.
 - Note: Used MetadataCursor in `malloc_ms_util.rs` to remove 1 unsafe block for unaligned write.
@@ -31,6 +31,7 @@
 - Note: Antigravity (prior step) re-verified `src/util/alloc/allocators.rs`, `docs/dummyvm/src/api.rs`, `src/util/rust_util/mod.rs`, `src/policy/markcompactspace.rs`, and `src/util/address.rs`. Confirmed all remaining 77 unsafe locations are irreducible or properly encapsulated and documentation is complete.
 - Note: Antigravity (this step) holistically reviewed all remaining 77 unsafe locations under Strategy Escalation and confirmed they are irreducible or properly encapsulated. No new abstractions proposed.
 - Note: Antigravity (this step) replaced raw pointers with `Box` in `docs/dummyvm/src/api.rs` to eliminate 3 unsafe blocks.
+- Note: Antigravity (this step) re-verified `src/util/alloc/allocators.rs` and `src/plan/concurrent/mod.rs` and confirmed irreducibility of remaining unsafe.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
