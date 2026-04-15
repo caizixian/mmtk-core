@@ -83,7 +83,7 @@ mod native_mark_sweep {
     pub fn ms_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWorkerThread) {
         use crate::plan::mutator_context::common_release_func;
 
-        get_freelist_allocator_mut::<VM>(mutator).release();
+        get_freelist_allocator_mut::<VM>(mutator).release(MarkSweep::get_ms_space);
 
         common_release_func(mutator, tls);
     }

@@ -9,6 +9,7 @@ use crate::util::linear_scan::Region;
 use crate::util::Address;
 use crate::util::VMThread;
 use crate::vm::VMBinding;
+use crate::MMTK;
 
 use super::allocator::AllocatorContext;
 
@@ -413,40 +414,40 @@ impl<VM: VMBinding> FreeListAllocator<VM> {
 
     pub(crate) fn prepare(&mut self) {}
 
-    pub(crate) fn release(&mut self) {
+    pub(crate) fn release(&mut self, get_space: fn(&'static MMTK<VM>) -> &MarkSweepSpace<VM>) {
         for bin in 0..MI_BIN_FULL {
             let unswept = self.unswept_blocks.get_mut(bin).unwrap();
-
+ 
             // If we do eager sweeping, we should have no unswept blocks.
             #[cfg(feature = "eager_sweeping")]
             debug_assert!(unswept.is_empty());
-
+ 
             let mut sweep_later = |list: &mut BlockList| {
                 list.release_blocks(self.space);
-
+ 
                 // For eager sweeping, that's it.  We just release unmarked blocks, and leave marked
                 // blocks to be swept later in the `SweepChunk` work packet.
-
+ 
                 // For lazy sweeping, we move blocks from available and consumed to unswept.  When
                 // an allocator tries to use them, they will sweep the block.
                 if cfg!(not(feature = "eager_sweeping")) {
                     unswept.append(list);
                 }
             };
-
+ 
             sweep_later(&mut self.available_blocks[bin]);
             sweep_later(&mut self.available_blocks_stress[bin]);
             sweep_later(&mut self.consumed_blocks[bin]);
         }
-
+ 
         // We abandon block lists immediately.  Otherwise, some mutators will hold lots of blocks
         // locally and prevent other mutators to use.
         {
             let mut global = self.space.get_abandoned_block_lists_in_gc().lock().unwrap();
             self.abandon_blocks(&mut global);
         }
-
-        self.space.release_packet_done();
+ 
+        self.space.release_packet_done(get_space);
     }
 
     fn abandon_blocks(&mut self, global: &mut AbandonedBlockLists) {

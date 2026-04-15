@@ -420,29 +420,26 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
         self.chunk_map.set_allocated(block.chunk(), true);
     }
 
-    pub fn prepare(&mut self, _full_heap: bool) {
+    pub fn prepare(&mut self, _full_heap: bool, get_space: fn(&'static MMTK<VM>) -> &MarkSweepSpace<VM>) {
         #[cfg(debug_assertions)]
         self.abandoned_in_gc.lock().unwrap().assert_empty();
-
-        // # Safety: MarkSweepSpace reference is always valid within this collection cycle.
-        let space = unsafe { &*(self as *const Self) };
+ 
         let work_packets = self
             .chunk_map
-            .generate_tasks(|chunk| Box::new(PrepareChunkMap { space, chunk }));
+            .generate_tasks(move |chunk| Box::new(PrepareChunkMap { chunk, get_space }));
         self.scheduler.work_buckets[crate::scheduler::WorkBucketStage::Prepare]
             .bulk_add(work_packets);
     }
 
-    pub fn release(&mut self, _proof: &crate::scheduler::ExclusivePlanAccessProof) {
+    pub fn release(&mut self, _proof: &crate::scheduler::ExclusivePlanAccessProof, get_space: fn(&'static MMTK<VM>) -> &MarkSweepSpace<VM>) {
         let num_mutators = VM::VMActivePlan::number_of_mutators();
         // all ReleaseMutator work packets plus the ReleaseMarkSweepSpace packet
         self.pending_release_packets
             .store(num_mutators + 1, Ordering::SeqCst);
-
+ 
         // Do work in separate work packet in order not to slow down the `Release` work packet which
         // blocks all `ReleaseMutator` packets.
-        let space = unsafe { &*(self as *const Self) };
-        let work_packet = ReleaseMarkSweepSpace { space };
+        let work_packet = ReleaseMarkSweepSpace { get_space };
         self.scheduler.work_buckets[crate::scheduler::WorkBucketStage::Release].add(work_packet);
     }
 
@@ -513,13 +510,13 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
         &self.abandoned_in_gc
     }
 
-    pub fn release_packet_done(&self) {
+    pub fn release_packet_done(&self, get_space: fn(&'static MMTK<VM>) -> &MarkSweepSpace<VM>) {
         let old = self.pending_release_packets.fetch_sub(1, Ordering::SeqCst);
         if old == 1 {
             if cfg!(feature = "eager_sweeping") {
                 // When doing eager sweeping, we start sweeing now.
                 // After sweeping, we will recycle blocks.
-                let work_packets = self.generate_sweep_tasks();
+                let work_packets = self.generate_sweep_tasks(get_space);
                 self.scheduler.work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
             } else {
                 // When doing lazy sweeping, we recycle blocks now.
@@ -528,17 +525,17 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
         }
     }
 
-    fn generate_sweep_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
-        let space = unsafe { &*(self as *const Self) };
+    fn generate_sweep_tasks(&self, get_space: fn(&'static MMTK<VM>) -> &MarkSweepSpace<VM>) -> Vec<Box<dyn GCWork<VM>>> {
         let epilogue = Arc::new(RecycleBlocks {
-            space,
             counter: AtomicUsize::new(0),
+            get_space,
         });
-        let tasks = self.chunk_map.generate_tasks(|chunk| {
+        let epilogue_for_closure = epilogue.clone();
+        let tasks = self.chunk_map.generate_tasks(move |chunk| {
             Box::new(SweepChunk {
-                space,
                 chunk,
-                epilogue: epilogue.clone(),
+                epilogue: epilogue_for_closure.clone(),
+                get_space,
             })
         });
         epilogue.counter.store(tasks.len(), Ordering::SeqCst);
@@ -574,13 +571,14 @@ use crate::scheduler::GCWork;
 use crate::MMTK;
 
 struct PrepareChunkMap<VM: VMBinding> {
-    space: &'static MarkSweepSpace<VM>,
     chunk: Chunk,
+    get_space: fn(&'static MMTK<VM>) -> &MarkSweepSpace<VM>,
 }
 
 impl<VM: VMBinding> GCWork<VM> for PrepareChunkMap<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        debug_assert!(self.space.chunk_map.get(self.chunk).unwrap().is_allocated());
+        let space = (self.get_space)(_mmtk);
+        debug_assert!(space.chunk_map.get(self.chunk).unwrap().is_allocated());
         // number of allocated blocks.
         let mut n_occupied_blocks = 0;
         self.chunk
@@ -594,7 +592,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunkMap<VM> {
             });
         if n_occupied_blocks == 0 {
             // Set this chunk as free if there is no live blocks.
-            self.space.chunk_map.set_allocated(self.chunk, false)
+            space.chunk_map.set_allocated(self.chunk, false)
         } else {
             // Otherwise this chunk is occupied, and we reset the mark bit if it is on the side.
             if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC {
@@ -605,32 +603,34 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunkMap<VM> {
 }
 
 struct ReleaseMarkSweepSpace<VM: VMBinding> {
-    space: &'static MarkSweepSpace<VM>,
+    get_space: fn(&'static MMTK<VM>) -> &MarkSweepSpace<VM>,
 }
 
 impl<VM: VMBinding> GCWork<VM> for ReleaseMarkSweepSpace<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        let space = (self.get_space)(_mmtk);
         {
-            let mut abandoned = self.space.abandoned.lock().unwrap();
-            abandoned.sweep_later(self.space);
+            let mut abandoned = space.abandoned.lock().unwrap();
+            abandoned.sweep_later(space);
         }
 
-        self.space.release_packet_done();
+        space.release_packet_done(self.get_space);
     }
 }
 
 /// Chunk sweeping work packet.  Only used by eager sweeping to sweep marked blocks after unmarked
 /// blocks have been released.
 struct SweepChunk<VM: VMBinding> {
-    space: &'static MarkSweepSpace<VM>,
     chunk: Chunk,
     /// A destructor invoked when all `SweepChunk` packets are finished.
     epilogue: Arc<RecycleBlocks<VM>>,
+    get_space: fn(&'static MMTK<VM>) -> &MarkSweepSpace<VM>,
 }
 
 impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        assert!(self.space.chunk_map.get(self.chunk).unwrap().is_allocated());
+        let space = (self.get_space)(_mmtk);
+        assert!(space.chunk_map.get(self.chunk).unwrap().is_allocated());
 
         // number of allocated blocks.
         let mut allocated_blocks = 0;
@@ -649,21 +649,22 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
         probe!(mmtk, sweep_chunk, allocated_blocks);
         // Set this chunk as free if there is not live blocks.
         if allocated_blocks == 0 {
-            self.space.chunk_map.set_allocated(self.chunk, false);
+            space.chunk_map.set_allocated(self.chunk, false);
         }
-        self.epilogue.finish_one_work_packet();
+        self.epilogue.finish_one_work_packet(_mmtk);
     }
 }
 
 struct RecycleBlocks<VM: VMBinding> {
-    space: &'static MarkSweepSpace<VM>,
     counter: AtomicUsize,
+    get_space: fn(&'static MMTK<VM>) -> &MarkSweepSpace<VM>,
 }
 
 impl<VM: VMBinding> RecycleBlocks<VM> {
-    fn finish_one_work_packet(&self) {
+    fn finish_one_work_packet(&self, mmtk: &'static MMTK<VM>) {
         if 1 == self.counter.fetch_sub(1, Ordering::SeqCst) {
-            self.space.recycle_blocks()
+            let space = (self.get_space)(mmtk);
+            space.recycle_blocks()
         }
     }
 }

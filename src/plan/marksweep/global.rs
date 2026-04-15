@@ -15,6 +15,7 @@ use crate::util::heap::VMRequest;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::VMWorkerThread;
 use crate::vm::VMBinding;
+use crate::MMTK;
 use enum_map::EnumMap;
 use mmtk_macros::{HasSpaces, PlanTraceObject};
 
@@ -58,15 +59,15 @@ impl<VM: VMBinding> Plan for MarkSweep<VM> {
 
     fn prepare(&mut self, tls: VMWorkerThread) {
         self.common.prepare(tls, true);
-        self.ms.prepare(true);
+        self.ms.prepare(true, Self::get_ms_space);
     }
-
+ 
     fn release(&mut self, _tls: VMWorkerThread) {
         panic!("Call release_with_proof instead");
     }
-
+ 
     fn release_with_proof(&mut self, tls: VMWorkerThread, proof: &crate::scheduler::ExclusivePlanAccessProof) {
-        self.ms.release(proof);
+        self.ms.release(proof, Self::get_ms_space);
         self.common.release(tls, true);
     }
 
@@ -105,6 +106,10 @@ impl<VM: VMBinding> Plan for MarkSweep<VM> {
 }
 
 impl<VM: VMBinding> MarkSweep<VM> {
+    pub(crate) fn get_ms_space(mmtk: &'static MMTK<VM>) -> &'static MarkSweepSpace<VM> {
+        mmtk.get_plan().downcast_ref::<Self>().unwrap().ms_space()
+    }
+
     pub fn new(args: CreateGeneralPlanArgs<VM>) -> Self {
         let mut global_side_metadata_specs = SideMetadataContext::new_global_specs(&[]);
         MarkSweepSpace::<VM>::extend_global_side_metadata_specs(&mut global_side_metadata_specs);
