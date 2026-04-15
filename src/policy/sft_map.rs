@@ -136,6 +136,9 @@ impl SFTRefStorage {
     }
 
     pub fn new(sft: SFTRawPointer) -> Self {
+        // SAFETY: DoubleWord is defined to have the same size as SFTRawPointer (checked in pre_use_check).
+        // Transmuting a fat pointer to a double-word sized integer is necessary here because
+        // pointer provenance APIs do not support fat pointers.
         let val: DoubleWord = unsafe { std::mem::transmute(sft) };
         Self(AtomicDoubleWord::new(val))
     }
@@ -150,6 +153,8 @@ impl SFTRefStorage {
         // We still need to use transmute here.
         #[allow(unknown_lints)]
         #[allow(integer_to_ptr_transmutes)]
+        // SAFETY: The value loaded was stored by `store` or `new`, which only store
+        // valid SFTRawPointer values. Transmuting it back is safe.
         unsafe {
             std::mem::transmute(val)
         }
@@ -157,6 +162,9 @@ impl SFTRefStorage {
 
     // Store a raw SFT pointer with the release ordering.
     pub fn store(&self, sft: SFTRawPointer) {
+        // SAFETY: DoubleWord is defined to have the same size as SFTRawPointer (checked in pre_use_check).
+        // Transmuting a fat pointer to a double-word sized integer is necessary here because
+        // pointer provenance APIs do not support fat pointers.
         let val: DoubleWord = unsafe { std::mem::transmute(sft) };
         self.0.store(val, Ordering::Release)
     }

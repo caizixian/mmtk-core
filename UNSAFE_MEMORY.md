@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 147 | Δ: -184
+- Starting count: 331 | Current: 148 | Δ: -183
 - Phase: 3
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,7 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/policy/sft_map.rs:139-160` — Document safety invariants for `SFTRefStorage` transmute operations — expected Δ: 0
-2. 🟡 MED: `src/util/memory.rs:175-565` — Document safety invariants for FFI calls to libc memory management functions — expected Δ: 0
+1. 🟡 MED: `src/util/memory.rs:175-565` — Document safety invariants for FFI calls to libc memory management functions — expected Δ: 0
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
