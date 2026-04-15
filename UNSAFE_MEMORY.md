@@ -10,6 +10,8 @@
 - `GCWork` trait requires `'static` references for work packets. We can avoid storing `'static` references by fetching the plan/space from `mmtk: &'static MMTK` in `do_work`.
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 - `SimpleSlot` uses `Address` instead of raw pointers, avoiding `unsafe impl Send`.
+- `ProofCell` is used for `MMTK.plan` to allow zero-cost reads on non-hot but frequent paths, avoiding threading proof tokens.
+- `InitializeOnce` is used for `SFT_MAP` to allow zero-cost reads on extreme hot paths (object tracing).
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
 - All actionable reduction items have been addressed or confirmed irreducible after holistic review.
