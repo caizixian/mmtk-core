@@ -16,6 +16,7 @@
 - Note: Final verification completed. No reducible unsafe blocks found.
 - Note: Re-evaluated all remaining unsafe locations under Strategy Escalation and confirmed they are irreducible.
 - Note: Antigravity re-verified all remaining unsafe locations in the provided list and confirmed irreducibility.
+- Note: Re-verified markcompactspace.rs, allocators.rs, and malloc_ms_util.rs and confirmed encapsulation/irreducibility.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
