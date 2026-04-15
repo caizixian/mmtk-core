@@ -7,7 +7,7 @@ use std::any::Any;
 /// otherwise, the downcast from `Any` will fail. We use `MockAny` for some methods in [`super::mockvm::MockVM`].
 /// The user should check if their intended arguments match the default `MockMethod` type, and if not,
 /// they should create their own `MockMethod`s for those methods.
-pub trait MockAny {
+pub trait MockAny: Send + Sync {
     fn call_any(&mut self, args: Box<dyn Any>) -> Box<dyn Any>;
 }
 

@@ -260,13 +260,13 @@ pub struct MockVM {
         ),
         (),
     >,
-    pub scan_roots_in_mutator_thread: Box<dyn MockAny>,
-    pub scan_vm_specific_roots: Box<dyn MockAny>,
+    pub scan_roots_in_mutator_thread: Box<dyn MockAny + Send + Sync>,
+    pub scan_vm_specific_roots: Box<dyn MockAny + Send + Sync>,
     pub notify_initial_thread_scan_complete: MockMethod<(bool, VMWorkerThread), ()>,
     pub supports_return_barrier: MockMethod<(), bool>,
     pub prepare_for_roots_re_scanning: MockMethod<(), ()>,
-    pub process_weak_refs: Box<dyn MockAny>,
-    pub forward_weak_refs: Box<dyn MockAny>,
+    pub process_weak_refs: Box<dyn MockAny + Send + Sync>,
+    pub forward_weak_refs: Box<dyn MockAny + Send + Sync>,
 }
 
 impl Default for MockVM {
@@ -372,8 +372,7 @@ impl Default for MockVM {
     }
 }
 
-unsafe impl Sync for MockVM {}
-unsafe impl Send for MockVM {}
+
 
 impl VMBinding for MockVM {
     type VMSlot = Address;

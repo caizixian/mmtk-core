@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 361 | Δ: -174
+- Starting count: 535 | Current: 359 | Δ: -176
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/util/test_util/mock_vm.rs:375` — Investigate if `unsafe impl Sync` and `Send` can be removed by adding bounds to `MockAny` or `MockMethod`.
+1. 🔴 HIGH: `src/util/heap/layout/vm_layout.rs:187` — Replace `static mut VM_LAYOUT` with `OnceLock<VMLayout>` — expected Δ: -2
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -61,7 +61,7 @@
 - `src/policy/copyspace.rs` — Irreducible FFI calls to `mprotect` and unsafe cast to extend lifetime for `CopySpace` reference. [Phase 2 confirmed]
 - `src/policy/marksweepspace/malloc_ms/global.rs` — Irreducible FFI calls to `free` and unsafe cast to extend lifetime for work packets. [Phase 2 confirmed]
 - `src/util/alloc/allocator.rs` — Irreducible `unsafe impl Sync` for `AllocationOptionsHolder` and `ptr::write_bytes` for alignment gap filling. [Phase 2 confirmed]
-- `src/util/test_util/mock_vm.rs` — Irreducible `transmute` in `lifetime!` macro to remove lifetimes in mock VM for testing. [Phase 2 confirmed]
+- `src/util/test_util/mock_vm.rs` — Irreducible `transmute` in `lifetime!` macro to remove lifetimes in mock VM for testing. Unsafe impl Send/Sync removed by adding bounds to MockAny. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - `SweepProof` for `malloc_ms` (Implemented).
