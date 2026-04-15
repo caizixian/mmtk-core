@@ -1,9 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 543 | Δ: -14 (Removed 14 blocks in block.rs using MetadataCursor)
+- Starting count: 722 | Current: 541 | Δ: -2 (Removed 2 blocks in global.rs using MetadataCursor)
 - Phase: 2
-
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - `Address::from_ptr` is safe and can be used to replace `Address::from_usize` in non-const contexts to avoid unsafe blocks.
@@ -11,8 +10,9 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs` — Document remaining unsafe blocks or refactor to use MetadataCursor if applicable.
-2. 🟡 MED: `src/util/metadata/metadata_val_traits.rs` — Check if trait methods can be made safe or encapsulated.
+1. 🔴 HIGH: `src/util/metadata/header_metadata.rs` — Analyze if unsafe blocks can be refactored or encapsulated.
+2. 🟡 MED: `src/util/metadata/side_metadata/global.rs` — Continue analyzing remaining unsafe blocks.
+3. 🟢 LOW: `src/util/metadata/metadata_val_traits.rs` — Irreducible trait methods, centralize unsafe in callers.
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -20,6 +20,7 @@
 - `unsafe { Address::zero() }` → `Address::ZERO`.
 - `unsafe { ObjectReference::from_raw_address_unchecked(x) }` → `ObjectReference::from_raw_address(x).unwrap()` when `x` is known to be non-zero.
 - Use `MetadataCursor` to encapsulate raw memory access for `MetadataValue` types, centralizing unsafe operations.
+- Inline `MetadataCursor` loads with masking for sub-byte metadata to remove unsafe blocks in search functions.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — remaining unsafe blocks are `assume_init_mut()` which are likely required for performance to avoid `Option` overhead in GC fast path.

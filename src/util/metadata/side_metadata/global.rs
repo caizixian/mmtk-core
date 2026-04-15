@@ -1045,7 +1045,16 @@ impl SideMetadataSpec {
                 return None;
             }
             // If we find non-zero value, just return it.
-            if !unsafe { self.load::<T>(cursor).is_zero() } {
+            let meta_addr = address_to_meta_address(self, cursor);
+            let val = if self.log_num_of_bits < 3 {
+                let lshift = meta_byte_lshift(self, cursor);
+                let mask = meta_byte_mask(self) << lshift;
+                let byte_val = super::helpers::MetadataCursor(meta_addr).load::<u8>();
+                num_traits::FromPrimitive::from_u8((byte_val & mask) >> lshift).unwrap()
+            } else {
+                super::helpers::MetadataCursor(meta_addr).load::<T>()
+            };
+            if !val.is_zero() {
                 return Some(cursor);
             }
             cursor -= region_bytes;
@@ -1066,7 +1075,16 @@ impl SideMetadataSpec {
             return None;
         }
         // Quick check if the current data_addr has a non zero value.
-        if !unsafe { self.load::<T>(data_addr).is_zero() } {
+        let meta_addr = address_to_meta_address(self, data_addr);
+        let val = if self.log_num_of_bits < 3 {
+            let lshift = meta_byte_lshift(self, data_addr);
+            let mask = meta_byte_mask(self) << lshift;
+            let byte_val = super::helpers::MetadataCursor(meta_addr).load::<u8>();
+            num_traits::FromPrimitive::from_u8((byte_val & mask) >> lshift).unwrap()
+        } else {
+            super::helpers::MetadataCursor(meta_addr).load::<T>()
+        };
+        if !val.is_zero() {
             return Some(data_addr.align_down(1 << self.log_bytes_in_region));
         }
 
