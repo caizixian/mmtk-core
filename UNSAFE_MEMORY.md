@@ -11,8 +11,7 @@
 - `SimpleSlot` uses `Address` instead of raw pointers, avoiding `unsafe impl Send`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: `src/util/metadata/metadata_val_traits.rs:154` — Verify safety documentation for remaining unsafe impls. — expected Δ: 0
-
+1. 🟢 LOW: `src/util/address.rs:233` — Verify safety documentation for primitive pointer operations. — expected Δ: 0
 
 ## Patterns Discovered
 - Removed redundant `unsafe impl Send` and `Sync` for `MMTK` as all its fields are automatically `Send` and `Sync`.
