@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 135 | Δ: -196
+- Starting count: 331 | Current: 134 | Δ: -197
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -78,6 +78,7 @@
 - `src/policy/marksweepspace/native_ms/global.rs` — All unsafe blocks removed by function pointer refactoring [Phase 2 confirmed].
 - `src/plan/marksweep/global.rs` — All unsafe blocks removed by function pointer refactoring [Phase 2 confirmed].
 - `src/util/test_util/fixtures.rs` — Irreducible unsafe in `get_mmtk_mut` and `Drop` due to `'static` requirement on `bind_mutator` and `Box::leak` usage [Phase 2 confirmed].
+- `src/policy/marksweepspace/malloc_ms/metadata.rs` — Remaining unsafe is unsafe fn signature for SweepProof constructor [Phase 2 confirmed].
 
 ## Abstraction Proposals (for Phase 2)
 ### MetadataCursor for side_metadata

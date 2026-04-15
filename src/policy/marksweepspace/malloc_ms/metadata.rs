@@ -122,7 +122,13 @@ pub(super) fn load128(metadata_spec: &SideMetadataSpec, data_addr: Address, _pro
     #[cfg(all(debug_assertions, feature = "extreme_assertions"))]
     metadata_spec.assert_metadata_mapped(data_addr);
 
-    unsafe { meta_addr.load::<u128>() }
+    let low = side_metadata::MetadataCursor(meta_addr).load::<u64>();
+    let high = side_metadata::MetadataCursor(meta_addr + 8usize).load::<u64>();
+    #[cfg(target_endian = "little")]
+    let val = ((high as u128) << 64) | (low as u128);
+    #[cfg(target_endian = "big")]
+    let val = ((low as u128) << 64) | (high as u128);
+    val
 }
 
 pub struct SweepProof {
