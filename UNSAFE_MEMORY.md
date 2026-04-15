@@ -10,7 +10,7 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/util/memory.rs:175-565` — Document safety invariants for FFI calls to libc memory management functions — expected Δ: 0
+1. 🟡 MED: `src/util/malloc/malloc_ms_util.rs:10-75` — Document safety invariants for FFI calls to malloc/free/calloc — expected Δ: 0
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
