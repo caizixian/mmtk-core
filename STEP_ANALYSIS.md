@@ -1,15 +1,21 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: Multiple (listed in prompt)
-- Strategy: Analysis of remaining unsafe blocks
+- File: `src/util/rust_util/mod.rs`
+- Strategy: Investigate `ProofCell::get_ref` and whether it can be made safe by threading a proof token.
 
 ## Findings
-- All files listed in the prompt's "Exact Unsafe Locations" are currently marked as "Files NOT to Revisit" or have been analyzed by previous steps and confirmed as irreducible.
-- `src/util/rust_util/mod.rs` line 117 (`ProofCell::get_ref`) is currently unsafe because it allows shared reads without checking for concurrent mutable accesses. While listed as irreducible to maintain zero-cost reads, it might be possible to thread a proof token to make it safe if we accept the refactoring overhead.
+- Investigated `ProofCell::get_ref` (line 117). It returns a shared reference `&T` from an `UnsafeCell<T>`.
+- It is marked `unsafe` because the caller must ensure no concurrent mutable accesses.
+- Making it safe by threading a proof token (like `SharedPlanAccessProof`) would require passing the token to `get_plan()` and all its callers.
+- `get_plan()` is used in over 50 places across the codebase, including hot paths like allocation.
+- Threading a token to all these places would be a massive refactoring and might introduce overhead or complexity that violates the "zero-cost reads" requirement.
+- Therefore, `ProofCell::get_ref` is confirmed as irreducible to maintain zero-cost reads on hot paths without massive refactoring.
+- Also checked `GCWorkerShared` `Sync` impl in `worker.rs`. It is needed because it contains `WorkerLocalStat` which contains `WorkCounter` trait objects. `WorkCounter` only implies `Send`, not `Sync`, because one of its implementations (`WorkPerfEvent`) wraps a perf event handle that might not be thread-safe. Thus it is also irreducible.
 
 ## Attempted Changes
-- None (all listed unsafe blocks are confirmed irreducible or analyzed as such).
+- None. All analyzed items were confirmed as irreducible.
 
 ## Blockers / Insights for Next Step
-- The Work Queue was empty. I am adding an item to investigate `ProofCell::get_ref` to satisfy the rule that the work queue must not be empty and to see if we can break the "irreducible" barrier for this file.
+- The work queue item was completed (investigation).
+- I am adding a new item to the work queue to investigate if `bytemuck` can be upgraded or worked around to remove the unsafe `Zeroable` impl in `atomic_box.rs`.
