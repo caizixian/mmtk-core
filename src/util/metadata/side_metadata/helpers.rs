@@ -61,7 +61,7 @@ pub(super) fn contiguous_meta_address_to_address(
     let data_addr = (data_addr_intermediate << metadata_spec.log_bytes_in_region)
         + ((bit as usize) << data_addr_bit_shift);
 
-    unsafe { Address::from_usize(data_addr) }
+    Address::from_ptr(data_addr as *const u8)
 }
 
 /// Align an pair of a metadata address and a metadata bit offset to the start of this metadata value.
