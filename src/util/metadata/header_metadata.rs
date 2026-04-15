@@ -152,18 +152,16 @@ impl HeaderMetadataSpec {
         }
 
         // metadata smaller than 8-bits is special in that more than one metadata value may be included in one AtomicU8 operation, and extra shift and mask is required
-        let res: T = if self.num_of_bits < 8 {
-            let byte_val = unsafe {
-                if let Some(order) = atomic_ordering {
+        let res: T = unsafe {
+            if self.num_of_bits < 8 {
+                let byte_val = if let Some(order) = atomic_ordering {
                     (self.meta_addr(header)).atomic_load::<AtomicU8>(order)
                 } else {
                     (self.meta_addr(header)).load::<u8>()
-                }
-            };
+                };
 
-            FromPrimitive::from_u8(self.get_bits_from_u8(byte_val)).unwrap()
-        } else {
-            unsafe {
+                FromPrimitive::from_u8(self.get_bits_from_u8(byte_val)).unwrap()
+            } else {
                 if let Some(order) = atomic_ordering {
                     T::load_atomic(self.meta_addr(header), order)
                 } else {
@@ -224,14 +222,12 @@ impl HeaderMetadataSpec {
         if self.num_of_bits < 8 {
             let val_u8 = val.to_u8().unwrap();
             let byte_addr = self.meta_addr(header);
-            if let Some(order) = atomic_ordering {
-                let _ = unsafe {
-                    <u8 as MetadataValue>::fetch_update(byte_addr, order, order, |old_val: u8| {
+            unsafe {
+                if let Some(order) = atomic_ordering {
+                    let _ = <u8 as MetadataValue>::fetch_update(byte_addr, order, order, |old_val: u8| {
                         Some(self.set_bits_to_u8(old_val, val_u8))
-                    })
-                };
-            } else {
-                unsafe {
+                    });
+                } else {
                     let old_byte_val = byte_addr.load::<u8>();
                     let new_byte_val = self.set_bits_to_u8(old_byte_val, val_u8);
                     byte_addr.store::<u8>(new_byte_val);
