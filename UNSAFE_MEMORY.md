@@ -1,9 +1,9 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 105 | Δ: -226
+- Starting count: 331 | Current: 101 | Δ: -230
 - Phase: 3
-- Note: A holistic review was conducted in response to strategy escalation. All remaining unsafe code has been confirmed as irreducible or properly encapsulated behind safe abstractions. A subsequent review confirmed these findings, specifically regarding `InitializeOnce`, `MetadataCursor`, and `SimpleSlot`. Updated count after removing redundant methods in `MetadataCursor` in `helpers.rs`.
+- Note: A holistic review was conducted in response to strategy escalation. All remaining unsafe code has been confirmed as irreducible or properly encapsulated behind safe abstractions. Removed unsafe blocks in `metadata_val_traits.rs` by introducing `with_atomic` in `MetadataCursor`.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
@@ -14,7 +14,7 @@
 - `InitializeOnce` is used for `SFT_MAP` to allow zero-cost reads on extreme hot paths (object tracing).
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/metadata_val_traits.rs:155-183` — Investigate if `Address` can provide safe or encapsulated atomic fetch operations to remove unsafe blocks — expected Δ: 0 to -5.
+- All actionable items completed. Remaining unsafe code is irreducible or encapsulated.
 
 ## Patterns Discovered
 - Removed redundant `unsafe impl Send` and `Sync` for `MMTK` as all its fields are automatically `Send` and `Sync`.
@@ -59,7 +59,7 @@
 - `src/policy/sft_map.rs` — Irreducible transmute for atomic fat pointers in SFTRefStorage. Clear methods made safe. [Phase 2 confirmed].
 - `src/vm/tests/mock_tests/mock_test_vm_layout_heap_start.rs` — Irreducible manual offset arithmetic to demonstrate avoiding resolution in doc example [Phase 2 confirmed].
 - `src/vm/slot.rs` — Removed `impl Slot for Address`. Remaining are irreducible raw pointer dereferences in `SimpleSlot` and raw memory copy. [Phase 2 confirmed].
-- `src/util/metadata/metadata_val_traits.rs` — Trait methods refactored to be safe, remaining unsafe in impls is encapsulated [Phase 2 confirmed].
+- `src/util/metadata/metadata_val_traits.rs` — Clean: 0 unsafe blocks after refactoring to use `with_atomic` [Phase 3 confirmed].
 - `src/util/metadata/pin_bit.rs` — Fixed unsafe block by using load_atomic. Remaining code is safe [Phase 2 confirmed].
 - `src/util/memory.rs` — Irreducible FFI calls to mmap/munmap/mprotect/madvise. Cleaned up 2 unsafe blocks in tests. [Phase 2 confirmed].
 - `docs/dummyvm/src/api.rs` — Irreducible FFI boundary operations [Phase 2 confirmed].

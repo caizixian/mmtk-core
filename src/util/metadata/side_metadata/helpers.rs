@@ -303,6 +303,12 @@ impl MetadataCursor {
     }
 
     #[inline(always)]
+    pub(crate) fn with_atomic<T: MetadataValue, R, F: FnOnce(&T::Atomic) -> R>(&self, f: F) -> R {
+        // SAFETY: MetadataCursor is an internal abstraction that is only constructed with valid metadata addresses.
+        unsafe { f(self.0.as_ref::<T::Atomic>()) }
+    }
+
+    #[inline(always)]
     pub(crate) fn fetch_add<T: MetadataValue>(&self, val: T, order: std::sync::atomic::Ordering) -> T {
         T::fetch_add(*self, val, order)
     }

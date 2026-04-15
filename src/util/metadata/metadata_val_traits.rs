@@ -151,23 +151,19 @@ macro_rules! impl_metadata_value_trait {
             }
 
             fn fetch_add(cursor: MetadataCursor, value: Self, order: Ordering) -> Self {
-                // SAFETY: MetadataCursor is assumed to point to a valid, properly aligned atomic value.
-                unsafe { cursor.0.as_ref::<$atomic>().fetch_add(value, order) }
+                cursor.with_atomic::<Self, _, _>(|a| a.fetch_add(value, order))
             }
 
             fn fetch_sub(cursor: MetadataCursor, value: Self, order: Ordering) -> Self {
-                // SAFETY: MetadataCursor is assumed to point to a valid, properly aligned atomic value.
-                unsafe { cursor.0.as_ref::<$atomic>().fetch_sub(value, order) }
+                cursor.with_atomic::<Self, _, _>(|a| a.fetch_sub(value, order))
             }
 
             fn fetch_and(cursor: MetadataCursor, value: Self, order: Ordering) -> Self {
-                // SAFETY: MetadataCursor is assumed to point to a valid, properly aligned atomic value.
-                unsafe { cursor.0.as_ref::<$atomic>().fetch_and(value, order) }
+                cursor.with_atomic::<Self, _, _>(|a| a.fetch_and(value, order))
             }
 
             fn fetch_or(cursor: MetadataCursor, value: Self, order: Ordering) -> Self {
-                // SAFETY: MetadataCursor is assumed to point to a valid, properly aligned atomic value.
-                unsafe { cursor.0.as_ref::<$atomic>().fetch_or(value, order) }
+                cursor.with_atomic::<Self, _, _>(|a| a.fetch_or(value, order))
             }
 
             fn fetch_update<F>(
@@ -179,13 +175,7 @@ macro_rules! impl_metadata_value_trait {
             where
                 F: FnMut(Self) -> Option<Self>,
             {
-                // SAFETY: MetadataCursor is assumed to point to a valid, properly aligned atomic value.
-                unsafe {
-                    cursor
-                        .0
-                        .as_ref::<$atomic>()
-                        .fetch_update(set_order, fetch_order, f)
-                }
+                cursor.with_atomic::<Self, _, _>(|a| a.fetch_update(set_order, fetch_order, f))
             }
         }
     };
