@@ -28,6 +28,8 @@ pub extern "C" fn mmtk_set_option_from_string(
     name: *const c_char,
     value: *const c_char,
 ) -> bool {
+    // SAFETY: The caller must ensure that `builder` is a valid pointer to an `MMTKBuilder`,
+    // and `name` and `value` are valid null-terminated C strings.
     let builder = unsafe { &mut *builder };
     let name_str: &CStr = unsafe { CStr::from_ptr(name) };
     let value_str: &CStr = unsafe { CStr::from_ptr(value) };
@@ -36,6 +38,7 @@ pub extern "C" fn mmtk_set_option_from_string(
 
 #[no_mangle]
 pub extern "C" fn mmtk_set_fixed_heap_size(builder: *mut MMTKBuilder, heap_size: usize) -> bool {
+    // SAFETY: The caller must ensure that `builder` is a valid pointer to an `MMTKBuilder`.
     let builder = unsafe { &mut *builder };
     builder
         .options
@@ -47,6 +50,8 @@ pub extern "C" fn mmtk_set_fixed_heap_size(builder: *mut MMTKBuilder, heap_size:
 
 #[no_mangle]
 pub fn mmtk_init(builder: *mut MMTKBuilder) {
+    // SAFETY: The caller must ensure that `builder` is a valid pointer to an `MMTKBuilder`
+    // that was created by `Box::into_raw` (e.g. by `mmtk_create_builder`).
     let builder = unsafe { Box::from_raw(builder) };
 
     // Create MMTK instance.
@@ -66,8 +71,11 @@ pub extern "C" fn mmtk_bind_mutator(tls: VMMutatorThread) -> *mut Mutator<DummyV
 #[no_mangle]
 pub extern "C" fn mmtk_destroy_mutator(mutator: *mut Mutator<DummyVM>) {
     // notify mmtk-core about destroyed mutator
+    // SAFETY: The caller must ensure that `mutator` is a valid pointer to a `Mutator`.
     memory_manager::destroy_mutator(unsafe { &mut *mutator });
     // turn the ptr back to a box, and let Rust properly reclaim it
+    // SAFETY: The caller must ensure that `mutator` was created by `Box::into_raw`
+    // (e.g. by `mmtk_bind_mutator`).
     let _ = unsafe { Box::from_raw(mutator) };
 }
 
@@ -90,6 +98,7 @@ pub extern "C" fn mmtk_alloc(
     {
         semantics = AllocationSemantics::Los;
     }
+    // SAFETY: The caller must ensure that `mutator` is a valid pointer to a `Mutator`.
     memory_manager::alloc::<DummyVM>(unsafe { &mut *mutator }, size, align, offset, semantics)
 }
 
@@ -111,11 +120,14 @@ pub extern "C" fn mmtk_post_alloc(
     {
         semantics = AllocationSemantics::Los;
     }
+    // SAFETY: The caller must ensure that `mutator` is a valid pointer to a `Mutator`.
     memory_manager::post_alloc::<DummyVM>(unsafe { &mut *mutator }, refer, bytes, semantics)
 }
 
 #[no_mangle]
 pub extern "C" fn mmtk_start_worker(tls: VMWorkerThread, worker: *mut GCWorker<DummyVM>) {
+    // SAFETY: The caller must ensure that `worker` is a valid pointer to a `GCWorker`
+    // that was created by `Box::into_raw`.
     let worker = unsafe { Box::from_raw(worker) };
     memory_manager::start_worker::<DummyVM>(mmtk(), tls, worker)
 }

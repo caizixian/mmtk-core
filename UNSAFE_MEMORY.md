@@ -10,7 +10,7 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `docs/dummyvm/src/api.rs:31-119` — Document safety invariants for FFI boundary operations — expected Δ: 0
+(No actionable items at this time. All identified addressable unsafe has been addressed or documented.)
 
 ## Patterns Discovered
 - Documented safety invariants for FFI calls in tests in `src/util/memory.rs`.
