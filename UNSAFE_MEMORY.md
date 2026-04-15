@@ -10,7 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/conversions.rs:100-120` — Replace `unsafe { Address::from_usize(...) }` with `Address::from_ptr` in tests.
+1. 🔴 HIGH: `src/util/heap/layout/map32.rs` — Replace `UnsafeCell` + `Mutex` with `RwLock` — expected Δ: -11
 2. 🟡 MED: `src/util/metadata/side_metadata/global.rs` — Continue analyzing remaining unsafe blocks.
 
 ## Patterns Discovered
