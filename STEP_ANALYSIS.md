@@ -1,5 +1,4 @@
 # Step Analysis (auto-saved)
-[ignoring loop detection]
 
 ## Target
 - <file being analyzed>
