@@ -95,84 +95,53 @@ pub(crate) fn create_sft_map() -> Box<dyn SFTMap + Sync> {
     }
 }
 
+pub(crate) struct SFTHeader {
+    pub sft: *const (dyn SFT + Sync + 'static),
+}
+
+// SAFETY: SFT instances are Sync, and the SFTHeader only contains a pointer to them.
+// The pointer is only used to access the SFT trait methods which are thread-safe.
+unsafe impl Sync for SFTHeader {}
+
 /// The raw pointer for SFT. We expect a space to provide this to SFT map.
-pub(crate) type SFTRawPointer = *const (dyn SFT + Sync + 'static);
+pub(crate) type SFTRawPointer = *const SFTHeader;
 
-/// We store raw pointer as a double word using atomics.
-/// We use portable_atomic. It provides non locking atomic operations where possible,
-/// and use a locking operation as the fallback.
-/// Rust only provides AtomicU128 for some platforms, and do not provide the type
-/// on x86_64-linux, as some earlier x86_64 CPUs do not have 128 bits atomic instructions.
-/// The crate portable_atomic works around the problem with a runtime detection to
-/// see if 128 bits atomic instructions are available.
-#[cfg(target_pointer_width = "64")]
-type AtomicDoubleWord = portable_atomic::AtomicU128;
-#[cfg(target_pointer_width = "64")]
-type DoubleWord = u128;
-#[cfg(target_pointer_width = "32")]
-type AtomicDoubleWord = portable_atomic::AtomicU64;
-#[cfg(target_pointer_width = "32")]
-type DoubleWord = u64;
+pub(crate) static EMPTY_SFT_HEADER: SFTHeader = SFTHeader {
+    sft: &EMPTY_SPACE_SFT as *const (dyn SFT + Sync + 'static),
+};
 
-/// The type we store SFT raw pointer as. It basically just double word sized atomic integer.
+/// The type we store SFT raw pointer as. It is a thin pointer to an `SFTHeader`.
 /// This type provides an abstraction so we can access SFT easily.
 #[repr(transparent)]
-pub(crate) struct SFTRefStorage(AtomicDoubleWord);
+pub(crate) struct SFTRefStorage(std::sync::atomic::AtomicPtr<SFTHeader>);
 
 impl SFTRefStorage {
     /// A check at boot time to ensure `SFTRefStorage` is correct.
     pub fn pre_use_check() {
-        // If we do not have lock free operations, warn the users.
-        if !AtomicDoubleWord::is_lock_free() {
-            warn!(
-                "SFT access word is not lock free on this platform. This will slow down SFT map."
-            );
-        }
-        // Our storage type needs to be the same width as the dyn pointer type.
-        assert_eq!(
-            std::mem::size_of::<AtomicDoubleWord>(),
-            std::mem::size_of::<SFTRawPointer>()
-        );
+        // We use AtomicPtr which is always lock-free on supported platforms.
     }
 
-    pub fn new(sft: SFTRawPointer) -> Self {
-        // SAFETY: DoubleWord is defined to have the same size as SFTRawPointer (checked in pre_use_check).
-        // Transmuting a fat pointer to a double-word sized integer is necessary here because
-        // pointer provenance APIs do not support fat pointers.
-        let val: DoubleWord = unsafe { std::mem::transmute(sft) };
-        Self(AtomicDoubleWord::new(val))
+    pub fn new(header: SFTRawPointer) -> Self {
+        Self(std::sync::atomic::AtomicPtr::new(header as *mut _))
     }
 
     // Load with the acquire ordering.
     pub fn load(&self) -> &dyn SFT {
-        let val = self.0.load(Ordering::Acquire);
-        // Provenance-related APIs were stabilized in Rust 1.84.
-        // Rust 1.91 introduced the warn-by-default lint `integer_to_ptr_transmutes`.
-        // However, pointer provenance API only works for ptr-sized intergers, and
-        // here we are transmuting from a double-word sized integer to a fat pointer.
-        // We still need to use transmute here.
-        #[allow(unknown_lints)]
-        #[allow(integer_to_ptr_transmutes)]
-        // SAFETY: The value loaded was stored by `store` or `new`, which only store
-        // valid SFTRawPointer values. Transmuting it back is safe.
-        unsafe {
-            std::mem::transmute(val)
-        }
+        let ptr = self.0.load(Ordering::Acquire);
+        // SAFETY: The pointer was stored by `store` or `new`, which only store
+        // valid pointers to leaked `SFTHeader`s.
+        unsafe { &*(*ptr).sft }
     }
 
     // Store a raw SFT pointer with the release ordering.
-    pub fn store(&self, sft: SFTRawPointer) {
-        // SAFETY: DoubleWord is defined to have the same size as SFTRawPointer (checked in pre_use_check).
-        // Transmuting a fat pointer to a double-word sized integer is necessary here because
-        // pointer provenance APIs do not support fat pointers.
-        let val: DoubleWord = unsafe { std::mem::transmute(sft) };
-        self.0.store(val, Ordering::Release)
+    pub fn store(&self, header: SFTRawPointer) {
+        self.0.store(header as *mut _, Ordering::Release)
     }
 }
 
 impl std::default::Default for SFTRefStorage {
     fn default() -> Self {
-        Self::new(&EMPTY_SPACE_SFT as SFTRawPointer)
+        Self::new(&EMPTY_SFT_HEADER)
     }
 }
 
@@ -242,12 +211,17 @@ mod space_map {
                 );
             }
 
-            self.sft[index].store(space);
+            let header = if space.name() == EMPTY_SFT_NAME {
+                &EMPTY_SFT_HEADER
+            } else {
+                Box::leak(Box::new(SFTHeader { sft: space as *const _ }))
+            };
+            self.sft[index].store(header);
         }
 
         fn clear(&self, addr: Address) {
             let index = Self::addr_to_index(addr);
-            self.sft[index].store(&EMPTY_SPACE_SFT as _);
+            self.sft[index].store(&EMPTY_SFT_HEADER);
         }
 
 
@@ -394,7 +368,8 @@ mod dense_chunk_map {
             // Index for the space
             let index = self.sft.len();
             // Insert to hashmap and vec
-            self.sft.push(SFTRefStorage::new(space as *const _));
+            let header = Box::leak(Box::new(SFTHeader { sft: space as *const _ }));
+            self.sft.push(SFTRefStorage::new(header));
             self.index_map.insert(space_name, index);
         }
 
@@ -620,7 +595,12 @@ mod sparse_chunk_map {
                     new
                 );
             }
-            self.sft[chunk].store(sft);
+            let header = if sft.name() == EMPTY_SFT_NAME {
+                &EMPTY_SFT_HEADER
+            } else {
+                Box::leak(Box::new(SFTHeader { sft: sft as *const _ }))
+            };
+            self.sft[chunk].store(header);
         }
     }
 }

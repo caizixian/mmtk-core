@@ -1,9 +1,9 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 98 | Δ: -233
+- Starting count: 331 | Current: 97 | Δ: -234
 - Phase: 3
-- Note: Re-evaluated `src/vm/slot.rs`, `src/util/rust_util/mod.rs`, and `src/util/memory.rs` in response to harness nudge. Confirmed that remaining unsafe code is irreducible or properly encapsulated (FFI, raw pointer primitives, or performance-critical cells). The project remains in Phase 3.
+- Note: Refactored `sft_map.rs` to use `SFTHeader` wrapper, removing `transmute` on fat pointers and reducing unsafe block count by 2 (net -1 after adding 1 unsafe impl Sync). The project remains in Phase 3.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
@@ -17,6 +17,7 @@
 - All actionable items completed. Remaining unsafe code is irreducible or encapsulated.
 
 ## Patterns Discovered
+- **Safe Abstraction**: Used `SFTHeader` wrapper to avoid `transmute` on fat pointers in `SFTRefStorage`, removing 3 unsafe blocks (and adding 1 unsafe impl Sync).
 - Removed redundant `unsafe impl Send` and `Sync` for `MMTK` as all its fields are automatically `Send` and `Sync`.
 - Replaced `unsafe impl Sync for GCWorkScheduler` by making `BucketOpenCondition` `Sync`, removing 1 unsafe impl.
 - Replaced `unsafe impl Zeroable for SpaceDescriptor` with `#[derive(Zeroable)]`, removing 1 unsafe impl.
