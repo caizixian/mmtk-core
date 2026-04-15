@@ -114,17 +114,13 @@ impl Block {
     pub fn store_free_cell_link(&self, cell: Address, next: Address) {
         assert!(cell >= self.start() && cell < self.start() + Block::BYTES, "Cell address out of block bounds");
         assert!(cell.is_aligned_to(std::mem::align_of::<Address>()), "Cell address not aligned");
-        unsafe {
-            cell.store::<Address>(next);
-        }
+        crate::util::metadata::side_metadata::helpers::MetadataCursor(cell).store::<usize>(next.as_usize());
     }
 
     pub fn load_free_cell_link(&self, cell: Address) -> Address {
         assert!(cell >= self.start() && cell < self.start() + Block::BYTES, "Cell address out of block bounds");
         assert!(cell.is_aligned_to(std::mem::align_of::<Address>()), "Cell address not aligned");
-        unsafe {
-            cell.load::<Address>()
-        }
+        Address::from_ptr(crate::util::metadata::side_metadata::helpers::MetadataCursor(cell).load::<usize>() as *const ())
     }
 
     #[cfg(feature = "malloc_native_mimalloc")]
