@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 419 | Δ: -116
+- Starting count: 535 | Current: 417 | Δ: -118
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/scheduler/gc_work.rs:59, 139` — investigate removing raw pointer casting for plan_mut — expected Δ: 1-2
-2. 🟡 MED: `src/scheduler/gc_work.rs:517` — investigate removing raw pointer dereference for worker — expected Δ: 1
+1. 🟡 MED: `src/scheduler/gc_work.rs:517` — investigate removing raw pointer dereference for worker — expected Δ: 1
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -27,7 +26,8 @@
 - Replace `*mut c_void` with `usize` in opaque pointer types to eliminate `unsafe impl Send` and `Sync`.
 - Use `std::sync::OnceLock` instead of `MaybeUninit` for single-assignment fields in shared structures to eliminate unsafe initialization and access (e.g., in `GCTrigger`).
 - Use `Box::leak` instead of `Box::into_raw` to get a reference directly when initializing lock-free structures, reducing unsafe blocks.
-- **New Pattern**: Replace `[MaybeUninit<T>; N]` with `[Option<T>; N]` for lazily initialized arrays if N is small or overhead is acceptable, eliminating `assume_init_mut()` unsafe calls.
+- Replace `[MaybeUninit<T>; N]` with `[Option<T>; N]` for lazily initialized arrays if N is small or overhead is acceptable, eliminating `assume_init_mut()` unsafe calls.
+- **New Pattern**: Use `mmtk.get_plan_mut()` in `GCWork` implementations instead of passing raw plan pointers, when the scheduler guarantees exclusive access during the phase (e.g., `Prepare` and `Release`).
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe blocks removed by replacing MaybeUninit with Option. [Phase 2 confirmed]

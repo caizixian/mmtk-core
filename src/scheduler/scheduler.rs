@@ -142,10 +142,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         self.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<C>::new());
 
         // Prepare global/collectors/mutators
-        self.work_buckets[WorkBucketStage::Prepare].add(Prepare::<C>::new(plan));
+        self.work_buckets[WorkBucketStage::Prepare].add(Prepare::<C>::new());
 
         // Release global/collectors/mutators
-        self.work_buckets[WorkBucketStage::Release].add(Release::<C>::new(plan));
+        self.work_buckets[WorkBucketStage::Release].add(Release::<C>::new());
 
         // Analysis GC work
         #[cfg(feature = "analysis")]
