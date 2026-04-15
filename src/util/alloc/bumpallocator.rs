@@ -66,7 +66,7 @@ impl<VM: VMBinding> BumpAllocator<VM> {
     }
 
     pub(crate) fn reset(&mut self) {
-        let zero = unsafe { Address::zero() };
+        let zero = Address::ZERO;
         self.bump_pointer.reset(zero, zero);
     }
 

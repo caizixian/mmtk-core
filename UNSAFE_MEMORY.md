@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 511 | Δ: -24
+- Starting count: 535 | Current: 501 | Δ: -34
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/metadata_val_traits.rs:84-131` — Analyze if trait methods can be made safe.
+1. 🔴 HIGH: `src/util/metadata/side_metadata/side_metadata_tests.rs` — Refactor tests to use safe APIs or `Vec` to eliminate unsafe blocks.
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -30,6 +30,7 @@
 - `src/util/metadata/header_metadata.rs` — Production unsafe is irreducible (raw address access in `load`/`store`), tests refactored to use `Vec`. [Phase 2 confirmed]
 - `src/vm/tests/mock_tests/mock_test_slots.rs` — Remaining unsafe blocks are dereferencing raw pointers to simulate VM slots and `unsafe impl Send`. [Phase 2 confirmed]
 - `src/util/metadata/side_metadata/global.rs` — Production unsafe in `load`/`store` is irreducible due to concurrent access invariants requiring `unsafe fn` signature. [Phase 2 confirmed]
+- `src/util/metadata/metadata_val_traits.rs` — Trait methods must remain unsafe because they take a raw `Address` and dereference it. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - `SweepProof` for `malloc_ms` (Implemented).

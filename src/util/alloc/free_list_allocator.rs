@@ -343,7 +343,7 @@ impl<VM: VMBinding> FreeListAllocator<VM> {
 
         // construct free list
         let block_end = block.start() + Block::BYTES;
-        let mut old_cell = unsafe { Address::zero() };
+        let mut old_cell = Address::ZERO;
         let mut new_cell = block.start();
 
         let final_cell = loop {
