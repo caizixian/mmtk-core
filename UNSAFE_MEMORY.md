@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 434 | Δ: -101
+- Starting count: 535 | Current: 420 | Δ: -115
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/copy/mod.rs:92-168` — re-evaluate assume_init_mut usage — expected Δ: 0-5
+1. 🔴 HIGH: `src/util/test_util/fixtures.rs:148-167` — remove raw pointer dereferencing in tests — expected Δ: 2-4
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -26,10 +26,11 @@
 - Replace `*mut c_void` with `usize` in opaque pointer types to eliminate `unsafe impl Send` and `Sync`.
 - Use `std::sync::OnceLock` instead of `MaybeUninit` for single-assignment fields in shared structures to eliminate unsafe initialization and access (e.g., in `GCTrigger`).
 - Use `Box::leak` instead of `Box::into_raw` to get a reference directly when initializing lock-free structures, reducing unsafe blocks.
+- **New Pattern**: Replace `[MaybeUninit<T>; N]` with `[Option<T>; N]` for lazily initialized arrays if N is small or overhead is acceptable, eliminating `assume_init_mut()` unsafe calls.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
+- `src/util/copy/mod.rs` — All unsafe blocks removed by replacing MaybeUninit with Option. [Phase 2 confirmed]
 - `src/util/rust_util/atomic_box.rs` — implements a safe abstraction (`OnceOptionBox`). Unsafe is required for raw pointer manipulation and justified `Zeroable` impl. [Phase 2 confirmed]
-- `src/util/copy/mod.rs` — remaining unsafe blocks are `assume_init_mut()` which are likely required for performance to avoid `Option` overhead in GC fast path.
 - `src/policy/sft_map.rs` — `transmute` of fat pointers is required for atomic trait object storage in `SFTRefStorage`. [Phase 2 confirmed]
 - `src/util/malloc/malloc_ms_util.rs` — mostly FFI calls to `libc` (malloc, calloc, free, etc.). [Phase 2 confirmed]
 - `src/util/alloc/allocators.rs` — Layout constraints for VM bindings require `MaybeUninit` arrays with separate initialization flags. `assume_init_ref` and `assume_init_mut` are required and safe due to runtime checks, but must be marked unsafe by compiler. [Phase 2 confirmed]
