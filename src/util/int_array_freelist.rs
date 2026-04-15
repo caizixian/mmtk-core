@@ -1,16 +1,11 @@
 use super::freelist::*;
-use std::ptr::NonNull;
 
 #[derive(Debug)]
 pub struct IntArrayFreeList {
     pub head: i32,
     pub heads: i32,
-    pub table: Option<Vec<i32>>,
-    parent: Option<NonNull<IntArrayFreeList>>,
+    pub table: std::sync::Arc<std::sync::RwLock<Vec<i32>>>,
 }
-
-unsafe impl Send for IntArrayFreeList {}
-unsafe impl Sync for IntArrayFreeList {}
 
 impl FreeList for IntArrayFreeList {
     fn head(&self) -> i32 {
@@ -20,10 +15,10 @@ impl FreeList for IntArrayFreeList {
         self.heads
     }
     fn get_entry(&self, index: i32) -> i32 {
-        self.table()[index as usize]
+        self.table.read().unwrap()[index as usize]
     }
     fn set_entry(&mut self, index: i32, value: i32) {
-        self.table_mut()[index as usize] = value;
+        self.table.write().unwrap()[index as usize] = value;
     }
 }
 
@@ -35,19 +30,16 @@ impl IntArrayFreeList {
         let mut iafl = IntArrayFreeList {
             head: -1,
             heads: heads as _,
-            table: Some(vec![0; len]), // len=2052
-            parent: None,
+            table: std::sync::Arc::new(std::sync::RwLock::new(vec![0; len])),
         };
         iafl.initialize_heap(units as _, grain);
         iafl
     }
     pub fn from_parent(parent: &IntArrayFreeList, ordinal: i32) -> Self {
-        let parent_ptr = std::ptr::NonNull::from(parent);
         let iafl = IntArrayFreeList {
             head: -(1 + ordinal),
             heads: parent.heads,
-            table: None,
-            parent: Some(parent_ptr),
+            table: parent.table.clone(),
         };
         debug_assert!(-iafl.head <= iafl.heads);
         iafl
@@ -55,24 +47,9 @@ impl IntArrayFreeList {
     pub(crate) fn get_ordinal(&self) -> i32 {
         -self.head - 1
     }
-    fn table(&self) -> &Vec<i32> {
-        match self.parent {
-            Some(p) => unsafe { p.as_ref().table() },
-            None => self.table.as_ref().unwrap(),
-        }
-    }
-
-    // FIXME: We need a safe implementation
-
-    fn table_mut(&mut self) -> &mut Vec<i32> {
-        match self.parent {
-            Some(mut p) => unsafe { p.as_mut().table_mut() },
-            None => self.table.as_mut().unwrap(),
-        }
-    }
     pub fn resize_freelist(&mut self, units: usize, grain: i32) {
-        // debug_assert!(self.parent.is_none() && !selected_plan::PLAN.is_initialized());
-        *self.table_mut() = vec![0; (units + 1 + self.heads as usize) << 1];
+        // debug_assert!(!selected_plan::PLAN.is_initialized());
+        *self.table.write().unwrap() = vec![0; (units + 1 + self.heads as usize) << 1];
         self.initialize_heap(units as _, grain);
     }
 }

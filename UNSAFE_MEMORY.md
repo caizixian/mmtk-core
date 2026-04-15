@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 374 | Δ: -161 (estimated)
+- Starting count: 535 | Current: 370 | Δ: -165 (estimated)
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -55,6 +55,7 @@
 - `src/util/heap/blockpageresource.rs` — All unsafe blocks removed by replacing UnsafeCell with RwLock in BlockQueue. [Phase 2 confirmed]
 - `src/vm/tests/mock_tests/mock_test_slots.rs` — All unsafe blocks removed by refactoring tests to use references instead of raw pointers. [Phase 2 confirmed]
 - `src/util/heap/layout/map64.rs` — Redundant unsafe impl Send and Sync removed. [Phase 2 confirmed]
+- `src/util/int_array_freelist.rs` — All unsafe blocks removed by replacing raw pointer with `Arc<RwLock>`. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - `SweepProof` for `malloc_ms` (Implemented).
