@@ -380,7 +380,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
         if self.get_gc_trigger().poll(false, Some(self)) {
             assert!(VM::VMActivePlan::is_mutator(tls), "Polling in GC worker");
             VM::VMCollection::block_for_gc(VMMutatorThread(tls));
-            return unsafe { Address::zero() };
+            return Address::ZERO;
         }
 
         let (address, is_offset_malloc) = alloc::<VM>(size, align, offset);

@@ -1,8 +1,9 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 683 | Δ: -39
+- Starting count: 722 | Current: 681 | Δ: -41
 - Phase: 1
+
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - `Address::from_ptr` is safe and can be used to replace `Address::from_usize` in non-const contexts to avoid unsafe blocks.
