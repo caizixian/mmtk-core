@@ -1,17 +1,16 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- Files: `src/util/rust_util/zeroed_alloc.rs`, `src/vm/slot.rs`, `src/policy/sft_map.rs`, `src/util/rust_util/mod.rs`
-- Strategy: Re-evaluate files marked as irreducible to ensure no opportunities were missed.
+- Files: `src/vm/slot.rs`, `src/util/rust_util/mod.rs`, `src/util/memory.rs`
+- Strategy: Re-evaluate files with unsafe to check for reducible items or potential safe abstractions, in response to harness nudge.
 
 ## Findings
-- `src/util/rust_util/zeroed_alloc.rs`: `new_zeroed_vec` is used for `OnceOptionBox` which is `Zeroable` but not `Pod`. Safe alternatives like `Vec::from_iter` may not optimize to `memset`. Confirmed irreducible for performance.
-- `src/vm/slot.rs`: `SimpleSlot` load/store and `MemorySlice::copy` use raw pointer operations and `std::ptr::copy`. Confirmed irreducible.
-- `src/policy/sft_map.rs`: `SFTRefStorage` uses `transmute` to bitcast fat pointers to `u128` for atomic operations. Confirmed irreducible as pointer provenance APIs don't support fat pointers.
-- `src/util/rust_util/mod.rs`: `InitializeOnce` and `ProofCell` are used for zero-cost reads on hot paths. Replacing them introduces atomic checks or locks. Confirmed irreducible for performance.
+- `src/vm/slot.rs`: `SimpleSlot` load/store use raw pointer dereferences on `Atomic<Address>`. This is necessary because the slot address is a raw address. A safe reference cannot be used without adding lifetime parameters to the `Slot` trait, which would be a massive cross-cutting refactoring. Confirmed irreducible.
+- `src/util/rust_util/mod.rs`: `InitializeOnce` and `ProofCell` provide zero-cost reads. Replacing them with `OnceLock` or requiring proof tokens for reads would introduce overhead on hot paths. Confirmed irreducible for performance.
+- `src/util/memory.rs`: Unsafe blocks are for FFI calls to `libc` (mmap, munmap, etc.) or raw memory zeroing (`write_bytes`). Confirmed irreducible.
 
 ## Attempted Changes
-- None. Analysis confirmed that the previous step's classification of these items as irreducible is correct.
+- None. Analysis confirmed that the remaining unsafe code is irreducible or properly encapsulated, consistent with Phase 3.
 
 ## Blockers / Insights for Next Step
-- All remaining unsafe code appears to be genuinely irreducible or properly encapsulated. The project is in Phase 3.
+- The project appears to be in Phase 3. All remaining unsafe code is FFI, raw pointer operations in primitives, or optimized cells for performance. No obvious candidates for reduction or safe abstractions were found without significant API redesign.
