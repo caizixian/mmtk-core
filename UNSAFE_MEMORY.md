@@ -10,7 +10,7 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/side_metadata/helpers.rs:250-343` — Check if `MetadataCursor` implementation has any redundant unsafe blocks that can be removed. — expected Δ: 0 or -1.
+1. 🔴 HIGH: `src/util/metadata/metadata_val_traits.rs:80-190` — Check if `MetadataValue` trait methods have any redundant unsafe or if they can be improved. — expected Δ: 0 or -1.
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
@@ -22,6 +22,8 @@
 - `src/util/metadata/side_metadata/helpers.rs` — Implementation of `MetadataCursor` abstraction, irreducible without moving unsafe to call sites [Phase 1 analysis].
 - `src/util/metadata/side_metadata/side_metadata_tests.rs` — Irreducible raw pointer manipulations for test verification [Phase 1 analysis].
 - `src/util/metadata/side_metadata/ranges.rs` — Irreducible raw pointer manipulations for bit range operations [Phase 1 analysis].
+- `src/policy/sft_map.rs` — Irreducible transmute for atomic fat pointers in `SFTRefStorage` [Phase 2 confirmed].
+- `src/vm/slot.rs` — Irreducible raw pointer dereferences in `SimpleSlot` and `Address` impls [Phase 2 confirmed].
 
 ## Abstraction Proposals (for Phase 2)
 ### MetadataCursor for side_metadata
