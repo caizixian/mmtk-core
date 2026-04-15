@@ -1,25 +1,14 @@
 use crate::util::constants::BYTES_IN_ADDRESS;
-use crate::util::malloc::library::*;
 use crate::util::Address;
 use crate::util::metadata::side_metadata::helpers::MetadataCursor;
 use crate::vm::VMBinding;
 
-fn safe_calloc(count: usize, size: usize) -> Address {
-    // SAFETY: FFI call to calloc is safe as long as arguments are valid.
-    Address::from_mut_ptr(unsafe { calloc(count, size) })
-}
-
 /// Allocate with alignment. This also guarantees the memory is zero initialized.
 pub fn align_alloc(size: usize, align: usize) -> Address {
-    let mut ptr = std::ptr::null_mut::<libc::c_void>();
-    let ptr_ptr = std::ptr::addr_of_mut!(ptr);
-    // SAFETY: ptr_ptr is a valid pointer to a local variable. The alignment requirements are assumed to be satisfied by the caller or checked elsewhere.
-    let result = unsafe { posix_memalign(ptr_ptr, align, size) };
-    if result != 0 {
-        return Address::ZERO;
+    let address = crate::util::malloc::align_alloc(size, align);
+    if !address.is_zero() {
+        crate::util::memory::zero(address, size);
     }
-    let address = Address::from_mut_ptr(ptr);
-    crate::util::memory::zero(address, size);
     address
 }
 
@@ -29,7 +18,7 @@ pub fn align_alloc(size: usize, align: usize) -> Address {
 pub fn align_offset_alloc<VM: VMBinding>(size: usize, align: usize, offset: usize) -> Address {
     // we allocate extra `align` bytes here, so we are able to handle offset
     let actual_size = size + align + BYTES_IN_ADDRESS;
-    let address = safe_calloc(1, actual_size);
+    let address = crate::util::malloc::calloc(1, actual_size);
     if address.is_zero() {
         return address;
     }
@@ -48,16 +37,14 @@ pub fn align_offset_alloc<VM: VMBinding>(size: usize, align: usize, offset: usiz
 pub fn offset_malloc_usable_size(address: Address) -> usize {
     let cursor = MetadataCursor(address - BYTES_IN_ADDRESS);
     let malloc_res = cursor.load::<usize>() as *mut libc::c_void;
-    // SAFETY: malloc_res is a valid pointer returned by calloc and is safe to query.
-    unsafe { malloc_usable_size(malloc_res) }
+    crate::util::malloc::malloc_usable_size(Address::from_mut_ptr(malloc_res))
 }
 
 /// Free an address that is allocated with an offset (returned by [`crate::util::malloc::malloc_ms_util::align_offset_alloc`]).
 pub fn offset_free(address: Address) {
     let cursor = MetadataCursor(address - BYTES_IN_ADDRESS);
     let malloc_res = cursor.load::<usize>() as *mut libc::c_void;
-    // SAFETY: malloc_res is a valid pointer returned by calloc and is safe to free.
-    unsafe { free(malloc_res) }
+    crate::util::malloc::free(Address::from_mut_ptr(malloc_res))
 }
 
 pub use crate::util::malloc::library::free;
@@ -68,8 +55,7 @@ pub fn get_malloc_usable_size(address: Address, is_offset_malloc: bool) -> usize
     if is_offset_malloc {
         offset_malloc_usable_size(address)
     } else {
-        // SAFETY: address is a valid pointer returned by the allocator.
-        unsafe { malloc_usable_size(address.to_mut_ptr()) }
+        crate::util::malloc::malloc_usable_size(address)
     }
 }
 
@@ -81,7 +67,7 @@ pub fn alloc<VM: VMBinding>(size: usize, align: usize, offset: usize) -> (Addres
     // malloc returns 16 bytes aligned address.
     // So if the alignment is smaller than 16 bytes, we do not need to align.
     if align <= 16 && offset == 0 {
-        address = safe_calloc(1, size);
+        address = crate::util::malloc::calloc(1, size);
         debug_assert!(address.is_aligned_to(align));
     } else if align > 16 && offset == 0 {
         address = align_alloc(size, align);

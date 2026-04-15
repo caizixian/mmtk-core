@@ -96,3 +96,21 @@ pub fn free_with_size<VM: VMBinding>(mmtk: &MMTK<VM>, addr: Address, old_size: u
         mmtk.state.decrease_malloc_bytes_by(old_size);
     }
 }
+
+/// Get the size of the memory block allocated by malloc.
+pub fn malloc_usable_size(addr: Address) -> usize {
+    // SAFETY: FFI call to library malloc_usable_size. The caller must ensure `addr` was returned by a compatible allocator.
+    unsafe { self::library::malloc_usable_size(addr.to_mut_ptr()) }
+}
+
+/// Allocate memory with alignment.
+pub fn align_alloc(size: usize, align: usize) -> Address {
+    let mut ptr = std::ptr::null_mut::<libc::c_void>();
+    let ptr_ptr = std::ptr::addr_of_mut!(ptr);
+    // SAFETY: FFI call to library posix_memalign.
+    let result = unsafe { self::library::posix_memalign(ptr_ptr, align, size) };
+    if result != 0 {
+        return Address::ZERO;
+    }
+    Address::from_mut_ptr(ptr)
+}

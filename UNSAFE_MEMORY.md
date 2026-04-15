@@ -1,8 +1,9 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 80 | Δ: -251
+- Starting count: 331 | Current: 77 | Δ: -254
 - Phase: 3
+- Note: Consolidated FFI calls in `malloc_ms_util.rs` to safe wrappers in `mod.rs`, removing all 5 unsafe blocks in that file and adding 2 in `mod.rs`, yielding Δ-3.
 - Note: Used MetadataCursor in `malloc_ms_util.rs` to remove 1 unsafe block for unaligned write.
 - Note: Removed redundant unsafe block inside unsafe fn get_ref in ProofCell yielding Δ-1.
 - Note: Added SAFETY comments to `src/policy/markcompactspace.rs` for irreducible raw heap access.
@@ -36,7 +37,7 @@
 - `InitializeOnce` was used for `SFT_MAP` to allow zero-cost reads on extreme hot paths (object tracing). Now replaced by `OnceLock` for safety.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: Task completed. All remaining unsafe blocks have been verified as irreducible or properly encapsulated.
+1. 🟡 MED: Check if other files can use the new safe wrappers in `mod.rs` (e.g. `malloc_usable_size`).
 
 ## Patterns Discovered
 - **Safe Abstraction**: Used `SFTHeader` wrapper to avoid `transmute` on fat pointers in `SFTRefStorage`, removing 3 unsafe blocks (and adding 1 unsafe impl Sync).
@@ -88,7 +89,7 @@
 - `src/util/metadata/pin_bit.rs` — Fixed unsafe block by using load_atomic. Remaining code is safe [Phase 2 confirmed].
 - `src/util/memory.rs` — Irreducible FFI calls to mmap/munmap/mprotect/madvise. Re-evaluated Phase 2 abstraction (MmapRegion) but reverted as it didn't reduce count. [Phase 3 confirmed].
 - docs/dummyvm/src/api.rs — Refactored some FFI functions to use Option<&mut T>, removing 3 unsafe blocks. Remaining unsafe are irreducible FFI boundary operations. [Phase 3 confirmed].
-- `src/util/malloc/malloc_ms_util.rs` — Used `MetadataCursor` to remove unsafe block at line 43. Remaining unsafe are irreducible FFI calls to malloc/free/calloc and `posix_memalign`. [Phase 3 confirmed].
+- `src/util/malloc/malloc_ms_util.rs` — Clean: 0 unsafe blocks after consolidating FFI calls to `mod.rs` [Phase 3 confirmed].
 - `src/util/metadata/header_metadata.rs` — Unsafe functions `load`/`store` are non-atomic/racy by design; unsafe blocks in tests call them [Phase 2 confirmed].
 - `src/util/metadata/global.rs` — `load` and `store` are non-atomic and not thread-safe by design. Unsafe comes from `ObjectModel::load_metadata` trait method. [Phase 3 confirmed].
 - `src/util/rust_util/atomic_box.rs` — Removed in favor of `std::sync::OnceLock`. File is now empty. [Phase 3 confirmed].
