@@ -156,7 +156,7 @@ impl HeaderMetadataSpec {
         // metadata smaller than 8-bits is special in that more than one metadata value may be included in one AtomicU8 operation, and extra shift and mask is required
         let res: T = if self.num_of_bits < 8 {
             let byte_val = if let Some(order) = atomic_ordering {
-                cursor.load_atomic_u8(order)
+                cursor.load_atomic::<u8>(order)
             } else {
                 cursor.load::<u8>()
             };
@@ -273,7 +273,7 @@ impl HeaderMetadataSpec {
         // metadata smaller than 8-bits is special in that more than one metadata value may be included in one AtomicU8 operation, and extra shift and mask is required
         let cursor = MetadataCursor(self.meta_addr(header));
         if self.num_of_bits < 8 {
-            let real_old_byte = cursor.load_atomic_u8(success_order);
+            let real_old_byte = cursor.load_atomic::<u8>(success_order);
             let expected_old_byte =
                 self.set_bits_to_u8(real_old_byte, old_metadata.to_u8().unwrap());
             let expected_new_byte =

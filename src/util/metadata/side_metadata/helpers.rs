@@ -11,7 +11,6 @@ use crate::util::Address;
 use crate::util::metadata::metadata_val_traits::MetadataValue;
 use crate::MMAPPER;
 use std::io::Result;
-use atomic_traits::Atomic;
 
 /// Performs address translation in contiguous metadata spaces (e.g. global and policy-specific in 64-bits, and global in 32-bits)
 pub(super) fn address_to_contiguous_meta_address(
@@ -252,47 +251,7 @@ pub enum FindMetaBitResult {
 pub struct MetadataCursor(pub(crate) Address);
 
 impl MetadataCursor {
-    #[inline(always)]
-    pub(crate) fn load_usize(&self) -> usize {
-        // SAFETY: MetadataCursor is an internal abstraction that is only constructed with valid metadata addresses.
-        unsafe { self.0.load::<usize>() }
-    }
 
-    #[inline(always)]
-    pub(crate) fn load_atomic_usize(&self, order: std::sync::atomic::Ordering) -> usize {
-        // SAFETY: MetadataCursor is an internal abstraction that is only constructed with valid metadata addresses.
-        unsafe { self.0.as_ref::<std::sync::atomic::AtomicUsize>().load(order) }
-    }
-
-    #[inline(always)]
-    fn load_u8(&self) -> u8 {
-        // SAFETY: MetadataCursor is an internal abstraction that is only constructed with valid metadata addresses.
-        unsafe { self.0.load::<u8>() }
-    }
-
-    #[inline(always)]
-    pub(crate) fn fetch_and_u8(&self, val: u8, order: std::sync::atomic::Ordering) -> u8 {
-        // SAFETY: MetadataCursor is an internal abstraction that is only constructed with valid metadata addresses.
-        unsafe { self.0.as_ref::<std::sync::atomic::AtomicU8>().fetch_and(val, order) }
-    }
-
-    #[inline(always)]
-    pub(crate) fn fetch_or_u8(&self, val: u8, order: std::sync::atomic::Ordering) -> u8 {
-        // SAFETY: MetadataCursor is an internal abstraction that is only constructed with valid metadata addresses.
-        unsafe { self.0.as_ref::<std::sync::atomic::AtomicU8>().fetch_or(val, order) }
-    }
-
-    #[inline(always)]
-    pub(crate) fn load_atomic_u8(&self, order: std::sync::atomic::Ordering) -> u8 {
-        // SAFETY: MetadataCursor is an internal abstraction that is only constructed with valid metadata addresses.
-        unsafe { self.0.as_ref::<std::sync::atomic::AtomicU8>().load(order) }
-    }
-
-    #[inline(always)]
-    pub(crate) fn store_atomic_u8(&self, val: u8, order: std::sync::atomic::Ordering) {
-        // SAFETY: MetadataCursor is an internal abstraction that is only constructed with valid metadata addresses.
-        unsafe { self.0.as_ref::<std::sync::atomic::AtomicU8>().store(val, order) }
-    }
 
     #[inline(always)]
     pub(crate) fn load<T: MetadataValue>(&self) -> T {
@@ -408,7 +367,7 @@ pub fn find_last_non_zero_bit_in_metadata_bytes(
 
         if step == BYTES_IN_ADDRESS {
             // Load and check a usize word
-            let value = MetadataCursor(cur).load_atomic_usize(std::sync::atomic::Ordering::Relaxed);
+            let value = MetadataCursor(cur).load_atomic::<usize>(std::sync::atomic::Ordering::Relaxed);
             if value != 0 {
                 let bit = find_last_non_zero_bit::<usize>(value, 0, usize::BITS as u8).unwrap();
                 let byte_offset = bit >> LOG_BITS_IN_BYTE;
@@ -420,7 +379,7 @@ pub fn find_last_non_zero_bit_in_metadata_bytes(
             }
         } else {
             // Load and check a byte
-            let value = MetadataCursor(cur).load_atomic_u8(std::sync::atomic::Ordering::Relaxed);
+            let value = MetadataCursor(cur).load_atomic::<u8>(std::sync::atomic::Ordering::Relaxed);
             if let Some(bit) = find_last_non_zero_bit::<u8>(value, 0, 8) {
                 return FindMetaBitResult::Found { addr: cur, bit };
             }
@@ -438,7 +397,7 @@ pub fn find_last_non_zero_bit_in_metadata_bits(
     if !addr.is_mapped() {
         return FindMetaBitResult::UnmappedMetadata;
     }
-    let byte = MetadataCursor(addr).load_atomic_u8(std::sync::atomic::Ordering::Relaxed);
+    let byte = MetadataCursor(addr).load_atomic::<u8>(std::sync::atomic::Ordering::Relaxed);
     if let Some(bit) = find_last_non_zero_bit::<u8>(byte, start_bit, end_bit) {
         return FindMetaBitResult::Found { addr, bit };
     }
@@ -473,19 +432,19 @@ pub fn scan_non_zero_bits_in_metadata_bytes(
 
     let mut cursor = meta_start;
     while cursor < meta_end && !cursor.is_aligned_to(BYTES_IN_ADDRESS) {
-        let byte = MetadataCursor(cursor).load_u8();
+        let byte = MetadataCursor(cursor).load::<u8>();
         scan_non_zero_bits_in_metadata_word(cursor, byte as usize, visit_bit);
         cursor += 1usize;
     }
 
     while cursor + BYTES_IN_ADDRESS < meta_end {
-        let word = MetadataCursor(cursor).load_usize();
+        let word = MetadataCursor(cursor).load::<usize>();
         scan_non_zero_bits_in_metadata_word(cursor, word, visit_bit);
         cursor += BYTES_IN_ADDRESS;
     }
 
     while cursor < meta_end {
-        let byte = MetadataCursor(cursor).load_u8();
+        let byte = MetadataCursor(cursor).load::<u8>();
         scan_non_zero_bits_in_metadata_word(cursor, byte as usize, visit_bit);
         cursor += 1usize;
     }
@@ -509,7 +468,7 @@ pub fn scan_non_zero_bits_in_metadata_bits(
     bit_end: BitOffset,
     visit_bit: &mut impl FnMut(Address, BitOffset),
 ) {
-    let byte = MetadataCursor(meta_addr).load_u8();
+    let byte = MetadataCursor(meta_addr).load::<u8>();
     for bit in bit_start..bit_end {
         if byte & (1 << bit) != 0 {
             visit_bit(meta_addr, bit);

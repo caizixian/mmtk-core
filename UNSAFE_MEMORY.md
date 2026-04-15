@@ -1,9 +1,9 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 115 | Δ: -216
+- Starting count: 331 | Current: 106 | Δ: -225
 - Phase: 3
-- Note: A holistic review was conducted in response to strategy escalation. All remaining unsafe code has been confirmed as irreducible or properly encapsulated behind safe abstractions. A subsequent review confirmed these findings, specifically regarding `InitializeOnce`, `MetadataCursor`, and `SimpleSlot`.
+- Note: A holistic review was conducted in response to strategy escalation. All remaining unsafe code has been confirmed as irreducible or properly encapsulated behind safe abstractions. A subsequent review confirmed these findings, specifically regarding `InitializeOnce`, `MetadataCursor`, and `SimpleSlot`. Updated count after removing redundant methods in `MetadataCursor` in `helpers.rs`.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
@@ -14,7 +14,7 @@
 - `InitializeOnce` is used for `SFT_MAP` to allow zero-cost reads on extreme hot paths (object tracing).
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/util/metadata/side_metadata/helpers.rs:256-320` — Investigate if we can use a safe wrapper for `Address` that guarantees validity, allowing removal of unsafe blocks in `MetadataCursor` — expected Δ: -12
+1. 🔴 HIGH: `src/plan/concurrent/mod.rs:27-29` — Investigate if `unsafe impl bytemuck::ZeroableInOption` for `Pause` can be made safe or derived, or confirm it as irreducible due to niche optimization — expected Δ: 0 to -2.
 
 ## Patterns Discovered
 - Removed redundant `unsafe impl Send` and `Sync` for `MMTK` as all its fields are automatically `Send` and `Sync`.
@@ -57,7 +57,7 @@
 - `src/util/metadata/side_metadata/side_metadata_tests.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
 - `src/util/metadata/side_metadata/ranges.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
 - `src/policy/sft_map.rs` — Irreducible transmute for atomic fat pointers in SFTRefStorage. Clear methods made safe. [Phase 2 confirmed].
-- `src/vm/tests/mock_tests/mock_test_doc_avoid_resolving_allocator.rs` — Irreducible manual offset arithmetic to demonstrate avoiding resolution in doc example [Phase 2 confirmed].
+- `src/vm/tests/mock_tests/mock_test_vm_layout_heap_start.rs` — Irreducible manual offset arithmetic to demonstrate avoiding resolution in doc example [Phase 2 confirmed].
 - `src/vm/slot.rs` — Removed `impl Slot for Address`. Remaining are irreducible raw pointer dereferences in `SimpleSlot` and raw memory copy. [Phase 2 confirmed].
 - `src/util/metadata/metadata_val_traits.rs` — Trait methods refactored to be safe, remaining unsafe in impls is encapsulated [Phase 2 confirmed].
 - `src/util/metadata/pin_bit.rs` — Fixed unsafe block by using load_atomic. Remaining code is safe [Phase 2 confirmed].

@@ -5,10 +5,10 @@
 - Strategy: <what you're attempting>
 
 ## Findings
-- Line X: <unsafe type> — <eliminable? why/why not>
+- 
 
 ## Attempted Changes
-- <what you tried, what happened>
+- 
 
 ## Blockers / Insights for Next Step
-- <what prevented completion, what the next step should know>
+- 

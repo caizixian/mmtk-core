@@ -203,7 +203,7 @@ impl SideMetadataSpec {
                     // Get a mask that the bits we need to zero are set to zero, and the other bits are 1.
                     let mask: u8 =
                         u8::MAX.checked_shl(bit_end as u32).unwrap_or(0) | !(u8::MAX << bit_start);
-                    super::helpers::MetadataCursor(addr).fetch_and_u8(mask, Ordering::SeqCst);
+                    super::helpers::MetadataCursor(addr).fetch_and::<u8>(mask, Ordering::SeqCst);
                     false
                 }
             }
@@ -240,7 +240,7 @@ impl SideMetadataSpec {
                     // Get a mask that the bits we need to set are 1, and the other bits are 0.
                     let mask: u8 = !(u8::MAX.checked_shl(bit_end as u32).unwrap_or(0))
                         & (u8::MAX << bit_start);
-                    super::helpers::MetadataCursor(addr).fetch_or_u8(mask, Ordering::SeqCst);
+                    super::helpers::MetadataCursor(addr).fetch_or::<u8>(mask, Ordering::SeqCst);
                     false
                 }
             }
@@ -436,10 +436,10 @@ impl SideMetadataSpec {
                     // we are setting selected bits in one byte
                     let mask: u8 = !(u8::MAX.checked_shl(bit_end as u32).unwrap_or(0))
                         & (u8::MAX << bit_start); // Get a mask that the bits we need to set are 1, and the other bits are 0.
-                    let old_src = super::helpers::MetadataCursor(src).load_atomic_u8(Ordering::Relaxed);
-                    let old_dst = super::helpers::MetadataCursor(dst).load_atomic_u8(Ordering::Relaxed);
+                    let old_src = super::helpers::MetadataCursor(src).load_atomic::<u8>(Ordering::Relaxed);
+                    let old_dst = super::helpers::MetadataCursor(dst).load_atomic::<u8>(Ordering::Relaxed);
                     let new = (old_src & mask) | (old_dst & !mask);
-                    super::helpers::MetadataCursor(dst).store_atomic_u8(new, Ordering::Relaxed);
+                    super::helpers::MetadataCursor(dst).store_atomic::<u8>(new, Ordering::Relaxed);
                     false
                 }
             }
@@ -581,7 +581,7 @@ impl SideMetadataSpec {
                 if bits_num_log < 3 {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
-                    let byte_val = super::helpers::MetadataCursor(meta_addr).load_atomic_u8(order);
+                    let byte_val = super::helpers::MetadataCursor(meta_addr).load_atomic::<u8>(order);
                     FromPrimitive::from_u8((byte_val & mask) >> lshift).unwrap()
                 } else {
                     super::helpers::MetadataCursor(meta_addr).load_atomic::<T>(order)
@@ -720,7 +720,7 @@ impl SideMetadataSpec {
             || {
                 let meta_addr = address_to_meta_address(self, data_addr);
                 let aligned_meta_addr = meta_addr.align_down(BYTES_IN_ADDRESS);
-                super::helpers::MetadataCursor(aligned_meta_addr).load_usize()
+                super::helpers::MetadataCursor(aligned_meta_addr).load::<usize>()
             },
             |_| {},
         )
@@ -748,7 +748,7 @@ impl SideMetadataSpec {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
 
-                    let real_old_byte = super::helpers::MetadataCursor(meta_addr).load_atomic_u8(success_order);
+                    let real_old_byte = super::helpers::MetadataCursor(meta_addr).load_atomic::<u8>(success_order);
                     let expected_old_byte =
                         (real_old_byte & !mask) | ((old_metadata.to_u8().unwrap()) << lshift);
                     let expected_new_byte =
@@ -1049,7 +1049,7 @@ impl SideMetadataSpec {
             let val = if self.log_num_of_bits < 3 {
                 let lshift = meta_byte_lshift(self, cursor);
                 let mask = meta_byte_mask(self) << lshift;
-                let byte_val = super::helpers::MetadataCursor(meta_addr).load_atomic_u8(Ordering::Relaxed);
+                let byte_val = super::helpers::MetadataCursor(meta_addr).load_atomic::<u8>(Ordering::Relaxed);
                 num_traits::FromPrimitive::from_u8((byte_val & mask) >> lshift).unwrap()
             } else {
                 super::helpers::MetadataCursor(meta_addr).load_atomic::<T>(Ordering::Relaxed)
@@ -1079,7 +1079,7 @@ impl SideMetadataSpec {
         let val = if self.log_num_of_bits < 3 {
             let lshift = meta_byte_lshift(self, data_addr);
             let mask = meta_byte_mask(self) << lshift;
-            let byte_val = super::helpers::MetadataCursor(meta_addr).load_atomic_u8(Ordering::Relaxed);
+            let byte_val = super::helpers::MetadataCursor(meta_addr).load_atomic::<u8>(Ordering::Relaxed);
             num_traits::FromPrimitive::from_u8((byte_val & mask) >> lshift).unwrap()
         } else {
             super::helpers::MetadataCursor(meta_addr).load_atomic::<T>(Ordering::Relaxed)
