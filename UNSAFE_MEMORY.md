@@ -30,6 +30,7 @@
 - Note: Antigravity (this step) re-verified `src/vm/slot.rs`, `src/util/metadata/side_metadata/helpers.rs`, and checked `malloc_usable_size` usage. Confirmed all remaining 77 unsafe locations are irreducible or properly encapsulated.
 - Note: Antigravity (prior step) re-verified `src/util/alloc/allocators.rs`, `docs/dummyvm/src/api.rs`, `src/util/rust_util/mod.rs`, `src/policy/markcompactspace.rs`, and `src/util/address.rs`. Confirmed all remaining 77 unsafe locations are irreducible or properly encapsulated and documentation is complete.
 - Note: Antigravity (this step) holistically reviewed all remaining 77 unsafe locations under Strategy Escalation and confirmed they are irreducible or properly encapsulated. No new abstractions proposed.
+- Note: Antigravity (this step) replaced raw pointers with `Box` in `docs/dummyvm/src/api.rs` to eliminate 3 unsafe blocks.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.

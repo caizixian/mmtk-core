@@ -51,10 +51,7 @@ pub extern "C" fn mmtk_set_fixed_heap_size(builder: Option<&mut MMTKBuilder>, he
 }
 
 #[no_mangle]
-pub fn mmtk_init(builder: *mut MMTKBuilder) {
-    // SAFETY: The caller must ensure that `builder` is a valid pointer to an `MMTKBuilder`
-    // that was created by `Box::into_raw` (e.g. by `mmtk_create_builder`).
-    let builder = unsafe { Box::from_raw(builder) };
+pub fn mmtk_init(builder: Box<MMTKBuilder>) {
 
     // Create MMTK instance.
     let mmtk = memory_manager::mmtk_init::<DummyVM>(&builder);
@@ -71,14 +68,11 @@ pub extern "C" fn mmtk_bind_mutator(tls: VMMutatorThread) -> *mut Mutator<DummyV
 }
 
 #[no_mangle]
-pub extern "C" fn mmtk_destroy_mutator(mutator: *mut Mutator<DummyVM>) {
+pub extern "C" fn mmtk_destroy_mutator(mut mutator: Box<Mutator<DummyVM>>) {
     // notify mmtk-core about destroyed mutator
     // SAFETY: The caller must ensure that `mutator` is a valid pointer to a `Mutator`
     // that was created by `Box::into_raw` (e.g. by `mmtk_bind_mutator`).
-    unsafe {
-        memory_manager::destroy_mutator(&mut *mutator);
-        let _ = Box::from_raw(mutator);
-    }
+    memory_manager::destroy_mutator(&mut *mutator);
 }
 
 #[no_mangle]
@@ -127,10 +121,9 @@ pub extern "C" fn mmtk_post_alloc(
 }
 
 #[no_mangle]
-pub extern "C" fn mmtk_start_worker(tls: VMWorkerThread, worker: *mut GCWorker<DummyVM>) {
+pub extern "C" fn mmtk_start_worker(tls: VMWorkerThread, worker: Box<GCWorker<DummyVM>>) {
     // SAFETY: The caller must ensure that `worker` is a valid pointer to a `GCWorker`
     // that was created by `Box::into_raw`.
-    let worker = unsafe { Box::from_raw(worker) };
     memory_manager::start_worker::<DummyVM>(mmtk(), tls, worker)
 }
 
@@ -292,8 +285,7 @@ mod tests {
         assert!(success);
 
         // Init MMTk
-        let builder_ptr = Box::into_raw(Box::new(builder));
-        mmtk_init(builder_ptr);
+        mmtk_init(Box::new(builder));
 
         // Create an MMTk mutator
         let tls = VMMutatorThread(VMThread(OpaquePointer::UNINITIALIZED)); // FIXME: Use the actual thread pointer or identifier
