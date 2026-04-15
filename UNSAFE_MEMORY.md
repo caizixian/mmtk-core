@@ -14,7 +14,7 @@
 - `InitializeOnce` is used for `SFT_MAP` to allow zero-cost reads on extreme hot paths (object tracing).
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-- All actionable items completed. Remaining unsafe code is irreducible or encapsulated.
+1. 🟡 MED: `src/util/memory.rs` — Implement `MmapRegion` abstraction — expected Δ: TBD
 
 ## Patterns Discovered
 - **Safe Abstraction**: Used `SFTHeader` wrapper to avoid `transmute` on fat pointers in `SFTRefStorage`, removing 3 unsafe blocks (and adding 1 unsafe impl Sync).
@@ -135,4 +135,4 @@
 - Target files: `src/util/memory.rs`, `src/util/heap/layout/mmapper/csm/mod.rs`
 - Expected Δ: TBD
 - Design sketch: A type that owns a memory mapping and guarantees safety for reads and writes within its bounds.
-- Status: proposed
+- Status: in-progress

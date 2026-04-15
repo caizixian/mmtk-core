@@ -154,6 +154,49 @@ impl std::fmt::Display for MmapAnnotation<'_> {
     }
 }
 
+/// A region of mapped memory.
+/// This type guarantees safety for reads and writes within its bounds.
+pub struct MmapRegion {
+    start: Address,
+    size: usize,
+}
+
+impl MmapRegion {
+    /// Create a new MmapRegion from raw parts.
+    /// # Safety
+    /// The caller must ensure that the memory range is valid, mapped, and owned by this object.
+    pub unsafe fn from_raw_parts(start: Address, size: usize) -> Self {
+        Self { start, size }
+    }
+
+    /// Get the start address of the region.
+    pub fn start(&self) -> Address {
+        self.start
+    }
+
+    /// Get the size of the region.
+    pub fn size(&self) -> usize {
+        self.size
+    }
+
+    /// Get the region as a slice.
+    pub fn as_slice(&self) -> &[u8] {
+        // SAFETY: The region is guaranteed to be valid and mapped.
+        unsafe { std::slice::from_raw_parts(self.start.to_ptr(), self.size) }
+    }
+
+    /// Get the region as a mutable slice.
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        // SAFETY: The region is guaranteed to be valid and mapped.
+        unsafe { std::slice::from_raw_parts_mut(self.start.to_mut_ptr(), self.size) }
+    }
+
+    /// Zero the memory in the region.
+    pub fn zero(&mut self) {
+        self.as_mut_slice().fill(0);
+    }
+}
+
 /// Check the result from an mmap function in this module.
 /// Return true if the mmap has failed due to an existing conflicting mapping.
 pub(crate) fn result_is_mapped(result: Result<()>) -> bool {
@@ -192,15 +235,14 @@ pub unsafe fn dzmmap(
     size: usize,
     strategy: MmapStrategy,
     anno: &MmapAnnotation,
-) -> Result<()> {
+) -> Result<MmapRegion> {
     let flags = libc::MAP_ANON | libc::MAP_PRIVATE | libc::MAP_FIXED;
-    let ret = mmap_fixed(start, size, flags, strategy, anno);
+    mmap_fixed(start, size, flags, strategy, anno)?;
     // We do not need to explicitly zero for Linux (memory is guaranteed to be zeroed)
     #[cfg(not(target_os = "linux"))]
-    if ret.is_ok() {
-        zero(start, size)
-    }
-    ret
+    zero(start, size);
+    
+    Ok(unsafe { MmapRegion::from_raw_parts(start, size) })
 }
 /// Demand-zero mmap (no replace):
 /// This function mmaps the memory and guarantees to zero all mapped memory.
@@ -211,15 +253,14 @@ pub fn dzmmap_noreplace(
     size: usize,
     strategy: MmapStrategy,
     anno: &MmapAnnotation,
-) -> Result<()> {
+) -> Result<MmapRegion> {
     let flags = MMAP_FLAGS;
-    let ret = mmap_fixed(start, size, flags, strategy, anno);
+    mmap_fixed(start, size, flags, strategy, anno)?;
     // We do not need to explicitly zero for Linux (memory is guaranteed to be zeroed)
     #[cfg(not(target_os = "linux"))]
-    if ret.is_ok() {
-        zero(start, size)
-    }
-    ret
+    zero(start, size);
+    
+    Ok(unsafe { MmapRegion::from_raw_parts(start, size) })
 }
 
 /// mmap with no swap space reserve:
