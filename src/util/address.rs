@@ -392,76 +392,66 @@ mod tests {
 
     #[test]
     fn align_up() {
-        unsafe {
-            assert_eq!(
-                Address::from_usize(0x10).align_up(0x10),
-                Address::from_usize(0x10)
-            );
-            assert_eq!(
-                Address::from_usize(0x11).align_up(0x10),
-                Address::from_usize(0x20)
-            );
-            assert_eq!(
-                Address::from_usize(0x20).align_up(0x10),
-                Address::from_usize(0x20)
-            );
-        }
+        assert_eq!(
+            Address::from_ptr(0x10 as *const ()).align_up(0x10),
+            Address::from_ptr(0x10 as *const ())
+        );
+        assert_eq!(
+            Address::from_ptr(0x11 as *const ()).align_up(0x10),
+            Address::from_ptr(0x20 as *const ())
+        );
+        assert_eq!(
+            Address::from_ptr(0x20 as *const ()).align_up(0x10),
+            Address::from_ptr(0x20 as *const ())
+        );
     }
 
     #[test]
     fn align_down() {
-        unsafe {
-            assert_eq!(
-                Address::from_usize(0x10).align_down(0x10),
-                Address::from_usize(0x10)
-            );
-            assert_eq!(
-                Address::from_usize(0x11).align_down(0x10),
-                Address::from_usize(0x10)
-            );
-            assert_eq!(
-                Address::from_usize(0x20).align_down(0x10),
-                Address::from_usize(0x20)
-            );
-        }
+        assert_eq!(
+            Address::from_ptr(0x10 as *const ()).align_down(0x10),
+            Address::from_ptr(0x10 as *const ())
+        );
+        assert_eq!(
+            Address::from_ptr(0x11 as *const ()).align_down(0x10),
+            Address::from_ptr(0x10 as *const ())
+        );
+        assert_eq!(
+            Address::from_ptr(0x20 as *const ()).align_down(0x10),
+            Address::from_ptr(0x20 as *const ())
+        );
     }
 
     #[test]
     fn is_aligned_to() {
-        unsafe {
-            assert!(Address::from_usize(0x10).is_aligned_to(0x10));
-            assert!(!Address::from_usize(0x11).is_aligned_to(0x10));
-            assert!(Address::from_usize(0x10).is_aligned_to(0x8));
-            assert!(!Address::from_usize(0x10).is_aligned_to(0x20));
-        }
+        assert!(Address::from_ptr(0x10 as *const ()).is_aligned_to(0x10));
+        assert!(!Address::from_ptr(0x11 as *const ()).is_aligned_to(0x10));
+        assert!(Address::from_ptr(0x10 as *const ()).is_aligned_to(0x8));
+        assert!(!Address::from_ptr(0x10 as *const ()).is_aligned_to(0x20));
     }
 
     #[test]
     fn bit_and() {
-        unsafe {
-            assert_eq!(
-                Address::from_usize(0b1111_1111_1100usize) & 0b1010u8,
-                0b1000u8
-            );
-            assert_eq!(
-                Address::from_usize(0b1111_1111_1100usize) & 0b1000_0000_1010usize,
-                0b1000_0000_1000usize
-            );
-        }
+        assert_eq!(
+            Address::from_ptr(0b1111_1111_1100usize as *const ()) & 0b1010u8,
+            0b1000u8
+        );
+        assert_eq!(
+            Address::from_ptr(0b1111_1111_1100usize as *const ()) & 0b1000_0000_1010usize,
+            0b1000_0000_1000usize
+        );
     }
 
     #[test]
     fn bit_or() {
-        unsafe {
-            assert_eq!(
-                Address::from_usize(0b1111_1111_1100usize) | 0b1010u8,
-                0b1111_1111_1110usize
-            );
-            assert_eq!(
-                Address::from_usize(0b1111_1111_1100usize) | 0b1000_0000_1010usize,
-                0b1111_1111_1110usize
-            );
-        }
+        assert_eq!(
+            Address::from_ptr(0b1111_1111_1100usize as *const ()) | 0b1010u8,
+            0b1111_1111_1110usize
+        );
+        assert_eq!(
+            Address::from_ptr(0b1111_1111_1100usize as *const ()) | 0b1000_0000_1010usize,
+            0b1111_1111_1110usize
+        );
     }
 }
 

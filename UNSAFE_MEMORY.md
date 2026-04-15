@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 530 | Δ: -5
+- Starting count: 535 | Current: 525 | Δ: -10
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,8 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs` — Continue analyzing remaining unsafe blocks.
-2. 🟡 MED: `src/util/metadata/metadata_val_traits.rs` — Irreducible trait methods, centralize unsafe in callers.
+1. 🔴 HIGH: `src/util/conversions.rs:100-120` — Replace `unsafe { Address::from_usize(...) }` with `Address::from_ptr` in tests.
+2. 🟡 MED: `src/util/metadata/side_metadata/global.rs` — Continue analyzing remaining unsafe blocks.
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
