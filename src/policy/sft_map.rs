@@ -36,7 +36,7 @@ pub trait SFTMap {
     /// # Safety
     /// The address must have a valid SFT entry in the map. Usually we know this if the address is from an object reference, or from our space address range.
     /// Otherwise, the caller should check with `has_sft_entry()` before calling this method.
-    unsafe fn update(&self, space: SFTRawPointer, start: Address, bytes: usize);
+    fn update(&self, space: &(dyn SFT + Sync + 'static), start: Address, bytes: usize);
 
     /// Notify the SFT map for space creation. `DenseChunkMap` needs to create an entry for the space.
     fn notify_space_creation(&mut self, _space: SFTRawPointer) {}
@@ -48,9 +48,9 @@ pub trait SFTMap {
     /// # Safety
     /// The address must have a valid SFT entry in the map. Usually we know this if the address is from an object reference, or from our space address range.
     /// Otherwise, the caller should check with `has_sft_entry()` before calling this method.
-    unsafe fn eager_initialize(
+    fn eager_initialize(
         &mut self,
-        space: *const (dyn SFT + Sync + 'static),
+        space: &(dyn SFT + Sync + 'static),
         start: Address,
         bytes: usize,
     ) {
@@ -205,9 +205,9 @@ mod space_map {
             cell.load()
         }
 
-        unsafe fn update(
+        fn update(
             &self,
-            space: *const (dyn SFT + Sync + 'static),
+            space: &(dyn SFT + Sync + 'static),
             start: Address,
             bytes: usize,
         ) {
@@ -384,7 +384,7 @@ mod dense_chunk_map {
             self.index_map.insert(space_name, index);
         }
 
-        unsafe fn eager_initialize(&mut self, space: SFTRawPointer, start: Address, bytes: usize) {
+        fn eager_initialize(&mut self, space: &(dyn SFT + Sync + 'static), start: Address, bytes: usize) {
             let context = SideMetadataContext {
                 global: vec![SFT_DENSE_CHUNK_MAP_INDEX],
                 local: vec![],
@@ -398,13 +398,13 @@ mod dense_chunk_map {
             self.update(space, start, bytes);
         }
 
-        unsafe fn update(
+        fn update(
             &self,
-            space: *const (dyn SFT + Sync + 'static),
+            space: &(dyn SFT + Sync + 'static),
             start: Address,
             bytes: usize,
         ) {
-            let index: u8 = *self.index_map.get((*space).name()).unwrap() as u8;
+            let index: u8 = *self.index_map.get(space.name()).unwrap() as u8;
 
             // Iterate through the chunks and record the space index in the side metadata.
             let first_chunk = conversions::chunk_align_down(start);
@@ -492,19 +492,19 @@ mod sparse_chunk_map {
         /// Update SFT map for the given address range.
         /// It should be used when we acquire new memory and use it as part of a space. For example, the cases include:
         /// 1. when a space grows, 2. when initializing a contiguous space, 3. when ensure_mapped() is called on a space.
-        unsafe fn update(
+        fn update(
             &self,
-            space: *const (dyn SFT + Sync + 'static),
+            space: &(dyn SFT + Sync + 'static),
             start: Address,
             bytes: usize,
         ) {
             if DEBUG_SFT {
-                self.log_update(&*space, start, bytes);
+                self.log_update(space, start, bytes);
             }
             let first = start.chunk_index();
             let last = conversions::chunk_align_up(start + bytes).chunk_index();
             for chunk in first..last {
-                self.set(chunk, &*space);
+                self.set(chunk, space);
             }
             if DEBUG_SFT {
                 self.trace_sft_map();

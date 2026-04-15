@@ -128,7 +128,7 @@ impl<VM: VMBinding> Space<VM> for LockFreeImmortalSpace<VM> {
 
     fn initialize_sft(&self, sft_map: &mut dyn crate::policy::sft_map::SFTMap) {
         // SAFETY: The address range `(self.start, self.start + self.total_bytes)` was reserved and mapped by this space during creation, so it is guaranteed to be a valid SFT entry range.
-        unsafe { sft_map.eager_initialize(self.as_sft(), self.start, self.total_bytes) };
+        sft_map.eager_initialize(self.as_sft(), self.start, self.total_bytes);
     }
 
     fn estimate_side_meta_pages(&self, data_pages: usize) -> usize {

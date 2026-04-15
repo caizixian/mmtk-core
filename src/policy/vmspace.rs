@@ -128,9 +128,7 @@ impl<VM: VMBinding> Space<VM> for VMSpace<VM> {
             // Set SFT
             assert!(sft_map.has_sft_entry(start), "The VM space start (aligned to {}) does not have a valid SFT entry. Possibly the address range is not in the address range we use.", start);
             // SAFETY: The regions are obtained from external pages which are chunk-aligned and have their metadata mapped in `set_vm_region_inner`, so it is guaranteed to be a valid SFT entry range.
-            unsafe {
-                sft_map.eager_initialize(self.as_sft(), start, size);
-            }
+            sft_map.eager_initialize(self.as_sft(), start, size);
         }
     }
 
@@ -254,9 +252,7 @@ impl<VM: VMBinding> VMSpace<VM> {
         // Set SFT if we should
         if set_sft {
             assert!(SFT_MAP.has_sft_entry(chunk_start), "The VM space start (aligned to {}) does not have a valid SFT entry. Possibly the address range is not in the address range we use.", chunk_start);
-            unsafe {
-                SFT_MAP.update(self.as_sft(), chunk_start, chunk_size);
-            }
+            SFT_MAP.update(self.as_sft(), chunk_start, chunk_size);
         }
 
         self.pr.add_new_external_pages(ExternalPages {

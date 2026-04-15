@@ -389,7 +389,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
                 self.map_metadata_and_update_bound(address, actual_size);
                 // Update SFT
                 assert!(crate::mmtk::SFT_MAP.has_sft_entry(address)); // make sure the address is okay with our SFT map
-                unsafe { crate::mmtk::SFT_MAP.update(self, address, actual_size) };
+                crate::mmtk::SFT_MAP.update(self, address, actual_size);
             }
 
             // Set chunk marks for the current object

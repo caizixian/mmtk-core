@@ -368,7 +368,7 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         }
 
         if new_chunk {
-            unsafe { SFT_MAP.update(self.as_sft(), start, bytes) };
+            SFT_MAP.update(self.as_sft(), start, bytes);
         }
     }
 
@@ -748,7 +748,7 @@ impl<VM: VMBinding> CommonSpace<VM> {
         // FIXME: eagerly initializing SFT is not a good idea.
         if self.contiguous {
             // SAFETY: The space is contiguous and the range `(self.start, self.start + self.extent)` was reserved and mapped during space creation, so it is guaranteed to be a valid SFT entry range.
-            unsafe { sft_map.eager_initialize(sft, self.start, self.extent) };
+            sft_map.eager_initialize(sft, self.start, self.extent);
         }
     }
 
