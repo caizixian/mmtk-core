@@ -30,9 +30,13 @@ pub extern "C" fn mmtk_set_option_from_string(
 ) -> bool {
     // SAFETY: The caller must ensure that `builder` is a valid pointer to an `MMTKBuilder`,
     // and `name` and `value` are valid null-terminated C strings.
-    let builder = unsafe { &mut *builder };
-    let name_str: &CStr = unsafe { CStr::from_ptr(name) };
-    let value_str: &CStr = unsafe { CStr::from_ptr(value) };
+    let (builder, name_str, value_str) = unsafe {
+        (
+            &mut *builder,
+            CStr::from_ptr(name),
+            CStr::from_ptr(value),
+        )
+    };
     builder.set_option(name_str.to_str().unwrap(), value_str.to_str().unwrap())
 }
 
@@ -71,12 +75,12 @@ pub extern "C" fn mmtk_bind_mutator(tls: VMMutatorThread) -> *mut Mutator<DummyV
 #[no_mangle]
 pub extern "C" fn mmtk_destroy_mutator(mutator: *mut Mutator<DummyVM>) {
     // notify mmtk-core about destroyed mutator
-    // SAFETY: The caller must ensure that `mutator` is a valid pointer to a `Mutator`.
-    memory_manager::destroy_mutator(unsafe { &mut *mutator });
-    // turn the ptr back to a box, and let Rust properly reclaim it
-    // SAFETY: The caller must ensure that `mutator` was created by `Box::into_raw`
-    // (e.g. by `mmtk_bind_mutator`).
-    let _ = unsafe { Box::from_raw(mutator) };
+    // SAFETY: The caller must ensure that `mutator` is a valid pointer to a `Mutator`
+    // that was created by `Box::into_raw` (e.g. by `mmtk_bind_mutator`).
+    unsafe {
+        memory_manager::destroy_mutator(&mut *mutator);
+        let _ = Box::from_raw(mutator);
+    }
 }
 
 #[no_mangle]

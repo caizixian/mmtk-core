@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 121 | Δ: -210
+- Starting count: 331 | Current: 116 | Δ: -215
 - Phase: 3
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -11,7 +11,8 @@
 - `SimpleSlot` uses `Address` instead of raw pointers, avoiding `unsafe impl Send`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: `src/util/rust_util/atomic_box.rs:40-95` — Review `OnceOptionBox` for potential safe alternatives if space overhead is not critical — expected Δ: 0
+1. 🟡 MED: Check other files in 'NOT to Revisit' for adjacent unsafe blocks that can be combined — expected Δ: 5
+2. 🟢 LOW: `src/util/rust_util/atomic_box.rs:40-95` — Review `OnceOptionBox` for potential safe alternatives if space overhead is not critical — expected Δ: 0
 
 
 ## Patterns Discovered

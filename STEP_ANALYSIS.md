@@ -1,14 +1,15 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: src/util/test_util/mock_vm.rs
-- Strategy: Analyze unsafe in mock framework
+- File: <file being analyzed>
+- Strategy: <what you're attempting>
 
 ## Findings
-- Line 47: `std::mem::transmute` — Irreducible. Used in `lifetime!` macro to remove lifetimes from references to pass them to `MockMethod` which requires `'static` references. This is a design limitation of the current mock framework for testing.
+- Line X: <unsafe type> — <eliminable? why/why not>
+- Line Y: <unsafe type> — <eliminable? why/why not>
 
 ## Attempted Changes
-- None. Determined to be irreducible.
+- <what you tried, what happened>
 
 ## Blockers / Insights for Next Step
-- Added the file to "Files NOT to Revisit" in `UNSAFE_MEMORY.md`.
+- <what prevented completion, what the next step should know>
