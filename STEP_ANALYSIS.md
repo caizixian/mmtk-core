@@ -1,15 +1,17 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: <file being analyzed>
-- Strategy: <what you're attempting>
+- File: `src/util/rust_util/atomic_box.rs`
+- Strategy: Replace manual `unsafe impl Zeroable` with `#[derive(Zeroable)]`.
 
 ## Findings
-- Line X: <unsafe type> — <eliminable? why/why not>
-- Line Y: <unsafe type> — <eliminable? why/why not>
+- Attempted to use `#[derive(bytemuck::Zeroable)]` on `OnceOptionBox`.
+- `cargo check` failed because `AtomicPtr` does not implement `Zeroable` in the version of `bytemuck` used.
+- Reverted the changes.
 
 ## Attempted Changes
-- <what you tried, what happened>
+- Reverted `src/util/rust_util/atomic_box.rs` to its original state.
 
 ## Blockers / Insights for Next Step
-- <what prevented completion, what the next step should know>
+- Confirmed that `OnceOptionBox` cannot use derive for `Zeroable` due to `AtomicPtr` lacking the trait implementation.
+- This unsafe impl is irreducible for now.

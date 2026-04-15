@@ -11,7 +11,7 @@
 - `SimpleSlot` uses `Address` instead of raw pointers, avoiding `unsafe impl Send`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: `src/util/rust_util/atomic_box.rs:40-95` — Review `OnceOptionBox` for potential safe alternatives if space overhead is not critical — expected Δ: 0
+- (No actionable items left. All remaining unsafe code appears to be irreducible or requires large architectural changes not yet planned.)
 
 
 ## Patterns Discovered
@@ -63,7 +63,7 @@
 - `src/util/malloc/malloc_ms_util.rs` — Irreducible FFI calls to malloc/free/calloc. Safety invariants documented in Phase 3. [Phase 2 confirmed].
 - `src/util/metadata/header_metadata.rs` — Unsafe functions `load`/`store` are non-atomic/racy by design; unsafe blocks in tests call them [Phase 2 confirmed].
 - `src/util/metadata/global.rs` — `load` and `store` are non-atomic and not thread-safe by design [Phase 2 confirmed].
-- `src/util/rust_util/atomic_box.rs` — Lock-free `OnceOptionBox` requires raw pointer manipulation. Re-evaluated: confirmed irreducible to maintain minimal space overhead in `Vec<OnceOptionBox>`. [Phase 2 confirmed].
+- `src/util/rust_util/atomic_box.rs` — Lock-free `OnceOptionBox` requires raw pointer manipulation. Attempted to use derive(Zeroable) in Phase 3, but AtomicPtr is not Zeroable in bytemuck 1.14.0. Confirmed irreducible to maintain minimal space overhead in `Vec<OnceOptionBox>`. [Phase 3 confirmed].
 - `src/policy/marksweepspace/malloc_ms/global.rs` — Irreducible lifetime extension for `GCWork` packets [Phase 2 confirmed].
 - `src/util/malloc/mod.rs` — Irreducible FFI calls to malloc/free [Phase 2 confirmed].
 - `src/plan/global.rs` — Irreducible lifetime extension for `GCWork` packets [Phase 2 confirmed].
