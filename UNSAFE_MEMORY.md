@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 511 (Estimated) | Δ: -30
+- Starting count: 535 | Current: 530 | Δ: -5
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -28,6 +28,7 @@
 - `src/util/malloc/malloc_ms_util.rs` — mostly FFI calls to `libc` (malloc, calloc, free, etc.). [Phase 2 confirmed]
 - `src/util/alloc/allocators.rs` — Layout constraints for VM bindings require `MaybeUninit` arrays with separate initialization flags. `assume_init_ref` and `assume_init_mut` are required and safe due to runtime checks, but must be marked unsafe by compiler. [Phase 2 confirmed]
 - `src/util/metadata/header_metadata.rs` — Production unsafe is irreducible (raw address access in `load`/`store`), tests refactored to use `Vec`. [Phase 2 confirmed]
+- `src/vm/tests/mock_tests/mock_test_slots.rs` — Remaining unsafe blocks are dereferencing raw pointers to simulate VM slots and `unsafe impl Send`. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - `SweepProof` for `malloc_ms` (Implemented).

@@ -416,7 +416,7 @@ pub fn find_last_non_zero_bit_in_metadata_bits(
     if !addr.is_mapped() {
         return FindMetaBitResult::UnmappedMetadata;
     }
-    let byte = unsafe { addr.load::<u8>() };
+    let byte = MetadataCursor(addr).load_u8();
     if let Some(bit) = find_last_non_zero_bit::<u8>(byte, start_bit, end_bit) {
         return FindMetaBitResult::Found { addr, bit };
     }

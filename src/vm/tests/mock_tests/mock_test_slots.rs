@@ -84,7 +84,7 @@ mod compressed_oop {
         fn load(&self) -> Option<ObjectReference> {
             let compressed = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
             let expanded = (compressed as usize) << 3;
-            ObjectReference::from_raw_address(unsafe { Address::from_usize(expanded) })
+            ObjectReference::from_raw_address(Address::from_ptr(expanded as *const u8))
         }
 
         fn store(&self, object: ObjectReference) {
@@ -104,7 +104,7 @@ mod compressed_oop {
         // So we make up addresses just for testing the bit operations of compressed OOP slots.
         let compressed1 = (COMPRESSABLE_ADDR1 >> 3) as u32;
         let objref1 =
-            ObjectReference::from_raw_address(unsafe { Address::from_usize(COMPRESSABLE_ADDR1) });
+            ObjectReference::from_raw_address(Address::from_ptr(COMPRESSABLE_ADDR1 as *const u8));
 
         let mut rust_slot: Atomic<u32> = Atomic::new(compressed1);
 
@@ -121,7 +121,7 @@ mod compressed_oop {
         let compressed1 = (COMPRESSABLE_ADDR1 >> 3) as u32;
         let compressed2 = (COMPRESSABLE_ADDR2 >> 3) as u32;
         let objref2 =
-            ObjectReference::from_raw_address(unsafe { Address::from_usize(COMPRESSABLE_ADDR2) })
+            ObjectReference::from_raw_address(Address::from_ptr(COMPRESSABLE_ADDR2 as *const u8))
                 .unwrap();
 
         let mut rust_slot: Atomic<u32> = Atomic::new(compressed1);
@@ -259,7 +259,7 @@ mod tagged_slot {
         fn load(&self) -> Option<ObjectReference> {
             let tagged = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
             let untagged = tagged & !Self::TAG_BITS_MASK;
-            ObjectReference::from_raw_address(unsafe { Address::from_usize(untagged) })
+            ObjectReference::from_raw_address(Address::from_ptr(untagged as *const u8))
         }
 
         fn store(&self, object: ObjectReference) {
