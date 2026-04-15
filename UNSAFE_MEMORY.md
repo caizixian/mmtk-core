@@ -22,6 +22,7 @@
 - Note: Re-verified fixtures.rs (leaked MMTK in tests) and markcompactspace.rs (forwarding pointer) and confirmed they are encapsulated/irreducible.
 - Note: Verified alignment in malloc_ms_util.rs and searched for other common unsafe patterns in src, confirming irreducibility of listed items.
 - Note: Verified slot_logger.rs and reference_processor.rs do not contain unsafe blocks or are clean.
+- Note: Re-verified address.rs, malloc_ms_util.rs, rust_util/mod.rs, slot.rs, api.rs, and fixtures.rs and confirmed they are irreducible or properly encapsulated.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
@@ -97,7 +98,7 @@
 - `src/mmtk.rs` — `ProofCell::get_ref` in `get_plan` is irreducible without threading proof tokens. Re-evaluated: confirmed irreducible to maintain zero-cost reads on hot allocation paths. [Phase 3 confirmed]
 - `src/policy/immix/line.rs` — All unsafe blocks removed after making SideMetadataSpec methods safe [Phase 2 confirmed].
 - `src/util/heap/chunk_map.rs` — All unsafe blocks removed after making SideMetadataSpec methods safe [Phase 2 confirmed].
-- `src/util/address.rs` — Irreducible primitive pointer operations (`load`, `store`, `as_ref`, etc.) [Phase 2 confirmed].
+- `src/util/address.rs` — Irreducible primitive pointer operations (`load`, `store`, `as_ref`, etc.) [Phase 3 confirmed].
 - `src/util/raw_memory_freelist.rs` — Remaining unsafe is FFI call to `munmap` in `Drop` [Phase 2 confirmed].
 - `src/policy/copyspace.rs` — Clean: 0 unsafe blocks after using safe wrappers for `mprotect`. [Phase 3 confirmed].
 - `src/util/alloc/allocators.rs` — Irreducible `MaybeUninit` usage for FFI layout compatibility. SAFETY comments added in Phase 3. [Phase 3 confirmed].
