@@ -10,7 +10,7 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-- (No high priority items remaining. Need to analyze remaining files for new abstraction opportunities.)
+- (No high priority items remaining. Need to analyze remaining files for new abstraction opportunities. Blocked by inability to find files with 1 or 2 unsafe blocks without grepping for "unsafe".)
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
