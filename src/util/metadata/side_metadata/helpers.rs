@@ -11,6 +11,7 @@ use crate::util::Address;
 use crate::util::metadata::metadata_val_traits::MetadataValue;
 use crate::MMAPPER;
 use std::io::Result;
+use atomic_traits::Atomic;
 
 /// Performs address translation in contiguous metadata spaces (e.g. global and policy-specific in 64-bits, and global in 32-bits)
 pub(super) fn address_to_contiguous_meta_address(
@@ -288,22 +289,22 @@ impl MetadataCursor {
 
     #[inline(always)]
     pub(crate) fn load<T: MetadataValue>(&self) -> T {
-        T::load(*self)
+        unsafe { self.0.load::<T>() }
     }
 
     #[inline(always)]
     pub(crate) fn load_atomic<T: MetadataValue>(&self, order: std::sync::atomic::Ordering) -> T {
-        T::load_atomic(*self, order)
+        unsafe { self.0.atomic_load::<T::Atomic>(order) }
     }
 
     #[inline(always)]
     pub(crate) fn store<T: MetadataValue>(&self, value: T) {
-        T::store(*self, value)
+        unsafe { self.0.store::<T>(value) }
     }
 
     #[inline(always)]
     pub(crate) fn store_atomic<T: MetadataValue>(&self, value: T, order: std::sync::atomic::Ordering) {
-        T::store_atomic(*self, value, order)
+        unsafe { self.0.atomic_store::<T::Atomic>(value, order) }
     }
 
     #[inline(always)]
@@ -324,7 +325,10 @@ impl MetadataCursor {
         success: std::sync::atomic::Ordering,
         failure: std::sync::atomic::Ordering,
     ) -> std::result::Result<T, T> {
-        T::compare_exchange(*self, current, new, success, failure)
+        unsafe {
+            self.0
+                .compare_exchange::<T::Atomic>(current, new, success, failure)
+        }
     }
 
     #[inline(always)]

@@ -3,6 +3,7 @@ use crate::util::metadata::side_metadata::helpers::MetadataCursor;
 use core::sync::atomic::*;
 use num_traits::{FromPrimitive, ToPrimitive};
 use num_traits::{Unsigned, WrappingAdd, WrappingSub, Zero};
+use atomic_traits::Atomic;
 
 /// Describes bits and log2 bits for the numbers.
 /// If num_traits has this, we do not need our own implementation: <https://github.com/rust-num/num-traits/issues/247>
@@ -78,6 +79,8 @@ pub trait MetadataValue:
     + std::fmt::Display
     + std::fmt::Debug
 {
+    type Atomic: Atomic<Type = Self>;
+
     /// Non atomic load
     fn load(cursor: MetadataCursor) -> Self;
 
@@ -119,20 +122,22 @@ pub trait MetadataValue:
 macro_rules! impl_metadata_value_trait {
     ($non_atomic: ty, $atomic: ty) => {
         impl MetadataValue for $non_atomic {
+            type Atomic = $atomic;
+
             fn load(cursor: MetadataCursor) -> Self {
-                unsafe { cursor.0.load::<$non_atomic>() }
+                cursor.load()
             }
 
             fn load_atomic(cursor: MetadataCursor, order: Ordering) -> Self {
-                unsafe { cursor.0.as_ref::<$atomic>().load(order) }
+                cursor.load_atomic(order)
             }
 
             fn store(cursor: MetadataCursor, value: Self) {
-                unsafe { cursor.0.store::<$non_atomic>(value) }
+                cursor.store(value)
             }
 
             fn store_atomic(cursor: MetadataCursor, value: Self, order: Ordering) {
-                unsafe { cursor.0.as_ref::<$atomic>().store(value, order) }
+                cursor.store_atomic(value, order)
             }
 
             fn compare_exchange(
@@ -142,12 +147,7 @@ macro_rules! impl_metadata_value_trait {
                 success: Ordering,
                 failure: Ordering,
             ) -> Result<Self, Self> {
-                unsafe {
-                    cursor
-                        .0
-                        .as_ref::<$atomic>()
-                        .compare_exchange(current, new, success, failure)
-                }
+                cursor.compare_exchange(current, new, success, failure)
             }
 
             fn fetch_add(cursor: MetadataCursor, value: Self, order: Ordering) -> Self {
