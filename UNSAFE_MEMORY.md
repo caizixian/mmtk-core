@@ -23,7 +23,7 @@
 - `InitializeOnce` was used for `SFT_MAP` to allow zero-cost reads on extreme hot paths (object tracing). Now replaced by `OnceLock` for safety.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: Task concluded. All remaining unsafe code has been verified and documented as irreducible or properly encapsulated.
+1. 🟡 MED: Investigate other files with unsafe not listed in the prompt's "Exact Unsafe Locations" to see if any are reducible or can benefit from safe abstractions.
 
 ## Patterns Discovered
 - **Safe Abstraction**: Used `SFTHeader` wrapper to avoid `transmute` on fat pointers in `SFTRefStorage`, removing 3 unsafe blocks (and adding 1 unsafe impl Sync).
