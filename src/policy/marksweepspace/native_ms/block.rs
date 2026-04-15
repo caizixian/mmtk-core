@@ -120,11 +120,9 @@ impl Block {
 
     #[cfg(feature = "malloc_native_mimalloc")]
     pub fn load_thread_free_list(&self) -> Address {
-        unsafe {
-            Address::from_usize(
-                Block::THREAD_FREE_LIST_TABLE.load_atomic::<usize>(self.start(), Ordering::SeqCst),
-            )
-        }
+        Address::from_ptr(
+            Block::THREAD_FREE_LIST_TABLE.load_atomic::<usize>(self.start(), Ordering::SeqCst) as *const ()
+        )
     }
 
     #[cfg(feature = "malloc_native_mimalloc")]
