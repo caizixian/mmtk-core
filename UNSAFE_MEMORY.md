@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 235 | Δ: -96
+- Starting count: 331 | Current: 228 | Δ: -103
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,8 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/heap/layout/map32.rs:67` — Investigate if `SFT_MAP.clear` can be made safe or if the unsafe block can be encapsulated. — expected Δ: 1
-2. 🟡 MED: `src/policy/marksweepspace/native_ms/block.rs:252` — Investigate if `Block::load_block_list` can return a safe reference or if the unsafe dereference in `attempt_release` can be encapsulated. — expected Δ: 1
+1. 🔴 HIGH: `src/policy/marksweepspace/native_ms/block.rs:252` — Investigate if `Block::load_block_list` can return a safe reference or if the unsafe dereference in `attempt_release` can be encapsulated. — expected Δ: 1
+2. 🟡 MED: `src/util/heap/layout/map32.rs:123` — Investigate if `allocate_contiguous_chunks` and `free_contiguous_chunks` in `VMMap` trait can be made safe. — expected Δ: 2
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.

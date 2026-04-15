@@ -63,6 +63,13 @@ pub trait SFTMap {
     /// The address must have a valid SFT entry in the map. Usually we know this if the address is from an object reference, or from our space address range.
     /// Otherwise, the caller should check with `has_sft_entry()` before calling this method.
     unsafe fn clear(&self, address: Address);
+
+    /// Clear SFT for the address safely. Panics if the address does not have a valid SFT entry.
+    fn clear_safe(&self, address: Address) {
+        assert!(self.has_sft_entry(address), "Attempted to clear SFT for an address without a valid entry: {}", address);
+        // SAFETY: We just checked that the address has a valid SFT entry.
+        unsafe { self.clear(address); }
+    }
 }
 
 pub(crate) fn create_sft_map() -> Box<dyn SFTMap + Sync> {
