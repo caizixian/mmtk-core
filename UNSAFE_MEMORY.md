@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 351 | Δ: -184
+- Starting count: 535 | Current: 349 | Δ: -186
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/test_util/fixtures.rs:156` — Use shared reference in `MMTKFixture` to remove unsafe in `get_mmtk` — expected Δ: -1
+1. 🔴 HIGH: `src/mmtk.rs:436` — Use `ExclusivePlanAccessProof` to remove unsafe in plan access (requires adding `get_ref_with_proof` or similar) — expected Δ: -1
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -64,6 +64,7 @@
 - `src/util/alloc/allocator.rs` — Irreducible `unsafe impl Sync` for `AllocationOptionsHolder` and `ptr::write_bytes` for alignment gap filling. [Phase 2 confirmed]
 - `src/util/test_util/mock_vm.rs` — Irreducible `transmute` in `lifetime!` macro to remove lifetimes in mock VM for testing. Unsafe impl Send/Sync removed by adding bounds to MockAny. [Phase 2 confirmed]
 - `src/util/heap/layout/vm_layout.rs` — All unsafe blocks removed by replacing static mut with OnceLock. [Phase 2 confirmed]
+- `src/util/test_util/fixtures.rs` — Remaining unsafe in `get_mmtk_mut` and `Drop` is required due to `Box::leak` and external API constraints. `unsafe impl Send` removed. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - `SweepProof` for `malloc_ms` (Implemented).
