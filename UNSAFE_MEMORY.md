@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 472 | Δ: -63
+- Starting count: 535 | Current: 470 | Δ: -65
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,8 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/scheduler/gc_work.rs:59` — investigate plan mutation in Prepare/Release — expected Δ: -2
-2. 🟡 MED: `src/util/memory.rs:173` — investigate memory mapping unsafe blocks — expected Δ: -0 (likely irreducible, but should confirm)
+1. 🔴 HIGH: `src/util/memory.rs:173` — investigate memory mapping unsafe blocks — expected Δ: -0 (likely irreducible, but should confirm)
+2. 🟡 MED: `src/util/metadata/helpers.rs:255` — investigate `MetadataCursor` loads/stores — expected Δ: -0 (likely irreducible, but should confirm)
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -25,6 +25,7 @@
 - Use `load_atomic`/`store_atomic` with `Relaxed` ordering for full-byte metadata in non-atomic contexts (guaranteed by `SweepProof`) to eliminate unsafe blocks without performance penalty.
 - Removing `unsafe` from function signatures when the body contains no unsafe operations and preconditions are enforced by types (e.g., `MutexGuard` or `&mut` references).
 - Replace `*mut c_void` with `usize` in opaque pointer types to eliminate `unsafe impl Send` and `Sync`.
+- Use `std::sync::OnceLock` instead of `MaybeUninit` for single-assignment fields in shared structures to eliminate unsafe initialization and access (e.g., in `GCTrigger`).
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — remaining unsafe blocks are `assume_init_mut()` which are likely required for performance to avoid `Option` overhead in GC fast path.

@@ -10,7 +10,7 @@ use crate::util::options::{GCTriggerSelector, Options, DEFAULT_MAX_NURSERY, DEFA
 use crate::vm::Collection;
 use crate::vm::VMBinding;
 use crate::MMTK;
-use std::mem::MaybeUninit;
+
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
 
@@ -21,7 +21,7 @@ use std::sync::Arc;
 pub struct GCTrigger<VM: VMBinding> {
     /// The current plan. This is uninitialized when we create it, and later initialized
     /// once we have a fixed address for the plan.
-    plan: MaybeUninit<&'static dyn Plan<VM = VM>>,
+    plan: std::sync::OnceLock<&'static dyn Plan<VM = VM>>,
     /// The triggering policy.
     pub policy: Box<dyn GCTriggerPolicy<VM>>,
     /// Set by mutators to trigger GC.  It is atomic so that mutators can check if GC has already
@@ -39,7 +39,7 @@ impl<VM: VMBinding> GCTrigger<VM> {
         state: Arc<GlobalState>,
     ) -> Self {
         GCTrigger {
-            plan: MaybeUninit::uninit(),
+            plan: std::sync::OnceLock::new(),
             policy: match *options.gc_trigger {
                 GCTriggerSelector::FixedHeapSize(size) => Box::new(FixedHeapSizeTrigger {
                     total_pages: conversions::bytes_to_pages_up(size),
@@ -69,12 +69,12 @@ impl<VM: VMBinding> GCTrigger<VM> {
     }
 
     /// Set the plan. This is called in `create_plan()` after we created a boxed plan.
-    pub fn set_plan(&mut self, plan: &'static dyn Plan<VM = VM>) {
-        self.plan.write(plan);
+    pub fn set_plan(&self, plan: &'static dyn Plan<VM = VM>) {
+        self.plan.set(plan).ok().expect("Plan already set");
     }
 
     fn plan(&self) -> &dyn Plan<VM = VM> {
-        unsafe { self.plan.assume_init() }
+        *self.plan.get().expect("Plan not initialized")
     }
 
     /// Request a GC.  Called by mutators when polling (during allocation) and when handling user
