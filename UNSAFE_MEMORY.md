@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 124 | Δ: -207
+- Starting count: 331 | Current: 121 | Δ: -210
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -11,7 +11,7 @@
 - `SimpleSlot` uses `Address` instead of raw pointers, avoiding `unsafe impl Send`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `benches/regular_bench/bulk_meta/bzero_bset.rs:9-60` — check if unsafe in benchmark can be removed — expected Δ: -3
+1. 🔴 HIGH: `src/util/metadata/metadata_val_traits.rs:123-178` — Check if any of the 10 encapsulated unsafe loads/stores can be further abstracted or removed — expected Δ: 0
 
 ## Patterns Discovered
 - Removed redundant `unsafe impl Send` and `Sync` for `MMTK` as all its fields are automatically `Send` and `Sync`.
@@ -105,6 +105,7 @@
 - `src/policy/marksweepspace/native_ms/block_list.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
 - `src/policy/compressor/compressorspace.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
 - `benches/regular_bench/bulk_meta/bscan.rs` — Clean: 0 unsafe blocks after using safe AlignedBuffer [Phase 2 confirmed].
+- `benches/regular_bench/bulk_meta/bzero_bset.rs` — Clean: 0 unsafe blocks after using AlignedBuffer and slice::fill [Phase 2 confirmed].
 
 ## Abstraction Proposals (for Phase 2)
 ### MetadataCursor for side_metadata

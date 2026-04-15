@@ -1,16 +1,10 @@
 //! Benchmarks for bulk zeroing and setting.
 
-use std::os::raw::c_void;
-
 use criterion::Criterion;
 use mmtk::util::{constants::LOG_BITS_IN_WORD, test_private, Address};
 
-fn allocate_aligned(size: usize) -> Address {
-    let ptr = unsafe {
-        std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(size, size).unwrap())
-    };
-    Address::from_mut_ptr(ptr)
-}
+#[repr(align(1024))]
+struct AlignedBuffer([u8; 1024]);
 
 const LINE_BYTES: usize = 256usize; // Match an Immix line size.
 const BLOCK_BYTES: usize = 32768usize; // Match an Immix block size.
@@ -21,7 +15,8 @@ const BLOCK_META_BYTES: usize = BLOCK_BYTES >> LOG_BITS_IN_WORD;
 
 pub fn bench(c: &mut Criterion) {
     c.bench_function("bzero_bset_line", |b| {
-        let start = allocate_aligned(LINE_META_BYTES);
+        let mut buffer = Box::new(AlignedBuffer([0; 1024]));
+        let start = Address::from_mut_ptr(buffer.0.as_mut_ptr());
         let end = start + LINE_META_BYTES;
 
         b.iter(|| {
@@ -31,17 +26,18 @@ pub fn bench(c: &mut Criterion) {
     });
 
     c.bench_function("bzero_bset_line_memset", |b| {
-        let start = allocate_aligned(LINE_META_BYTES);
-        let end = start + LINE_META_BYTES;
+        let mut buffer = Box::new(AlignedBuffer([0; 1024]));
+        let slice = &mut buffer.0[..LINE_META_BYTES];
 
-        b.iter(|| unsafe {
-            libc::memset(start.as_mut_ref() as *mut c_void, 0xff, end - start);
-            libc::memset(start.as_mut_ref() as *mut c_void, 0x00, end - start);
+        b.iter(|| {
+            slice.fill(0xff);
+            slice.fill(0x00);
         })
     });
 
     c.bench_function("bzero_bset_block", |b| {
-        let start = allocate_aligned(BLOCK_META_BYTES);
+        let mut buffer = Box::new(AlignedBuffer([0; 1024]));
+        let start = Address::from_mut_ptr(buffer.0.as_mut_ptr());
         let end = start + BLOCK_META_BYTES;
 
         b.iter(|| {
@@ -51,12 +47,12 @@ pub fn bench(c: &mut Criterion) {
     });
 
     c.bench_function("bzero_bset_block_memset", |b| {
-        let start = allocate_aligned(BLOCK_META_BYTES);
-        let end = start + BLOCK_META_BYTES;
+        let mut buffer = Box::new(AlignedBuffer([0; 1024]));
+        let slice = &mut buffer.0[..BLOCK_META_BYTES];
 
-        b.iter(|| unsafe {
-            libc::memset(start.as_mut_ref() as *mut c_void, 0xff, end - start);
-            libc::memset(start.as_mut_ref() as *mut c_void, 0x00, end - start);
+        b.iter(|| {
+            slice.fill(0xff);
+            slice.fill(0x00);
         })
     });
 }
