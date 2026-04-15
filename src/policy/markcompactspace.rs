@@ -13,6 +13,7 @@ use crate::util::heap::{MonotonePageResource, PageResource};
 use crate::util::metadata::{extract_side_metadata, vo_bit};
 use crate::util::object_enum::{self, ObjectEnumerator};
 use crate::util::{Address, ObjectReference};
+use crate::util::metadata::side_metadata::helpers::MetadataCursor;
 use crate::{vm::*, ObjectQueue};
 use atomic::Ordering;
 
@@ -208,8 +209,8 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
 
     /// Get header forwarding pointer for an object
     fn get_header_forwarding_pointer(object: ObjectReference) -> Option<ObjectReference> {
-        // SAFETY: The object reference is valid, and we are accessing the header word reserved for forwarding pointers (allocated during reservation).
-        let addr = unsafe { Self::header_forwarding_pointer_address(object).load::<Address>() };
+        let addr_usize = MetadataCursor(Self::header_forwarding_pointer_address(object)).load::<usize>();
+        let addr = Address::from_usize(addr_usize);
         ObjectReference::from_raw_address(addr)
     }
 
@@ -218,11 +219,8 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
         object: ObjectReference,
         forwarding_pointer: ObjectReference,
     ) {
-        // SAFETY: The object reference is valid, and we are writing to the header word reserved for forwarding pointers (allocated during reservation).
-        unsafe {
-            Self::header_forwarding_pointer_address(object)
-                .store::<ObjectReference>(forwarding_pointer);
-        }
+        MetadataCursor(Self::header_forwarding_pointer_address(object))
+            .store::<usize>(forwarding_pointer.to_raw_address().as_usize());
     }
 
     // Clear header forwarding pointer for an object
