@@ -192,9 +192,7 @@ pub(crate) fn find_object_from_internal_pointer<VM: VMBinding>(
         return None;
     }
 
-    if let Some(vo_addr) = unsafe {
-        VO_BIT_SIDE_METADATA_SPEC.find_prev_non_zero_value::<u8>(start, search_limit_bytes)
-    } {
+    if let Some(vo_addr) = VO_BIT_SIDE_METADATA_SPEC.find_prev_non_zero_value::<u8>(start, search_limit_bytes) {
         is_internal_ptr_from_vo_bit::<VM>(vo_addr, start)
     } else {
         None

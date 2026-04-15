@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 252 | Δ: -79
+- Starting count: 331 | Current: 250 | Δ: -81
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/side_metadata/global.rs:1004` — Verify if `find_prev_non_zero_value` can be made safe by using atomic loads, or confirm it must remain unsafe due to data race risks with non-atomic loads. — expected Δ: 0
+1. 🔴 HIGH: `src/util/metadata/metadata_val_traits.rs:84` — Re-evaluate if any of the 20 unsafe trait methods can be made safe or if they are truly irreducible due to raw pointer dereferencing. — expected Δ: 0
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
@@ -22,6 +22,7 @@
 - **API Cleanup**: Removed `from_raw_address_unchecked` as it was unused in core and replaced its usage in `dummyvm` with safe `from_raw_address().unwrap()`.
 - **Safe Abstraction**: Used `MetadataCursor` to encapsulate unsafe loads and stores in `SideMetadataSpec`, allowing removal of `unsafe` from several function signatures.
 - **Refactoring**: Replaced fake `'static` reference in `MetadataByteArrayRef` with `Address` and used `MetadataCursor` for safe access, removing 1 unsafe block.
+- **Refactoring**: Made `find_prev_non_zero_value` safe by using atomic loads in its implementation and helpers, removing `unsafe` from signature and 1 unsafe block at call site.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/scheduler/worker.rs` — Remaining unsafe are trait impls for Send/Sync [Phase 2 confirmed].

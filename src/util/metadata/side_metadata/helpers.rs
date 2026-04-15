@@ -256,6 +256,11 @@ impl MetadataCursor {
     }
 
     #[inline(always)]
+    pub(crate) fn load_atomic_usize(&self, order: std::sync::atomic::Ordering) -> usize {
+        unsafe { self.0.as_ref::<std::sync::atomic::AtomicUsize>().load(order) }
+    }
+
+    #[inline(always)]
     fn load_u8(&self) -> u8 {
         unsafe { self.0.load::<u8>() }
     }
@@ -386,7 +391,7 @@ pub fn find_last_non_zero_bit_in_metadata_bytes(
 
         if step == BYTES_IN_ADDRESS {
             // Load and check a usize word
-            let value = MetadataCursor(cur).load_usize();
+            let value = MetadataCursor(cur).load_atomic_usize(std::sync::atomic::Ordering::Relaxed);
             if value != 0 {
                 let bit = find_last_non_zero_bit::<usize>(value, 0, usize::BITS as u8).unwrap();
                 let byte_offset = bit >> LOG_BITS_IN_BYTE;
@@ -398,7 +403,7 @@ pub fn find_last_non_zero_bit_in_metadata_bytes(
             }
         } else {
             // Load and check a byte
-            let value = MetadataCursor(cur).load_u8();
+            let value = MetadataCursor(cur).load_atomic_u8(std::sync::atomic::Ordering::Relaxed);
             if let Some(bit) = find_last_non_zero_bit::<u8>(value, 0, 8) {
                 return FindMetaBitResult::Found { addr: cur, bit };
             }
@@ -416,7 +421,7 @@ pub fn find_last_non_zero_bit_in_metadata_bits(
     if !addr.is_mapped() {
         return FindMetaBitResult::UnmappedMetadata;
     }
-    let byte = MetadataCursor(addr).load_u8();
+    let byte = MetadataCursor(addr).load_atomic_u8(std::sync::atomic::Ordering::Relaxed);
     if let Some(bit) = find_last_non_zero_bit::<u8>(byte, start_bit, end_bit) {
         return FindMetaBitResult::Found { addr, bit };
     }

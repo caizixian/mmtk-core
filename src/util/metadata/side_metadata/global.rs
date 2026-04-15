@@ -1001,7 +1001,7 @@ impl SideMetadataSpec {
     /// This function uses non-atomic load for the side metadata. The user needs to make sure
     /// that there is no other thread that is mutating the side metadata.
     #[allow(clippy::let_and_return)]
-    pub unsafe fn find_prev_non_zero_value<T: MetadataValue>(
+    pub fn find_prev_non_zero_value<T: MetadataValue>(
         &self,
         data_addr: Address,
         search_limit_bytes: usize,
@@ -1049,10 +1049,10 @@ impl SideMetadataSpec {
             let val = if self.log_num_of_bits < 3 {
                 let lshift = meta_byte_lshift(self, cursor);
                 let mask = meta_byte_mask(self) << lshift;
-                let byte_val = super::helpers::MetadataCursor(meta_addr).load::<u8>();
+                let byte_val = super::helpers::MetadataCursor(meta_addr).load_atomic_u8(Ordering::Relaxed);
                 num_traits::FromPrimitive::from_u8((byte_val & mask) >> lshift).unwrap()
             } else {
-                super::helpers::MetadataCursor(meta_addr).load::<T>()
+                super::helpers::MetadataCursor(meta_addr).load_atomic::<T>(Ordering::Relaxed)
             };
             if !val.is_zero() {
                 return Some(cursor);
@@ -1079,10 +1079,10 @@ impl SideMetadataSpec {
         let val = if self.log_num_of_bits < 3 {
             let lshift = meta_byte_lshift(self, data_addr);
             let mask = meta_byte_mask(self) << lshift;
-            let byte_val = super::helpers::MetadataCursor(meta_addr).load::<u8>();
+            let byte_val = super::helpers::MetadataCursor(meta_addr).load_atomic_u8(Ordering::Relaxed);
             num_traits::FromPrimitive::from_u8((byte_val & mask) >> lshift).unwrap()
         } else {
-            super::helpers::MetadataCursor(meta_addr).load::<T>()
+            super::helpers::MetadataCursor(meta_addr).load_atomic::<T>(Ordering::Relaxed)
         };
         if !val.is_zero() {
             return Some(data_addr.align_down(1 << self.log_bytes_in_region));
