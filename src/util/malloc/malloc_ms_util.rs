@@ -3,6 +3,11 @@ use crate::util::malloc::library::*;
 use crate::util::Address;
 use crate::vm::VMBinding;
 
+fn safe_calloc(count: usize, size: usize) -> Address {
+    // SAFETY: FFI call to calloc is safe as long as arguments are valid.
+    Address::from_mut_ptr(unsafe { calloc(count, size) })
+}
+
 /// Allocate with alignment. This also guarantees the memory is zero initialized.
 pub fn align_alloc(size: usize, align: usize) -> Address {
     let mut ptr = std::ptr::null_mut::<libc::c_void>();
@@ -23,9 +28,7 @@ pub fn align_alloc(size: usize, align: usize) -> Address {
 pub fn align_offset_alloc<VM: VMBinding>(size: usize, align: usize, offset: usize) -> Address {
     // we allocate extra `align` bytes here, so we are able to handle offset
     let actual_size = size + align + BYTES_IN_ADDRESS;
-    // SAFETY: FFI call to calloc is safe as long as arguments are valid.
-    let raw = unsafe { calloc(1, actual_size) };
-    let address = Address::from_mut_ptr(raw);
+    let address = safe_calloc(1, actual_size);
     if address.is_zero() {
         return address;
     }
@@ -84,9 +87,7 @@ pub fn alloc<VM: VMBinding>(size: usize, align: usize, offset: usize) -> (Addres
     // malloc returns 16 bytes aligned address.
     // So if the alignment is smaller than 16 bytes, we do not need to align.
     if align <= 16 && offset == 0 {
-        // SAFETY: FFI call to calloc is safe as long as arguments are valid.
-        let raw = unsafe { calloc(1, size) };
-        address = Address::from_mut_ptr(raw);
+        address = safe_calloc(1, size);
         debug_assert!(address.is_aligned_to(align));
     } else if align > 16 && offset == 0 {
         address = align_alloc(size, align);

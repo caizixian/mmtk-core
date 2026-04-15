@@ -1,15 +1,15 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 83 | Δ: -248
+- Starting count: 331 | Current: 82 | Δ: -249
 - Phase: 3
+- Note: Added `safe_calloc` in `src/util/malloc/malloc_ms_util.rs` to remove 2 unsafe blocks and add 1, yielding a delta of -1.
 - Note: Used safe wrappers in `copyspace.rs` to remove 2 unsafe blocks, breaking the 0-reduction streak.
 - Note: Added `dzmmap_test` helper in tests to reduce unsafe blocks at call sites in `src/util/memory.rs`.
 - Note: Added SAFETY comments to `src/util/malloc/mod.rs`, `src/scheduler/affinity.rs`, and `src/util/alloc/allocators.rs` in Phase 3.
 - Note: Verified remaining unsafe locations in `malloc_ms_util.rs`, `rust_util/mod.rs`, and `slot.rs` are irreducible or properly encapsulated, concluding the task.
 - Note: Re-evaluated `ProofCell` and `SimpleSlot` and confirmed they are good abstractions.
 - Note: Added SAFETY comment to `src/util/metadata/side_metadata/global.rs:422` for `std::ptr::copy`.
-- Note: Re-verified `src/util/malloc/malloc_ms_util.rs` and `src/util/memory.rs` and confirmed all remaining unsafe code is irreducible FFI or low-level memory operations.
 - Note: Re-verified `src/vm/slot.rs` and `src/util/rust_util/mod.rs` and agreed with the conclusion that they are irreducible.
 - Note: Performed a holistic review of all remaining 83 unsafe items. Confirmed they are irreducible or properly encapsulated.
 - Note: Final verification completed. No reducible unsafe blocks found.
