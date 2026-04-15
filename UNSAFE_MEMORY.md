@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 483 | Δ: -52
+- Starting count: 535 | Current: 480 | Δ: -55
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,8 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/vo_bit/mod.rs:193` — investigate if `find_prev_non_zero_value` can be encapsulated or made safe — expected Δ: -1
+1. 🔴 HIGH: `src/util/heap/freelistpageresource.rs:91` — investigate page_offset unsafe block — expected Δ: -1
+2. 🟡 MED: `src/util/rust_util/mod.rs:74` — investigate InitializeOnce unsafe blocks — expected Δ: -3
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -34,6 +35,7 @@
 - `src/util/metadata/metadata_val_traits.rs` — Trait methods must remain unsafe because they take a raw `Address` and dereference it. [Phase 2 confirmed]
 - `src/util/metadata/side_metadata/side_metadata_tests.rs` — Remaining unsafe blocks in tests require complex bit extraction for sub-byte metadata. [Phase 2 confirmed]
 - `src/policy/marksweepspace/malloc_ms/metadata.rs` — Remaining unsafe is `u128` load (primitive not implementing `MetadataValue`) and `SweepProof` constructor. [Phase 2 confirmed]
+- `src/util/metadata/vo_bit/mod.rs` — `find_prev_non_zero_value` is encapsulated in safe `find_object_from_internal_pointer`. Irreducible without capability tokens. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - `SweepProof` for `malloc_ms` (Implemented).

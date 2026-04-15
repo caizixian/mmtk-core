@@ -122,11 +122,11 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         let mut array = BlockQueue::new();
         let mut cursor = start + B::BYTES;
         while cursor < last_block {
-            let result = unsafe { array.push_relaxed(B::from_aligned_address(cursor)) };
+            let result = array.push_mut(B::from_aligned_address(cursor));
             if let Err(block) = result {
                 self.block_queue.add_global_array(array);
                 array = BlockQueue::new();
-                let result2 = unsafe { array.push_relaxed(block) };
+                let result2 = array.push_mut(block);
                 debug_assert!(result2.is_ok());
             }
             cursor += B::BYTES;
@@ -237,6 +237,18 @@ impl<B: Region> BlockQueue<B> {
         }
     }
 
+    /// Push an element when we have exclusive access.
+    fn push_mut(&mut self, block: B) -> Result<(), B> {
+        let i = *self.cursor.get_mut();
+        if i < Self::CAPACITY {
+            self.data.get_mut()[i].write(block);
+            *self.cursor.get_mut() = i + 1;
+            Ok(())
+        } else {
+            Err(block)
+        }
+    }
+
     /// Atomically pop an element from the array.
     fn pop(&self) -> Option<B> {
         let i = self
@@ -334,8 +346,8 @@ impl<B: Region> BlockPool<B> {
                 .is_err()
         };
         if failed {
-            let queue = BlockQueue::new();
-            let result = unsafe { queue.push_relaxed(block) };
+            let mut queue = BlockQueue::new();
+            let result = queue.push_mut(block);
             debug_assert!(result.is_ok());
             let old_queue = self.worker_local_freed_blocks[id].replace(queue);
             assert!(!old_queue.is_empty());
