@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 94 | Δ: -237
+- Starting count: 331 | Current: 93 | Δ: -238
 - Phase: 3
 - Note: Reverted `MmapRegion` abstraction in `src/util/memory.rs` as it did not reduce unsafe code and increased count by 5. The count is back to 97.
 
@@ -75,7 +75,7 @@
 - `src/plan/global.rs` — Irreducible lifetime extension for `GCWork` packets [Phase 2 confirmed].
 - `src/plan/concurrent/concurrent_marking_work.rs` — All unsafe removed or made safe by refactoring [Phase 2 confirmed].
 - `src/util/rust_util/mod.rs` — `InitializeOnce` is irreducible to maintain zero-cost reads for `SFT_MAP` on hot path. `ProofCell` `Sync` is irreducible. Safety comments added for missing `unsafe impl Sync` in Phase 3. [Phase 3 confirmed].
-- `src/util/rust_util/zeroed_alloc.rs` — `new_zeroed_vec` requires manual zeroed allocation and `Vec::from_raw_parts` for performance; `bytemuck::zeroed_vec` is not available in version 1.14.0. Handled zero size case and added safety comments in Phase 3. [Phase 3 confirmed].
+- `src/util/rust_util/zeroed_alloc.rs` — Merged two unsafe blocks in `new_zeroed_vec` to reduce count by 1. Remaining unsafe is irreducible due to performance requirements. [Phase 3 confirmed].
 - `src/mmtk.rs` — `ProofCell::get_ref` in `get_plan` is irreducible without threading proof tokens. Re-evaluated: confirmed irreducible to maintain zero-cost reads on hot allocation paths. [Phase 3 confirmed]
 - `src/policy/immix/line.rs` — All unsafe blocks removed after making SideMetadataSpec methods safe [Phase 2 confirmed].
 - `src/util/heap/chunk_map.rs` — All unsafe blocks removed after making SideMetadataSpec methods safe [Phase 2 confirmed].
