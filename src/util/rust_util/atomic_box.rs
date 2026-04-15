@@ -82,6 +82,8 @@ impl<T> Drop for OnceOptionBox<T> {
     }
 }
 
+// SAFETY: OnceOptionBox only contains an AtomicPtr. A zeroed AtomicPtr represents a null pointer,
+// which is a valid representation for AtomicPtr and matches the state created by `OnceOptionBox::new()`.
 unsafe impl<T> Zeroable for OnceOptionBox<T> {}
 
 #[cfg(test)]
