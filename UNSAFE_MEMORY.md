@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 355 | Δ: -180
+- Starting count: 535 | Current: 352 | Δ: -183
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/alloc/free_list_allocator.rs:155` — Use a handle wrapper for free list cells to encapsulate raw loads/stores — expected Δ: -2
+1. 🔴 HIGH: `src/util/alloc/free_list_allocator.rs:177` — Use `block.load_free_cell_link(cursor).is_zero()` to remove the last unsafe block in debug assertion — expected Δ: -1
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -50,7 +50,7 @@
 - `src/util/memory.rs` — Irreducible FFI calls (`mmap`, `madvise`, `munmap`, `mprotect`) and core primitives (`ptr::write_bytes`). [Phase 2 confirmed]
 - `src/util/metadata/side_metadata/helpers.rs` — Implementation of `MetadataCursor` abstraction, irreducible without moving unsafe to call sites. [Phase 2 confirmed]
 - `docs/dummyvm/src/api.rs` — Irreducible FFI boundary operations (raw pointer dereferencing and Box::from_raw). [Phase 2 confirmed]
-- `src/util/alloc/free_list_allocator.rs` — Remaining unsafe blocks are raw heap access for free list manipulation. [Phase 2 confirmed]
+- `src/util/alloc/free_list_allocator.rs` — Most unsafe blocks removed by using Block methods. Remaining unsafe is a debug assertion. [Phase 2 confirmed]
 - `src/policy/immix/immixspace.rs` — All unsafe blocks removed or moved to `schedule_collection` in previous steps. [Phase 2 confirmed]
 - `src/mmtk.rs` — Unsafe required for casting local plan to static reference for `gc_trigger` and dereferencing `UnsafeCell`. [Phase 2 confirmed]
 - `src/util/heap/blockpageresource.rs` — All unsafe blocks removed by replacing UnsafeCell with RwLock in BlockQueue. [Phase 2 confirmed]

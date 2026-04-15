@@ -119,6 +119,14 @@ impl Block {
         }
     }
 
+    pub fn load_free_cell_link(&self, cell: Address) -> Address {
+        assert!(cell >= self.start() && cell < self.start() + Block::BYTES, "Cell address out of block bounds");
+        assert!(cell.is_aligned_to(std::mem::align_of::<Address>()), "Cell address not aligned");
+        unsafe {
+            cell.load::<Address>()
+        }
+    }
+
     #[cfg(feature = "malloc_native_mimalloc")]
     pub fn load_local_free_list(&self) -> Address {
         let meta_addr = crate::util::metadata::side_metadata::helpers::address_to_meta_address(&Block::LOCAL_FREE_LIST_TABLE, self.start());
