@@ -11,7 +11,7 @@
 - `SimpleSlot` uses `Address` instead of raw pointers, avoiding `unsafe impl Send`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/util/metadata/global.rs:52-114` — Document safety invariants for `load` and `store` — expected Δ: 0
+1. 🟡 MED: `src/util/metadata/metadata_val_traits.rs:123-180` — Move unsafe from macro to `MetadataCursor` safe methods — expected Δ: 0
 
 ## Patterns Discovered
 - Removed redundant `unsafe impl Send` and `Sync` for `MMTK` as all its fields are automatically `Send` and `Sync`.
