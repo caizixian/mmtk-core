@@ -140,7 +140,8 @@ fn is_vo_bit_set_inner<const ATOMIC: bool>(addr: Address) -> Option<ObjectRefere
     let vo_bit = if ATOMIC {
         VO_BIT_SIDE_METADATA_SPEC.load_atomic::<u8>(addr, Ordering::SeqCst)
     } else {
-        unsafe { VO_BIT_SIDE_METADATA_SPEC.load::<u8>(addr) }
+        let meta_addr = crate::util::metadata::side_metadata::helpers::address_to_meta_address(&VO_BIT_SIDE_METADATA_SPEC, addr);
+        crate::util::metadata::side_metadata::helpers::MetadataCursor(meta_addr).load::<u8>()
     };
 
     (vo_bit == 1).then(|| get_object_ref_for_vo_addr(addr))
@@ -178,7 +179,8 @@ pub(crate) const VO_BIT_WORD_TO_REGION: usize = 1
 
 /// Bulk check if a VO bit word. Return true if there is any bit set in the word.
 pub(crate) fn get_raw_vo_bit_word(addr: Address) -> usize {
-    unsafe { VO_BIT_SIDE_METADATA_SPEC.load_raw_word(addr) }
+    let meta_addr = crate::util::metadata::side_metadata::helpers::address_to_meta_address(&VO_BIT_SIDE_METADATA_SPEC, addr);
+    crate::util::metadata::side_metadata::helpers::MetadataCursor(meta_addr).load_usize()
 }
 
 /// Find the base reference to the object from a potential internal pointer.
@@ -203,8 +205,8 @@ pub(crate) fn find_object_from_internal_pointer<VM: VMBinding>(
 pub(crate) fn get_object_ref_for_vo_addr(vo_addr: Address) -> ObjectReference {
     // VO bit should be set on the address.
     debug_assert!(vo_addr.is_aligned_to(ObjectReference::ALIGNMENT));
-    debug_assert!(unsafe { is_vo_addr(vo_addr) });
-    unsafe { ObjectReference::from_raw_address_unchecked(vo_addr) }
+    debug_assert!(is_vo_addr(vo_addr));
+    ObjectReference::from_raw_address(vo_addr).unwrap()
 }
 
 /// Check if the address could be an internal pointer in the object.
@@ -227,10 +229,7 @@ pub(crate) fn is_internal_ptr_from_vo_bit<VM: VMBinding>(
     }
 }
 
-/// Non-atomically check if the VO bit is set for this address.
-///
-/// # Safety
-/// The caller needs to make sure that no one is modifying VO bit.
-pub(crate) unsafe fn is_vo_addr(addr: Address) -> bool {
-    VO_BIT_SIDE_METADATA_SPEC.load::<u8>(addr) != 0
+/// Check if the VO bit is set for this address.
+pub(crate) fn is_vo_addr(addr: Address) -> bool {
+    VO_BIT_SIDE_METADATA_SPEC.load_atomic::<u8>(addr, Ordering::Relaxed) != 0
 }

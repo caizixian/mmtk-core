@@ -251,7 +251,7 @@ pub(crate) struct MetadataCursor(pub(crate) Address);
 
 impl MetadataCursor {
     #[inline(always)]
-    fn load_usize(&self) -> usize {
+    pub(crate) fn load_usize(&self) -> usize {
         unsafe { self.0.load::<usize>() }
     }
 

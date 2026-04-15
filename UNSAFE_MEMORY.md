@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 488 | Δ: -47
+- Starting count: 535 | Current: 483 | Δ: -52
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/vo_bit/mod.rs:98-145` — use MetadataCursor or safe wrappers to eliminate unsafe blocks in non-atomic VO bit operations — expected Δ: -3
+1. 🔴 HIGH: `src/util/metadata/vo_bit/mod.rs:193` — investigate if `find_prev_non_zero_value` can be encapsulated or made safe — expected Δ: -1
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
