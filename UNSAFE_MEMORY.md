@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 378 | Δ: -157 (estimated)
+- Starting count: 535 | Current: 376 | Δ: -159 (estimated)
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/heap/layout/mmapper/csm/two_level_storage.rs:60-70` — check if `unsafe impl Send for TwoLevelStateStorage` is redundant — expected Δ: 1-2
+1. 🔴 HIGH: `src/util/test_util/fixtures.rs:156-167` — check if `MMTKFixture` can use references instead of raw pointers to eliminate unsafe blocks in tests — expected Δ: 1-3
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
