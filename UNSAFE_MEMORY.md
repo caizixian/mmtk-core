@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 464 | Δ: -71
+- Starting count: 535 | Current: 463 | Δ: -72
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,9 +10,8 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/policy/compressor/forwarding.rs:87` — use `Address::from_ptr` instead of `from_usize` — expected Δ: -1
-2. 🟡 MED: `src/util/alloc/bumpallocator.rs:228` — use `Address::from_ptr` instead of `from_usize` — expected Δ: -1
-3. 🟢 LOW: `src/vm/tests/mock_tests/mock_test_conservatism.rs:113` — use `Address::from_ptr` instead of `from_usize` — expected Δ: -1
+1. 🔴 HIGH: `src/util/alloc/bumpallocator.rs:228` — use `Address::from_ptr` instead of `from_usize` — expected Δ: -1
+2. 🟡 MED: `src/vm/tests/mock_tests/mock_test_conservatism.rs:113` — use `Address::from_ptr` instead of `from_usize` — expected Δ: -1
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
