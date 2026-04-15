@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 342 | Δ: -193
+- Starting count: 535 | Current: 331 | Δ: -204
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -11,7 +11,6 @@
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
 1. 🔴 HIGH: `src/mmtk.rs:436` — Use `ExclusivePlanAccessProof` to remove unsafe in plan access (requires adding `get_ref_with_proof` or similar) — expected Δ: -1
-2. 🟢 LOW: `src/vm/tests/mock_tests/*.rs` — Remove unnecessary unsafe blocks around safe `Address::from_usize` in mock tests — expected Δ: -10+
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -30,6 +29,7 @@
 - Use `Box::leak` instead of `Box::into_raw` to get a reference directly when initializing lock-free structures, reducing unsafe blocks.
 - Replace `[MaybeUninit<T>; N]` with `[Option<T>; N]` for lazily initialized arrays if N is small or overhead is acceptable, eliminating `assume_init_mut()` unsafe calls.
 - Refactor mock slots in tests to use references instead of raw pointers to eliminate unsafe blocks in tests.
+- `unsafe { Address::from_usize(x) }` → `Address::from_usize(x)` because `Address::from_usize` is a safe `const fn`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe blocks removed by replacing MaybeUninit with Option. [Phase 2 confirmed]
