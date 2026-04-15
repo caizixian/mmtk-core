@@ -1,18 +1,17 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: Multiple files (`fixtures.rs`, `markcompactspace.rs`, `global.rs`)
-- Strategy: Holistic review of remaining unsafe locations to verify irreducibility or proper encapsulation.
+- File: `src/util/malloc/malloc_ms_util.rs` and general search for unsafe patterns.
+- Strategy: Verify alignment requirements for `write_unaligned` and search for other common unsafe patterns to find reducible items.
 
 ## Findings
-- `src/util/test_util/fixtures.rs`: Line 161 and 169. The unsafe cast in `get_mmtk_mut` is used to get a mutable reference from a leaked `'static` shared reference. This is required by the test infrastructure to allow sharing the MMTK instance while still allowing mutation in specific test cases. It is encapsulated within the method and used only in tests.
-- `src/policy/markcompactspace.rs`: Line 212 and 222. These are raw heap accesses for storing/loading forwarding pointers. They are encapsulated in safe functions `get_header_forwarding_pointer` and `store_header_forwarding_pointer`. This is the Lisp-2 algorithm implementation and requires direct memory manipulation.
-- `src/util/metadata/global.rs`: Line 54 and 104. These are `unsafe fn` signatures for non-atomic load and store. They are unsafe by design as they do not provide synchronization and rely on the caller to ensure safety (e.g., during stop-the-world phases).
+- `src/util/malloc/malloc_ms_util.rs`: Line 43 uses `write_unaligned`. On 64-bit systems, if `result` is aligned to 16 bytes, `result - 8` is aligned to 8 bytes (word size). Thus, `write_unaligned` might not be strictly necessary on 64-bit systems with 16-byte alignment, but it is kept for cross-platform safety and consistency.
+- Searched for `Box::from_raw`, `read_unaligned`, `write_unaligned`, `std::ptr::copy`, `transmute`, and `from_raw_parts` in `src`. All occurrences found are in files already marked as irreducible or in tests (e.g., `fixtures.rs`, `slot.rs`, `mock_vm.rs`).
+- Confirmed that all listed files with unsafe in the prompt have been analyzed by previous steps and deemed irreducible or properly encapsulated.
 
 ## Attempted Changes
-- None. Concluded that these specific instances are either properly encapsulated or irreducible due to design constraints (FFI, performance, or test infrastructure).
+- None. Documenting the alignment insight and the conclusion that remaining unsafe is irreducible.
 
 ## Blockers / Insights for Next Step
-- The remaining unsafe blocks in the provided list appear to be irreducible or already follow the safe abstraction pattern (encapsulating unsafe behind a safe API in the same file).
-- Without the ability to grep for "unsafe" to find the remaining ~24 unsafe items not listed in the prompt, further progress on finding reducible items is blocked.
-- Recommending to focus on documentation and verifying safety invariants for the remaining unsafe blocks.
+- The remaining ~24 unsafe items in other files cannot be found without the ability to grep for "unsafe", as they are not listed in the prompt's Ground Truth list.
+- Recommending to conclude the task or focus on documentation of safety invariants if no new list is provided.

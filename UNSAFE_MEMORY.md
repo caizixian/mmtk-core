@@ -19,6 +19,7 @@
 - Note: Re-verified markcompactspace.rs, allocators.rs, and malloc_ms_util.rs and confirmed encapsulation/irreducibility.
 - Note: Re-verified affinity.rs, fixtures.rs, slot.rs, and allocators.rs and agreed with irreducibility conclusions.
 - Note: Re-verified fixtures.rs (leaked MMTK in tests) and markcompactspace.rs (forwarding pointer) and confirmed they are encapsulated/irreducible.
+- Note: Verified alignment in malloc_ms_util.rs and searched for other common unsafe patterns in src, confirming irreducibility of listed items.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
@@ -81,7 +82,7 @@
 - `src/util/metadata/pin_bit.rs` — Fixed unsafe block by using load_atomic. Remaining code is safe [Phase 2 confirmed].
 - `src/util/memory.rs` — Irreducible FFI calls to mmap/munmap/mprotect/madvise. Re-evaluated Phase 2 abstraction (MmapRegion) but reverted as it didn't reduce count. [Phase 3 confirmed].
 - docs/dummyvm/src/api.rs — Refactored some FFI functions to use Option<&mut T>, removing 3 unsafe blocks. Remaining unsafe are irreducible FFI boundary operations. [Phase 3 confirmed].
-- `src/util/malloc/malloc_ms_util.rs` — Irreducible FFI calls to malloc/free/calloc. Analyzed `posix_memalign` and confirmed it is required to maintain consistency with feature-selected allocators. [Phase 3 confirmed].
+- `src/util/malloc/malloc_ms_util.rs` — Irreducible FFI calls to malloc/free/calloc. Analyzed `posix_memalign` and confirmed it is required to maintain consistency with feature-selected allocators. Insight: `write_unaligned` at line 43 might be aligned on 64-bit systems if alignment is 16, but kept for safety. [Phase 3 confirmed].
 - `src/util/metadata/header_metadata.rs` — Unsafe functions `load`/`store` are non-atomic/racy by design; unsafe blocks in tests call them [Phase 2 confirmed].
 - `src/util/metadata/global.rs` — `load` and `store` are non-atomic and not thread-safe by design. Unsafe comes from `ObjectModel::load_metadata` trait method. [Phase 3 confirmed].
 - `src/util/rust_util/atomic_box.rs` — Removed in favor of `std::sync::OnceLock`. File is now empty. [Phase 3 confirmed].
