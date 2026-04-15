@@ -11,7 +11,7 @@
 - `SimpleSlot` uses `Address` instead of raw pointers, avoiding `unsafe impl Send`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-- (No actionable items left. All remaining unsafe code appears to be irreducible or requires large architectural changes not yet planned.)
+1. 🟡 MED: `src/util/rust_util/mod.rs:117-120` — Investigate if `ProofCell::get_ref` can be made safe by threading `ExclusivePlanAccessProof` or a similar token, even if it requires large refactoring. — expected Δ: -1
 
 
 ## Patterns Discovered
