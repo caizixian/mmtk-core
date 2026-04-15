@@ -660,15 +660,14 @@ mod tests {
     macro_rules! impl_with_object {
         ($type: ty) => {
             paste!{
-                fn [<with_ $type _obj>]<F>(f: F) where F: FnOnce(Address, *mut $type) + std::panic::UnwindSafe {
+                fn [<with_ $type _obj>]<F>(f: F) where F: FnOnce(Address, &mut [$type]) + std::panic::UnwindSafe {
                     let mut v: Vec<$type> = vec![0; 3];
                     // Make sure they are all empty
                     assert_eq!(v[0], 0, "memory at index 0 is not zero");
                     assert_eq!(v[1], 0, "memory at index 1 is not zero");
                     assert_eq!(v[2], 0, "memory at index 2 is not zero");
-                    let ptr_mid = &mut v[1] as *mut $type;
-                    let obj = Address::from_ptr(ptr_mid);
-                    f(obj, ptr_mid)
+                    let obj = Address::from_ptr(&v[1] as *const $type);
+                    f(obj, &mut v)
                 }
             }
         }
@@ -689,36 +688,36 @@ mod tests {
             paste!{
                 #[test]
                 fn [<$tname _load>]() {
-                    [<with_ $type _obj>](|obj, ptr| {
+                    [<with_ $type _obj>](|obj, v| {
                         let spec = HeaderMetadataSpec { bit_offset: 0, num_of_bits: $num_of_bits };
                         assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
                         let max_value = max_value($num_of_bits) as $type;
-                        unsafe { *ptr = max_value };
+                        v[1] = max_value;
                         assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
                     });
                 }
 
                 #[test]
                 fn [<$tname _load_atomic>]() {
-                    [<with_ $type _obj>](|obj, ptr| {
+                    [<with_ $type _obj>](|obj, v| {
                         let spec = HeaderMetadataSpec { bit_offset: 0, num_of_bits: $num_of_bits };
                         assert_eq!(spec.load_atomic::<$type>(obj, None, Ordering::SeqCst), 0);
                         let max_value = max_value($num_of_bits) as $type;
-                        unsafe { *ptr = max_value };
+                        v[1] = max_value;
                         assert_eq!(spec.load_atomic::<$type>(obj, None, Ordering::SeqCst), max_value);
                     });
                 }
 
                 #[test]
                 fn [<$tname _load_next>]() {
-                    [<with_ $type _obj>](|obj, ptr| {
+                    [<with_ $type _obj>](|obj, v| {
                         let spec = HeaderMetadataSpec { bit_offset: $num_of_bits, num_of_bits: $num_of_bits };
                         assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
                         let max_value = max_value($num_of_bits) as $type;
                         if $num_of_bits < 8 {
-                            unsafe { *ptr = max_value << spec.bit_offset}
+                            v[1] = max_value << spec.bit_offset;
                         } else {
-                            unsafe { *(ptr.offset(1)) = max_value };
+                            v[2] = max_value;
                         }
                         assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
                     });
@@ -726,14 +725,14 @@ mod tests {
 
                 #[test]
                 fn [<$tname _load_prev>]() {
-                    [<with_ $type _obj>](|obj, ptr| {
+                    [<with_ $type _obj>](|obj, v| {
                         let spec = HeaderMetadataSpec { bit_offset: -$num_of_bits, num_of_bits: $num_of_bits };
                         assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
                         let max_value = max_value($num_of_bits) as $type;
                         if $num_of_bits < 8 {
-                            unsafe { *(ptr.offset(-1)) = max_value << (BITS_IN_BYTE as isize + spec.bit_offset)}
+                            v[0] = max_value << (BITS_IN_BYTE as isize + spec.bit_offset);
                         } else {
-                            unsafe { *(ptr.offset(-1)) = max_value };
+                            v[0] = max_value;
                         }
                         assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
                     });
@@ -741,7 +740,7 @@ mod tests {
 
                 #[test]
                 fn [<$tname _load_mask>]() {
-                    [<with_ $type _obj>](|obj, ptr| {
+                    [<with_ $type _obj>](|obj, v| {
                         // The test only runs for metadata no smaller than 1 byte
                         if $num_of_bits < 8 {
                             return;
@@ -750,7 +749,7 @@ mod tests {
                         let spec = HeaderMetadataSpec { bit_offset: 0, num_of_bits: $num_of_bits };
                         assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
                         let max_value = max_value($num_of_bits) as $type;
-                        unsafe { *ptr = max_value };
+                        v[1] = max_value;
                         assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
                         assert_eq!(unsafe { spec.load::<$type>(obj, Some(0)) }, 0);
                         assert_eq!(unsafe { spec.load::<$type>(obj, Some(0b101)) }, 0b101);
@@ -759,63 +758,63 @@ mod tests {
 
                 #[test]
                 fn [<$tname _store>]() {
-                    [<with_ $type _obj>](|obj, ptr| {
+                    [<with_ $type _obj>](|obj, v| {
                         let spec = HeaderMetadataSpec { bit_offset: 0, num_of_bits: $num_of_bits };
                         assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
                         let max_value = max_value($num_of_bits) as $type;
                         unsafe { spec.store::<$type>(obj, max_value, None) };
                         assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
-                        assert_eq!(unsafe { *ptr }, max_value);
+                        assert_eq!(v[1], max_value);
                     });
                 }
 
                 #[test]
                 fn [<$tname _store_atomic>]() {
-                    [<with_ $type _obj>](|obj, ptr| {
+                    [<with_ $type _obj>](|obj, v| {
                         let spec = HeaderMetadataSpec { bit_offset: 0, num_of_bits: $num_of_bits };
                         assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
                         let max_value = max_value($num_of_bits) as $type;
                         spec.store_atomic::<$type>(obj, max_value, None, Ordering::SeqCst);
                         assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
-                        assert_eq!(unsafe { *ptr }, max_value);
+                        assert_eq!(v[1], max_value);
                     });
                 }
 
                 #[test]
                 fn [<$tname _store_next>]() {
-                    [<with_ $type _obj>](|obj, ptr| {
+                    [<with_ $type _obj>](|obj, v| {
                         let spec = HeaderMetadataSpec { bit_offset: $num_of_bits, num_of_bits: $num_of_bits };
                         assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
                         let max_value = max_value($num_of_bits) as $type;
                         unsafe { spec.store::<$type>(obj, max_value, None) };
                         assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
                         if $num_of_bits < 8 {
-                            assert_eq!(unsafe { *ptr }, max_value << spec.bit_offset);
+                            assert_eq!(v[1], max_value << spec.bit_offset);
                         } else {
-                            assert_eq!(unsafe { *(ptr.offset(1)) }, max_value);
+                            assert_eq!(v[2], max_value);
                         }
                     });
                 }
 
                 #[test]
                 fn [<$tname _store_prev>]() {
-                    [<with_ $type _obj>](|obj, ptr| {
+                    [<with_ $type _obj>](|obj, v| {
                         let spec = HeaderMetadataSpec { bit_offset: -$num_of_bits, num_of_bits: $num_of_bits };
                         assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
                         let max_value = max_value($num_of_bits) as $type;
                         unsafe { spec.store::<$type>(obj, max_value, None) };
                         assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
                         if $num_of_bits < 8 {
-                            assert_eq!(unsafe { *ptr.offset(-1) }, max_value << (BITS_IN_BYTE as isize + spec.bit_offset));
+                            assert_eq!(v[0], max_value << (BITS_IN_BYTE as isize + spec.bit_offset));
                         } else {
-                            assert_eq!(unsafe { *(ptr.offset(-1)) }, max_value);
+                            assert_eq!(v[0], max_value);
                         }
                     });
                 }
 
                 #[test]
                 fn [<$tname _store_mask>]() {
-                    [<with_ $type _obj>](|obj, ptr| {
+                    [<with_ $type _obj>](|obj, v| {
                         // The test only runs for metadata no smaller than 1 byte
                         if $num_of_bits < 8 {
                             return;
@@ -835,7 +834,7 @@ mod tests {
                         // set to max with mask of 1 bit
                         unsafe { spec.store::<$type>(obj, max_value, Some(0b10)) };
                         assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0b10);
-                        assert_eq!(unsafe { *ptr }, 0b10);
+                        assert_eq!(v[1], 0b10);
                     });
                 }
 
@@ -891,7 +890,7 @@ mod tests {
 
                 #[test]
                 fn [<$tname _fetch_add_overflow>]() {
-                    [<with_ $type _obj>](|obj, ptr| {
+                    [<with_ $type _obj>](|obj, v| {
                         for bit_offset in (0isize..($type::BITS as isize)).step_by($num_of_bits) {
                             let spec = HeaderMetadataSpec { bit_offset, num_of_bits: $num_of_bits };
                             let max_value = max_value($num_of_bits) as $type;
@@ -903,9 +902,9 @@ mod tests {
                             let old_val_from_fetch = spec.fetch_add::<$type>(obj, 1, Ordering::SeqCst);
                             assert_eq!(old_val, old_val_from_fetch);
                             assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
-                            assert_eq!(unsafe { *ptr }, 0); // we should not accidentally affect other bits
+                            assert_eq!(v[1], 0); // we should not accidentally affect other bits
                         }
-                    })
+                    });
                 }
 
                 #[test]
