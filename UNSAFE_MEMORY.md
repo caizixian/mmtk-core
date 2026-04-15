@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 138 | Δ: -193
+- Starting count: 331 | Current: 137 | Δ: -194
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -13,6 +13,7 @@
 1. 🔴 HIGH: Search for other work packets that store `'static` references and can be refactored to use `mmtk.get_plan()` to remove lifetime extension unsafe blocks.
 
 ## Patterns Discovered
+- Refactoring: Removed raw pointer cast in `MallocSpace::release` by passing a function pointer to `MSSweepChunk` to fetch the space from `MMTK`.
 - Documented safety invariants for FFI calls in tests in `src/util/memory.rs`.
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
 - Using `MockObject` in tests to encapsulate unsafe `load`/`store` calls on `HeaderMetadataSpec`.

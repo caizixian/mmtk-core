@@ -550,14 +550,13 @@ impl<VM: VMBinding> MallocSpace<VM> {
         crate::util::metadata::vo_bit::is_vo_bit_set_for_addr(addr)
     }
 
-    pub fn prepare(&mut self, _full_heap: bool) {}
+    pub fn prepare(&mut self, _full_heap: bool, _get_space: fn(&'static MMTK<VM>) -> &'static MallocSpace<VM>) {}
 
-    pub fn release(&mut self, proof: &crate::scheduler::ExclusivePlanAccessProof) {
+    pub fn release(&mut self, proof: &crate::scheduler::ExclusivePlanAccessProof, get_space: fn(&'static MMTK<VM>) -> &'static MallocSpace<VM>) {
         use crate::scheduler::WorkBucketStage;
-        let space = unsafe { &*(self as *const Self) };
         let work_packets = self.chunk_map.generate_tasks(|chunk| {
             Box::new(MSSweepChunk {
-                ms: space,
+                get_space,
                 chunk: chunk.start(),
                 proof: SweepProof::new(proof),
             })
@@ -887,14 +886,15 @@ use crate::MMTK;
 
 /// Simple work packet that just sweeps a single chunk
 pub struct MSSweepChunk<VM: VMBinding> {
-    ms: &'static MallocSpace<VM>,
+    get_space: fn(&'static MMTK<VM>) -> &'static MallocSpace<VM>,
     // starting address of a chunk
     chunk: Address,
     proof: SweepProof,
 }
 
 impl<VM: VMBinding> GCWork<VM> for MSSweepChunk<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        self.ms.sweep_chunk(self.chunk, &self.proof);
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        let ms = (self.get_space)(mmtk);
+        ms.sweep_chunk(self.chunk, &self.proof);
     }
 }
