@@ -1,9 +1,9 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 89 | Δ: -242
+- Starting count: 331 | Current: 86 | Δ: -245
 - Phase: 3
-- Note: Removed `OnceOptionBox` in `src/util/rust_util/atomic_box.rs` and replaced with `std::sync::OnceLock` in `two_level_storage.rs`, reducing unsafe count by 4.
+- Note: Replaced `InitializeOnce` with `std::sync::OnceLock` in `src/util/rust_util/mod.rs`, reducing unsafe count by 3.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
@@ -11,7 +11,7 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 - `SimpleSlot` uses `Address` instead of raw pointers, avoiding `unsafe impl Send`.
 - `ProofCell` is used for `MMTK.plan` to allow zero-cost reads on non-hot but frequent paths, avoiding threading proof tokens.
-- `InitializeOnce` is used for `SFT_MAP` to allow zero-cost reads on extreme hot paths (object tracing).
+- `InitializeOnce` was used for `SFT_MAP` to allow zero-cost reads on extreme hot paths (object tracing). Now replaced by `OnceLock` for safety.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
 1. 🟢 LOW: Audit other files in `src/util/` to see if they are clean but not listed. (Audited conversions.rs, api_util.rs, constants.rs, finalizable_processor.rs, freelist.rs, is_mmtk_object.rs, epilogue.rs, int_array_freelist.rs, object_forwarding.rs, object_enum.rs, opaque_pointer.rs, logger.rs, mod.rs, options.rs, treadmill.rs).
@@ -74,7 +74,7 @@
 - `src/util/malloc/mod.rs` — Irreducible FFI calls to malloc/free [Phase 2 confirmed].
 - `src/plan/global.rs` — Irreducible lifetime extension for `GCWork` packets [Phase 2 confirmed].
 - `src/plan/concurrent/concurrent_marking_work.rs` — All unsafe removed or made safe by refactoring [Phase 2 confirmed].
-- `src/util/rust_util/mod.rs` — `InitializeOnce` is irreducible to maintain zero-cost reads for `SFT_MAP` on hot path. `ProofCell` `Sync` is irreducible. Safety comments added for missing `unsafe impl Sync` in Phase 3. [Phase 3 confirmed].
+- `src/util/rust_util/mod.rs` — InitializeOnce replaced with OnceLock. ProofCell Sync is irreducible. [Phase 3 confirmed].
 - `src/util/rust_util/zeroed_alloc.rs` — Merged two unsafe blocks in `new_zeroed_vec` to reduce count by 1. Remaining unsafe is irreducible due to performance requirements. [Phase 3 confirmed].
 - `src/mmtk.rs` — `ProofCell::get_ref` in `get_plan` is irreducible without threading proof tokens. Re-evaluated: confirmed irreducible to maintain zero-cost reads on hot allocation paths. [Phase 3 confirmed]
 - `src/policy/immix/line.rs` — All unsafe blocks removed after making SideMetadataSpec methods safe [Phase 2 confirmed].
@@ -135,22 +135,3 @@
 - `src/util/mod.rs` — Clean: 0 unsafe blocks [Phase 3 confirmed].
 - `src/util/options.rs` — Clean: 0 unsafe blocks [Phase 3 confirmed].
 - `src/util/treadmill.rs` — Clean: 0 unsafe blocks [Phase 3 confirmed].
-
-## Abstraction Proposals (for Phase 2)
-### MetadataCursor for side_metadata
-- Target files: `src/util/metadata/side_metadata/global.rs`, `src/util/metadata/side_metadata/sanity.rs`
-- Expected Δ: N/A (already implemented, but centralizes unsafe)
-- Design sketch: `struct MetadataCursor(Address);` provides safe methods for load/store.
-- Status: done
-
-### MetadataCursor for MetadataValue trait
-- Target files: `src/util/metadata/metadata_val_traits.rs`
-- Expected Δ: 20
-- Design sketch: Change `MetadataValue` trait methods to take `MetadataCursor` instead of `Address`, allowing them to be safe.
-- Status: done
-
-### MmapRegion for memory mapping
-- Target files: `src/util/memory.rs`, `src/util/heap/layout/mmapper/csm/mod.rs`
-- Expected Δ: TBD
-- Design sketch: A type that owns a memory mapping and guarantees safety for reads and writes within its bounds.
-- Status: abandoned (reverted as it did not reduce unsafe count)
