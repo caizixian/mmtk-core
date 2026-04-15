@@ -44,7 +44,7 @@ pub struct Prepare<C: GCWorkContext> {
     phantom: PhantomData<C>,
 }
 
-unsafe impl<C: GCWorkContext> Send for Prepare<C> {}
+
 
 impl<C: GCWorkContext> Prepare<C> {
     pub fn new() -> Self {
@@ -127,7 +127,7 @@ impl<C: GCWorkContext> Release<C> {
     }
 }
 
-unsafe impl<C: GCWorkContext> Send for Release<C> {}
+
 
 impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
