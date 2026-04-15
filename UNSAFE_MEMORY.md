@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 480 | Δ: -55
+- Starting count: 535 | Current: 475 | Δ: -60
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/heap/freelistpageresource.rs:91` — investigate page_offset unsafe block — expected Δ: -1
-2. 🟡 MED: `src/util/rust_util/mod.rs:74` — investigate InitializeOnce unsafe blocks — expected Δ: -3
+1. 🔴 HIGH: `src/util/rust_util/mod.rs:74` — investigate InitializeOnce unsafe blocks — expected Δ: -3
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -23,6 +22,7 @@
 - Use `Vec` instead of manual allocation in tests to eliminate unsafe blocks.
 - Replace `UnsafeCell` with `RwLock` in global maps (Map32, Map64) to eliminate unsafe operations.
 - Use `load_atomic`/`store_atomic` with `Relaxed` ordering for full-byte metadata in non-atomic contexts (guaranteed by `SweepProof`) to eliminate unsafe blocks without performance penalty.
+- Removing `unsafe` from function signatures when the body contains no unsafe operations and preconditions are enforced by types (e.g., `MutexGuard` or `&mut` references).
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — remaining unsafe blocks are `assume_init_mut()` which are likely required for performance to avoid `Option` overhead in GC fast path.
@@ -36,6 +36,7 @@
 - `src/util/metadata/side_metadata/side_metadata_tests.rs` — Remaining unsafe blocks in tests require complex bit extraction for sub-byte metadata. [Phase 2 confirmed]
 - `src/policy/marksweepspace/malloc_ms/metadata.rs` — Remaining unsafe is `u128` load (primitive not implementing `MetadataValue`) and `SweepProof` constructor. [Phase 2 confirmed]
 - `src/util/metadata/vo_bit/mod.rs` — `find_prev_non_zero_value` is encapsulated in safe `find_object_from_internal_pointer`. Irreducible without capability tokens. [Phase 2 confirmed]
+- `src/util/heap/freelistpageresource.rs` — Remaining unsafe are `unsafe impl Send` and `unsafe impl Sync`. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - `SweepProof` for `malloc_ms` (Implemented).
