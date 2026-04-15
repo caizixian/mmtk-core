@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 129 | Δ: -202
+- Starting count: 331 | Current: 126 | Δ: -205
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -104,6 +104,7 @@
 - `src/policy/vmspace.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
 - `src/policy/marksweepspace/native_ms/block_list.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
 - `src/policy/compressor/compressorspace.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
+- `benches/regular_bench/bulk_meta/bscan.rs` — Clean: 0 unsafe blocks after using safe AlignedBuffer [Phase 2 confirmed].
 
 ## Abstraction Proposals (for Phase 2)
 ### MetadataCursor for side_metadata

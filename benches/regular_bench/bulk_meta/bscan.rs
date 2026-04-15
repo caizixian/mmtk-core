@@ -7,12 +7,9 @@ use mmtk::util::{
 use rand::{seq::IteratorRandom, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
-fn allocate_aligned(size: usize) -> Address {
-    let ptr = unsafe {
-        std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(size, size).unwrap())
-    };
-    Address::from_mut_ptr(ptr)
-}
+#[repr(align(1024))]
+struct AlignedBuffer([usize; 1024 / std::mem::size_of::<usize>()]);
+
 
 const BLOCK_BYTES: usize = 32768usize; // Match an Immix block size.
 
@@ -36,11 +33,13 @@ struct PreparedBitmap {
     start: Address,
     end: Address,
     set_bits: Vec<(Address, u8)>,
+    _buffer: Box<AlignedBuffer>,
 }
 
 /// Make a bitmap of the desired size and set bits.
 fn make_standard_bitmap() -> PreparedBitmap {
-    let start = allocate_aligned(BLOCK_META_BYTES);
+    let mut buffer = Box::new(AlignedBuffer([0; 1024 / std::mem::size_of::<usize>()]));
+    let start = Address::from_mut_ptr(buffer.0.as_mut_ptr() as *mut u8);
     let end = start + BLOCK_META_BYTES;
     let mut rng = get_rng();
 
@@ -57,15 +56,15 @@ fn make_standard_bitmap() -> PreparedBitmap {
     set_bits.sort();
 
     for (addr, bit) in set_bits.iter() {
-        let word = unsafe { addr.load::<usize>() };
-        let new_word = word | (1 << bit);
-        unsafe { addr.store::<usize>(new_word) };
+        let offset = (addr.as_usize() - start.as_usize()) / std::mem::size_of::<usize>();
+        buffer.0[offset] |= 1 << bit;
     }
 
     PreparedBitmap {
         start,
         end,
         set_bits,
+        _buffer: buffer,
     }
 }
 
