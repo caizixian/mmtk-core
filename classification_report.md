@@ -21,6 +21,7 @@ pub(crate) struct MetadataSlot(pub(crate) Address);
 ```
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/util/metadata/header_metadata.rs` | 90 | 0 | -90 |
@@ -641,6 +642,7 @@ index 176a508f..cf5e11ca 100644
 **Description**: Introduced a trait extension `SideMetadataSpecBlockExt` for `SideMetadataSpec` that provides safe methods for loading and storing addresses and usizes, encapsulating atomic operations and raw pointer manipulations.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/policy/marksweepspace/native_ms/block.rs` | 16 | 0 | -16 |
@@ -675,6 +677,7 @@ trait SideMetadataSpecBlockExt {
 **Description**: Replaced non-atomic loads and stores on side metadata with atomic operations (typically using `Ordering::Relaxed`). This addresses potential data races at the language level and allows removing the `unsafe` qualifier from functions accessing side metadata.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/util/metadata/vo_bit/mod.rs` | 8 | 0 | -8 |
@@ -777,6 +780,7 @@ trait SideMetadataSpecBlockExt {
 **Description**: Replaced unsafe metadata operations (like `is_marked_unsafe`, `unset_vo_bit_unsafe`, `unset_mark_bit`, `unset_page_mark`) with safe versions that encapsulate the unsafety.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/policy/marksweepspace/malloc_ms/global.rs` | 8 | 0 | -8 |
@@ -907,6 +911,7 @@ pub(crate) struct SFTWrapper(pub &'static (dyn SFT + Sync));
 Additionally, many SFT map operations were made safe, and `unsafe impl Sync` was removed for map implementations.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/policy/sft_map.rs` | 26 | 2 | -24 |
@@ -1241,6 +1246,7 @@ index 6d53f764..a0473bf0 100644
 **Description**: Removed complex bulk XOR operations on metadata that required `load128` and manual pointer manipulation, reverting to simpler object-by-object sweeping.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/policy/marksweepspace/malloc_ms/global.rs` | 3 | 0 | -3 |
@@ -1294,6 +1300,7 @@ index 6d53f764..a0473bf0 100644
 **Description**: Replaced trait methods that take raw `Address` and perform unsafe operations (like loading/storing atomics via pointer casting) with methods that take safe references to the value or its associated atomic type. This allows the use of standard safe atomic methods.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/util/metadata/metadata_val_traits.rs` | 20 | 0 | -20 |
@@ -1347,6 +1354,7 @@ index 6d53f764..a0473bf0 100644
 **Description**: `Address::from_usize()` was made a safe function, removing the need for `unsafe` blocks when creating addresses from raw integers.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/util/metadata/side_metadata/helpers.rs` | 27 | 0 | -27 |
@@ -2504,6 +2512,7 @@ index dc0922f3..0de1b0b3 100644
 **Description**: `ObjectReference::from_raw_address_unchecked` was replaced by `ObjectReference::from_raw_address(...).unwrap()` which is safe.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/util/alloc/free_list_allocator.rs` | 1 | 0 | -1 |
@@ -2596,6 +2605,7 @@ index dc0922f3..0de1b0b3 100644
 **Description**: Refactored `SimpleSlot` to hold a safe `Address` instead of a raw pointer to an atomic. Consolidated raw pointer dereferencing into a single internal helper `as_atomic(&self) -> &Atomic<Address>`, making `load` and `store` safe methods. Removed `unsafe impl Send` as `Address` is `Send`. Also removed the legacy `impl Slot for Address` to enforce type safety.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/vm/slot.rs` | 7 | 2 | -5 |
@@ -2694,6 +2704,7 @@ index dc0922f3..0de1b0b3 100644
 **Description**: Replacing raw pointer arithmetic and direct dereferencing with a safe slice created from raw parts. This encapsulates the unsafe memory access behind Rust's safe slice types, providing bounds checks.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/util/raw_memory_freelist.rs` | 2 | 1 | -1 |
@@ -2772,6 +2783,7 @@ index dc0922f3..0de1b0b3 100644
 **Description**: Replaced raw pointers to atomics with safe Rust references with lifetimes in mock slot implementations. This eliminates unsafe pointer dereferences for load/store operations and removes the need for `unsafe impl Send`.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/vm/tests/mock_tests/mock_test_slots.rs` | 11 | 0 | -11 |
@@ -2871,6 +2883,7 @@ index dc0922f3..0de1b0b3 100644
 **Description**: Passing references instead of raw pointers to methods, removing the need to dereference raw pointers within the method.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/policy/marksweepspace/native_ms/block.rs` | 1 | 0 | -1 |
@@ -2978,6 +2991,7 @@ index dc0922f3..0de1b0b3 100644
 **Description**: `UnsafeCell` combined with a manual `Mutex<()>` was replaced by a proper `Mutex<T>` that safely protects the inner data. This eliminates the need for unsafe manual locking patterns and `UnsafeCell::get()` calls. Additionally, some shared fields were moved to `AtomicUsize` to allow safe concurrent access without full locks.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/util/heap/layout/map32.rs` | 11 | 0 | -11 |
@@ -3209,6 +3223,7 @@ index 128e5752..ae390742 100644
 **Description**: Guarded access to global state (like the Plan) by a zero-sized proof token (`StwProof`) that encodes the "Stop The World" invariant at the type level, or by standard Rust borrow rules on `StwProtected` wrappers. This allows safe access to mutable state without raw pointers or manual locking.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/scheduler/gc_work.rs` | 4 | 0 | -4 |
@@ -3389,6 +3404,7 @@ index 128e5752..ae390742 100644
 **Description**: Replaced unsafe raw pointers (`NonNull`) used for sharing state between parent and child instances with safe reference counting and read-write locks (`Arc<RwLock<T>>`). This eliminates the need for manual pointer dereferencing and custom `unsafe impl Send/Sync`.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/util/int_array_freelist.rs` | 4 | 0 | -4 |
@@ -3502,6 +3518,7 @@ index 128e5752..ae390742 100644
 **Description**: Replaced custom unsafe lock-free queue implementation `BlockQueue` (which used `UnsafeCell` and `MaybeUninit` with unsafe operations like `push_relaxed` and `assume_init`) with a safe concurrent queue `ArrayQueue` from the `crossbeam` crate.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/util/heap/blockpageresource.rs` | 8 | 0 | -8 |
@@ -3589,6 +3606,7 @@ index 128e5752..ae390742 100644
 **Description**: Replaced unsafe raw memory access (via `load` and `store` on metadata tables) with safe atomic operations (`load_atomic` and `store_atomic`) provided by the abstraction.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/plan/barriers.rs` | 1 | 0 | -1 |
@@ -3754,6 +3772,7 @@ index 24bb105b..f88ec10e 100644
 **Description**: Replaced `MaybeUninit` arrays with `Option` arrays, removing the need for `unsafe` `assume_init_mut()` and `assume_init()` calls. The elements are accessed safely using `as_mut().expect(...)`.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/util/copy/mod.rs` | 18 | 0 | -18 |
@@ -4242,6 +4261,7 @@ index 9b070cc0..8dd0f28a 100644
 **Description**: Replaced `UnsafeCell<MaybeUninit<T>>`, `std::sync::Once`, or `static mut` with `std::sync::OnceLock<T>`, removing the need for `unsafe` blocks during initialization and reference retrieval.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/util/rust_util/mod.rs` | 5 | 0 | -5 |
@@ -4409,6 +4429,7 @@ diff --git a/src/util/rust_util/atomic_box.rs b/src/util/rust_util/atomic_box.rs
 **Description**: Replaced `NonZeroUsize::new_unchecked` with `NonZeroUsize::new(...).expect(...)` to ensure safety during initialization.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/policy/marksweepspace/native_ms/block.rs` | 1 | 0 | -1 |
@@ -4434,6 +4455,7 @@ diff --git a/src/util/rust_util/atomic_box.rs b/src/util/rust_util/atomic_box.rs
 **Description**: Replaced manual allocation (`std::alloc::alloc_zeroed`) and raw pointer manipulation with a `Vec` that is initialized safely (e.g., using `vec![]` or `bytemuck::zeroed_vec`). This eliminates the need for unsafe allocation and raw pointer load/store during initialization. In some cases (like `bscan.rs`), the vector is leaked to provide a static-like buffer.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `benches/regular_bench/bulk_meta/bscan.rs` | 3 | 0 | -3 |
@@ -4567,6 +4589,7 @@ index 09346bf3..9c38e20d 100644
 **Description**: Removing unsafe lifetime erasure hacks (like casting a reference to a raw pointer and back to a reference with a different lifetime) by enforcing correct lifetimes in function signatures (e.g., requiring `'static` when needed).
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/policy/copyspace.rs` | 1 | 0 | -1 |
@@ -4597,6 +4620,7 @@ index 09346bf3..9c38e20d 100644
 **Description**: Removal of the unsafe hack that cast a local plan reference to a `'static` reference and used `Arc::as_ptr` to modify `GCTrigger`.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/mmtk.rs` | 2 | 0 | -2 |
@@ -4642,6 +4666,7 @@ index 09346bf3..9c38e20d 100644
 **Description**: Replaced manual pointer arithmetic and unchecked object creation in sweeping loops with a safe `CellIter` and safe `ObjectReference` creation. One unsafe operation (storing the link) was moved to a helper method `BlockCell::store_link`.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/policy/marksweepspace/native_ms/block.rs` | 5 | 1 | -4 |
@@ -4685,6 +4710,7 @@ index 09346bf3..9c38e20d 100644
 **Description**: Replacing unsafe raw pointer dereferencing to access slice or array elements with safe alternatives like `as_bytes().first()`.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/scheduler/worker.rs` | 1 | 0 | -1 |
@@ -4715,6 +4741,7 @@ index 09346bf3..9c38e20d 100644
 **Description**: Marking internal methods that manipulate the heap or free list as safe, as they do not perform unsafe memory operations directly and their safety invariants are either handled or represent logic correctness rather than memory safety.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/util/heap/freelistpageresource.rs` | 5 | 0 | -5 |
@@ -4838,6 +4865,7 @@ index 09346bf3..9c38e20d 100644
 **Description**: The `VMMap` trait methods `allocate_contiguous_chunks` and `free_contiguous_chunks` were made safe, allowing callers to remove `unsafe` blocks. This was enabled by adding internal synchronization (Mutex) in the implementations (`Map32` and `Map64`).
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/util/heap/pageresource.rs` | 2 | 0 | -2 |
@@ -4893,6 +4921,7 @@ index 09346bf3..9c38e20d 100644
 **Description**: Replaced direct unsafe access to allocators and subsequent downcasting with a safe wrapper method `allocator_impl_mut_for_semantic` on `Mutator`.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/plan/compressor/mutator.rs` | 1 | 0 | -1 |
@@ -5166,6 +5195,7 @@ index 2a190a31..0fd8ab8f 100644
 **Description**: `unsafe` trait implementations (such as `unsafe impl Zeroable`) were replaced by using derive macros (e.g., `#[derive(Zeroable)]`), allowing the compiler or macro to guarantee safety based on the types of the fields.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/util/heap/space_descriptor.rs` | 1 | 0 | -1 |
@@ -5196,6 +5226,7 @@ index 2a190a31..0fd8ab8f 100644
 **Description**: Removal of explicit `unsafe impl Send` and `unsafe impl Sync` because the compiler can now automatically derive them. This often happens when fields are updated to use safe concurrent types or when raw pointers are removed.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/util/heap/freelistpageresource.rs` | 2 | 0 | -2 |
@@ -5604,6 +5635,7 @@ index 7cb231d8..7eaab29b 100644
 **Description**: Replaced manual type erasure using raw pointers and `expose_provenance` with the safe `std::any::Any` trait and `downcast_mut` for dynamic type checking at runtime.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/util/erase_vm.rs` | 1 | 0 | -1 |
@@ -5657,6 +5689,7 @@ index adc092c7..d17b96e5 100644
 **Description**: Replaced raw pointers (`*mut T`) with `Option<&mut T>` or `Option<Box<T>>` in `extern "C"` function signatures. Since these types are ABI-compatible with nullable pointers in C, this removes the need for `unsafe` dereferencing and `Box::from_raw` calls at the FFI boundary.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `docs/dummyvm/src/api.rs` | 10 | 1 | -9 |
@@ -5797,6 +5830,7 @@ index adc092c7..d17b96e5 100644
 **Description**: Replaced raw libc FFI calls for setting thread affinity with the safe `core_affinity` crate.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/scheduler/affinity.rs` | 2 | 1 | -1 |
@@ -5853,6 +5887,7 @@ index adc092c7..d17b96e5 100644
 **Description**: Centralizing and consolidating unsafe calls to operating system memory management APIs (like `mmap`, `mprotect`, `munmap`). This reduces the number of distinct unsafe blocks by merging contiguous calls or delegating to internal helpers.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/util/memory.rs` | 8 | 5 | -3 |
@@ -6073,6 +6108,7 @@ index adc092c7..d17b96e5 100644
 **Description**: Replaced raw C allocator calls (like `free` and `calloc`) with safe wrappers in `crate::util::malloc`.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/policy/marksweepspace/malloc_ms/global.rs` | 1 | 0 | -1 |
@@ -6151,6 +6187,7 @@ index adc092c7..d17b96e5 100644
 **Description**: Methods that previously relied on the caller to ensure safety invariants (such as valid indices or initialized state) were refactored to perform runtime checks (assertions) and panic on failure. This allows the methods to be safe and removes the need for `unsafe` blocks at call sites.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/plan/mutator_context.rs` | 15 | 0 | -15 |
@@ -6473,6 +6510,7 @@ index adc092c7..d17b96e5 100644
 **Description**: Removal of unsafe casts from `self` to a raw pointer and back to a reference (often with an extended lifetime) to pass to work packets or closures. This is resolved by refactoring the work packets to not require the reference or to acquire it safely.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/plan/global.rs` | 1 | 0 | -1 |
@@ -6630,6 +6668,7 @@ index adc092c7..d17b96e5 100644
 **Description**: Merging adjacent unsafe blocks or moving operations into a single unsafe block to improve readability and reduce the count of unsafe blocks, without removing the need for unsafe.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/util/malloc/malloc_ms_util.rs` | 5 | 3 | -2 |
@@ -6674,6 +6713,7 @@ index adc092c7..d17b96e5 100644
 **Description**: Removal of `unsafe` blocks that were not actually required for the operation, such as around safe function calls like `Address::zero()`.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/policy/marksweepspace/malloc_ms/global.rs` | 1 | 0 | -1 |
@@ -6716,6 +6756,7 @@ index adc092c7..d17b96e5 100644
 **Description**: Removed an unsafe optimization that bypassed normal abstractions (e.g., setting raw bytes directly in side metadata), falling back to a safe method to ensure memory safety at the cost of potential performance.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/util/metadata/log_bit.rs` | 1 | 0 | -1 |
@@ -6755,6 +6796,7 @@ index adc092c7..d17b96e5 100644
 **Description**: Removed `unsafe impl` for `bytemuck` traits (`ZeroableInOption`, `PodInOption`) on an enum by providing explicit safe conversion methods (`to_u8`, `from_u8`) between `Option<Enum>` and primitive types. This avoids the need for unsafe transmutations or trait promises about memory layout.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/plan/concurrent/mod.rs` | 2 | 0 | -2 |
@@ -6796,6 +6838,7 @@ index adc092c7..d17b96e5 100644
 **Description**: Replaced direct calls to unsafe FFI functions (from `libc`) with safe methods provided by the Rust standard library (e.g., `std::process`, `std::thread`, and `slice::fill`).
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/util/rust_util/mod.rs` | 2 | 0 | -2 |
@@ -6879,6 +6922,7 @@ index adc092c7..d17b96e5 100644
 **Description**: Replaced raw pointers with leaked static references in test fixtures (`MMTKFixture`). Since tests can afford to leak memory, this eliminates the need for unsafe dereferencing and manual `Drop` implementations that free the raw pointer. It also allows removing manual `unsafe impl Send`.
 
 **Files and Unsafe Delta**:
+
 | File | Base | New | Δ |
 |------|------|-----|---|
 | `src/util/test_util/fixtures.rs` | 4 | 0 | -4 |
