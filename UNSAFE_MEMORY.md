@@ -10,7 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/scheduler/mod.rs:39-45` — Restrict visibility of `ExclusivePlanAccessProof::new()` to `pub(in crate::scheduler)` to enforce capability token pattern.
+1. 🔴 HIGH: `src/policy/copyspace.rs:367` and `src/policy/marksweepspace/malloc_ms/global.rs:557` — Investigate if we can avoid unsafe lifetime extension for work packets by refactoring `BumpAllocator` or using `Arc`.
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -57,6 +57,11 @@
 - `src/util/heap/layout/map64.rs` — Redundant unsafe impl Send and Sync removed. [Phase 2 confirmed]
 - `src/util/int_array_freelist.rs` — All unsafe blocks removed by replacing raw pointer with `Arc<RwLock>`. [Phase 2 confirmed]
 - `src/util/malloc/mod.rs` — Irreducible FFI calls to library `malloc`, `calloc`, `realloc`, `free`. [Phase 2 confirmed]
+- `src/scheduler/affinity.rs` — Irreducible FFI calls to libc for thread affinity (`sched_getaffinity`, `sched_setaffinity`). [Phase 2 confirmed]
+- `src/policy/copyspace.rs` — Irreducible FFI calls to `mprotect` and unsafe cast to extend lifetime for `CopySpace` reference. [Phase 2 confirmed]
+- `src/policy/marksweepspace/malloc_ms/global.rs` — Irreducible FFI calls to `free` and unsafe cast to extend lifetime for work packets. [Phase 2 confirmed]
+- `src/util/alloc/allocator.rs` — Irreducible `unsafe impl Sync` for `AllocationOptionsHolder` and `ptr::write_bytes` for alignment gap filling. [Phase 2 confirmed]
+- `src/util/test_util/mock_vm.rs` — Irreducible `transmute` in `lifetime!` macro to remove lifetimes in mock VM for testing. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - `SweepProof` for `malloc_ms` (Implemented).
