@@ -14,8 +14,7 @@
 - `InitializeOnce` was used for `SFT_MAP` to allow zero-cost reads on extreme hot paths (object tracing). Now replaced by `OnceLock` for safety.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: `src/util/malloc/malloc_ms_util.rs:11` — Check if we can use `Layout` and `alloc` instead of `posix_memalign` to avoid FFI.
-2. 🟢 LOW: Conclude the task as all remaining unsafe code has been verified and documented where needed.
+1. 🟢 LOW: Conclude the task as all remaining unsafe code has been verified and documented where needed.
 
 ## Patterns Discovered
 - **Safe Abstraction**: Used `SFTHeader` wrapper to avoid `transmute` on fat pointers in `SFTRefStorage`, removing 3 unsafe blocks (and adding 1 unsafe impl Sync).
@@ -67,7 +66,7 @@
 - `src/util/metadata/pin_bit.rs` — Fixed unsafe block by using load_atomic. Remaining code is safe [Phase 2 confirmed].
 - `src/util/memory.rs` — Irreducible FFI calls to mmap/munmap/mprotect/madvise. Re-evaluated Phase 2 abstraction (MmapRegion) but reverted as it didn't reduce count. [Phase 3 confirmed].
 - docs/dummyvm/src/api.rs — Refactored some FFI functions to use Option<&mut T>, removing 3 unsafe blocks. Remaining unsafe are irreducible FFI boundary operations. [Phase 3 confirmed].
-- `src/util/malloc/malloc_ms_util.rs` — Irreducible FFI calls to malloc/free/calloc. Safety invariants documented in Phase 3. [Phase 2 confirmed].
+- `src/util/malloc/malloc_ms_util.rs` — Irreducible FFI calls to malloc/free/calloc. Analyzed `posix_memalign` and confirmed it is required to maintain consistency with feature-selected allocators. [Phase 3 confirmed].
 - `src/util/metadata/header_metadata.rs` — Unsafe functions `load`/`store` are non-atomic/racy by design; unsafe blocks in tests call them [Phase 2 confirmed].
 - `src/util/metadata/global.rs` — `load` and `store` are non-atomic and not thread-safe by design. Unsafe comes from `ObjectModel::load_metadata` trait method. [Phase 3 confirmed].
 - `src/util/rust_util/atomic_box.rs` — Removed in favor of `std::sync::OnceLock`. File is now empty. [Phase 3 confirmed].
