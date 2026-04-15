@@ -3,7 +3,7 @@
 ## Progress
 - Starting count: 331 | Current: 97 | Δ: -234
 - Phase: 3
-- Note: Refactored `sft_map.rs` to use `SFTHeader` wrapper, removing `transmute` on fat pointers and reducing unsafe block count by 2 (net -1 after adding 1 unsafe impl Sync). The project remains in Phase 3.
+- Note: Reverted `MmapRegion` abstraction in `src/util/memory.rs` as it did not reduce unsafe code and increased count by 5. The count is back to 97.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
@@ -14,7 +14,7 @@
 - `InitializeOnce` is used for `SFT_MAP` to allow zero-cost reads on extreme hot paths (object tracing).
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/util/memory.rs` — Implement `MmapRegion` abstraction — expected Δ: TBD
+1. 🟢 LOW: `src/util/rust_util/atomic_box.rs` — Audit and document safety invariants for remaining unsafe operations.
 
 ## Patterns Discovered
 - **Safe Abstraction**: Used `SFTHeader` wrapper to avoid `transmute` on fat pointers in `SFTRefStorage`, removing 3 unsafe blocks (and adding 1 unsafe impl Sync).
@@ -64,7 +64,7 @@
 - `src/vm/slot.rs` — Removed `impl Slot for Address`. Remaining are irreducible raw pointer dereferences in `SimpleSlot` and raw memory copy. SAFETY comments added in Phase 3. [Phase 3 confirmed].
 - `src/util/metadata/metadata_val_traits.rs` — Clean: 0 unsafe blocks after refactoring to use `with_atomic` [Phase 3 confirmed].
 - `src/util/metadata/pin_bit.rs` — Fixed unsafe block by using load_atomic. Remaining code is safe [Phase 2 confirmed].
-- `src/util/memory.rs` — Irreducible FFI calls to mmap/munmap/mprotect/madvise. Cleaned up 2 unsafe blocks in tests. [Phase 2 confirmed].
+- `src/util/memory.rs` — Irreducible FFI calls to mmap/munmap/mprotect/madvise. Re-evaluated Phase 2 abstraction (MmapRegion) but reverted as it didn't reduce count. [Phase 3 confirmed].
 - `docs/dummyvm/src/api.rs` — Irreducible FFI boundary operations [Phase 2 confirmed].
 - `src/util/malloc/malloc_ms_util.rs` — Irreducible FFI calls to malloc/free/calloc. Safety invariants documented in Phase 3. [Phase 2 confirmed].
 - `src/util/metadata/header_metadata.rs` — Unsafe functions `load`/`store` are non-atomic/racy by design; unsafe blocks in tests call them [Phase 2 confirmed].
@@ -135,4 +135,4 @@
 - Target files: `src/util/memory.rs`, `src/util/heap/layout/mmapper/csm/mod.rs`
 - Expected Δ: TBD
 - Design sketch: A type that owns a memory mapping and guarantees safety for reads and writes within its bounds.
-- Status: in-progress
+- Status: abandoned (reverted as it did not reduce unsafe count)
