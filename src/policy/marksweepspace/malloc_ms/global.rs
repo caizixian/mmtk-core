@@ -351,10 +351,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
     }
 
     /// Unset multiple pages, starting from the given address, for the given size, and decrease the active page count if we unset any page mark in the region
-    ///
-    /// # Safety
-    /// We need to ensure that only one GC thread is accessing the range.
-    unsafe fn unset_page_mark(&self, start: Address, size: usize) {
+    fn unset_page_mark(&self, start: Address, size: usize, proof: &SweepProof) {
         debug_assert!(start.is_aligned_to(BYTES_IN_MALLOC_PAGE));
         debug_assert!(crate::util::conversions::raw_is_aligned(
             size,
@@ -363,9 +360,9 @@ impl<VM: VMBinding> MallocSpace<VM> {
         let mut page = start;
         let mut cleared_pages = 0;
         while page < start + size {
-            if is_page_marked_unsafe(page) {
+            if is_page_marked_non_atomic(page, proof) {
                 cleared_pages += 1;
-                unset_page_mark_unsafe(page);
+                unset_page_mark_non_atomic(page, proof);
             }
             page += BYTES_IN_MALLOC_PAGE;
         }
@@ -465,7 +462,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
         if offset_malloc_bit {
             trace!("Free memory {:x}", addr);
             offset_free(addr);
-            unsafe { unset_offset_malloc_bit_unsafe(addr) };
+            unset_offset_malloc_bit(addr);
         } else {
             let ptr = addr.to_mut_ptr();
             trace!("Free memory {:?}", ptr);
@@ -562,6 +559,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
             Box::new(MSSweepChunk {
                 ms: space,
                 chunk: chunk.start(),
+                proof: unsafe { SweepProof::new_unchecked() },
             })
         });
 
@@ -579,14 +577,14 @@ impl<VM: VMBinding> MallocSpace<VM> {
 
     pub fn end_of_gc(&mut self) {}
 
-    pub fn sweep_chunk(&self, chunk_start: Address) {
+    pub fn sweep_chunk(&self, chunk_start: Address, proof: &SweepProof) {
         // Call the relevant sweep function depending on the location of the mark bits
         match *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC {
             MetadataSpec::OnSide(local_mark_bit_side_spec) => {
-                self.sweep_chunk_mark_on_side(chunk_start, local_mark_bit_side_spec);
+                self.sweep_chunk_mark_on_side(chunk_start, local_mark_bit_side_spec, proof);
             }
             _ => {
-                self.sweep_chunk_mark_in_header(chunk_start);
+                self.sweep_chunk_mark_in_header(chunk_start, proof);
             }
         }
     }
@@ -600,30 +598,30 @@ impl<VM: VMBinding> MallocSpace<VM> {
     }
 
     /// Clean up for an empty chunk
-    fn clean_up_empty_chunk(&self, chunk_start: Address) {
+    fn clean_up_empty_chunk(&self, chunk_start: Address, proof: &SweepProof) {
         // Clear the chunk map
         self.chunk_map
             .set_allocated(Chunk::from_aligned_address(chunk_start), false);
         // Clear the SFT entry
         unsafe { crate::mmtk::SFT_MAP.clear(chunk_start) };
         // Clear the page marks - we are the only GC thread that is accessing this chunk
-        unsafe { self.unset_page_mark(chunk_start, BYTES_IN_CHUNK) };
+        self.unset_page_mark(chunk_start, BYTES_IN_CHUNK, proof);
     }
 
     /// Sweep an object if it is dead, and unset page marks for empty pages before this object.
     /// Return true if the object is swept.
-    fn sweep_object(&self, object: ObjectReference, empty_page_start: &mut Address) -> bool {
+    fn sweep_object(&self, object: ObjectReference, empty_page_start: &mut Address, proof: &SweepProof) -> bool {
         let (obj_start, offset_malloc, bytes) = Self::get_malloc_addr_size(object);
 
         // We are the only thread that is dealing with the object. We can use non-atomic methods for the metadata.
-        if !unsafe { is_marked_unsafe::<VM>(object) } {
+        if !is_marked_non_atomic::<VM>(object, proof) {
             // Dead object
             trace!("Object {} has been allocated but not marked", object);
 
             // Free object
             self.free_internal(obj_start, bytes, offset_malloc);
             trace!("free object {}", object);
-            unsafe { unset_vo_bit_unsafe(object) };
+            unset_vo_bit_non_atomic(object, proof);
 
             true
         } else {
@@ -637,9 +635,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
                     .align_down(BYTES_IN_MALLOC_PAGE);
                 if current_page > *empty_page_start {
                     // we are the only GC thread that is accessing this chunk
-                    unsafe {
-                        self.unset_page_mark(*empty_page_start, current_page - *empty_page_start)
-                    };
+                    self.unset_page_mark(*empty_page_start, current_page - *empty_page_start, proof);
                 }
             }
 
@@ -683,7 +679,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
     /// This function uses non-atomic accesses to side metadata (although these
     /// non-atomic accesses should not have race conditions associated with them)
     /// as well as calls libc functions (`malloc_usable_size()`, `free()`)
-    fn sweep_chunk_mark_on_side(&self, chunk_start: Address, mark_bit_spec: SideMetadataSpec) {
+    fn sweep_chunk_mark_on_side(&self, chunk_start: Address, mark_bit_spec: SideMetadataSpec, proof: &SweepProof) {
         // We can do xor on bulk for mark bits and valid object bits. If the result is zero, that means
         // the objects in it are all alive (both valid object bit and mark bit is set), and we do not
         // need to do anything for the region. Otherwise, we will sweep each single object in the region.
@@ -716,13 +712,12 @@ impl<VM: VMBinding> MallocSpace<VM> {
 
             // Scan the chunk by every 'bulk_load_size' region.
             while address < chunk_end {
-                let alloc_128: u128 = unsafe {
-                    load128(
-                        &crate::util::metadata::vo_bit::VO_BIT_SIDE_METADATA_SPEC,
-                        address,
-                    )
-                };
-                let mark_128: u128 = unsafe { load128(&mark_bit_spec, address) };
+                let alloc_128: u128 = load128(
+                    &crate::util::metadata::vo_bit::VO_BIT_SIDE_METADATA_SPEC,
+                    address,
+                    proof,
+                );
+                let mark_128: u128 = load128(&mark_bit_spec, address, proof);
 
                 // Check if there are dead objects in the bulk loaded region
                 if alloc_128 ^ mark_128 != 0 {
@@ -736,7 +731,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
                         false,
                     >::new(address, end);
                     for object in bulk_load_scan {
-                        self.sweep_object(object, &mut empty_page_start);
+                        self.sweep_object(object, &mut empty_page_start, proof);
                     }
                 } else {
                     // TODO we aren't actually accounting for the case where an object is alive and spans
@@ -778,7 +773,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
                     }
 
                     debug_assert!(
-                        unsafe { is_marked_unsafe::<VM>(object) },
+                        is_marked_non_atomic::<VM>(object, proof),
                         "Dead object = {} found after sweep",
                         object
                     );
@@ -792,13 +787,13 @@ impl<VM: VMBinding> MallocSpace<VM> {
 
             // If we never updated empty_page_start, the entire chunk is empty.
             if empty_page_start.is_zero() {
-                self.clean_up_empty_chunk(chunk_start);
+                self.clean_up_empty_chunk(chunk_start, proof);
             }
 
             #[cfg(debug_assertions)]
             self.debug_sweep_chunk_done(live_bytes);
         } else {
-            self.sweep_each_object_in_chunk(chunk_start);
+            self.sweep_each_object_in_chunk(chunk_start, proof);
         }
     }
 
@@ -807,11 +802,11 @@ impl<VM: VMBinding> MallocSpace<VM> {
     /// This function uses non-atomic accesses to side metadata (although these
     /// non-atomic accesses should not have race conditions associated with them)
     /// as well as calls libc functions (`malloc_usable_size()`, `free()`)
-    fn sweep_chunk_mark_in_header(&self, chunk_start: Address) {
-        self.sweep_each_object_in_chunk(chunk_start)
+    fn sweep_chunk_mark_in_header(&self, chunk_start: Address, proof: &SweepProof) {
+        self.sweep_each_object_in_chunk(chunk_start, proof)
     }
 
-    fn sweep_each_object_in_chunk(&self, chunk_start: Address) {
+    fn sweep_each_object_in_chunk(&self, chunk_start: Address, proof: &SweepProof) {
         #[cfg(debug_assertions)]
         let mut live_bytes = 0;
 
@@ -843,11 +838,11 @@ impl<VM: VMBinding> MallocSpace<VM> {
                 );
             }
 
-            let live = !self.sweep_object(object, &mut empty_page_start);
+            let live = !self.sweep_object(object, &mut empty_page_start, proof);
             if live {
                 // Live object. Unset mark bit.
                 // We should be the only thread that access this chunk, it is okay to use non-atomic store.
-                unsafe { unset_mark_bit::<VM>(object) };
+                unset_mark_bit_non_atomic::<VM>(object, proof);
 
                 #[cfg(debug_assertions)]
                 {
@@ -860,19 +855,18 @@ impl<VM: VMBinding> MallocSpace<VM> {
 
         // If we never updated empty_page_start, the entire chunk is empty.
         if empty_page_start.is_zero() {
-            self.clean_up_empty_chunk(chunk_start);
+            self.clean_up_empty_chunk(chunk_start, proof);
         } else if empty_page_start < chunk_start + BYTES_IN_CHUNK {
             // This is for the edge case where we have a live object and then no other live
             // objects afterwards till the end of the chunk. For example consider chunk
             // 0x0-0x400000 where only one object at 0x100 is alive. We will unset page bits
             // for 0x0-0x100 but then not unset it for the pages after 0x100. This checks
             // if we have empty pages at the end of a chunk that needs to be cleared.
-            unsafe {
-                self.unset_page_mark(
-                    empty_page_start,
-                    chunk_start + BYTES_IN_CHUNK - empty_page_start,
-                )
-            };
+            self.unset_page_mark(
+                empty_page_start,
+                chunk_start + BYTES_IN_CHUNK - empty_page_start,
+                proof,
+            );
         }
 
         #[cfg(debug_assertions)]
@@ -896,10 +890,11 @@ pub struct MSSweepChunk<VM: VMBinding> {
     ms: &'static MallocSpace<VM>,
     // starting address of a chunk
     chunk: Address,
+    proof: SweepProof,
 }
 
 impl<VM: VMBinding> GCWork<VM> for MSSweepChunk<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        self.ms.sweep_chunk(self.chunk);
+        self.ms.sweep_chunk(self.chunk, &self.proof);
     }
 }

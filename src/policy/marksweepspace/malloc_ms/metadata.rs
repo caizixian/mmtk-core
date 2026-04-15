@@ -26,8 +26,8 @@ pub fn is_marked<VM: VMBinding>(object: ObjectReference, ordering: Ordering) -> 
     VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(object, None, ordering) == 1
 }
 
-pub unsafe fn is_marked_unsafe<VM: VMBinding>(object: ObjectReference) -> bool {
-    VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load::<VM, u8>(object, None) == 1
+pub fn is_marked_non_atomic<VM: VMBinding>(object: ObjectReference, _proof: &SweepProof) -> bool {
+    unsafe { VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load::<VM, u8>(object, None) == 1 }
 }
 
 /// Set the page mark from 0 to 1. Return true if we set it successfully in this call.
@@ -45,8 +45,8 @@ pub(super) fn is_page_marked(page_addr: Address) -> bool {
 }
 
 #[allow(unused)]
-pub(super) unsafe fn is_page_marked_unsafe(page_addr: Address) -> bool {
-    ACTIVE_PAGE_METADATA_SPEC.load::<u8>(page_addr) == 1
+pub(super) fn is_page_marked_non_atomic(page_addr: Address, _proof: &SweepProof) -> bool {
+    unsafe { ACTIVE_PAGE_METADATA_SPEC.load::<u8>(page_addr) == 1 }
 }
 
 pub fn set_vo_bit(object: ObjectReference) {
@@ -77,34 +77,52 @@ pub(super) fn set_offset_malloc_bit(address: Address) {
     OFFSET_MALLOC_METADATA_SPEC.store_atomic::<u8>(address, 1, Ordering::SeqCst);
 }
 
+pub(super) fn unset_offset_malloc_bit(address: Address) {
+    OFFSET_MALLOC_METADATA_SPEC.store_atomic::<u8>(address, 0, Ordering::SeqCst);
+}
+
 /// Unset the offset bit for the allocation. The argument address should be the allocation address (object start)
-pub(super) unsafe fn unset_offset_malloc_bit_unsafe(address: Address) {
-    OFFSET_MALLOC_METADATA_SPEC.store::<u8>(address, 0);
+pub(super) fn unset_offset_malloc_bit_non_atomic(address: Address, _proof: &SweepProof) {
+    unsafe { OFFSET_MALLOC_METADATA_SPEC.store::<u8>(address, 0) };
 }
 
-pub unsafe fn unset_vo_bit_unsafe(object: ObjectReference) {
-    vo_bit::unset_vo_bit_unsafe(object);
-}
-
-#[allow(unused)]
-pub unsafe fn unset_mark_bit<VM: VMBinding>(object: ObjectReference) {
-    VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.store::<VM, u8>(object, 0, None);
+pub fn unset_vo_bit_non_atomic(object: ObjectReference, _proof: &SweepProof) {
+    unsafe { vo_bit::unset_vo_bit_unsafe(object) };
 }
 
 #[allow(unused)]
-pub(super) unsafe fn unset_page_mark_unsafe(page_addr: Address) {
-    ACTIVE_PAGE_METADATA_SPEC.store::<u8>(page_addr, 0)
+pub fn unset_mark_bit_non_atomic<VM: VMBinding>(object: ObjectReference, _proof: &SweepProof) {
+    unsafe { VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.store::<VM, u8>(object, 0, None) };
+}
+
+#[allow(unused)]
+pub(super) fn unset_page_mark_non_atomic(page_addr: Address, _proof: &SweepProof) {
+    unsafe { ACTIVE_PAGE_METADATA_SPEC.store::<u8>(page_addr, 0) }
 }
 
 /// Load u128 bits of side metadata
 ///
 /// # Safety
 /// unsafe as it can segfault if one tries to read outside the bounds of the mapped side metadata
-pub(super) unsafe fn load128(metadata_spec: &SideMetadataSpec, data_addr: Address) -> u128 {
+pub(super) fn load128(metadata_spec: &SideMetadataSpec, data_addr: Address, _proof: &SweepProof) -> u128 {
     let meta_addr = side_metadata::address_to_meta_address(metadata_spec, data_addr);
 
     #[cfg(all(debug_assertions, feature = "extreme_assertions"))]
     metadata_spec.assert_metadata_mapped(data_addr);
 
-    meta_addr.load::<u128>()
+    unsafe { meta_addr.load::<u128>() }
+}
+
+pub struct SweepProof {
+    _priv: (),
+}
+
+impl SweepProof {
+    /// Create a new proof.
+    ///
+    /// # Safety
+    /// The caller must ensure that this thread has exclusive access to the chunk being swept.
+    pub unsafe fn new_unchecked() -> Self {
+        Self { _priv: () }
+    }
 }
