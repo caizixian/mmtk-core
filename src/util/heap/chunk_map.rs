@@ -145,7 +145,7 @@ impl ChunkMap {
             );
         }
         // Update alloc byte
-        unsafe { Self::ALLOC_TABLE.store::<u8>(chunk.start(), state.0) };
+        Self::ALLOC_TABLE.store::<u8>(chunk.start(), state.0);
         // If this is a newly allcoated chunk, then expand the chunk range.
         if allocated {
             debug_assert!(!chunk.start().is_zero());
@@ -170,7 +170,7 @@ impl ChunkMap {
 
     /// Get chunk state, regardless of the space. This should always be private.
     fn get_internal(&self, chunk: Chunk) -> ChunkState {
-        let byte = unsafe { Self::ALLOC_TABLE.load::<u8>(chunk.start()) };
+        let byte = Self::ALLOC_TABLE.load::<u8>(chunk.start());
         ChunkState(byte)
     }
 

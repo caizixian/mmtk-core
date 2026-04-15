@@ -512,7 +512,7 @@ impl SideMetadataSpec {
     ///
     /// 1. Concurrent access to this operation is undefined behaviour.
     /// 2. Interleaving Non-atomic and atomic operations is undefined behaviour.
-    pub unsafe fn load<T: MetadataValue>(&self, data_addr: Address) -> T {
+    pub fn load<T: MetadataValue>(&self, data_addr: Address) -> T {
         self.side_metadata_access::<true, T, _, _, _>(
             data_addr,
             None,
@@ -522,11 +522,11 @@ impl SideMetadataSpec {
                 if bits_num_log < 3 {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
-                    let byte_val = meta_addr.load::<u8>();
+                    let byte_val = super::helpers::MetadataCursor(meta_addr).load::<u8>();
 
                     FromPrimitive::from_u8((byte_val & mask) >> lshift).unwrap()
                 } else {
-                    meta_addr.load::<T>()
+                    super::helpers::MetadataCursor(meta_addr).load::<T>()
                 }
             },
             |_v| {
@@ -544,7 +544,7 @@ impl SideMetadataSpec {
     ///
     /// 1. Concurrent access to this operation is undefined behaviour.
     /// 2. Interleaving Non-atomic and atomic operations is undefined behaviour.
-    pub unsafe fn store<T: MetadataValue>(&self, data_addr: Address, metadata: T) {
+    pub fn store<T: MetadataValue>(&self, data_addr: Address, metadata: T) {
         self.side_metadata_access::<true, T, _, _, _>(
             data_addr,
             Some(metadata),
@@ -554,12 +554,12 @@ impl SideMetadataSpec {
                 if bits_num_log < 3 {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
-                    let old_val = meta_addr.load::<u8>();
+                    let old_val = super::helpers::MetadataCursor(meta_addr).load::<u8>();
                     let new_val = (old_val & !mask) | (metadata.to_u8().unwrap() << lshift);
 
-                    meta_addr.store::<u8>(new_val);
+                    super::helpers::MetadataCursor(meta_addr).store::<u8>(new_val);
                 } else {
-                    meta_addr.store::<T>(metadata);
+                    super::helpers::MetadataCursor(meta_addr).store::<T>(metadata);
                 }
             },
             |_| {
@@ -630,7 +630,7 @@ impl SideMetadataSpec {
     ///
     /// 1. Concurrent access to this operation is undefined behaviour.
     /// 2. Interleaving Non-atomic and atomic operations is undefined behaviour.
-    pub unsafe fn set_zero(&self, data_addr: Address) {
+    pub fn set_zero(&self, data_addr: Address) {
         use num_traits::Zero;
         match self.log_num_of_bits {
             0..=3 => self.store(data_addr, u8::zero()),
@@ -691,14 +691,14 @@ impl SideMetadataSpec {
     ///
     /// 1. Concurrent access to this operation is undefined behaviour.
     /// 2. Interleaving Non-atomic and atomic operations is undefined behaviour.
-    pub unsafe fn load_raw_byte(&self, data_addr: Address) -> u8 {
+    pub fn load_raw_byte(&self, data_addr: Address) -> u8 {
         debug_assert!(self.log_num_of_bits < 3);
         self.side_metadata_access::<false, u8, _, _, _>(
             data_addr,
             None,
             || {
                 let meta_addr = address_to_meta_address(self, data_addr);
-                meta_addr.load::<u8>()
+                super::helpers::MetadataCursor(meta_addr).load::<u8>()
             },
             |_| {},
         )
@@ -711,7 +711,7 @@ impl SideMetadataSpec {
     ///
     /// 1. Concurrent access to this operation is undefined behaviour.
     /// 2. Interleaving Non-atomic and atomic operations is undefined behaviour.
-    pub unsafe fn load_raw_word(&self, data_addr: Address) -> usize {
+    pub fn load_raw_word(&self, data_addr: Address) -> usize {
         use crate::util::constants::*;
         debug_assert!(self.log_num_of_bits < (LOG_BITS_IN_BYTE + LOG_BYTES_IN_ADDRESS) as usize);
         self.side_metadata_access::<false, usize, _, _, _>(
@@ -720,7 +720,7 @@ impl SideMetadataSpec {
             || {
                 let meta_addr = address_to_meta_address(self, data_addr);
                 let aligned_meta_addr = meta_addr.align_down(BYTES_IN_ADDRESS);
-                aligned_meta_addr.load::<usize>()
+                super::helpers::MetadataCursor(aligned_meta_addr).load_usize()
             },
             |_| {},
         )
@@ -1205,7 +1205,7 @@ impl SideMetadataSpec {
             debug_assert!(cursor.is_mapped());
 
             // If we find non-zero value, just call back.
-            if !unsafe { self.load::<T>(cursor).is_zero() } {
+            if !self.load::<T>(cursor).is_zero() {
                 visit_data(cursor);
             }
             cursor += region_bytes;
