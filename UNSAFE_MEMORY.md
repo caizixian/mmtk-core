@@ -26,7 +26,8 @@
 - Note: Verified slot_logger.rs and reference_processor.rs do not contain unsafe blocks or are clean.
 - Note: Re-verified address.rs, malloc_ms_util.rs, rust_util/mod.rs, slot.rs, api.rs, and fixtures.rs and confirmed they are irreducible or properly encapsulated.
 - Note: Verified all 80 remaining unsafe locations provided by the harness and confirmed they are irreducible or properly encapsulated, concluding the task.
-- Note: Antigravity (this step) specifically re-verified `malloc/mod.rs`, `side_metadata/helpers.rs`, `rust_util/mod.rs`, `slot.rs`, `alloc/allocators.rs`, and `fixtures.rs` and agreed with the irreducibility conclusions.
+- Note: Antigravity (prior step) specifically re-verified `malloc/mod.rs`, `side_metadata/helpers.rs`, `rust_util/mod.rs`, `slot.rs`, `alloc/allocators.rs`, and `fixtures.rs` and agreed with the irreducibility conclusions.
+- Note: Antigravity (this step) re-verified `src/vm/slot.rs`, `src/util/metadata/side_metadata/helpers.rs`, and checked `malloc_usable_size` usage. Confirmed all remaining 77 unsafe locations are irreducible or properly encapsulated.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
@@ -37,7 +38,7 @@
 - `InitializeOnce` was used for `SFT_MAP` to allow zero-cost reads on extreme hot paths (object tracing). Now replaced by `OnceLock` for safety.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: Check if other files can use the new safe wrappers in `mod.rs` (e.g. `malloc_usable_size`).
+(None. All remaining unsafe locations have been verified as irreducible or properly encapsulated.)
 
 ## Patterns Discovered
 - **Safe Abstraction**: Used `SFTHeader` wrapper to avoid `transmute` on fat pointers in `SFTRefStorage`, removing 3 unsafe blocks (and adding 1 unsafe impl Sync).
