@@ -13,6 +13,7 @@ use crate::MMTK;
 
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
+use std::sync::Weak;
 
 /// GCTrigger is responsible for triggering GCs based on the given policy.
 /// All the decisions about heap limit and GC triggering should be resolved here.
@@ -21,7 +22,7 @@ use std::sync::Arc;
 pub struct GCTrigger<VM: VMBinding> {
     /// The current plan. This is uninitialized when we create it, and later initialized
     /// once we have a fixed address for the plan.
-    plan: std::sync::OnceLock<&'static dyn Plan<VM = VM>>,
+    plan: std::sync::OnceLock<Weak<dyn Plan<VM = VM>>>,
     /// The triggering policy.
     pub policy: Box<dyn GCTriggerPolicy<VM>>,
     /// Set by mutators to trigger GC.  It is atomic so that mutators can check if GC has already
@@ -69,12 +70,12 @@ impl<VM: VMBinding> GCTrigger<VM> {
     }
 
     /// Set the plan. This is called in `create_plan()` after we created a boxed plan.
-    pub fn set_plan(&self, plan: &'static dyn Plan<VM = VM>) {
-        self.plan.set(plan).ok().expect("Plan already set");
+    pub fn set_plan(&self, plan: Arc<dyn Plan<VM = VM>>) {
+        self.plan.set(Arc::downgrade(&plan)).ok().expect("Plan already set");
     }
 
-    fn plan(&self) -> &dyn Plan<VM = VM> {
-        *self.plan.get().expect("Plan not initialized")
+    fn plan(&self) -> Arc<dyn Plan<VM = VM>> {
+        self.plan.get().expect("Plan not initialized").upgrade().expect("Plan dropped")
     }
 
     /// Request a GC.  Called by mutators when polling (during allocation) and when handling user
@@ -114,7 +115,7 @@ impl<VM: VMBinding> GCTrigger<VM> {
         let plan = self.plan();
         if self
             .policy
-            .is_gc_required(space_full, space.map(|s| SpaceStats::new(s)), plan)
+            .is_gc_required(space_full, space.map(|s| SpaceStats::new(s)), &*plan)
         {
             info!(
                 "[POLL] {}{} ({}/{} pages)",
@@ -196,7 +197,7 @@ impl<VM: VMBinding> GCTrigger<VM> {
 
     /// Check if the heap is full
     pub fn is_heap_full(&self) -> bool {
-        self.policy.is_heap_full(self.plan())
+        self.policy.is_heap_full(&*self.plan())
     }
 
     /// Return upper bound of the nursery size (in number of bytes)

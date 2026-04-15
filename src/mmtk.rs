@@ -111,7 +111,7 @@ impl Default for MMTKBuilder {
 pub struct MMTK<VM: VMBinding> {
     pub(crate) options: Arc<Options>,
     pub(crate) state: Arc<GlobalState>,
-    pub(crate) plan: crate::util::rust_util::ProofCell<Box<dyn Plan<VM = VM>>>,
+    pub(crate) plan: crate::util::rust_util::ProofCell<Arc<dyn Plan<VM = VM>>>,
     pub(crate) reference_processors: ReferenceProcessors,
     pub(crate) finalizable_processor:
         Mutex<FinalizableProcessor<<VM::VMReferenceGlue as ReferenceGlue<VM>>::FinalizableType>>,
@@ -179,14 +179,6 @@ impl<VM: VMBinding> MMTK<VM> {
             },
         );
 
-        // We haven't finished creating MMTk. No one is using the GC trigger. We cast the arc into a mutable reference.
-        {
-            // We know the plan address will not change. Cast it to a static reference.
-            let static_plan: &'static dyn Plan<VM = VM> = unsafe { &*(&*plan as *const _) };
-            // Set the plan so we can trigger GC and check GC condition without using plan
-            gc_trigger.set_plan(static_plan);
-        }
-
         // TODO: This probably does not work if we have multiple MMTk instances.
         // This needs to be called after we create Plan. It needs to use HeapMeta, which is gradually built when we create spaces.
         VM_MAP.finalize_static_space_map(
@@ -202,6 +194,9 @@ impl<VM: VMBinding> MMTK<VM> {
                 })
             },
         );
+
+        let plan: Arc<dyn Plan<VM = VM>> = Arc::from(plan);
+        gc_trigger.set_plan(plan.clone());
 
         MMTK {
             options,
@@ -442,7 +437,8 @@ impl<VM: VMBinding> MMTK<VM> {
     /// which guarantees that the plan is not used by other threads.
     #[allow(clippy::mut_from_ref)]
     pub fn get_plan_mut(&self, _proof: &crate::scheduler::ExclusivePlanAccessProof) -> &mut dyn Plan<VM = VM> {
-        &mut **self.plan.get_mut_with_proof(_proof)
+        let arc = self.plan.get_mut_with_proof(_proof);
+        Arc::get_mut(arc).expect("Plan is shared!")
     }
 
     /// Get the run time options.

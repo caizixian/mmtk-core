@@ -154,7 +154,7 @@ pub fn create_gc_worker_context<VM: VMBinding>(
 /// We should avoid having methods with the same name in both Plan and BasePlan, as this may confuse people, and
 /// they may call a wrong method by mistake.
 // TODO: Some methods that are not overriden can be moved from the trait to BasePlan.
-pub trait Plan: 'static + HasSpaces + Sync + Downcast {
+pub trait Plan: 'static + HasSpaces + Sync + Send + Downcast {
     /// Get the plan constraints for the plan.
     /// This returns a non-constant value. A constant value can be found in each plan's module if needed.
     fn constraints(&self) -> &'static PlanConstraints;

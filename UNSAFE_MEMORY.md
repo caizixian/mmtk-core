@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 280 | Δ: -51
+- Starting count: 331 | Current: 279 | Δ: -52
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,13 +10,14 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/mmtk.rs:185` — Analyze if the lifetime extension hack for `static_plan` can be avoided by using `Arc` or proper ownership in `GCTrigger`. — expected Δ: 1
+1. 🟡 MED: `src/mmtk.rs:436` — Analyze if `ProofCell::get_ref` usage in `get_plan` can be made safer or if `ProofCell` can be replaced. — expected Δ: 0
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
 - Using `MockObject` in tests to encapsulate unsafe `load`/`store` calls on `HeaderMetadataSpec`.
 - **Tightened bounds**: Added `T: Sync` bound to `InitializeOnce` to ensure soundness when shared across threads.
 - Replaced unsafe raw pointer dereference in bpftrace workaround with safe `str::as_bytes().first()`.
+- **Safe Abstraction**: Replaced `'static` plan reference in `GCTrigger` with `Weak<dyn Plan>` and used `Arc<dyn Plan>` in `MMTK` to avoid unsafe lifetime extension.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/scheduler/worker.rs` — Remaining unsafe are trait impls for Send/Sync [Phase 2 confirmed].
@@ -37,6 +38,7 @@
 - `src/util/rust_util/atomic_box.rs` — Lock-free `OnceOptionBox` requires raw pointer manipulation [Phase 2 confirmed].
 - `src/policy/marksweepspace/malloc_ms/global.rs` — Irreducible lifetime extension for `GCWork` packets [Phase 2 confirmed].
 - `src/util/malloc/mod.rs` — Irreducible FFI calls to malloc/free [Phase 2 confirmed].
+- `src/plan/global.rs` — Irreducible lifetime extension for `GCWork` packets [Phase 2 confirmed].
 
 ## Abstraction Proposals (for Phase 2)
 ### MetadataCursor for side_metadata
