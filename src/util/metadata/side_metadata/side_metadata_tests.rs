@@ -680,39 +680,28 @@ mod tests {
 
     #[test]
     fn test_side_metadata_zero_meta_bits() {
-        let size = 4usize;
-        let allocate_u32 = || -> Address {
-            let ptr = unsafe {
-                std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(size, 4).unwrap())
-            };
-            Address::from_mut_ptr(ptr)
-        };
-        let fill_1 = |addr: Address| unsafe {
-            addr.store(u32::MAX);
-        };
+        let mut val: u32 = u32::MAX;
+        let start = Address::from_mut_ptr(&mut val);
+        let end = start + 4usize;
 
-        let start = allocate_u32();
-        let end = start + size;
-
-        fill_1(start);
         // zero the word
         SideMetadataSpec::zero_meta_bits(start, 0, end, 0);
-        assert_eq!(unsafe { start.load::<u32>() }, 0);
+        assert_eq!(val, 0);
 
-        fill_1(start);
+        val = u32::MAX;
         // zero first 2 bits
         SideMetadataSpec::zero_meta_bits(start, 0, start, 2);
-        assert_eq!(unsafe { start.load::<u32>() }, 0xFFFF_FFFC); // ....1100
+        assert_eq!(val, 0xFFFF_FFFC); // ....1100
 
-        fill_1(start);
+        val = u32::MAX;
         // zero last 2 bits
         SideMetadataSpec::zero_meta_bits(end - 1, 6, end, 0);
-        assert_eq!(unsafe { start.load::<u32>() }, 0x3FFF_FFFF); // 0011....
+        assert_eq!(val, 0x3FFF_FFFF); // 0011....
 
-        fill_1(start);
+        val = u32::MAX;
         // zero everything except first 2 bits and last 2 bits
         SideMetadataSpec::zero_meta_bits(start, 2, end - 1, 6);
-        assert_eq!(unsafe { start.load::<u32>() }, 0xC000_0003); // 1100....0011
+        assert_eq!(val, 0xC000_0003); // 1100....0011
     }
 
     #[test]

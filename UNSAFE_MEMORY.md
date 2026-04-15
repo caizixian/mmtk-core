@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 501 | Δ: -34
+- Starting count: 535 | Current: 495 | Δ: -40
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/side_metadata/side_metadata_tests.rs` — Refactor tests to use safe APIs or `Vec` to eliminate unsafe blocks.
+1. 🔴 HIGH: `src/policy/marksweepspace/malloc_ms/metadata.rs:30-100` — use MetadataCursor or safe wrappers to eliminate unsafe blocks — expected Δ: -7
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -31,6 +31,7 @@
 - `src/vm/tests/mock_tests/mock_test_slots.rs` — Remaining unsafe blocks are dereferencing raw pointers to simulate VM slots and `unsafe impl Send`. [Phase 2 confirmed]
 - `src/util/metadata/side_metadata/global.rs` — Production unsafe in `load`/`store` is irreducible due to concurrent access invariants requiring `unsafe fn` signature. [Phase 2 confirmed]
 - `src/util/metadata/metadata_val_traits.rs` — Trait methods must remain unsafe because they take a raw `Address` and dereference it. [Phase 2 confirmed]
+- `src/util/metadata/side_metadata/side_metadata_tests.rs` — Remaining unsafe blocks in tests require complex bit extraction for sub-byte metadata. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - `SweepProof` for `malloc_ms` (Implemented).
