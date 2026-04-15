@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 131 | Δ: -200
+- Starting count: 331 | Current: 129 | Δ: -202
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,10 +10,11 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: Check if other trait objects in `src/util` need `Send` bound to allow removing more unsafe impls.
-2. 🟡 MED: Continue searching for other files in `src/policy` subdirectories (e.g., `marksweepspace/malloc_ms`) that are not in the NOT to Revisit list.
+1. 🔴 HIGH: Try to replace `*mut Atomic<Address>` with `NonNull<Atomic<Address>>` in `SimpleSlot` to remove `unsafe impl Send` in `src/vm/slot.rs:176`.
+2. 🟡 MED: Check if other trait objects in `src/util` need `Send` bound to allow removing more unsafe impls.
 
 ## Patterns Discovered
+- Removed redundant `unsafe impl Send` and `Sync` for `MMTK` as all its fields are automatically `Send` and `Sync`.
 - Replaced `unsafe impl Sync for GCWorkScheduler` by making `BucketOpenCondition` `Sync`, removing 1 unsafe impl.
 - Replaced `unsafe impl Zeroable for SpaceDescriptor` with `#[derive(Zeroable)]`, removing 1 unsafe impl.
 - Verified that most files in `src/util/heap` are clean of unsafe blocks.
