@@ -254,56 +254,67 @@ pub struct MetadataCursor(pub(crate) Address);
 impl MetadataCursor {
     #[inline(always)]
     pub(crate) fn load_usize(&self) -> usize {
+        // SAFETY: MetadataCursor is an internal abstraction that is only constructed with valid metadata addresses.
         unsafe { self.0.load::<usize>() }
     }
 
     #[inline(always)]
     pub(crate) fn load_atomic_usize(&self, order: std::sync::atomic::Ordering) -> usize {
+        // SAFETY: MetadataCursor is an internal abstraction that is only constructed with valid metadata addresses.
         unsafe { self.0.as_ref::<std::sync::atomic::AtomicUsize>().load(order) }
     }
 
     #[inline(always)]
     fn load_u8(&self) -> u8 {
+        // SAFETY: MetadataCursor is an internal abstraction that is only constructed with valid metadata addresses.
         unsafe { self.0.load::<u8>() }
     }
 
     #[inline(always)]
     pub(crate) fn fetch_and_u8(&self, val: u8, order: std::sync::atomic::Ordering) -> u8 {
+        // SAFETY: MetadataCursor is an internal abstraction that is only constructed with valid metadata addresses.
         unsafe { self.0.as_ref::<std::sync::atomic::AtomicU8>().fetch_and(val, order) }
     }
 
     #[inline(always)]
     pub(crate) fn fetch_or_u8(&self, val: u8, order: std::sync::atomic::Ordering) -> u8 {
+        // SAFETY: MetadataCursor is an internal abstraction that is only constructed with valid metadata addresses.
         unsafe { self.0.as_ref::<std::sync::atomic::AtomicU8>().fetch_or(val, order) }
     }
 
     #[inline(always)]
     pub(crate) fn load_atomic_u8(&self, order: std::sync::atomic::Ordering) -> u8 {
+        // SAFETY: MetadataCursor is an internal abstraction that is only constructed with valid metadata addresses.
         unsafe { self.0.as_ref::<std::sync::atomic::AtomicU8>().load(order) }
     }
 
     #[inline(always)]
     pub(crate) fn store_atomic_u8(&self, val: u8, order: std::sync::atomic::Ordering) {
+        // SAFETY: MetadataCursor is an internal abstraction that is only constructed with valid metadata addresses.
         unsafe { self.0.as_ref::<std::sync::atomic::AtomicU8>().store(val, order) }
     }
 
     #[inline(always)]
     pub(crate) fn load<T: MetadataValue>(&self) -> T {
+        // SAFETY: MetadataCursor is an internal abstraction that is only constructed with valid metadata addresses.
         unsafe { self.0.load::<T>() }
     }
 
     #[inline(always)]
     pub(crate) fn load_atomic<T: MetadataValue>(&self, order: std::sync::atomic::Ordering) -> T {
+        // SAFETY: MetadataCursor is an internal abstraction that is only constructed with valid metadata addresses.
         unsafe { self.0.atomic_load::<T::Atomic>(order) }
     }
 
     #[inline(always)]
     pub(crate) fn store<T: MetadataValue>(&self, value: T) {
+        // SAFETY: MetadataCursor is an internal abstraction that is only constructed with valid metadata addresses.
         unsafe { self.0.store::<T>(value) }
     }
 
     #[inline(always)]
     pub(crate) fn store_atomic<T: MetadataValue>(&self, value: T, order: std::sync::atomic::Ordering) {
+        // SAFETY: MetadataCursor is an internal abstraction that is only constructed with valid metadata addresses.
         unsafe { self.0.atomic_store::<T::Atomic>(value, order) }
     }
 
@@ -325,6 +336,7 @@ impl MetadataCursor {
         success: std::sync::atomic::Ordering,
         failure: std::sync::atomic::Ordering,
     ) -> std::result::Result<T, T> {
+        // SAFETY: MetadataCursor is an internal abstraction that is only constructed with valid metadata addresses.
         unsafe {
             self.0
                 .compare_exchange::<T::Atomic>(current, new, success, failure)
