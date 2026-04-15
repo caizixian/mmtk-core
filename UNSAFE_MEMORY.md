@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 495 | Δ: -40
+- Starting count: 535 | Current: 488 | Δ: -47
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/policy/marksweepspace/malloc_ms/metadata.rs:30-100` — use MetadataCursor or safe wrappers to eliminate unsafe blocks — expected Δ: -7
+1. 🔴 HIGH: `src/util/metadata/vo_bit/mod.rs:98-145` — use MetadataCursor or safe wrappers to eliminate unsafe blocks in non-atomic VO bit operations — expected Δ: -3
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -21,6 +21,7 @@
 - Inline `MetadataCursor` loads with masking for sub-byte metadata to remove unsafe blocks in search functions.
 - Use `Vec` instead of manual allocation in tests to eliminate unsafe blocks.
 - Replace `UnsafeCell` with `RwLock` in global maps (Map32, Map64) to eliminate unsafe operations.
+- Use `load_atomic`/`store_atomic` with `Relaxed` ordering for full-byte metadata in non-atomic contexts (guaranteed by `SweepProof`) to eliminate unsafe blocks without performance penalty.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — remaining unsafe blocks are `assume_init_mut()` which are likely required for performance to avoid `Option` overhead in GC fast path.
@@ -32,6 +33,7 @@
 - `src/util/metadata/side_metadata/global.rs` — Production unsafe in `load`/`store` is irreducible due to concurrent access invariants requiring `unsafe fn` signature. [Phase 2 confirmed]
 - `src/util/metadata/metadata_val_traits.rs` — Trait methods must remain unsafe because they take a raw `Address` and dereference it. [Phase 2 confirmed]
 - `src/util/metadata/side_metadata/side_metadata_tests.rs` — Remaining unsafe blocks in tests require complex bit extraction for sub-byte metadata. [Phase 2 confirmed]
+- `src/policy/marksweepspace/malloc_ms/metadata.rs` — Remaining unsafe is `u128` load (primitive not implementing `MetadataValue`) and `SweepProof` constructor. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - `SweepProof` for `malloc_ms` (Implemented).

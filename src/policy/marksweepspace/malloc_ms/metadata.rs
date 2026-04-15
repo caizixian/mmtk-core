@@ -27,7 +27,7 @@ pub fn is_marked<VM: VMBinding>(object: ObjectReference, ordering: Ordering) -> 
 }
 
 pub fn is_marked_non_atomic<VM: VMBinding>(object: ObjectReference, _proof: &SweepProof) -> bool {
-    unsafe { VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load::<VM, u8>(object, None) == 1 }
+    VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(object, None, Ordering::Relaxed) == 1
 }
 
 /// Set the page mark from 0 to 1. Return true if we set it successfully in this call.
@@ -46,7 +46,7 @@ pub(super) fn is_page_marked(page_addr: Address) -> bool {
 
 #[allow(unused)]
 pub(super) fn is_page_marked_non_atomic(page_addr: Address, _proof: &SweepProof) -> bool {
-    unsafe { ACTIVE_PAGE_METADATA_SPEC.load::<u8>(page_addr) == 1 }
+    ACTIVE_PAGE_METADATA_SPEC.load_atomic::<u8>(page_addr, Ordering::Relaxed) == 1
 }
 
 pub fn set_vo_bit(object: ObjectReference) {
@@ -69,7 +69,7 @@ pub(super) fn set_page_mark(page_addr: Address) {
 
 /// Is this allocation an offset malloc? The argument address should be the allocation address (object start)
 pub(super) fn is_offset_malloc(address: Address) -> bool {
-    unsafe { OFFSET_MALLOC_METADATA_SPEC.load::<u8>(address) == 1 }
+    OFFSET_MALLOC_METADATA_SPEC.load_atomic::<u8>(address, Ordering::Relaxed) == 1
 }
 
 /// Set the offset bit for the allocation. The argument address should be the allocation address (object start)
@@ -83,21 +83,33 @@ pub(super) fn unset_offset_malloc_bit(address: Address) {
 
 /// Unset the offset bit for the allocation. The argument address should be the allocation address (object start)
 pub(super) fn unset_offset_malloc_bit_non_atomic(address: Address, _proof: &SweepProof) {
-    unsafe { OFFSET_MALLOC_METADATA_SPEC.store::<u8>(address, 0) };
+    let meta_addr = side_metadata::address_to_meta_address(&OFFSET_MALLOC_METADATA_SPEC, address);
+    let cursor = side_metadata::MetadataCursor(meta_addr);
+    let lshift = side_metadata::meta_byte_lshift(&OFFSET_MALLOC_METADATA_SPEC, address);
+    let mask = side_metadata::meta_byte_mask(&OFFSET_MALLOC_METADATA_SPEC) << lshift;
+    let old_val = cursor.load::<u8>();
+    let new_val = old_val & !mask;
+    cursor.store::<u8>(new_val);
 }
 
 pub fn unset_vo_bit_non_atomic(object: ObjectReference, _proof: &SweepProof) {
-    unsafe { vo_bit::unset_vo_bit_unsafe(object) };
+    let meta_addr = side_metadata::address_to_meta_address(&vo_bit::VO_BIT_SIDE_METADATA_SPEC, object.to_raw_address());
+    let cursor = side_metadata::MetadataCursor(meta_addr);
+    let lshift = side_metadata::meta_byte_lshift(&vo_bit::VO_BIT_SIDE_METADATA_SPEC, object.to_raw_address());
+    let mask = side_metadata::meta_byte_mask(&vo_bit::VO_BIT_SIDE_METADATA_SPEC) << lshift;
+    let old_val = cursor.load::<u8>();
+    let new_val = old_val & !mask;
+    cursor.store::<u8>(new_val);
 }
 
 #[allow(unused)]
 pub fn unset_mark_bit_non_atomic<VM: VMBinding>(object: ObjectReference, _proof: &SweepProof) {
-    unsafe { VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.store::<VM, u8>(object, 0, None) };
+    VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.store_atomic::<VM, u8>(object, 0, None, Ordering::Relaxed);
 }
 
 #[allow(unused)]
 pub(super) fn unset_page_mark_non_atomic(page_addr: Address, _proof: &SweepProof) {
-    unsafe { ACTIVE_PAGE_METADATA_SPEC.store::<u8>(page_addr, 0) }
+    ACTIVE_PAGE_METADATA_SPEC.store_atomic::<u8>(page_addr, 0, Ordering::Relaxed);
 }
 
 /// Load u128 bits of side metadata
