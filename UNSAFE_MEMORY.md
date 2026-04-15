@@ -10,7 +10,8 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/util/metadata/side_metadata/helpers.rs:255` — Investigate if `self.0.load::<usize>()` can be made safe or if it's irreducible. — expected Δ: 1
+1. 🟡 MED: `src/util/metadata/header_metadata.rs` — Investigate if unsafe blocks in tests calling `load`/`store` can be eliminated using a safe wrapper or `MetadataCursor`. — expected Δ: 2
+2. 🟢 LOW: `src/util/metadata/side_metadata/global.rs` — Verify if all unsafe blocks in tests were removed and if any remaining can be addressed. — expected Δ: 1
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
