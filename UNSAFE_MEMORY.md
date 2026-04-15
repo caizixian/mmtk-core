@@ -113,7 +113,6 @@
 - `src/scheduler/affinity.rs` — Irreducible FFI calls for thread affinity. SAFETY comments added in Phase 3. [Phase 3 confirmed].
 - `src/util/alloc/allocator.rs` — Irreducible raw heap access in `fill_alignment_gap`. `unsafe impl Sync` for `AllocationOptionsHolder` removed by using `Mutex`. [Phase 2 confirmed].
 - `src/policy/immix/immixspace.rs` — Clean: 0 unsafe blocks, no unsafe impl Sync [Phase 2 confirmed].
-- `src/scheduler/gc_work.rs` — Irreducible raw pointer `worker: *mut GCWorker` in `ProcessEdgesBase` due to VM callback constraints and performance [Phase 2 confirmed].
 - `src/policy/marksweepspace/native_ms/global.rs` — All unsafe blocks removed by function pointer refactoring [Phase 2 confirmed].
 - `src/plan/marksweep/global.rs` — All unsafe blocks removed by function pointer refactoring [Phase 2 confirmed].
 - `src/util/test_util/fixtures.rs` — Irreducible unsafe in `get_mmtk_mut` and `Drop` due to `'static` requirement on `bind_mutator` and `Box::leak` usage. SAFETY comments added in Phase 3. [Phase 3 confirmed].

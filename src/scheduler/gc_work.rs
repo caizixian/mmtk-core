@@ -522,23 +522,6 @@ impl<VM: VMBinding> ProcessEdgesBase<VM> {
     }
 }
 
-    pub fn mmtk(&self) -> &'static MMTK<VM> {
-        self.mmtk
-    }
-
-    pub fn plan(&self) -> &'static dyn Plan<VM = VM> {
-        self.mmtk.get_plan()
-    }
-
-    /// Pop all nodes from nodes, and clear nodes to an empty vector.
-    pub fn pop_nodes(&mut self) -> Vec<ObjectReference> {
-        self.nodes.take()
-    }
-
-    pub fn is_roots(&self) -> bool {
-        self.roots
-    }
-}
 
 /// A short-hand for `<E::VM as VMBinding>::VMSlot`.
 pub type SlotOf<E> = <<E as ProcessEdgesWork>::VM as VMBinding>::VMSlot;
@@ -996,19 +979,17 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         PlanScanObjects::<Self, P>::new(self.plan, nodes, false, self.bucket)
     }
 
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        // We cannot borrow `self` twice in a call, so we extract `worker` as a local variable.
-        let worker = self.worker();
+    fn trace_object(&mut self, object: ObjectReference, worker: &mut GCWorker<Self::VM>) -> ObjectReference {
         self.plan
             .trace_object::<VectorObjectQueue, KIND>(&mut self.base.nodes, object, worker)
     }
 
-    fn process_slot(&mut self, slot: SlotOf<Self>) {
+    fn process_slot(&mut self, slot: SlotOf<Self>, worker: &mut GCWorker<Self::VM>) {
         let Some(object) = slot.load() else {
             // Skip slots that are not holding an object reference.
             return;
         };
-        let new_object = self.trace_object(object);
+        let new_object = self.trace_object(object, worker);
         if P::may_move_objects::<KIND>() && new_object != object {
             slot.store(new_object);
         }
@@ -1156,10 +1137,9 @@ impl<VM: VMBinding, R2OPE: ProcessEdgesWork<VM = VM>, O2OPE: ProcessEdgesWork<VM
             // We create an instance of E to use its `trace_object` method and its object queue.
             let mut process_edges_work =
                 R2OPE::new(vec![], true, mmtk, WorkBucketStage::PinningRootsTrace);
-            process_edges_work.set_worker(worker);
 
             for object in self.roots.iter().copied() {
-                let new_object = process_edges_work.trace_object(object);
+                let new_object = process_edges_work.trace_object(object, worker);
                 debug_assert_eq!(
                     object, new_object,
                     "Object moved while tracing root unmovable root object: {} -> {}",
