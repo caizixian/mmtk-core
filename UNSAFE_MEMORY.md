@@ -14,7 +14,7 @@
 - `InitializeOnce` is used for `SFT_MAP` to allow zero-cost reads on extreme hot paths (object tracing).
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/plan/concurrent/mod.rs:27-29` — Investigate if `unsafe impl bytemuck::ZeroableInOption` for `Pause` can be made safe or derived, or confirm it as irreducible due to niche optimization — expected Δ: 0 to -2.
+1. 🔴 HIGH: `src/util/memory.rs:190` — Investigate if `dzmmap` can be wrapped in a safe API that ensures the memory has been reserved first, or confirm it as irreducible — expected Δ: 0 to -1.
 
 ## Patterns Discovered
 - Removed redundant `unsafe impl Send` and `Sync` for `MMTK` as all its fields are automatically `Send` and `Sync`.
