@@ -71,6 +71,8 @@ impl<T> InitializeOnce<T> {
     /// initialization is done (`Once` returns).
     pub fn initialize_once(&self, init_fn: &'static dyn Fn() -> T) {
         self.once.call_once(|| {
+            // SAFETY: `Once` guarantees that this closure is called exactly once,
+            // and no other threads can access the value concurrently during initialization.
             unsafe { &mut *self.v.get() }.write(init_fn());
         });
         debug_assert!(self.once.is_completed());
@@ -80,6 +82,8 @@ impl<T> InitializeOnce<T> {
     pub fn get_ref(&self) -> &T {
         // We only assert in debug builds.
         debug_assert!(self.once.is_completed());
+        // SAFETY: The value has been initialized by `initialize_once` (checked by debug_assert).
+        // `Once` guarantees that initialization happens before any thread returns from it.
         unsafe { (*self.v.get()).assume_init_ref() }
     }
 
@@ -93,6 +97,7 @@ impl<T> InitializeOnce<T> {
     pub unsafe fn get_mut(&self) -> &mut T {
         // We only assert in debug builds.
         debug_assert!(self.once.is_completed());
+        // SAFETY: The value has been initialized, and the caller guarantees no races.
         unsafe { (*self.v.get()).assume_init_mut() }
     }
 }
@@ -122,11 +127,14 @@ impl<T> ProofCell<T> {
     /// # Safety
     /// The caller must ensure there are no concurrent mutable accesses.
     pub unsafe fn get_ref(&self) -> &T {
-        &*self.value.get()
+        // SAFETY: The caller must ensure there are no concurrent mutable accesses.
+        unsafe { &*self.value.get() }
     }
 
     /// Get a mutable reference with proof.
     pub fn get_mut_with_proof(&self, _proof: &crate::scheduler::ExclusivePlanAccessProof) -> &mut T {
+        // SAFETY: The `ExclusivePlanAccessProof` token guarantees that we have exclusive access
+        // to the plan and its components, preventing concurrent mutable access.
         unsafe { &mut *self.value.get() }
     }
 }

@@ -35,6 +35,8 @@ impl<T> OnceOptionBox<T> {
     /// Get a reference to the content of this box, or `None` if not yet initialized.
     pub fn get(&self, order: Ordering) -> Option<&T> {
         let ptr = self.inner.load(order);
+        // SAFETY: The pointer is either null or points to a valid `T` allocated by `Box::leak`
+        // in `get_or_init`. The value is never mutated or deallocated while references exist.
         unsafe { ptr.as_ref() }
     }
 
@@ -66,6 +68,10 @@ impl<T> OnceOptionBox<T> {
         match cas_result {
             Ok(_) => r,
             Err(old_inner) => unsafe {
+                // SAFETY: `new_inner` was created from `Box::new` and leaked above.
+                // Since the CAS failed, we own it and must reclaim it to avoid leak.
+                // `old_inner` is non-null because the CAS failed against a null pointer.
+                // It points to a valid `T` initialized by another thread.
                 drop(Box::from_raw(new_inner));
                 old_inner.as_ref().unwrap()
             },
@@ -77,6 +83,8 @@ impl<T> Drop for OnceOptionBox<T> {
     fn drop(&mut self) {
         let ptr = *self.inner.get_mut();
         if !ptr.is_null() {
+            // SAFETY: The pointer is non-null and was allocated by `Box::leak` in `get_or_init`.
+            // We have exclusive access during `Drop` and own the data.
             drop(unsafe { Box::from_raw(ptr) });
         }
     }
