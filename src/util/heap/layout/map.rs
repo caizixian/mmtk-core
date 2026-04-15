@@ -10,7 +10,7 @@ use crate::util::Address;
 /// `space_displacement` field.
 pub struct CreateFreeListResult {
     // The created free list.
-    pub free_list: Box<dyn FreeList>,
+    pub free_list: Box<dyn FreeList + Send>,
     // The number of bytes to be added to the starting address of the space.  Zero if not needed.
     // Always aligned to chunks.
     pub space_displacement: usize,

@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 137 | Δ: -194
+- Starting count: 331 | Current: 135 | Δ: -196
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -11,6 +11,7 @@
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
 1. 🔴 HIGH: Search for other files in `src/util/heap` or `src/policy` that are not in the NOT to Revisit list and verify if they are clean or have addressable unsafe blocks.
+2. 🟡 MED: Check if other trait objects in `src/util` need `Send` bound to allow removing more unsafe impls.
 
 ## Patterns Discovered
 - Refactoring: Removed raw pointer cast in `MallocSpace::release` by passing a function pointer to `MSSweepChunk` to fetch the space from `MMTK`.
@@ -37,6 +38,7 @@
 - **Refactoring**: Replaced unsafe raw pointer dereference in `side_metadata/global.rs` tests with safe `MetadataValue::store` using `MetadataCursor`.
 - **API Cleanup**: Refactored `notify_space_creation` to take a reference instead of a raw pointer, removing 1 unsafe block in `sft_map.rs`.
 - **Refactoring**: Removed `impl Slot for Address` and updated `Range<Address>` to yield `SimpleSlot`, removing 2 unsafe blocks and moving towards recommended practice.
+- **Refactoring**: Removed redundant `unsafe impl Send` and `Sync` for `FreeListPageResource` by adding `Send` bound to `FreeList` trait and updating `CreateFreeListResult` to use `Box<dyn FreeList + Send>`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/plan/concurrent/mod.rs` — Irreducible manual unsafe impls for bytemuck traits to use niche [Phase 2 confirmed].

@@ -30,8 +30,7 @@ pub struct FreeListPageResource<VM: VMBinding> {
     pub(crate) protect_memory_on_release: Option<memory::MmapProtection>,
 }
 
-unsafe impl<VM: VMBinding> Send for FreeListPageResource<VM> {}
-unsafe impl<VM: VMBinding> Sync for FreeListPageResource<VM> {}
+
 
 struct FreeListPageResourceSync {
     pub(crate) free_list: Box<dyn FreeList>,
@@ -186,7 +185,9 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         // But in the current implementation, only `Map32` supports discontiguous spaces, and
         // `Map32` only uses `IntArrayFreeList`.
         debug_assert!(
-            free_list.downcast_ref::<RawMemoryFreeList>().is_none(),
+            (&*free_list as &dyn FreeList)
+                .downcast_ref::<RawMemoryFreeList>()
+                .is_none(),
             "We can't allocate RawMemoryFreeList for discontiguous spaces."
         );
 

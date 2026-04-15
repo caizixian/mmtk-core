@@ -1,14 +1,15 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: `src/util/heap` and `src/policy` (Searching for candidates)
-- Strategy: Find files not in the "Files NOT to Revisit" list and check for addressable unsafe blocks.
+- File: <file being analyzed>
+- Strategy: <what you're attempting>
 
 ## Findings
-- Searching for files in `src/util/heap` and `src/policy`.
+- Line X: <unsafe type> — <eliminable? why/why not>
+- Line Y: <unsafe type> — <eliminable? why/why not>
 
 ## Attempted Changes
-- None yet.
+- <what you tried, what happened>
 
 ## Blockers / Insights for Next Step
-- None yet.
+- <what prevented completion, what the next step should know>
