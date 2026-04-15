@@ -57,6 +57,8 @@
 - `src/util/raw_memory_freelist.rs` — Remaining unsafe is FFI call to `munmap` in `Drop` [Phase 2 confirmed].
 - `src/policy/copyspace.rs` — Irreducible FFI calls to `mprotect` and lifetime extension for `BumpAllocator` [Phase 2 confirmed].
 - `src/policy/marksweepspace/native_ms/block.rs` — All unsafe blocks removed by passing BlockList reference [Phase 2 confirmed].
+- `src/util/alloc/allocators.rs` — Irreducible `MaybeUninit` usage for FFI layout compatibility [Phase 2 confirmed].
+- `src/scheduler/affinity.rs` — Irreducible FFI calls for thread affinity [Phase 2 confirmed].
 
 ## Abstraction Proposals (for Phase 2)
 ### MetadataCursor for side_metadata

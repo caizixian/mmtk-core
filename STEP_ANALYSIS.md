@@ -1,15 +1,16 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: `src/util/metadata/header_metadata.rs`
-- Strategy: Eliminate unsafe blocks in tests calling `load`/`store` by using `MetadataCursor` directly in `MockObject`.
+- File: `src/util/alloc/allocators.rs` and `src/scheduler/affinity.rs`
+- Strategy: Audit for reducible unsafe blocks.
 
 ## Findings
-- Line 664 (in file view): `unsafe { spec.load::<T>(self.obj, optional_mask) }` — Eliminable by replicating non-atomic `load_inner` logic using `MetadataCursor` safe methods.
-- Line 668 (in file view): `unsafe { spec.store::<T>(self.obj, val, optional_mask) }` — Eliminable by replicating non-atomic `store_inner` logic using `MetadataCursor` safe methods.
+- `src/util/alloc/allocators.rs`: Uses `MaybeUninit` to ensure fixed layout size for VM bindings. The unsafe `assume_init_ref` and `assume_init_mut` are protected by runtime assertions on initialization flags. This is a justified safe abstraction for FFI compatibility.
+- `src/scheduler/affinity.rs`: Uses unsafe for FFI calls to libc (`sched_getaffinity`, `sched_setaffinity`) and manipulation of `cpu_set_t`. These are irreducible without external dependencies.
 
 ## Attempted Changes
-- Plan to modify `MockObject` methods `load` and `store` to use `MetadataCursor` directly.
+- None. Determined that unsafe in these files is irreducible or justified.
 
 ## Blockers / Insights for Next Step
-- None so far.
+- The work queue is currently empty as all analyzed files with unsafe have been classified as irreducible or addressed.
+- Future steps should focus on finding other files with small unsafe counts that might have been missed, or proceed to Phase 3 (documentation) if all files are audited.
