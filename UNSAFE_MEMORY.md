@@ -11,7 +11,7 @@
 - `SimpleSlot` uses `Address` instead of raw pointers, avoiding `unsafe impl Send`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/metadata_val_traits.rs:123-178` — Check if any of the 10 encapsulated unsafe loads/stores can be further abstracted or removed — expected Δ: 0
+1. 🟡 MED: `src/util/metadata/global.rs:52-114` — Document safety invariants for `load` and `store` — expected Δ: 0
 
 ## Patterns Discovered
 - Removed redundant `unsafe impl Send` and `Sync` for `MMTK` as all its fields are automatically `Send` and `Sync`.
@@ -61,6 +61,7 @@
 - `docs/dummyvm/src/api.rs` — Irreducible FFI boundary operations [Phase 2 confirmed].
 - `src/util/malloc/malloc_ms_util.rs` — Irreducible FFI calls to malloc/free/calloc. Safety invariants documented in Phase 3. [Phase 2 confirmed].
 - `src/util/metadata/header_metadata.rs` — Unsafe functions `load`/`store` are non-atomic/racy by design; unsafe blocks in tests call them [Phase 2 confirmed].
+- `src/util/metadata/global.rs` — `load` and `store` are non-atomic and not thread-safe by design [Phase 2 confirmed].
 - `src/util/rust_util/atomic_box.rs` — Lock-free `OnceOptionBox` requires raw pointer manipulation [Phase 2 confirmed].
 - `src/policy/marksweepspace/malloc_ms/global.rs` — Irreducible lifetime extension for `GCWork` packets [Phase 2 confirmed].
 - `src/util/malloc/mod.rs` — Irreducible FFI calls to malloc/free [Phase 2 confirmed].
