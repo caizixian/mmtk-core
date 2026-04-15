@@ -6,6 +6,7 @@
 - Note: Added `dzmmap_test` helper in tests to reduce unsafe blocks at call sites in `src/util/memory.rs`.
 - Note: Added SAFETY comments to `src/util/malloc/mod.rs`, `src/scheduler/affinity.rs`, and `src/util/alloc/allocators.rs` in Phase 3.
 - Note: Verified remaining unsafe locations in `malloc_ms_util.rs`, `rust_util/mod.rs`, and `slot.rs` are irreducible or properly encapsulated, concluding the task.
+- Note: Re-evaluated `ProofCell` and `SimpleSlot` and confirmed they are good abstractions.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
@@ -16,7 +17,8 @@
 - `InitializeOnce` was used for `SFT_MAP` to allow zero-cost reads on extreme hot paths (object tracing). Now replaced by `OnceLock` for safety.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: Conclude the task as all remaining unsafe code has been verified and documented where needed.
+1. 🟡 MED: `src/vm/slot.rs:181-191` — Re-evaluate if `SimpleSlot` can use safe atomic operations without raw pointer dereference — expected Δ: 0
+2. 🟢 LOW: Conclude the task as all remaining unsafe code has been verified and documented where needed.
 
 ## Patterns Discovered
 - **Safe Abstraction**: Used `SFTHeader` wrapper to avoid `transmute` on fat pointers in `SFTRefStorage`, removing 3 unsafe blocks (and adding 1 unsafe impl Sync).
