@@ -1,15 +1,16 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: <file being analyzed>
-- Strategy: <what you're attempting>
+- File: src/policy/immortalspace.rs, src/policy/largeobjectspace.rs, src/policy/lockfreeimmortalspace.rs
+- Strategy: Check for addressable unsafe blocks.
 
 ## Findings
-- Line X: <unsafe type> — <eliminable? why/why not>
-- Line Y: <unsafe type> — <eliminable? why/why not>
+- src/policy/immortalspace.rs: Clean, 0 unsafe blocks.
+- src/policy/largeobjectspace.rs: Clean, 0 unsafe blocks.
+- src/policy/lockfreeimmortalspace.rs: Clean, 0 unsafe blocks.
 
 ## Attempted Changes
-- <what you tried, what happened>
+- Added files to "Files NOT to Revisit" in UNSAFE_MEMORY.md.
 
 ## Blockers / Insights for Next Step
-- <what prevented completion, what the next step should know>
+- None

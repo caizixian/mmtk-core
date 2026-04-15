@@ -94,6 +94,9 @@
 - `src/util/heap/monotonepageresource.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
 - `src/policy/copy_context.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
 - `src/policy/gc_work.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
+- `src/policy/immortalspace.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
+- `src/policy/largeobjectspace.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
+- `src/policy/lockfreeimmortalspace.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
 
 ## Abstraction Proposals (for Phase 2)
 ### MetadataCursor for side_metadata
