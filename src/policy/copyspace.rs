@@ -13,7 +13,7 @@ use crate::util::object_forwarding;
 use crate::util::{copy::*, object_enum};
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
-use libc::{mprotect, PROT_EXEC, PROT_NONE, PROT_READ, PROT_WRITE};
+use crate::util::memory::{mprotect, munprotect, MmapProtection};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -291,10 +291,7 @@ impl<VM: VMBinding> CopySpace<VM> {
         }
         let start = self.common().start;
         let extent = self.common().extent;
-        // SAFETY: The memory range is valid and owned by this space.
-        unsafe {
-            mprotect(start.to_mut_ptr(), extent, PROT_NONE);
-        }
+        mprotect(start, extent).expect("Failed to protect memory");
         trace!("Protect {:x} {:x}", start, start + extent);
     }
 
@@ -307,14 +304,7 @@ impl<VM: VMBinding> CopySpace<VM> {
         }
         let start = self.common().start;
         let extent = self.common().extent;
-        // SAFETY: The memory range is valid and owned by this space.
-        unsafe {
-            mprotect(
-                start.to_mut_ptr(),
-                extent,
-                PROT_READ | PROT_WRITE | PROT_EXEC,
-            );
-        }
+        munprotect(start, extent, MmapProtection::ReadWriteExec).expect("Failed to unprotect memory");
         trace!("Unprotect {:x} {:x}", start, start + extent);
     }
 }

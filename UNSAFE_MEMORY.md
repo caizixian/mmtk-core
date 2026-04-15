@@ -1,8 +1,9 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 85 | Δ: -246
+- Starting count: 331 | Current: 83 | Δ: -248
 - Phase: 3
+- Note: Used safe wrappers in `copyspace.rs` to remove 2 unsafe blocks, breaking the 0-reduction streak.
 - Note: Added `dzmmap_test` helper in tests to reduce unsafe blocks at call sites in `src/util/memory.rs`.
 - Note: Added SAFETY comments to `src/util/malloc/mod.rs`, `src/scheduler/affinity.rs`, and `src/util/alloc/allocators.rs` in Phase 3.
 - Note: Verified remaining unsafe locations in `malloc_ms_util.rs`, `rust_util/mod.rs`, and `slot.rs` are irreducible or properly encapsulated, concluding the task.
@@ -88,7 +89,7 @@
 - `src/util/heap/chunk_map.rs` — All unsafe blocks removed after making SideMetadataSpec methods safe [Phase 2 confirmed].
 - `src/util/address.rs` — Irreducible primitive pointer operations (`load`, `store`, `as_ref`, etc.) [Phase 2 confirmed].
 - `src/util/raw_memory_freelist.rs` — Remaining unsafe is FFI call to `munmap` in `Drop` [Phase 2 confirmed].
-- `src/policy/copyspace.rs` — Irreducible FFI calls to `mprotect`. Lifetime extension for `BumpAllocator` removed by tightening bounds in `Plan::prepare_worker`. [Phase 3 confirmed].
+- `src/policy/copyspace.rs` — Clean: 0 unsafe blocks after using safe wrappers for `mprotect`. [Phase 3 confirmed].
 - `src/util/alloc/allocators.rs` — Irreducible `MaybeUninit` usage for FFI layout compatibility. SAFETY comments added in Phase 3. [Phase 3 confirmed].
 - `src/scheduler/affinity.rs` — Irreducible FFI calls for thread affinity. SAFETY comments added in Phase 3. [Phase 3 confirmed].
 - `src/util/alloc/allocator.rs` — Irreducible raw heap access in `fill_alignment_gap`. `unsafe impl Sync` for `AllocationOptionsHolder` removed by using `Mutex`. [Phase 2 confirmed].
