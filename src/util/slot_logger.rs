@@ -15,7 +15,7 @@ pub struct SlotLogger<SL: Slot> {
     slot_log: RwLock<HashSet<SL>>,
 }
 
-unsafe impl<SL: Slot> Sync for SlotLogger<SL> {}
+// The RwLock ensures safety. If SL is Send + Sync, this is automatically Sync.
 
 impl<SL: Slot> SlotLogger<SL> {
     pub fn new() -> Self {

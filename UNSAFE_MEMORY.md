@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 157 | Δ: -174
+- Starting count: 331 | Current: 154 | Δ: -177
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -29,6 +29,8 @@
 - **Refactoring**: Eliminated unsafe blocks in `header_metadata.rs` tests by using `MetadataCursor` directly in `MockObject` to replicate non-atomic loads and stores.
 - **Refactoring**: Refactored `MetadataValue` trait to use `MetadataCursor` instead of `Address`, removing `unsafe` from trait methods and implementations, and removing `unsafe` blocks in `helpers.rs` (eliminated ~30 unsafe items).
 - **Safe Abstraction**: Used function pointers `fn(&'static MMTK<VM>) -> &Space` to allow work packets to fetch space references from MMTK without storing `'static` references, eliminating lifetime extension unsafe blocks in `native_ms/global.rs`.
+- **Refactoring**: Removed redundant `unsafe impl Sync` for `SlotLogger` and `ImmixSpace` as they are automatically `Sync`.
+- **Refactoring**: Removed redundant `unsafe impl Send` for `UpdateReferences` as it is automatically `Send`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/scheduler/worker.rs` — Remaining unsafe are trait impls for Send/Sync [Phase 2 confirmed].
