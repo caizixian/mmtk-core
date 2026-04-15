@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 357 | Δ: -178
+- Starting count: 535 | Current: 355 | Δ: -180
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/plan/markcompact/gc_work.rs:47` — Use `ProofCell` or safe wrapper for `plan` access — expected Δ: -1
+1. 🔴 HIGH: `src/util/alloc/free_list_allocator.rs:155` — Use a handle wrapper for free list cells to encapsulate raw loads/stores — expected Δ: -2
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -18,6 +18,7 @@
 - `unsafe { Address::zero() }` → `Address::ZERO`.
 - `unsafe { ObjectReference::from_raw_address_unchecked(x) }` → `ObjectReference::from_raw_address(x).unwrap()` when `x` is known to be non-zero.
 - Use `MetadataCursor` to encapsulate raw memory access for `MetadataValue` types, centralizing unsafe operations.
+- Use `ExclusivePlanAccessProof` and downcasting to access concrete plan types safely in work packets.
 - Inline `MetadataCursor` loads with masking for sub-byte metadata to remove unsafe blocks in search functions.
 - Use `Vec` and slice indexing instead of raw pointer dereferencing in tests to eliminate unsafe blocks (e.g., in `header_metadata.rs`).
 - Replace `UnsafeCell` with `RwLock` in global maps (Map32, Map64) to eliminate unsafe operations.
