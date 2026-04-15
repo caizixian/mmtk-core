@@ -10,7 +10,7 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: Search for other work packets that store `'static` references and can be refactored to use `mmtk.get_plan()` to remove lifetime extension unsafe blocks.
+1. 🔴 HIGH: Search for other files in `src/util/heap` or `src/policy` that are not in the NOT to Revisit list and verify if they are clean or have addressable unsafe blocks.
 
 ## Patterns Discovered
 - Refactoring: Removed raw pointer cast in `MallocSpace::release` by passing a function pointer to `MSSweepChunk` to fetch the space from `MMTK`.
@@ -75,6 +75,7 @@
 - `src/scheduler/gc_work.rs` — Irreducible raw pointer `worker: *mut GCWorker` in `ProcessEdgesBase` due to VM callback constraints and performance [Phase 2 confirmed].
 - `src/policy/marksweepspace/native_ms/global.rs` — All unsafe blocks removed by function pointer refactoring [Phase 2 confirmed].
 - `src/plan/marksweep/global.rs` — All unsafe blocks removed by function pointer refactoring [Phase 2 confirmed].
+- `src/util/test_util/fixtures.rs` — Irreducible unsafe in `get_mmtk_mut` and `Drop` due to `'static` requirement on `bind_mutator` and `Box::leak` usage [Phase 2 confirmed].
 
 ## Abstraction Proposals (for Phase 2)
 ### MetadataCursor for side_metadata
