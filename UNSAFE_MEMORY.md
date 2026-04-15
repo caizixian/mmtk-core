@@ -14,7 +14,7 @@
 - `InitializeOnce` is used for `SFT_MAP` to allow zero-cost reads on extreme hot paths (object tracing).
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: Audit other files in `src/util/` to see if they are clean but not listed. (Audited conversions.rs, api_util.rs, constants.rs, finalizable_processor.rs, freelist.rs).
+1. 🟢 LOW: Audit other files in `src/util/` to see if they are clean but not listed. (Audited conversions.rs, api_util.rs, constants.rs, finalizable_processor.rs, freelist.rs, is_mmtk_object.rs, epilogue.rs, int_array_freelist.rs, object_forwarding.rs, object_enum.rs, opaque_pointer.rs, logger.rs, mod.rs, options.rs, treadmill.rs).
 
 ## Patterns Discovered
 - **Safe Abstraction**: Used `SFTHeader` wrapper to avoid `transmute` on fat pointers in `SFTRefStorage`, removing 3 unsafe blocks (and adding 1 unsafe impl Sync).
@@ -125,6 +125,16 @@
 - `src/util/constants.rs` — Clean: 0 unsafe blocks [Phase 3 confirmed].
 - `src/util/finalizable_processor.rs` — Clean: 0 unsafe blocks [Phase 3 confirmed].
 - `src/util/freelist.rs` — Clean: 0 unsafe blocks [Phase 3 confirmed].
+- `src/util/is_mmtk_object.rs` — Clean: 0 unsafe blocks [Phase 3 confirmed].
+- `src/util/epilogue.rs` — Clean: 0 unsafe blocks [Phase 3 confirmed].
+- `src/util/int_array_freelist.rs` — Clean: 0 unsafe blocks [Phase 3 confirmed].
+- `src/util/object_forwarding.rs` — Clean: 0 unsafe blocks [Phase 3 confirmed].
+- `src/util/object_enum.rs` — Clean: 0 unsafe blocks [Phase 3 confirmed].
+- `src/util/opaque_pointer.rs` — Clean: 0 unsafe blocks [Phase 3 confirmed].
+- `src/util/logger.rs` — Clean: 0 unsafe blocks [Phase 3 confirmed].
+- `src/util/mod.rs` — Clean: 0 unsafe blocks [Phase 3 confirmed].
+- `src/util/options.rs` — Clean: 0 unsafe blocks [Phase 3 confirmed].
+- `src/util/treadmill.rs` — Clean: 0 unsafe blocks [Phase 3 confirmed].
 
 ## Abstraction Proposals (for Phase 2)
 ### MetadataCursor for side_metadata
