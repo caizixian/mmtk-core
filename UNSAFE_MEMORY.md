@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 412 | Δ: -123
+- Starting count: 535 | Current: 411 | Δ: -124
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/policy/immix/immixspace.rs:450` and `547` — move work packet creation to `schedule_collection` to use `&'static self` — expected Δ: 2
+1. 🔴 HIGH: `src/mmtk.rs:186` — use `Box::leak` and change `plan` type to `UnsafeCell<&'static mut dyn Plan>` to eliminate unsafe block — expected Δ: 1
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -27,7 +27,7 @@
 - Use `std::sync::OnceLock` instead of `MaybeUninit` for single-assignment fields in shared structures to eliminate unsafe initialization and access (e.g., in `GCTrigger`).
 - Use `Box::leak` instead of `Box::into_raw` to get a reference directly when initializing lock-free structures, reducing unsafe blocks.
 - Replace `[MaybeUninit<T>; N]` with `[Option<T>; N]` for lazily initialized arrays if N is small or overhead is acceptable, eliminating `assume_init_mut()` unsafe calls.
-- **New Pattern**: Use `mmtk.get_plan_mut()` in `GCWork` implementations instead of passing raw plan pointers, when the scheduler guarantees exclusive access during the phase (e.g., `Prepare` and `Release`).
+- Use `mmtk.get_plan_mut()` in `GCWork` implementations instead of passing raw plan pointers, when the scheduler guarantees exclusive access during the phase (e.g., `Prepare` and `Release`).
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe blocks removed by replacing MaybeUninit with Option. [Phase 2 confirmed]
@@ -51,6 +51,7 @@
 - `src/util/metadata/side_metadata/helpers.rs` — Implementation of `MetadataCursor` abstraction, irreducible without moving unsafe to call sites. [Phase 2 confirmed]
 - `docs/dummyvm/src/api.rs` — Irreducible FFI boundary operations (raw pointer dereferencing and Box::from_raw). [Phase 2 confirmed]
 - `src/util/alloc/free_list_allocator.rs` — Remaining unsafe blocks are raw heap access for free list manipulation. [Phase 2 confirmed]
+- `src/policy/immix/immixspace.rs` — All unsafe blocks removed or moved to `schedule_collection` in previous steps. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - `SweepProof` for `malloc_ms` (Implemented).

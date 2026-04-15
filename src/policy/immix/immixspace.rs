@@ -939,11 +939,11 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
 
 /// Chunk sweeping work packet.
 pub(crate) struct SweepChunk<VM: VMBinding> {
-    space: &'static ImmixSpace<VM>,
-    chunk: Chunk,
-    unlog_bits_op: UnlogBitsOperation,
+    pub(crate) space: &'static ImmixSpace<VM>,
+    pub(crate) chunk: Chunk,
+    pub(crate) unlog_bits_op: UnlogBitsOperation,
     /// A destructor invoked when all `SweepChunk` packets are finished.
-    epilogue: Arc<FlushPageResource<VM>>,
+    pub(crate) epilogue: Arc<FlushPageResource<VM>>,
 }
 
 impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
@@ -1012,7 +1012,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
 
 /// Count number of remaining work pacets, and flush page resource if all packets are finished.
 pub(crate) struct FlushPageResource<VM: VMBinding> {
-    space: &'static ImmixSpace<VM>,
+    pub(crate) space: &'static ImmixSpace<VM>,
     pub(crate) counter: AtomicUsize,
 }
 
