@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 106 | Δ: -225
+- Starting count: 331 | Current: 105 | Δ: -226
 - Phase: 3
 - Note: A holistic review was conducted in response to strategy escalation. All remaining unsafe code has been confirmed as irreducible or properly encapsulated behind safe abstractions. A subsequent review confirmed these findings, specifically regarding `InitializeOnce`, `MetadataCursor`, and `SimpleSlot`. Updated count after removing redundant methods in `MetadataCursor` in `helpers.rs`.
 
@@ -14,7 +14,7 @@
 - `InitializeOnce` is used for `SFT_MAP` to allow zero-cost reads on extreme hot paths (object tracing).
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/memory.rs:190` — Investigate if `dzmmap` can be wrapped in a safe API that ensures the memory has been reserved first, or confirm it as irreducible — expected Δ: 0 to -1.
+1. 🔴 HIGH: `src/scheduler/gc_work.rs:487` — Investigate if `ProcessEdgesBase` can be refactored to use a safe wrapper instead of raw pointer to avoid `unsafe impl Send` — expected Δ: 0 to -1.
 
 ## Patterns Discovered
 - Removed redundant `unsafe impl Send` and `Sync` for `MMTK` as all its fields are automatically `Send` and `Sync`.
@@ -50,7 +50,7 @@
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/plan/concurrent/mod.rs` — Irreducible manual unsafe impls for bytemuck traits to use niche [Phase 2 confirmed].
-- `src/scheduler/worker.rs` — Remaining unsafe are trait impls for Send/Sync [Phase 2 confirmed].
+- `src/scheduler/worker.rs` — Removed `unsafe impl Sync for WorkerGroup`. Remaining unsafe are trait impls for Send/Sync [Phase 2 confirmed].
 - `src/util/metadata/side_metadata/sanity.rs` — Fixed redundant unsafe block, remaining are irreducible or valid assertions [Phase 2 confirmed].
 - `src/util/metadata/side_metadata/global.rs` — Production unsafe in `load`/`store` is irreducible due to concurrent access invariants; tests were cleaned up [Phase 2 confirmed].
 - `src/util/metadata/side_metadata/helpers.rs` — Implementation of `MetadataCursor` abstraction, irreducible without moving unsafe to call sites. SAFETY comments added in Phase 3. [Phase 3 confirmed].
