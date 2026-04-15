@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 646 | Δ: -76 (Removed 2 unsafe blocks in sft_map.rs)
+- Starting count: 722 | Current: 632 | Δ: -90 (Made SFTMap::get_unchecked safe and removed 10 unsafe blocks)
 - Phase: 1
 
 ## Codebase Invariants (PROTECTED — do not prune)
