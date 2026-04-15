@@ -170,6 +170,8 @@ pub fn zero(start: Address, len: usize) {
 
 /// Set a range of memory to the given value. Similar to memset.
 pub fn set(start: Address, val: u8, len: usize) {
+    // SAFETY: The caller must ensure that the memory range `[start, start + len)` is valid and writable.
+    // This function is typically used to zero or initialize memory in spaces or metadata.
     unsafe {
         std::ptr::write_bytes::<u8>(start.to_mut_ptr(), val, len);
     }

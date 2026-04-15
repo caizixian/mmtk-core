@@ -2,7 +2,7 @@
 
 ## Progress
 - Starting count: 331 | Current: 147 | Δ: -184
-- Phase: 2
+- Phase: 3
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - `SFT_MAP` is a global static `InitializeOnce` container. Accessing it mutably during plan initialization requires `unsafe` to bypass borrow checker.
@@ -10,7 +10,7 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-- (None. All queued items investigated and deemed irreducible.)
+- (None. All queued items investigated and deemed irreducible. Entering Phase 3: Irreducible Documentation.)
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
