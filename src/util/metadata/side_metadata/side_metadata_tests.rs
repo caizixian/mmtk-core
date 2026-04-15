@@ -562,6 +562,14 @@ mod tests {
         });
     }
 
+    fn test_store_u8(spec: &SideMetadataSpec, addr: Address, val: u8) {
+        unsafe { spec.store(addr, val) }
+    }
+
+    fn test_load_u8(spec: &SideMetadataSpec, addr: Address) -> u8 {
+        unsafe { spec.load(addr) }
+    }
+
     #[test]
     fn test_side_metadata_bzero_by_bytes() {
         serial_test(|| {
@@ -598,19 +606,19 @@ mod tests {
                     // Set metadata for the regions
                     regions
                         .iter()
-                        .for_each(|addr| unsafe { spec.store::<u8>(*addr, 1) });
+                        .for_each(|addr| test_store_u8(&spec, *addr, 1));
                     regions
                         .iter()
-                        .for_each(|addr| assert!(unsafe { spec.load::<u8>(*addr) } == 1));
+                        .for_each(|addr| assert!(test_load_u8(&spec, *addr) == 1));
 
                     // bulk zero the 8 regions (1 bit for each, in total 1 byte)
                     spec.bzero_metadata(regions[0], region_size * 8);
                     // Check if the first 8 regions are set to 0
                     regions[0..8]
                         .iter()
-                        .for_each(|addr| assert!(unsafe { spec.load::<u8>(*addr) } == 0));
+                        .for_each(|addr| assert!(test_load_u8(&spec, *addr) == 0));
                     // Check if the 9th region is still 1
-                    assert!(unsafe { spec.load::<u8>(regions[8]) } == 1);
+                    assert!(test_load_u8(&spec, regions[8]) == 1);
                 },
                 || {
                     sanity::reset();
@@ -655,21 +663,21 @@ mod tests {
                     // Set metadata for the regions
                     regions
                         .iter()
-                        .for_each(|addr| unsafe { spec.store::<u8>(*addr, 1) });
+                        .for_each(|addr| test_store_u8(&spec, *addr, 1));
                     regions
                         .iter()
-                        .for_each(|addr| assert!(unsafe { spec.load::<u8>(*addr) } == 1));
+                        .for_each(|addr| assert!(test_load_u8(&spec, *addr) == 1));
 
                     // bulk zero the first 4 regions (1 bit for each, in total 4 bits)
                     spec.bzero_metadata(regions[0], region_size * 4);
                     // Check if the first 4 regions are set to 0
                     regions[0..4]
                         .iter()
-                        .for_each(|addr| assert!(unsafe { spec.load::<u8>(*addr) } == 0));
+                        .for_each(|addr| assert!(test_load_u8(&spec, *addr) == 0));
                     // Check if the rest regions is still 1
                     regions[4..9]
                         .iter()
-                        .for_each(|addr| assert!(unsafe { spec.load::<u8>(*addr) } == 1));
+                        .for_each(|addr| assert!(test_load_u8(&spec, *addr) == 1));
                 },
                 || {
                     sanity::reset();

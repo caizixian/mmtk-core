@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 370 | Δ: -165 (estimated)
+- Starting count: 535 | Current: 364 | Δ: -171 (estimated)
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -11,6 +11,7 @@
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
 1. 🔴 HIGH: `src/mmtk.rs:437-446` — implement `ExclusivePlanAccessProof` token to remove unsafe blocks for plan access — expected Δ: 2
+2. 🟡 MED: `src/util/metadata/side_metadata/side_metadata_tests.rs` — add helpers for `load_atomic` and `store_atomic` to reduce more unsafe blocks in tests.
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -56,6 +57,7 @@
 - `src/vm/tests/mock_tests/mock_test_slots.rs` — All unsafe blocks removed by refactoring tests to use references instead of raw pointers. [Phase 2 confirmed]
 - `src/util/heap/layout/map64.rs` — Redundant unsafe impl Send and Sync removed. [Phase 2 confirmed]
 - `src/util/int_array_freelist.rs` — All unsafe blocks removed by replacing raw pointer with `Arc<RwLock>`. [Phase 2 confirmed]
+- `src/util/malloc/mod.rs` — Irreducible FFI calls to library `malloc`, `calloc`, `realloc`, `free`. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - `SweepProof` for `malloc_ms` (Implemented).
