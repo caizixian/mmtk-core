@@ -10,7 +10,7 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/util/alloc/allocator.rs:180-190` — Investigate raw heap access in `fill_alignment_gap` — expected Δ: 0-1
+1. 🔴 HIGH: `src/util/metadata/metadata_val_traits.rs:84-139` — Refactor `MetadataValue` trait to use `MetadataCursor` instead of `Address` to make methods safe — expected Δ: 20
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
@@ -59,7 +59,7 @@
 - `src/policy/marksweepspace/native_ms/block.rs` — All unsafe blocks removed by passing BlockList reference [Phase 2 confirmed].
 - `src/util/alloc/allocators.rs` — Irreducible `MaybeUninit` usage for FFI layout compatibility [Phase 2 confirmed].
 - `src/scheduler/affinity.rs` — Irreducible FFI calls for thread affinity [Phase 2 confirmed].
-- `src/util/alloc/allocator.rs` — Irreducible unsafe impl Sync for AllocationOptionsHolder and raw heap access in `fill_alignment_gap` [Phase 1 analysis].
+- `src/util/alloc/allocator.rs` — Irreducible unsafe impl Sync for AllocationOptionsHolder and raw heap access in `fill_alignment_gap` [Phase 2 confirmed].
 - `src/policy/immix/immixspace.rs` — Only unsafe impl Sync, no unsafe blocks [Phase 1 analysis].
 - `src/scheduler/gc_work.rs` — Irreducible raw pointer `worker: *mut GCWorker` in `ProcessEdgesBase` due to VM callback constraints and performance [Phase 2 confirmed].
 
@@ -69,3 +69,9 @@
 - Expected Δ: N/A (already implemented, but centralizes unsafe)
 - Design sketch: `struct MetadataCursor(Address);` provides safe methods for load/store.
 - Status: done
+
+### MetadataCursor for MetadataValue trait
+- Target files: `src/util/metadata/metadata_val_traits.rs`
+- Expected Δ: 20
+- Design sketch: Change `MetadataValue` trait methods to take `MetadataCursor` instead of `Address`, allowing them to be safe.
+- Status: proposed
