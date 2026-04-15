@@ -89,16 +89,7 @@ pub(crate) fn unset_vo_bit_nocheck(object: ObjectReference) {
     VO_BIT_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_raw_address(), 0, Ordering::SeqCst);
 }
 
-/// Non-atomically unset the VO bit for an object. The caller needs to ensure the side
-/// metadata for the VO bit for the object is accessed by only one thread.
-///
-/// # Safety
-///
-/// This is unsafe: check the comment on `side_metadata::store`
-pub(crate) unsafe fn unset_vo_bit_unsafe(object: ObjectReference) {
-    debug_assert!(is_vo_bit_set(object), "{:x}: VO bit not set", object);
-    VO_BIT_SIDE_METADATA_SPEC.store::<u8>(object.to_raw_address(), 0);
-}
+
 
 /// Check if the VO bit is set for an object.
 pub(crate) fn is_vo_bit_set(object: ObjectReference) -> bool {
@@ -118,11 +109,7 @@ pub(crate) fn is_vo_bit_set_for_addr(address: Address) -> Option<ObjectReference
 /// metadata for the VO bit for the object is accessed by only one thread.
 ///
 /// The `address` must be word-aligned.
-///
-/// # Safety
-///
-/// This is unsafe: check the comment on `side_metadata::load`
-pub(crate) unsafe fn is_vo_bit_set_unsafe(address: Address) -> Option<ObjectReference> {
+pub(crate) fn is_vo_bit_set_unsafe(address: Address) -> Option<ObjectReference> {
     is_vo_bit_set_inner::<false>(address)
 }
 
@@ -141,7 +128,7 @@ fn is_vo_bit_set_inner<const ATOMIC: bool>(addr: Address) -> Option<ObjectRefere
         VO_BIT_SIDE_METADATA_SPEC.load_atomic::<u8>(addr, Ordering::SeqCst)
     } else {
         let meta_addr = crate::util::metadata::side_metadata::helpers::address_to_meta_address(&VO_BIT_SIDE_METADATA_SPEC, addr);
-        crate::util::metadata::side_metadata::helpers::MetadataCursor(meta_addr).load::<u8>()
+        crate::util::metadata::side_metadata::helpers::MetadataCursor(meta_addr).load_atomic::<u8>(Ordering::Relaxed)
     };
 
     (vo_bit == 1).then(|| get_object_ref_for_vo_addr(addr))

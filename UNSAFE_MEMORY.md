@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 101 | Δ: -230
+- Starting count: 331 | Current: 98 | Δ: -233
 - Phase: 3
 - Note: A holistic review was conducted in response to strategy escalation. All remaining unsafe code has been confirmed as irreducible or properly encapsulated behind safe abstractions. Removed unsafe blocks in `metadata_val_traits.rs` by introducing `with_atomic` in `MetadataCursor`.
 
@@ -49,6 +49,8 @@
 - **Refactoring**: Tightened lifetime bounds in `Plan::prepare_worker` to take `&'static self`, eliminating unsafe lifetime extension in `CopySpace::rebind`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
+- `src/util/metadata/vo_bit/mod.rs` — Clean: 0 unsafe blocks after removing dead code and using Relaxed atomic load [Phase 3 confirmed].
+- `src/util/linear_scan.rs` — Clean: 0 unsafe blocks after making VO bit check safe [Phase 3 confirmed].
 - `src/plan/concurrent/mod.rs` — Irreducible manual unsafe impls for bytemuck traits to use niche [Phase 2 confirmed].
 - `src/scheduler/worker.rs` — Removed `unsafe impl Sync for WorkerGroup`. Remaining unsafe are trait impls for Send/Sync [Phase 2 confirmed].
 - `src/util/metadata/side_metadata/sanity.rs` — Fixed redundant unsafe block, remaining are irreducible or valid assertions [Phase 2 confirmed].
