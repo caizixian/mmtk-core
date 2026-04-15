@@ -757,7 +757,7 @@ mod tests {
         let spec_1 = SideMetadataSpec {
             name: "spec_1",
             is_global: true,
-            offset: SideMetadataOffset::addr(unsafe { Address::from_usize(1) }),
+            offset: SideMetadataOffset::addr(Address::from_usize(1)),
             log_num_of_bits: 0,
             log_bytes_in_region: 0,
         };
