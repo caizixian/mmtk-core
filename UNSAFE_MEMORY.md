@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: <pending> | Δ: <pending>
+- Starting count: 331 | Current: 281 | Δ: -50
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/log_bit.rs` — Check for unsafe blocks and see if they can be removed or abstracted. — expected Δ: unknown.
+1. 🔴 HIGH: `src/util/memory.rs:173` — Analyze if `set` can be made safe via a `MappedRegion` abstraction to encapsulate unsafe memory writes. — expected Δ: 1
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
@@ -27,6 +27,13 @@
 - `src/vm/slot.rs` — Irreducible raw pointer dereferences in `SimpleSlot` and `Address` impls [Phase 2 confirmed].
 - `src/util/metadata/metadata_val_traits.rs` — Trait methods require unsafe for raw pointer dereferencing in atomic operations [Phase 1 analysis].
 - `src/util/metadata/pin_bit.rs` — Fixed unsafe block by using load_atomic. Remaining code is safe [Phase 1 analysis].
+- `src/util/memory.rs` — Irreducible FFI calls to mmap/munmap/mprotect/madvise and tests [Phase 2 confirmed].
+- `docs/dummyvm/src/api.rs` — Irreducible FFI boundary operations [Phase 2 confirmed].
+- `src/util/malloc/malloc_ms_util.rs` — Irreducible FFI calls to malloc/free/calloc [Phase 2 confirmed].
+- `src/util/metadata/header_metadata.rs` — Unsafe functions `load`/`store` are non-atomic/racy by design; unsafe blocks in tests call them [Phase 2 confirmed].
+- `src/util/rust_util/atomic_box.rs` — Lock-free `OnceOptionBox` requires raw pointer manipulation [Phase 2 confirmed].
+- `src/policy/marksweepspace/malloc_ms/global.rs` — Irreducible lifetime extension for `GCWork` packets [Phase 2 confirmed].
+- `src/util/malloc/mod.rs` — Irreducible FFI calls to malloc/free [Phase 2 confirmed].
 
 ## Abstraction Proposals (for Phase 2)
 ### MetadataCursor for side_metadata
