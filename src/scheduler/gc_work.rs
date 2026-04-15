@@ -516,6 +516,9 @@ impl<VM: VMBinding> ProcessEdgesBase<VM> {
     }
 
     pub fn worker(&self) -> &'static mut GCWorker<VM> {
+        // SAFETY: The `worker` pointer is set in `do_work` before any heap processing.
+        // It is only used during the dynamic extent of `do_work` where the worker is guaranteed to be alive.
+        // We return a `'static mut` reference to satisfy API constraints (e.g. ObjectTracer) without passing it as an argument.
         unsafe { &mut *self.worker }
     }
 

@@ -10,7 +10,7 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/scheduler/gc_work.rs:519` — Analyze if `worker: *mut GCWorker` can be replaced with a safe alternative or if it's irreducible — expected Δ: 0-1
+1. 🟡 MED: `src/util/alloc/allocator.rs:180-190` — Investigate raw heap access in `fill_alignment_gap` — expected Δ: 0-1
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
@@ -61,6 +61,7 @@
 - `src/scheduler/affinity.rs` — Irreducible FFI calls for thread affinity [Phase 2 confirmed].
 - `src/util/alloc/allocator.rs` — Irreducible unsafe impl Sync for AllocationOptionsHolder and raw heap access in `fill_alignment_gap` [Phase 1 analysis].
 - `src/policy/immix/immixspace.rs` — Only unsafe impl Sync, no unsafe blocks [Phase 1 analysis].
+- `src/scheduler/gc_work.rs` — Irreducible raw pointer `worker: *mut GCWorker` in `ProcessEdgesBase` due to VM callback constraints and performance [Phase 2 confirmed].
 
 ## Abstraction Proposals (for Phase 2)
 ### MetadataCursor for side_metadata
