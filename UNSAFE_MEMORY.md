@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 228 | Δ: -103
+- Starting count: 331 | Current: 219 | Δ: -112
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/policy/marksweepspace/native_ms/block.rs:252` — Investigate if `Block::load_block_list` can return a safe reference or if the unsafe dereference in `attempt_release` can be encapsulated. — expected Δ: 1
+1. 🟡 MED: `src/util/metadata/side_metadata/helpers.rs:255` — Investigate if `self.0.load::<usize>()` can be made safe or if it's irreducible. — expected Δ: 1
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
@@ -21,7 +21,6 @@
 - **Refactoring**: Removed raw pointer `worker: *mut GCWorker` from `ConcurrentTraceObjects` and replaced it with safe alternatives (storing `mmtk` reference and `tls` data), making it auto-derived `Send` and eliminating unsafe block.
 - **API Cleanup**: Removed `from_raw_address_unchecked` as it was unused in core and replaced its usage in `dummyvm` with safe `from_raw_address().unwrap()`.
 - **Safe Abstraction**: Used `MetadataCursor` to encapsulate unsafe loads and stores in `SideMetadataSpec`, allowing removal of `unsafe` from several function signatures.
-- **Refactoring**: Replaced fake `'static` reference in `MetadataByteArrayRef` with `Address` and used `MetadataCursor` for safe access, removing 1 unsafe block.
 - **Refactoring**: Made `find_prev_non_zero_value` safe by using atomic loads in its implementation and helpers, removing `unsafe` from signature and 1 unsafe block at call site.
 - **Refactoring**: Made `SFTMap::update` and `eager_initialize` safe by taking references instead of raw pointers, removing 6 unsafe blocks at call sites.
 - **Refactoring**: Used `MetadataCursor` in `src/policy/marksweepspace/native_ms/block.rs` to remove unsafe loads and stores of free cell links.
@@ -56,6 +55,7 @@
 - `src/util/address.rs` — Irreducible primitive pointer operations (`load`, `store`, `as_ref`, etc.) [Phase 2 confirmed].
 - `src/util/raw_memory_freelist.rs` — Remaining unsafe is FFI call to `munmap` in `Drop` [Phase 2 confirmed].
 - `src/policy/copyspace.rs` — Irreducible FFI calls to `mprotect` and lifetime extension for `BumpAllocator` [Phase 2 confirmed].
+- `src/policy/marksweepspace/native_ms/block.rs` — All unsafe blocks removed by passing BlockList reference [Phase 2 confirmed].
 
 ## Abstraction Proposals (for Phase 2)
 ### MetadataCursor for side_metadata
