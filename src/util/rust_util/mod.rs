@@ -136,19 +136,9 @@ unsafe impl<T: Send> Send for ProofCell<T> {}
 
 /// Create a formatted string that makes the best effort idenfying the current process and thread.
 pub fn debug_process_thread_id() -> String {
-    let pid = unsafe { libc::getpid() };
-    #[cfg(target_os = "linux")]
-    {
-        // `gettid()` is Linux-specific.
-        let tid = unsafe { libc::gettid() };
-        format!("PID: {}, TID: {}", pid, tid)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        // TODO: When we support other platforms, use platform-specific methods to get thread
-        // identifiers.
-        format!("PID: {}", pid)
-    }
+    let pid = std::process::id();
+    let tid = std::thread::current().id();
+    format!("PID: {}, ThreadId: {:?}", pid, tid)
 }
 
 #[cfg(test)]
