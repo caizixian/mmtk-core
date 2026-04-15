@@ -10,7 +10,7 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/util/address.rs:230-275` — Investigate if any primitive operations can be made safe or if all are truly irreducible — expected Δ: 0
+1. 🟡 MED: `src/policy/sft_map.rs:130-160` — Investigate if transmute for atomic fat pointers can be avoided — expected Δ: 1
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
