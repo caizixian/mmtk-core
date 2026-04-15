@@ -1,4 +1,5 @@
 use crate::util::Address;
+use crate::util::metadata::side_metadata::helpers::MetadataCursor;
 use core::sync::atomic::*;
 use num_traits::{FromPrimitive, ToPrimitive};
 use num_traits::{Unsigned, WrappingAdd, WrappingSub, Zero};
@@ -78,58 +79,35 @@ pub trait MetadataValue:
     + std::fmt::Debug
 {
     /// Non atomic load
-    /// # Safety
-    /// The caller needs to guarantee that the address is valid, and can be used as a pointer to the type.
-    /// The caller also needs to be aware that the method is not thread safe, as it is a non-atomic operation.
-    unsafe fn load(addr: Address) -> Self;
+    fn load(cursor: MetadataCursor) -> Self;
 
     /// Atomic load
-    /// # Safety
-    /// The caller needs to guarantee that the address is valid, and can be used as a pointer to the type.
-    unsafe fn load_atomic(addr: Address, order: Ordering) -> Self;
+    fn load_atomic(cursor: MetadataCursor, order: Ordering) -> Self;
 
     /// Non atomic store
-    /// # Safety
-    /// The caller needs to guarantee that the address is valid, and can be used as a pointer to the type.
-    /// The caller also needs to be aware that the method is not thread safe, as it is a non-atomic operation.
-    unsafe fn store(addr: Address, value: Self);
+    fn store(cursor: MetadataCursor, value: Self);
 
     /// Atomic store
-    /// # Safety
-    /// The caller needs to guarantee that the address is valid, and can be used as a pointer to the type.
-    /// The caller also needs to be aware that the method is not thread safe, as it is a non-atomic operation.
-    unsafe fn store_atomic(addr: Address, value: Self, order: Ordering);
+    fn store_atomic(cursor: MetadataCursor, value: Self, order: Ordering);
 
-    /// # Safety
-    /// The caller needs to guarantee that the address is valid, and can be used as a pointer to the type.
-    unsafe fn compare_exchange(
-        addr: Address,
+    fn compare_exchange(
+        cursor: MetadataCursor,
         current: Self,
         new: Self,
         success: Ordering,
         failure: Ordering,
     ) -> Result<Self, Self>;
 
-    /// # Safety
-    /// The caller needs to guarantee that the address is valid, and can be used as a pointer to the type.
-    unsafe fn fetch_add(addr: Address, value: Self, order: Ordering) -> Self;
+    fn fetch_add(cursor: MetadataCursor, value: Self, order: Ordering) -> Self;
 
-    /// # Safety
-    /// The caller needs to guarantee that the address is valid, and can be used as a pointer to the type.
-    unsafe fn fetch_sub(addr: Address, value: Self, order: Ordering) -> Self;
+    fn fetch_sub(cursor: MetadataCursor, value: Self, order: Ordering) -> Self;
 
-    /// # Safety
-    /// The caller needs to guarantee that the address is valid, and can be used as a pointer to the type.
-    unsafe fn fetch_and(addr: Address, value: Self, order: Ordering) -> Self;
+    fn fetch_and(cursor: MetadataCursor, value: Self, order: Ordering) -> Self;
 
-    /// # Safety
-    /// The caller needs to guarantee that the address is valid, and can be used as a pointer to the type.
-    unsafe fn fetch_or(addr: Address, value: Self, order: Ordering) -> Self;
+    fn fetch_or(cursor: MetadataCursor, value: Self, order: Ordering) -> Self;
 
-    /// # Safety
-    /// The caller needs to guarantee that the address is valid, and can be used as a pointer to the type.
-    unsafe fn fetch_update<F>(
-        addr: Address,
+    fn fetch_update<F>(
+        cursor: MetadataCursor,
         set_order: Ordering,
         fetch_order: Ordering,
         f: F,
@@ -137,54 +115,59 @@ pub trait MetadataValue:
     where
         F: FnMut(Self) -> Option<Self>;
 }
+
 macro_rules! impl_metadata_value_trait {
     ($non_atomic: ty, $atomic: ty) => {
         impl MetadataValue for $non_atomic {
-            unsafe fn load(addr: Address) -> Self {
-                addr.load::<$non_atomic>()
+            fn load(cursor: MetadataCursor) -> Self {
+                unsafe { cursor.0.load::<$non_atomic>() }
             }
 
-            unsafe fn load_atomic(addr: Address, order: Ordering) -> Self {
-                addr.as_ref::<$atomic>().load(order)
+            fn load_atomic(cursor: MetadataCursor, order: Ordering) -> Self {
+                unsafe { cursor.0.as_ref::<$atomic>().load(order) }
             }
 
-            unsafe fn store(addr: Address, value: Self) {
-                addr.store::<$non_atomic>(value)
+            fn store(cursor: MetadataCursor, value: Self) {
+                unsafe { cursor.0.store::<$non_atomic>(value) }
             }
 
-            unsafe fn store_atomic(addr: Address, value: Self, order: Ordering) {
-                addr.as_ref::<$atomic>().store(value, order)
+            fn store_atomic(cursor: MetadataCursor, value: Self, order: Ordering) {
+                unsafe { cursor.0.as_ref::<$atomic>().store(value, order) }
             }
 
-            unsafe fn compare_exchange(
-                addr: Address,
+            fn compare_exchange(
+                cursor: MetadataCursor,
                 current: Self,
                 new: Self,
                 success: Ordering,
                 failure: Ordering,
             ) -> Result<Self, Self> {
-                addr.as_ref::<$atomic>()
-                    .compare_exchange(current, new, success, failure)
+                unsafe {
+                    cursor
+                        .0
+                        .as_ref::<$atomic>()
+                        .compare_exchange(current, new, success, failure)
+                }
             }
 
-            unsafe fn fetch_add(addr: Address, value: Self, order: Ordering) -> Self {
-                addr.as_ref::<$atomic>().fetch_add(value, order)
+            fn fetch_add(cursor: MetadataCursor, value: Self, order: Ordering) -> Self {
+                unsafe { cursor.0.as_ref::<$atomic>().fetch_add(value, order) }
             }
 
-            unsafe fn fetch_sub(addr: Address, value: Self, order: Ordering) -> Self {
-                addr.as_ref::<$atomic>().fetch_sub(value, order)
+            fn fetch_sub(cursor: MetadataCursor, value: Self, order: Ordering) -> Self {
+                unsafe { cursor.0.as_ref::<$atomic>().fetch_sub(value, order) }
             }
 
-            unsafe fn fetch_and(addr: Address, value: Self, order: Ordering) -> Self {
-                addr.as_ref::<$atomic>().fetch_and(value, order)
+            fn fetch_and(cursor: MetadataCursor, value: Self, order: Ordering) -> Self {
+                unsafe { cursor.0.as_ref::<$atomic>().fetch_and(value, order) }
             }
 
-            unsafe fn fetch_or(addr: Address, value: Self, order: Ordering) -> Self {
-                addr.as_ref::<$atomic>().fetch_or(value, order)
+            fn fetch_or(cursor: MetadataCursor, value: Self, order: Ordering) -> Self {
+                unsafe { cursor.0.as_ref::<$atomic>().fetch_or(value, order) }
             }
 
-            unsafe fn fetch_update<F>(
-                addr: Address,
+            fn fetch_update<F>(
+                cursor: MetadataCursor,
                 set_order: Ordering,
                 fetch_order: Ordering,
                 f: F,
@@ -192,12 +175,17 @@ macro_rules! impl_metadata_value_trait {
             where
                 F: FnMut(Self) -> Option<Self>,
             {
-                addr.as_ref::<$atomic>()
-                    .fetch_update(set_order, fetch_order, f)
+                unsafe {
+                    cursor
+                        .0
+                        .as_ref::<$atomic>()
+                        .fetch_update(set_order, fetch_order, f)
+                }
             }
         }
     };
 }
+
 impl_metadata_value_trait!(u8, AtomicU8);
 impl_metadata_value_trait!(u16, AtomicU16);
 impl_metadata_value_trait!(u32, AtomicU32);

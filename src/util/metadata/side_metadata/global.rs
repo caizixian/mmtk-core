@@ -676,7 +676,7 @@ impl SideMetadataSpec {
                     Some(1u8),
                     || {
                         let meta_addr = address_to_meta_address(self, data_addr);
-                        u8::store_atomic(meta_addr, 0xffu8, order);
+                        u8::store_atomic(super::helpers::MetadataCursor(meta_addr), 0xffu8, order);
                     },
                     |_| {}
                 )

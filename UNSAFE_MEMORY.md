@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 180 | Δ: -151
+- Starting count: 331 | Current: 150 | Δ: -181
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/metadata_val_traits.rs:84-139` — Refactor `MetadataValue` trait to use `MetadataCursor` instead of `Address` to make methods safe — expected Δ: 20
+- (No high priority items remaining. Need to analyze remaining files for new abstraction opportunities.)
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
@@ -27,6 +27,7 @@
 - **Refactoring**: Removed redundant unsafe blocks in `global.rs` tests wrapping safe `load` and `store` calls.
 - **Safe Abstraction**: Made `VMMap::allocate_contiguous_chunks` and `free_contiguous_chunks` safe in the trait and implementations as they use internal locking.
 - **Refactoring**: Eliminated unsafe blocks in `header_metadata.rs` tests by using `MetadataCursor` directly in `MockObject` to replicate non-atomic loads and stores.
+- **Refactoring**: Refactored `MetadataValue` trait to use `MetadataCursor` instead of `Address`, removing `unsafe` from trait methods and implementations, and removing `unsafe` blocks in `helpers.rs` (eliminated ~30 unsafe items).
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/scheduler/worker.rs` — Remaining unsafe are trait impls for Send/Sync [Phase 2 confirmed].
@@ -38,7 +39,7 @@
 - `src/util/metadata/side_metadata/ranges.rs` — Irreducible raw pointer manipulations for bit range operations [Phase 1 analysis].
 - `src/policy/sft_map.rs` — Irreducible transmute for atomic fat pointers in `SFTRefStorage` [Phase 2 confirmed].
 - `src/vm/slot.rs` — Irreducible raw pointer dereferences in `SimpleSlot` and `Address` impls [Phase 2 confirmed].
-- `src/util/metadata/metadata_val_traits.rs` — Trait methods require unsafe for raw pointer dereferencing in atomic operations [Phase 2 confirmed].
+- `src/util/metadata/metadata_val_traits.rs` — Trait methods refactored to be safe, remaining unsafe in impls is encapsulated [Phase 2 confirmed].
 - `src/util/metadata/pin_bit.rs` — Fixed unsafe block by using load_atomic. Remaining code is safe [Phase 1 analysis].
 - `src/util/memory.rs` — Irreducible FFI calls to mmap/munmap/mprotect/madvise and tests [Phase 2 confirmed].
 - `docs/dummyvm/src/api.rs` — Irreducible FFI boundary operations [Phase 2 confirmed].
@@ -74,4 +75,4 @@
 - Target files: `src/util/metadata/metadata_val_traits.rs`
 - Expected Δ: 20
 - Design sketch: Change `MetadataValue` trait methods to take `MetadataCursor` instead of `Address`, allowing them to be safe.
-- Status: proposed
+- Status: done

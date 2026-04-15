@@ -247,7 +247,8 @@ pub enum FindMetaBitResult {
     UnmappedMetadata,
 }
 
-pub(crate) struct MetadataCursor(pub(crate) Address);
+#[derive(Copy, Clone)]
+pub struct MetadataCursor(pub(crate) Address);
 
 impl MetadataCursor {
     #[inline(always)]
@@ -287,22 +288,22 @@ impl MetadataCursor {
 
     #[inline(always)]
     pub(crate) fn load<T: MetadataValue>(&self) -> T {
-        unsafe { T::load(self.0) }
+        T::load(*self)
     }
 
     #[inline(always)]
     pub(crate) fn load_atomic<T: MetadataValue>(&self, order: std::sync::atomic::Ordering) -> T {
-        unsafe { T::load_atomic(self.0, order) }
+        T::load_atomic(*self, order)
     }
 
     #[inline(always)]
     pub(crate) fn store<T: MetadataValue>(&self, value: T) {
-        unsafe { T::store(self.0, value) }
+        T::store(*self, value)
     }
 
     #[inline(always)]
     pub(crate) fn store_atomic<T: MetadataValue>(&self, value: T, order: std::sync::atomic::Ordering) {
-        unsafe { T::store_atomic(self.0, value, order) }
+        T::store_atomic(*self, value, order)
     }
 
     #[inline(always)]
@@ -312,7 +313,7 @@ impl MetadataCursor {
         fetch_order: std::sync::atomic::Ordering,
         f: F,
     ) -> std::result::Result<T, T> {
-        unsafe { T::fetch_update(self.0, set_order, fetch_order, f) }
+        T::fetch_update(*self, set_order, fetch_order, f)
     }
 
     #[inline(always)]
@@ -323,27 +324,27 @@ impl MetadataCursor {
         success: std::sync::atomic::Ordering,
         failure: std::sync::atomic::Ordering,
     ) -> std::result::Result<T, T> {
-        unsafe { T::compare_exchange(self.0, current, new, success, failure) }
+        T::compare_exchange(*self, current, new, success, failure)
     }
 
     #[inline(always)]
     pub(crate) fn fetch_add<T: MetadataValue>(&self, val: T, order: std::sync::atomic::Ordering) -> T {
-        unsafe { T::fetch_add(self.0, val, order) }
+        T::fetch_add(*self, val, order)
     }
 
     #[inline(always)]
     pub(crate) fn fetch_sub<T: MetadataValue>(&self, val: T, order: std::sync::atomic::Ordering) -> T {
-        unsafe { T::fetch_sub(self.0, val, order) }
+        T::fetch_sub(*self, val, order)
     }
 
     #[inline(always)]
     pub(crate) fn fetch_and<T: MetadataValue>(&self, val: T, order: std::sync::atomic::Ordering) -> T {
-        unsafe { T::fetch_and(self.0, val, order) }
+        T::fetch_and(*self, val, order)
     }
 
     #[inline(always)]
     pub(crate) fn fetch_or<T: MetadataValue>(&self, val: T, order: std::sync::atomic::Ordering) -> T {
-        unsafe { T::fetch_or(self.0, val, order) }
+        T::fetch_or(*self, val, order)
     }
 }
 
