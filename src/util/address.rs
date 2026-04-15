@@ -583,22 +583,7 @@ impl ObjectReference {
         NonZeroUsize::new(addr.0).map(ObjectReference)
     }
 
-    /// Like `from_raw_address`, but assume `addr` is not zero.  This can be used to elide a check
-    /// against zero for performance-critical code.
-    ///
-    /// # Safety
-    ///
-    /// This method assumes `addr` is not zero.  It should only be used in cases where we know at
-    /// compile time that the input cannot be zero.  For example, if we compute the address by
-    /// adding a positive offset to a non-zero address, we know the result must not be zero.
-    pub unsafe fn from_raw_address_unchecked(addr: Address) -> ObjectReference {
-        debug_assert!(!addr.is_zero());
-        debug_assert!(
-            addr.is_aligned_to(Self::ALIGNMENT),
-            "ObjectReference is required to be word aligned.  addr: {addr}"
-        );
-        ObjectReference(NonZeroUsize::new_unchecked(addr.0))
-    }
+
 
     /// Get the header base address from an object reference. This method is used by MMTk to get a base address for the
     /// object header, and access the object header. This method is syntactic sugar for [`crate::vm::ObjectModel::ref_to_header`].
