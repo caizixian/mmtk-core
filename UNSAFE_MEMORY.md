@@ -3,7 +3,7 @@
 ## Progress
 - Starting count: 331 | Current: 86 | Δ: -245
 - Phase: 3
-- Note: Added SAFETY comments to `src/util/malloc/mod.rs` and `src/scheduler/affinity.rs` for irreducible FFI calls in Phase 3.
+- Note: Added SAFETY comments to `src/util/malloc/mod.rs`, `src/scheduler/affinity.rs`, and `src/util/alloc/allocators.rs` in Phase 3.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
@@ -14,7 +14,7 @@
 - `InitializeOnce` was used for `SFT_MAP` to allow zero-cost reads on extreme hot paths (object tracing). Now replaced by `OnceLock` for safety.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: `src/util/alloc/allocators.rs:52-91` — Check for SAFETY comments for `MaybeUninit` usage.
+1. 🟢 LOW: `src/util/malloc/malloc_ms_util.rs:11` — Check if we can use `Layout` and `alloc` instead of `posix_memalign` to avoid FFI.
 2. 🟢 LOW: Conclude the task as all remaining unsafe code has been verified and documented where needed.
 
 ## Patterns Discovered
@@ -83,7 +83,7 @@
 - `src/util/address.rs` — Irreducible primitive pointer operations (`load`, `store`, `as_ref`, etc.) [Phase 2 confirmed].
 - `src/util/raw_memory_freelist.rs` — Remaining unsafe is FFI call to `munmap` in `Drop` [Phase 2 confirmed].
 - `src/policy/copyspace.rs` — Irreducible FFI calls to `mprotect`. Lifetime extension for `BumpAllocator` removed by tightening bounds in `Plan::prepare_worker`. [Phase 3 confirmed].
-- `src/util/alloc/allocators.rs` — Irreducible `MaybeUninit` usage for FFI layout compatibility [Phase 2 confirmed].
+- `src/util/alloc/allocators.rs` — Irreducible `MaybeUninit` usage for FFI layout compatibility. SAFETY comments added in Phase 3. [Phase 3 confirmed].
 - `src/scheduler/affinity.rs` — Irreducible FFI calls for thread affinity. SAFETY comments added in Phase 3. [Phase 3 confirmed].
 - `src/util/alloc/allocator.rs` — Irreducible raw heap access in `fill_alignment_gap`. `unsafe impl Sync` for `AllocationOptionsHolder` removed by using `Mutex`. [Phase 2 confirmed].
 - `src/policy/immix/immixspace.rs` — Clean: 0 unsafe blocks, no unsafe impl Sync [Phase 2 confirmed].

@@ -49,6 +49,7 @@ pub struct Allocators<VM: VMBinding> {
 
 impl<VM: VMBinding> Allocators<VM> {
     pub fn get_allocator(&self, selector: AllocatorSelector) -> &dyn Allocator<VM> {
+        // SAFETY: We ensure that the allocator is initialized by checking the corresponding flag before calling `assume_init_ref`.
         unsafe {
             match selector {
                 AllocatorSelector::BumpPointer(index) => {
@@ -88,6 +89,7 @@ impl<VM: VMBinding> Allocators<VM> {
         &mut self,
         selector: AllocatorSelector,
     ) -> &mut dyn Allocator<VM> {
+        // SAFETY: We ensure that the allocator is initialized by checking the corresponding flag before calling `assume_init_mut`.
         unsafe {
             match selector {
                 AllocatorSelector::BumpPointer(index) => {
