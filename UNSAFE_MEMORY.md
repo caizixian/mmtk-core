@@ -11,8 +11,8 @@
 - `SimpleSlot` uses `Address` instead of raw pointers, avoiding `unsafe impl Send`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-- Completed re-evaluation of all remaining unsafe locations. Confirmed that all are irreducible due to FFI, low-level memory operations, or performance constraints.
-- Next step: Enter Phase 3 to document safety invariants for remaining irreducible unsafe.
+1. 🟢 LOW: `src/util/memory.rs:175-597` — Document safety invariants for irreducible FFI calls — expected Δ: 0
+2. 🟢 LOW: `docs/dummyvm/src/api.rs:33-131` — Document safety invariants for irreducible FFI calls — expected Δ: 0
 
 
 ## Patterns Discovered
@@ -76,7 +76,7 @@
 - `src/util/heap/chunk_map.rs` — All unsafe blocks removed after making SideMetadataSpec methods safe [Phase 2 confirmed].
 - `src/util/address.rs` — Irreducible primitive pointer operations (`load`, `store`, `as_ref`, etc.) [Phase 2 confirmed].
 - `src/util/raw_memory_freelist.rs` — Remaining unsafe is FFI call to `munmap` in `Drop` [Phase 2 confirmed].
-- `src/policy/copyspace.rs` — Irreducible FFI calls to `mprotect` and lifetime extension for `BumpAllocator` [Phase 2 confirmed].
+- `src/policy/copyspace.rs` — Irreducible FFI calls to `mprotect` and lifetime extension for `BumpAllocator`. Safety invariants documented in Phase 3. [Phase 3 confirmed].
 - `src/util/alloc/allocators.rs` — Irreducible `MaybeUninit` usage for FFI layout compatibility [Phase 2 confirmed].
 - `src/scheduler/affinity.rs` — Irreducible FFI calls for thread affinity [Phase 2 confirmed].
 - `src/util/alloc/allocator.rs` — Irreducible raw heap access in `fill_alignment_gap`. `unsafe impl Sync` for `AllocationOptionsHolder` removed by using `Mutex`. [Phase 2 confirmed].

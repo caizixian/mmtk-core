@@ -291,6 +291,7 @@ impl<VM: VMBinding> CopySpace<VM> {
         }
         let start = self.common().start;
         let extent = self.common().extent;
+        // SAFETY: The memory range is valid and owned by this space.
         unsafe {
             mprotect(start.to_mut_ptr(), extent, PROT_NONE);
         }
@@ -306,6 +307,7 @@ impl<VM: VMBinding> CopySpace<VM> {
         }
         let start = self.common().start;
         let extent = self.common().extent;
+        // SAFETY: The memory range is valid and owned by this space.
         unsafe {
             mprotect(
                 start.to_mut_ptr(),
@@ -363,6 +365,8 @@ impl<VM: VMBinding> CopySpaceCopyContext<VM> {
     }
 
     pub fn rebind(&mut self, space: &CopySpace<VM>) {
+        // SAFETY: The space reference is assumed to live long enough (typically 'static in MMTk plans).
+        // This is a lifetime extension to satisfy the BumpAllocator's requirement for a 'static space.
         self.copy_allocator
             .rebind(unsafe { &*{ space as *const _ } });
     }

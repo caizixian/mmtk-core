@@ -1,16 +1,15 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: All remaining files with unsafe code.
-- Strategy: Re-evaluate for potential new abstractions or confirm irreducibility.
+- File: <file being analyzed>
+- Strategy: <what you're attempting>
 
 ## Findings
-- Confirmed that all remaining unsafe code is irreducible due to FFI boundaries, low-level memory operations, or performance constraints that require bypassing safety checks (like `ProofCell` and `InitializeOnce`).
-- The top files by unsafe count are either implementations of safe abstractions (like `MetadataCursor` in `helpers.rs`) or FFI boundaries (like `memory.rs` and `api.rs`).
+- Line X: <unsafe type> — <eliminable? why/why not>
+- Line Y: <unsafe type> — <eliminable? why/why not>
 
 ## Attempted Changes
-- None. Analyzed the files and confirmed that the unsafe code is justified by performance and design constraints.
+- <what you tried, what happened>
 
 ## Blockers / Insights for Next Step
-- All addressable unsafe has been addressed or identified as irreducible.
-- The project is ready for Phase 3 (documenting safety invariants).
+- <what prevented completion, what the next step should know>
