@@ -10,7 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/policy/lockfreeimmortalspace.rs:130` — Investigate if `eager_initialize` can be made safe or if we can add a safety comment.
+1. 🔴 HIGH: `src/vm/slot.rs:180` — Investigate if we can replace raw pointer dereference with safe operations in SimpleSlot.
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.

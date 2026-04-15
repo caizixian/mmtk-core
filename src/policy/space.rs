@@ -747,6 +747,7 @@ impl<VM: VMBinding> CommonSpace<VM> {
         // * change grow_space() so it sets SFT no matter what the new_chunks value is.
         // FIXME: eagerly initializing SFT is not a good idea.
         if self.contiguous {
+            // SAFETY: The space is contiguous and the range `(self.start, self.start + self.extent)` was reserved and mapped during space creation, so it is guaranteed to be a valid SFT entry range.
             unsafe { sft_map.eager_initialize(sft, self.start, self.extent) };
         }
     }
