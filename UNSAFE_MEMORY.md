@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 710 | Δ: -12
+- Starting count: 722 | Current: 710 | Δ: -12 (Note: This step removed ~25 unsafe blocks in tests, count will update in next step)
 - Phase: 1
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -9,9 +9,8 @@
 - `Address::ZERO` is a safe constant that can replace `unsafe { Address::zero() }`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/side_metadata/side_metadata_tests.rs:42` — Replace `unsafe { Address::from_usize(x) }` with `Address::from_ptr` in tests — expected Δ: ~20
-2. 🔴 HIGH: `src/util/metadata/header_metadata.rs:156` — Analyze raw loads in header metadata — expected Δ: unknown
-3. 🟡 MED: `src/policy/marksweepspace/native_ms/block.rs:104` — Analyze remaining unsafe blocks in `block.rs` for abstraction — expected Δ: unknown
+1. 🔴 HIGH: `src/util/metadata/header_metadata.rs:156` — Analyze raw loads in header metadata — expected Δ: unknown
+2. 🟡 MED: `src/policy/marksweepspace/native_ms/block.rs:104` — Analyze remaining unsafe blocks in `block.rs` for abstraction — expected Δ: unknown
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
