@@ -11,7 +11,7 @@ use num_traits::FromPrimitive;
 use ranges::BitByteRange;
 use std::fmt;
 use std::io::Result;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::Ordering;
 
 /// This struct stores the specification of a side metadata bit-set.
 /// It is used as an input to the (inline) functions provided by the side metadata module.
@@ -581,10 +581,10 @@ impl SideMetadataSpec {
                 if bits_num_log < 3 {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
-                    let byte_val = unsafe { meta_addr.atomic_load::<AtomicU8>(order) };
+                    let byte_val = super::helpers::MetadataCursor(meta_addr).load_atomic_u8(order);
                     FromPrimitive::from_u8((byte_val & mask) >> lshift).unwrap()
                 } else {
-                    unsafe { T::load_atomic(meta_addr, order) }
+                    super::helpers::MetadataCursor(meta_addr).load_atomic::<T>(order)
                 }
             },
             |_v| {
@@ -607,15 +607,11 @@ impl SideMetadataSpec {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
                     let metadata_u8 = metadata.to_u8().unwrap();
-                    let _ = unsafe {
-                        <u8 as MetadataValue>::fetch_update(meta_addr, order, order, |v: u8| {
-                            Some((v & !mask) | (metadata_u8 << lshift))
-                        })
-                    };
+                    let _ = super::helpers::MetadataCursor(meta_addr).fetch_update::<u8, _>(order, order, |v: u8| {
+                        Some((v & !mask) | (metadata_u8 << lshift))
+                    });
                 } else {
-                    unsafe {
-                        T::store_atomic(meta_addr, metadata, order);
-                    }
+                    super::helpers::MetadataCursor(meta_addr).store_atomic::<T>(metadata, order);
                 }
             },
             |_| {
@@ -752,32 +748,27 @@ impl SideMetadataSpec {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
 
-                    let res = unsafe {
-                        let real_old_byte = meta_addr.atomic_load::<AtomicU8>(success_order);
-                        let expected_old_byte =
-                            (real_old_byte & !mask) | ((old_metadata.to_u8().unwrap()) << lshift);
-                        let expected_new_byte =
-                            (expected_old_byte & !mask) | ((new_metadata.to_u8().unwrap()) << lshift);
+                    let real_old_byte = super::helpers::MetadataCursor(meta_addr).load_atomic_u8(success_order);
+                    let expected_old_byte =
+                        (real_old_byte & !mask) | ((old_metadata.to_u8().unwrap()) << lshift);
+                    let expected_new_byte =
+                        (expected_old_byte & !mask) | ((new_metadata.to_u8().unwrap()) << lshift);
 
-                        meta_addr.compare_exchange::<AtomicU8>(
-                            expected_old_byte,
-                            expected_new_byte,
-                            success_order,
-                            failure_order,
-                        )
-                    };
+                    let res = super::helpers::MetadataCursor(meta_addr).compare_exchange::<u8>(
+                        expected_old_byte,
+                        expected_new_byte,
+                        success_order,
+                        failure_order,
+                    );
                     res.map(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
                         .map_err(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
                 } else {
-                    unsafe {
-                        T::compare_exchange(
-                            meta_addr,
-                            old_metadata,
-                            new_metadata,
-                            success_order,
-                            failure_order,
-                        )
-                    }
+                    super::helpers::MetadataCursor(meta_addr).compare_exchange::<T>(
+                        old_metadata,
+                        new_metadata,
+                        success_order,
+                        failure_order,
+                    )
                 }
             },
             |_res| {
@@ -802,19 +793,16 @@ impl SideMetadataSpec {
         let lshift = meta_byte_lshift(self, data_addr);
         let mask = meta_byte_mask(self) << lshift;
 
-        let old_raw_byte = unsafe {
-            <u8 as MetadataValue>::fetch_update(
-                meta_addr,
-                set_order,
-                fetch_order,
-                |raw_byte: u8| {
-                    let old_val = (raw_byte & mask) >> lshift;
-                    let new_val = update(old_val);
-                    let new_raw_byte = (raw_byte & !mask) | ((new_val << lshift) & mask);
-                    Some(new_raw_byte)
-                },
-            )
-        }
+        let old_raw_byte = super::helpers::MetadataCursor(meta_addr).fetch_update::<u8, _>(
+            set_order,
+            fetch_order,
+            |raw_byte: u8| {
+                let old_val = (raw_byte & mask) >> lshift;
+                let new_val = update(old_val);
+                let new_raw_byte = (raw_byte & !mask) | ((new_val << lshift) & mask);
+                Some(new_raw_byte)
+            },
+        )
         .unwrap();
         (old_raw_byte & mask) >> lshift
     }
@@ -844,7 +832,7 @@ impl SideMetadataSpec {
                     ))
                     .unwrap()
                 } else {
-                    unsafe { T::fetch_add(meta_addr, val, order) }
+                    super::helpers::MetadataCursor(meta_addr).fetch_add::<T>(val, order)
                 }
             },
             |_old_val| {
@@ -878,7 +866,7 @@ impl SideMetadataSpec {
                     ))
                     .unwrap()
                 } else {
-                    unsafe { T::fetch_sub(meta_addr, val, order) }
+                    super::helpers::MetadataCursor(meta_addr).fetch_sub::<T>(val, order)
                 }
             },
             |_old_val| {
@@ -907,12 +895,11 @@ impl SideMetadataSpec {
                     let mask = meta_byte_mask(self) << lshift;
                     // We do not need to use fetch_ops_on_bits(), we can just set irrelavent bits to 1, and do fetch_and
                     let rhs = (val.to_u8().unwrap() << lshift) | !mask;
-                    let old_raw_byte =
-                        unsafe { <u8 as MetadataValue>::fetch_and(meta_addr, rhs, order) };
+                    let old_raw_byte = super::helpers::MetadataCursor(meta_addr).fetch_and::<u8>(rhs, order);
                     let old_val = (old_raw_byte & mask) >> lshift;
                     FromPrimitive::from_u8(old_val).unwrap()
                 } else {
-                    unsafe { T::fetch_and(meta_addr, val, order) }
+                    super::helpers::MetadataCursor(meta_addr).fetch_and::<T>(val, order)
                 }
             },
             |_old_val| {
@@ -941,12 +928,11 @@ impl SideMetadataSpec {
                     let mask = meta_byte_mask(self) << lshift;
                     // We do not need to use fetch_ops_on_bits(), we can just set irrelavent bits to 0, and do fetch_or
                     let rhs = (val.to_u8().unwrap() << lshift) & mask;
-                    let old_raw_byte =
-                        unsafe { <u8 as MetadataValue>::fetch_or(meta_addr, rhs, order) };
+                    let old_raw_byte = super::helpers::MetadataCursor(meta_addr).fetch_or::<u8>(rhs, order);
                     let old_val = (old_raw_byte & mask) >> lshift;
                     FromPrimitive::from_u8(old_val).unwrap()
                 } else {
-                    unsafe { T::fetch_or(meta_addr, val, order) }
+                    super::helpers::MetadataCursor(meta_addr).fetch_or::<T>(val, order)
                 }
             },
             |_old_val| {
@@ -975,24 +961,21 @@ impl SideMetadataSpec {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
 
-                    unsafe {
-                        <u8 as MetadataValue>::fetch_update(
-                            meta_addr,
-                            set_order,
-                            fetch_order,
-                            |raw_byte: u8| {
-                                let old_val = (raw_byte & mask) >> lshift;
-                                f(FromPrimitive::from_u8(old_val).unwrap()).map(|new_val| {
-                                    (raw_byte & !mask)
-                                        | ((new_val.to_u8().unwrap() << lshift) & mask)
-                                })
-                            },
-                        )
-                    }
+                    super::helpers::MetadataCursor(meta_addr).fetch_update::<u8, _>(
+                        set_order,
+                        fetch_order,
+                        move |raw_byte: u8| {
+                            let old_val = (raw_byte & mask) >> lshift;
+                            f(FromPrimitive::from_u8(old_val).unwrap()).map(|new_val| {
+                                (raw_byte & !mask)
+                                    | ((new_val.to_u8().unwrap() << lshift) & mask)
+                            })
+                        },
+                    )
                     .map(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
                     .map_err(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
                 } else {
-                    unsafe { T::fetch_update(meta_addr, set_order, fetch_order, f) }
+                    super::helpers::MetadataCursor(meta_addr).fetch_update::<T, _>(set_order, fetch_order, f)
                 }
             },
             |_result| {

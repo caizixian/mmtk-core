@@ -309,6 +309,37 @@ impl MetadataCursor {
     ) -> std::result::Result<T, T> {
         unsafe { T::fetch_update(self.0, set_order, fetch_order, f) }
     }
+
+    #[inline(always)]
+    pub(crate) fn compare_exchange<T: MetadataValue>(
+        &self,
+        current: T,
+        new: T,
+        success: std::sync::atomic::Ordering,
+        failure: std::sync::atomic::Ordering,
+    ) -> std::result::Result<T, T> {
+        unsafe { T::compare_exchange(self.0, current, new, success, failure) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn fetch_add<T: MetadataValue>(&self, val: T, order: std::sync::atomic::Ordering) -> T {
+        unsafe { T::fetch_add(self.0, val, order) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn fetch_sub<T: MetadataValue>(&self, val: T, order: std::sync::atomic::Ordering) -> T {
+        unsafe { T::fetch_sub(self.0, val, order) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn fetch_and<T: MetadataValue>(&self, val: T, order: std::sync::atomic::Ordering) -> T {
+        unsafe { T::fetch_and(self.0, val, order) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn fetch_or<T: MetadataValue>(&self, val: T, order: std::sync::atomic::Ordering) -> T {
+        unsafe { T::fetch_or(self.0, val, order) }
+    }
 }
 
 // Check and find the last bit that is set. We try load words where possible, and fall back to load bytes.
