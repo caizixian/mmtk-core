@@ -1545,7 +1545,7 @@ pub struct MetadataByteArrayRef<const ENTRIES: usize> {
     heap_range_start: Address,
     #[cfg(feature = "extreme_assertions")]
     spec: SideMetadataSpec,
-    data: &'static [u8; ENTRIES],
+    data: Address,
 }
 
 impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
@@ -1572,9 +1572,7 @@ impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
             heap_range_start: start,
             #[cfg(feature = "extreme_assertions")]
             spec: *metadata_spec,
-            // # Safety
-            // The metadata memory is assumed to be mapped when accessing.
-            data: unsafe { &*address_to_meta_address(metadata_spec, start).to_ptr() },
+            data: address_to_meta_address(metadata_spec, start),
         }
     }
 
@@ -1589,7 +1587,7 @@ impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
     pub fn get(&self, index: usize) -> u8 {
         #[cfg(feature = "extreme_assertions")]
         let _lock = sanity::SANITY_LOCK.lock().unwrap();
-        let value = self.data[index];
+        let value = super::helpers::MetadataCursor(self.data + index).load::<u8>();
         #[cfg(feature = "extreme_assertions")]
         {
             let data_addr = self.heap_range_start + (index << self.spec.log_bytes_in_region);
