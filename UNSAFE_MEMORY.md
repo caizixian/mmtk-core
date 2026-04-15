@@ -15,6 +15,7 @@
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
 1. 🟢 LOW: `src/util/address.rs` — Audit and document safety invariants for remaining unsafe operations.
+2. 🟢 LOW: Audit other files in `src/util/` (e.g. `src/util/conversions.rs` or others) to see if they are clean but not listed.
 
 ## Patterns Discovered
 - **Safe Abstraction**: Used `SFTHeader` wrapper to avoid `transmute` on fat pointers in `SFTRefStorage`, removing 3 unsafe blocks (and adding 1 unsafe impl Sync).
@@ -102,6 +103,9 @@
 - `src/util/heap/blockpageresource.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
 - `src/util/heap/freelistpageresource.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
 - `src/util/heap/monotonepageresource.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
+- `src/util/heap/pageresource.rs` — Clean: 0 unsafe blocks [Phase 3 confirmed].
+- `src/util/heap/regionpageresource.rs` — Clean: 0 unsafe blocks [Phase 3 confirmed].
+- `src/util/heap/space_descriptor.rs` — Clean: 0 unsafe blocks [Phase 3 confirmed].
 - `src/policy/copy_context.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
 - `src/policy/gc_work.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
 - `src/policy/immortalspace.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
