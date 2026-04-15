@@ -5,6 +5,7 @@
 - Phase: 3
 - Note: Added `dzmmap_test` helper in tests to reduce unsafe blocks at call sites in `src/util/memory.rs`.
 - Note: Added SAFETY comments to `src/util/malloc/mod.rs`, `src/scheduler/affinity.rs`, and `src/util/alloc/allocators.rs` in Phase 3.
+- Note: Verified remaining unsafe locations in `malloc_ms_util.rs`, `rust_util/mod.rs`, and `slot.rs` are irreducible or properly encapsulated, concluding the task.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
