@@ -26,9 +26,9 @@ impl MockScanning {
 }
 
 static SLOTS: [Address; 3] = [
-    unsafe { Address::from_usize(0x8) },
-    unsafe { Address::from_usize(0x8) },
-    unsafe { Address::from_usize(0x8) },
+    Address::from_usize(0x8),
+    Address::from_usize(0x8),
+    Address::from_usize(0x8),
 ];
 
 /// A factory with a plain value, a boxed value and a shared data with Arc.

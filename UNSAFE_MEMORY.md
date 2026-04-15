@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 272 | Δ: -59
+- Starting count: 331 | Current: 266 | Δ: -65
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,10 +10,8 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: `benches/mock_bench/mmapper.rs:30-31` — Remove redundant unsafe wrapping `Address::from_usize` — expected Δ: -2
-2. 🟢 LOW: `tests/test_roots_work_factory.rs:29-31` — Remove redundant unsafe wrapping `Address::from_usize` — expected Δ: -3
-3. 🟢 LOW: `benches/mock_bench/mmapper.rs:70` — Remove redundant unsafe wrapping `Address::from_usize` — expected Δ: -1
-4. 🟡 MED: `src/mmtk.rs:436` — Analyze if `ProofCell::get_ref` usage in `get_plan` can be made safer or if `ProofCell` can be replaced. — expected Δ: 0
+1. 🟡 MED: `src/mmtk.rs:436` — Analyze if `ProofCell::get_ref` usage in `get_plan` can be made safer or if `ProofCell` can be replaced. — expected Δ: 0
+2. 🟡 MED: `src/util/rust_util/mod.rs:74-96` — Analyze if `InitializeOnce` can be replaced with `std::sync::OnceLock` — expected Δ: -4
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
