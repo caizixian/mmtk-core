@@ -208,6 +208,7 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
 
     /// Get header forwarding pointer for an object
     fn get_header_forwarding_pointer(object: ObjectReference) -> Option<ObjectReference> {
+        // SAFETY: The object reference is valid, and we are accessing the header word reserved for forwarding pointers (allocated during reservation).
         let addr = unsafe { Self::header_forwarding_pointer_address(object).load::<Address>() };
         ObjectReference::from_raw_address(addr)
     }
@@ -217,6 +218,7 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
         object: ObjectReference,
         forwarding_pointer: ObjectReference,
     ) {
+        // SAFETY: The object reference is valid, and we are writing to the header word reserved for forwarding pointers (allocated during reservation).
         unsafe {
             Self::header_forwarding_pointer_address(object)
                 .store::<ObjectReference>(forwarding_pointer);
