@@ -1,19 +1,18 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: `src/util/address.rs`
-- Strategy: Verify and improve safety documentation for primitive pointer operations (Work Queue item).
+- File: Holistic review of remaining unsafe code.
+- Strategy: Verify irreducibility of remaining unsafe code across major files.
 
 ## Findings
-- All files with unsafe are currently marked as "NOT to Revisit" or confirmed irreducible in `UNSAFE_MEMORY.md`.
-- A holistic review suggests that the remaining unsafe code is indeed irreducible or properly encapsulated behind safe abstractions (like `MetadataCursor`).
-- The work queue contains one item: "Verify safety documentation for primitive pointer operations" in `src/util/address.rs`.
-- I addressed this item by improving the `# Safety` sections of `load`, `store`, `atomic_load`, `atomic_store`, `compare_exchange`, `as_ref`, and `as_mut_ref`.
+- `src/util/metadata/side_metadata/helpers.rs`: Unsafe blocks are inside `MetadataCursor` abstraction, which is the correct place for them. Irreducible without moving unsafe to call sites.
+- `src/util/memory.rs`: FFI calls to OS memory management are irreducible.
+- `src/util/rust_util/mod.rs`: `InitializeOnce` is required for zero-cost reads on hot path, cannot be replaced by `OnceLock` without potential performance regression.
+- `src/util/malloc/malloc_ms_util.rs`: FFI calls to malloc/free.
+- `src/vm/slot.rs`: `SimpleSlot` encapsulates raw pointer operations.
 
 ## Attempted Changes
-- Improved safety documentation for primitive pointer operations in `src/util/address.rs`.
+- None, as all remaining unsafe is confirmed irreducible or properly encapsulated.
 
 ## Blockers / Insights for Next Step
-- The work queue is now empty of actionable reduction items.
-- All remaining unsafe code is documented as irreducible or encapsulated.
-- The next step should conclude the effort or focus on maintenance.
+- Concluded that the remaining unsafe is irreducible or properly encapsulated. Recommend stopping the reduction effort or focusing on maintenance.
