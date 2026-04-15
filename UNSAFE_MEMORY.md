@@ -2,7 +2,7 @@
 
 ## Progress
 - Starting count: 331 | Current: 121 | Δ: -210
-- Phase: 2
+- Phase: 3
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
@@ -11,8 +11,8 @@
 - `SimpleSlot` uses `Address` instead of raw pointers, avoiding `unsafe impl Send`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-- Re-evaluated `atomic_box.rs` and `mmtk.rs` and confirmed they are irreducible due to performance/space constraints.
-- Next step: Focus on documenting safety invariants for remaining irreducible unsafe or discuss with user if they accept refactoring cost for threading tokens.
+- Completed re-evaluation of all remaining unsafe locations. Confirmed that all are irreducible due to FFI, low-level memory operations, or performance constraints.
+- Next step: Enter Phase 3 to document safety invariants for remaining irreducible unsafe.
 
 
 ## Patterns Discovered

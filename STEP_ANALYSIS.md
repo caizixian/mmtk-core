@@ -1,16 +1,16 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: Multiple (src/util/rust_util/atomic_box.rs, src/mmtk.rs)
-- Strategy: Re-evaluate files for potential new abstractions or local removals, focusing on files marked as irreducible.
+- File: All remaining files with unsafe code.
+- Strategy: Re-evaluate for potential new abstractions or confirm irreducibility.
 
 ## Findings
-- `src/util/rust_util/atomic_box.rs`: `OnceOptionBox` uses unsafe raw pointer manipulation to implement a lock-free option box with minimal space overhead (exactly the size of an `AtomicPtr`). Replacing it with `OnceLock` would introduce space overhead that is likely unacceptable since it is used in a `Vec` for slabs. The `Zeroable` impl is unsafe but sound because a zeroed `AtomicPtr` is a null pointer, which is the correct initial state.
-- `src/mmtk.rs`: `get_plan` uses `ProofCell::get_ref` which is unsafe because it bypasses Rust's borrow checker to allow fast read access on the hot path (e.g. allocation) without locks, assuming no concurrent mutation. Mutation only happens during GC when mutators are stopped. Removing this would require threading proof tokens to ~50 call sites, including hot allocation paths, or using locks/atomics which would degrade performance.
+- Confirmed that all remaining unsafe code is irreducible due to FFI boundaries, low-level memory operations, or performance constraints that require bypassing safety checks (like `ProofCell` and `InitializeOnce`).
+- The top files by unsafe count are either implementations of safe abstractions (like `MetadataCursor` in `helpers.rs`) or FFI boundaries (like `memory.rs` and `api.rs`).
 
 ## Attempted Changes
-- None. Analyzed the files and confirmed that the unsafe code is justified by performance and space constraints, consistent with the findings of previous steps.
+- None. Analyzed the files and confirmed that the unsafe code is justified by performance and design constraints.
 
 ## Blockers / Insights for Next Step
-- I have re-evaluated the top files and confirmed that the unsafe code is irreducible without accepting performance or space overheads.
-- I will update `UNSAFE_MEMORY.md` to reflect this re-evaluation and add detailed justifications.
+- All addressable unsafe has been addressed or identified as irreducible.
+- The project is ready for Phase 3 (documenting safety invariants).
