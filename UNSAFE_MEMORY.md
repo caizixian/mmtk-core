@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 470 | Δ: -65
+- Starting count: 535 | Current: 464 | Δ: -71
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,9 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/memory.rs:173` — investigate memory mapping unsafe blocks — expected Δ: -0 (likely irreducible, but should confirm)
-2. 🟡 MED: `src/util/metadata/helpers.rs:255` — investigate `MetadataCursor` loads/stores — expected Δ: -0 (likely irreducible, but should confirm)
+1. 🔴 HIGH: `src/policy/compressor/forwarding.rs:87` — use `Address::from_ptr` instead of `from_usize` — expected Δ: -1
+2. 🟡 MED: `src/util/alloc/bumpallocator.rs:228` — use `Address::from_ptr` instead of `from_usize` — expected Δ: -1
+3. 🟢 LOW: `src/vm/tests/mock_tests/mock_test_conservatism.rs:113` — use `Address::from_ptr` instead of `from_usize` — expected Δ: -1
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -42,6 +43,9 @@
 - `src/util/heap/freelistpageresource.rs` — Remaining unsafe are `unsafe impl Send` and `unsafe impl Sync`. [Phase 2 confirmed]
 - `src/util/rust_util/mod.rs` — `InitializeOnce` avoids checks on reads for performance, and `get_mut` allows mutating from `&self` which is necessary for plan creation but inherently unsafe. [Phase 2 confirmed]
 - `src/vm/slot.rs` — `SimpleSlot` and `Address` as `Slot` require raw pointer dereference to avoid lifetimes in the `Slot` trait. [Phase 2 confirmed]
+- `src/util/conversions.rs` — All unsafe blocks removed. [Phase 2 confirmed]
+- `src/util/memory.rs` — Irreducible FFI calls (`mmap`, `madvise`, `munmap`, `mprotect`) and core primitives (`ptr::write_bytes`). [Phase 2 confirmed]
+- `src/util/metadata/side_metadata/helpers.rs` — Implementation of `MetadataCursor` abstraction, irreducible without moving unsafe to call sites. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - `SweepProof` for `malloc_ms` (Implemented).
