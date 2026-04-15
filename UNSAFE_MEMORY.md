@@ -3,8 +3,7 @@
 ## Progress
 - Starting count: 331 | Current: 86 | Δ: -245
 - Phase: 3
-- Note: Replaced `InitializeOnce` with `std::sync::OnceLock` in `src/util/rust_util/mod.rs`, reducing unsafe count by 3.
-- Note: Verified all remaining 86 unsafe instances against the "Files NOT to Revisit" list. All are accounted for as irreducible FFI, primitive pointer operations, or safe abstractions.
+- Note: Added SAFETY comments to `src/util/malloc/mod.rs` and `src/scheduler/affinity.rs` for irreducible FFI calls in Phase 3.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
@@ -15,7 +14,8 @@
 - `InitializeOnce` was used for `SFT_MAP` to allow zero-cost reads on extreme hot paths (object tracing). Now replaced by `OnceLock` for safety.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: All remaining unsafe code has been verified as irreducible or part of safe abstractions. Finalize documentation and safety invariants if needed, or conclude the task.
+1. 🟢 LOW: `src/util/alloc/allocators.rs:52-91` — Check for SAFETY comments for `MaybeUninit` usage.
+2. 🟢 LOW: Conclude the task as all remaining unsafe code has been verified and documented where needed.
 
 ## Patterns Discovered
 - **Safe Abstraction**: Used `SFTHeader` wrapper to avoid `transmute` on fat pointers in `SFTRefStorage`, removing 3 unsafe blocks (and adding 1 unsafe impl Sync).
@@ -72,7 +72,7 @@
 - `src/util/metadata/global.rs` — `load` and `store` are non-atomic and not thread-safe by design. Unsafe comes from `ObjectModel::load_metadata` trait method. [Phase 3 confirmed].
 - `src/util/rust_util/atomic_box.rs` — Removed in favor of `std::sync::OnceLock`. File is now empty. [Phase 3 confirmed].
 - `src/policy/marksweepspace/malloc_ms/global.rs` — Irreducible lifetime extension for `GCWork` packets [Phase 2 confirmed].
-- `src/util/malloc/mod.rs` — Irreducible FFI calls to malloc/free [Phase 2 confirmed].
+- `src/util/malloc/mod.rs` — Irreducible FFI calls to malloc/free. SAFETY comments added in Phase 3. [Phase 3 confirmed].
 - `src/plan/global.rs` — Irreducible lifetime extension for `GCWork` packets [Phase 2 confirmed].
 - `src/plan/concurrent/concurrent_marking_work.rs` — All unsafe removed or made safe by refactoring [Phase 2 confirmed].
 - `src/util/rust_util/mod.rs` — InitializeOnce replaced with OnceLock. ProofCell Sync is irreducible. [Phase 3 confirmed].
@@ -84,7 +84,7 @@
 - `src/util/raw_memory_freelist.rs` — Remaining unsafe is FFI call to `munmap` in `Drop` [Phase 2 confirmed].
 - `src/policy/copyspace.rs` — Irreducible FFI calls to `mprotect`. Lifetime extension for `BumpAllocator` removed by tightening bounds in `Plan::prepare_worker`. [Phase 3 confirmed].
 - `src/util/alloc/allocators.rs` — Irreducible `MaybeUninit` usage for FFI layout compatibility [Phase 2 confirmed].
-- `src/scheduler/affinity.rs` — Irreducible FFI calls for thread affinity [Phase 2 confirmed].
+- `src/scheduler/affinity.rs` — Irreducible FFI calls for thread affinity. SAFETY comments added in Phase 3. [Phase 3 confirmed].
 - `src/util/alloc/allocator.rs` — Irreducible raw heap access in `fill_alignment_gap`. `unsafe impl Sync` for `AllocationOptionsHolder` removed by using `Mutex`. [Phase 2 confirmed].
 - `src/policy/immix/immixspace.rs` — Clean: 0 unsafe blocks, no unsafe impl Sync [Phase 2 confirmed].
 - `src/scheduler/gc_work.rs` — Irreducible raw pointer `worker: *mut GCWorker` in `ProcessEdgesBase` due to VM callback constraints and performance [Phase 2 confirmed].

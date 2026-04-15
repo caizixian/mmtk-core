@@ -12,6 +12,7 @@ pub type CoreId = u16;
 /// Return the total number of cores allocated to the program.
 pub fn get_total_num_cpus() -> u16 {
     use std::mem::MaybeUninit;
+    // SAFETY: FFI calls to Linux affinity APIs. Safe as we pass valid pointers to local cpu_set_t.
     unsafe {
         let mut cs = MaybeUninit::zeroed().assume_init();
         CPU_ZERO(&mut cs);
@@ -51,6 +52,7 @@ impl AffinityKind {
 /// Bind the current thread to the specified core.
 fn bind_current_thread_to_core(cpu: CoreId) {
     use std::mem::MaybeUninit;
+    // SAFETY: FFI calls to Linux affinity APIs. Safe as we pass valid pointers to local cpu_set_t.
     unsafe {
         let mut cs = MaybeUninit::zeroed().assume_init();
         CPU_ZERO(&mut cs);
@@ -69,6 +71,7 @@ fn bind_current_thread_to_core(_cpu: CoreId) {
 /// Bind the current thread to the specified core.
 fn bind_current_thread_to_cpuset(cpuset: &[CoreId]) {
     use std::mem::MaybeUninit;
+    // SAFETY: FFI calls to Linux affinity APIs. Safe as we pass valid pointers to local cpu_set_t.
     unsafe {
         let mut cs = MaybeUninit::zeroed().assume_init();
         CPU_ZERO(&mut cs);
