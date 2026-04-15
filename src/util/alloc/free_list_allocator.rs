@@ -174,7 +174,7 @@ impl<VM: VMBinding> FreeListAllocator<VM> {
         {
             let mut cursor = cell;
             while cursor < cell + cell_size {
-                debug_assert_eq!(unsafe { cursor.load::<usize>() }, 0);
+                debug_assert!(block.load_free_cell_link(cursor).is_zero());
                 cursor += crate::util::constants::BYTES_IN_ADDRESS;
             }
         }
