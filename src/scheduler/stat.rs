@@ -27,7 +27,7 @@ pub struct SchedulerStat {
     /// called for each [`WorkerLocalStat`].
     /// We assume different threads have the same set of work counters
     /// (in the same order).
-    work_counters: HashMap<TypeId, Vec<Vec<Box<dyn WorkCounter>>>>,
+    work_counters: HashMap<TypeId, Vec<Vec<Box<dyn WorkCounter + Send + Sync>>>>,
 }
 
 impl SchedulerStat {
@@ -187,7 +187,7 @@ impl WorkStat {
 pub struct WorkerLocalStat<C> {
     work_id_name_map: HashMap<TypeId, &'static str>,
     work_counts: HashMap<TypeId, usize>,
-    work_counters: HashMap<TypeId, Vec<Box<dyn WorkCounter>>>,
+    work_counters: HashMap<TypeId, Vec<Box<dyn WorkCounter + Send + Sync>>>,
     enabled: AtomicBool,
     _phantom: PhantomData<fn() -> C>,
 }
@@ -234,8 +234,8 @@ impl<VM: VMBinding> WorkerLocalStat<VM> {
     }
 
     #[allow(unused_variables, unused_mut)]
-    fn counter_set(mmtk: &'static MMTK<VM>) -> Vec<Box<dyn WorkCounter>> {
-        let mut counters: Vec<Box<dyn WorkCounter>> = vec![Box::new(WorkDuration::new())];
+    fn counter_set(mmtk: &'static MMTK<VM>) -> Vec<Box<dyn WorkCounter + Send + Sync>> {
+        let mut counters: Vec<Box<dyn WorkCounter + Send + Sync>> = vec![Box::new(WorkDuration::new())];
         #[cfg(feature = "perf_counter")]
         for e in &mmtk.options.work_perf_events.events {
             counters.push(Box::new(WorkPerfEvent::new(

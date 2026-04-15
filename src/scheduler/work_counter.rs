@@ -19,11 +19,11 @@ pub(super) struct WorkCounterBase {
 /// Make [`WorkCounter`] trait objects cloneable
 pub(super) trait WorkCounterClone {
     /// Clone the object
-    fn clone_box(&self) -> Box<dyn WorkCounter>;
+    fn clone_box(&self) -> Box<dyn WorkCounter + Send + Sync>;
 }
 
-impl<T: 'static + WorkCounter + Clone> WorkCounterClone for T {
-    fn clone_box(&self) -> Box<dyn WorkCounter> {
+impl<T: 'static + WorkCounter + Clone + Sync> WorkCounterClone for T {
+    fn clone_box(&self) -> Box<dyn WorkCounter + Send + Sync> {
         Box::new(self.clone())
     }
 }
@@ -46,8 +46,8 @@ pub(super) trait WorkCounter: WorkCounterClone + std::fmt::Debug + Send {
     fn get_base(&self) -> &WorkCounterBase;
 }
 
-impl Clone for Box<dyn WorkCounter> {
-    fn clone(&self) -> Box<dyn WorkCounter> {
+impl Clone for Box<dyn WorkCounter + Send + Sync> {
+    fn clone(&self) -> Box<dyn WorkCounter + Send + Sync> {
         self.clone_box()
     }
 }

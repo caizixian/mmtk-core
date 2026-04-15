@@ -45,13 +45,13 @@ pub struct GCWorkerShared<VM: VMBinding> {
     /// The live bytes are stored in an array. The index is the index from the space descriptor.
     pub live_bytes_per_space: AtomicRefCell<[usize; MAX_SPACES]>,
     /// A queue of GCWork that can only be processed by the owned thread.
-    pub designated_work: ArrayQueue<Box<dyn GCWork<VM>>>,
+    pub designated_work: ArrayQueue<Box<dyn GCWork<VM> + Send>>,
     /// Handle for stealing packets from the current worker
-    pub stealer: Option<Stealer<Box<dyn GCWork<VM>>>>,
+    pub stealer: Option<Stealer<Box<dyn GCWork<VM> + Send>>>,
 }
 
 impl<VM: VMBinding> GCWorkerShared<VM> {
-    pub fn new(stealer: Option<Stealer<Box<dyn GCWork<VM>>>>) -> Self {
+    pub fn new(stealer: Option<Stealer<Box<dyn GCWork<VM> + Send>>>) -> Self {
         Self {
             stat: Default::default(),
             live_bytes_per_space: AtomicRefCell::new([0; MAX_SPACES]),
@@ -100,11 +100,10 @@ pub struct GCWorker<VM: VMBinding> {
     /// Reference to the shared part of the GC worker.  It is used for synchronization.
     pub shared: Arc<GCWorkerShared<VM>>,
     /// Local work packet queue.
-    pub local_work_buffer: deque::Worker<Box<dyn GCWork<VM>>>,
+    pub local_work_buffer: deque::Worker<Box<dyn GCWork<VM> + Send>>,
 }
 
-unsafe impl<VM: VMBinding> Sync for GCWorkerShared<VM> {}
-unsafe impl<VM: VMBinding> Send for GCWorkerShared<VM> {}
+// Auto-derived Send and Sync should apply now.
 
 // Error message for borrowing `GCWorkerShared::stat`.
 const STAT_BORROWED_MSG: &str = "GCWorkerShared.stat is already borrowed.  This may happen if \
@@ -129,7 +128,7 @@ pub(crate) struct WorkerShouldExit;
 /// Too many functions return `Option<Box<dyn GCWork<VM>>>`.  In most cases, when `None` is
 /// returned, the caller should try getting work packets from another place.  To avoid confusion,
 /// we use `Err(WorkerShouldExit)` to clearly indicate that the worker should exit immediately.
-pub(crate) type PollResult<VM> = Result<Box<dyn GCWork<VM>>, WorkerShouldExit>;
+pub(crate) type PollResult<VM> = Result<Box<dyn GCWork<VM> + Send>, WorkerShouldExit>;
 
 impl<VM: VMBinding> GCWorker<VM> {
     pub(crate) fn new(
@@ -137,7 +136,7 @@ impl<VM: VMBinding> GCWorker<VM> {
         ordinal: ThreadId,
         scheduler: Arc<GCWorkScheduler<VM>>,
         shared: Arc<GCWorkerShared<VM>>,
-        local_work_buffer: deque::Worker<Box<dyn GCWork<VM>>>,
+        local_work_buffer: deque::Worker<Box<dyn GCWork<VM> + Send>>,
     ) -> Self {
         Self {
             tls: VMWorkerThread(VMThread::UNINITIALIZED),
@@ -275,7 +274,7 @@ enum WorkerCreationState<VM: VMBinding> {
     /// been spawn.
     Initial {
         /// The local work queues for to-be-created workers.
-        local_work_queues: Vec<deque::Worker<Box<dyn GCWork<VM>>>>,
+        local_work_queues: Vec<deque::Worker<Box<dyn GCWork<VM> + Send>>>,
     },
     /// All worker threads are spawn and running.  `GCWorker` structs have been transferred to
     /// worker threads.
@@ -358,7 +357,7 @@ impl<VM: VMBinding> WorkerGroup<VM> {
     #[allow(clippy::vec_box)] // See `WorkerCreationState::Surrendered`.
     fn create_workers(
         &self,
-        local_work_queues: Vec<deque::Worker<Box<dyn GCWork<VM>>>>,
+        local_work_queues: Vec<deque::Worker<Box<dyn GCWork<VM> + Send>>>,
         mmtk: &'static MMTK<VM>,
     ) -> Vec<Box<GCWorker<VM>>> {
         debug!("Creating GCWorker instances...");

@@ -351,7 +351,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     /// Get a schedulable work packet without retry.
-    fn poll_schedulable_work_once(&self, worker: &GCWorker<VM>) -> Steal<Box<dyn GCWork<VM>>> {
+    fn poll_schedulable_work_once(&self, worker: &GCWorker<VM>) -> Steal<Box<dyn GCWork<VM> + Send>> {
         let mut should_retry = false;
         // Try find a packet that can be processed only by this worker.
         if let Some(w) = worker.shared.designated_work.pop() {
@@ -384,7 +384,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     /// Get a schedulable work packet.
-    fn poll_schedulable_work(&self, worker: &GCWorker<VM>) -> Option<Box<dyn GCWork<VM>>> {
+    fn poll_schedulable_work(&self, worker: &GCWorker<VM>) -> Option<Box<dyn GCWork<VM> + Send>> {
         // Loop until we successfully get a packet.
         loop {
             match self.poll_schedulable_work_once(worker) {

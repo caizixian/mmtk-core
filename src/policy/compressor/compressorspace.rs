@@ -293,8 +293,8 @@ impl<VM: VMBinding> CompressorSpace<VM> {
 
     fn generate_tasks(
         &self,
-        f: &mut impl FnMut(&AllocatedRegion<forwarding::CompressorRegion>, usize) -> Box<dyn GCWork<VM>>,
-    ) -> Vec<Box<dyn GCWork<VM>>> {
+        f: &mut impl FnMut(&AllocatedRegion<forwarding::CompressorRegion>, usize) -> Box<dyn GCWork<VM> + Send>,
+    ) -> Vec<Box<dyn GCWork<VM> + Send>> {
         let mut packets = vec![];
         let mut index = 0;
         self.pr.enumerate_regions(&mut |r| {
@@ -305,7 +305,7 @@ impl<VM: VMBinding> CompressorSpace<VM> {
     }
 
     pub fn add_offset_vector_tasks(&'static self) {
-        let offset_vector_packets: Vec<Box<dyn GCWork<VM>>> = self.generate_tasks(&mut |r, _| {
+        let offset_vector_packets: Vec<Box<dyn GCWork<VM> + Send>> = self.generate_tasks(&mut |r, _| {
             Box::new(CalculateOffsetVector::<VM>::new(self, r.region, r.cursor()))
         });
         self.scheduler.work_buckets[WorkBucketStage::CalculateForwarding]
@@ -354,7 +354,7 @@ impl<VM: VMBinding> CompressorSpace<VM> {
     }
 
     pub fn add_compact_tasks(&'static self) {
-        let compact_packets: Vec<Box<dyn GCWork<VM>>> =
+        let compact_packets: Vec<Box<dyn GCWork<VM> + Send>> =
             self.generate_tasks(&mut |_, i| Box::new(Compact::<VM>::new(self, i)));
         self.scheduler.work_buckets[WorkBucketStage::Compact].bulk_add(compact_packets);
     }

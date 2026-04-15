@@ -525,7 +525,7 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
         }
     }
 
-    fn generate_sweep_tasks(&self, get_space: fn(&'static MMTK<VM>) -> &MarkSweepSpace<VM>) -> Vec<Box<dyn GCWork<VM>>> {
+    fn generate_sweep_tasks(&self, get_space: fn(&'static MMTK<VM>) -> &MarkSweepSpace<VM>) -> Vec<Box<dyn GCWork<VM> + Send>> {
         let epilogue = Arc::new(RecycleBlocks {
             counter: AtomicUsize::new(0),
             get_space,

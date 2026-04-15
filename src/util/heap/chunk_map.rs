@@ -184,9 +184,9 @@ impl ChunkMap {
     /// Helper function to create per-chunk processing work packets for each allocated chunks.
     pub fn generate_tasks<VM: VMBinding>(
         &self,
-        func: impl Fn(Chunk) -> Box<dyn GCWork<VM>>,
-    ) -> Vec<Box<dyn GCWork<VM>>> {
-        let mut work_packets: Vec<Box<dyn GCWork<VM>>> = vec![];
+        func: impl Fn(Chunk) -> Box<dyn GCWork<VM> + Send>,
+    ) -> Vec<Box<dyn GCWork<VM> + Send>> {
+        let mut work_packets: Vec<Box<dyn GCWork<VM> + Send>> = vec![];
         for chunk in self.all_chunks() {
             work_packets.push(func(chunk));
         }
