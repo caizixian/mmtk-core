@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 281 | Δ: -50
+- Starting count: 331 | Current: 280 | Δ: -51
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -16,8 +16,10 @@
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
 - Using `MockObject` in tests to encapsulate unsafe `load`/`store` calls on `HeaderMetadataSpec`.
 - **Tightened bounds**: Added `T: Sync` bound to `InitializeOnce` to ensure soundness when shared across threads.
+- Replaced unsafe raw pointer dereference in bpftrace workaround with safe `str::as_bytes().first()`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
+- `src/scheduler/worker.rs` — Remaining unsafe are trait impls for Send/Sync [Phase 2 confirmed].
 - `src/policy/marksweepspace/native_ms/global.rs` — Irreducible lifetime extension for `GCWork` packets [Phase 2 confirmed].
 - `src/util/metadata/side_metadata/sanity.rs` — Fixed redundant unsafe block, remaining are irreducible or valid assertions [Phase 2 confirmed].
 - `src/util/metadata/side_metadata/global.rs` — Production unsafe in `load`/`store` is irreducible due to concurrent access invariants [Phase 1 analysis].

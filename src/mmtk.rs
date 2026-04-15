@@ -433,7 +433,7 @@ impl<VM: VMBinding> MMTK<VM> {
 
     /// Get a reference to the plan.
     pub fn get_plan(&self) -> &dyn Plan<VM = VM> {
-        &**self.plan.get_ref()
+        unsafe { &**self.plan.get_ref() }
     }
 
     /// Get the plan as mutable reference.
