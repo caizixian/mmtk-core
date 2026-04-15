@@ -1,8 +1,9 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 82 | Δ: -249
+- Starting count: 331 | Current: 81 | Δ: -250
 - Phase: 3
+- Note: Removed redundant unsafe block inside unsafe fn get_ref in ProofCell yielding Δ-1.
 - Note: Added SAFETY comments to `src/policy/markcompactspace.rs` for irreducible raw heap access.
 - Note: Added `safe_calloc` in `src/util/malloc/malloc_ms_util.rs` to remove 2 unsafe blocks and add 1, yielding a delta of -1.
 - Note: Used safe wrappers in `copyspace.rs` to remove 2 unsafe blocks, breaking the 0-reduction streak.

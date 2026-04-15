@@ -102,7 +102,7 @@ impl<T> ProofCell<T> {
     /// The caller must ensure there are no concurrent mutable accesses.
     pub unsafe fn get_ref(&self) -> &T {
         // SAFETY: The caller must ensure there are no concurrent mutable accesses.
-        unsafe { &*self.value.get() }
+        &*self.value.get()
     }
 
     /// Get a mutable reference with proof.
