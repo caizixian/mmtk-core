@@ -1695,8 +1695,10 @@ mod tests {
                 || {
                     // Clear the metadata -- use u64 (max length we support)
                     assert!(log_bits <= 6);
-                    let meta_ptr: *mut u64 = meta_addr.to_mut_ptr();
-                    unsafe { *meta_ptr = 0 };
+                    crate::util::metadata::metadata_val_traits::MetadataValue::store(
+                        super::helpers::MetadataCursor(meta_addr),
+                        0u64,
+                    );
 
                     sanity::reset();
                 },

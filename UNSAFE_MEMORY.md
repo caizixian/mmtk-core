@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 148 | Δ: -183
+- Starting count: 331 | Current: 147 | Δ: -184
 - Phase: 3
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -32,6 +32,7 @@
 - **Refactoring**: Removed redundant `unsafe impl Sync` for `SlotLogger` and `ImmixSpace` as they are automatically `Sync`.
 - **Refactoring**: Removed redundant `unsafe impl Send` for `UpdateReferences` as it is automatically `Send`.
 - **Refactoring**: Removed redundant `unsafe impl Send` for `WorkerLocalStat` by using `PhantomData<fn() -> C>` to allow auto-deriving `Send`.
+- **Refactoring**: Replaced unsafe raw pointer dereference in `side_metadata/global.rs` tests with safe `MetadataValue::store` using `MetadataCursor`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/plan/concurrent/mod.rs` — Irreducible manual unsafe impls for bytemuck traits to use niche [Phase 2 confirmed].
