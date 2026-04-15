@@ -21,6 +21,7 @@
 - Note: Re-verified affinity.rs, fixtures.rs, slot.rs, and allocators.rs and agreed with irreducibility conclusions.
 - Note: Re-verified fixtures.rs (leaked MMTK in tests) and markcompactspace.rs (forwarding pointer) and confirmed they are encapsulated/irreducible.
 - Note: Verified alignment in malloc_ms_util.rs and searched for other common unsafe patterns in src, confirming irreducibility of listed items.
+- Note: Verified slot_logger.rs and reference_processor.rs do not contain unsafe blocks or are clean.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
