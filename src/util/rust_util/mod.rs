@@ -128,7 +128,6 @@ impl<T> ProofCell<T> {
 }
 
 unsafe impl<T: Sync> Sync for ProofCell<T> {}
-unsafe impl<T: Send> Send for ProofCell<T> {}
 
 /// Create a formatted string that makes the best effort idenfying the current process and thread.
 pub fn debug_process_thread_id() -> String {

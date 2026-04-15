@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 125 | Δ: -206
+- Starting count: 331 | Current: 124 | Δ: -207
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -11,8 +11,7 @@
 - `SimpleSlot` uses `Address` instead of raw pointers, avoiding `unsafe impl Send`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: Check if other trait objects in `src/util` need `Send` bound to allow removing more unsafe impls.
-2. 🟡 MED: `src/util/rust_util/mod.rs:117-131` — check if `ProofCell` unsafe impls can be removed — expected Δ: -2.
+1. 🔴 HIGH: `benches/regular_bench/bulk_meta/bzero_bset.rs:9-60` — check if unsafe in benchmark can be removed — expected Δ: -3
 
 ## Patterns Discovered
 - Removed redundant `unsafe impl Send` and `Sync` for `MMTK` as all its fields are automatically `Send` and `Sync`.
@@ -67,7 +66,7 @@
 - `src/util/malloc/mod.rs` — Irreducible FFI calls to malloc/free [Phase 2 confirmed].
 - `src/plan/global.rs` — Irreducible lifetime extension for `GCWork` packets [Phase 2 confirmed].
 - `src/plan/concurrent/concurrent_marking_work.rs` — All unsafe removed or made safe by refactoring [Phase 2 confirmed].
-- `src/util/rust_util/mod.rs` — `InitializeOnce` is irreducible to maintain zero-cost reads [Phase 2 confirmed].
+- `src/util/rust_util/mod.rs` — `InitializeOnce` is irreducible to maintain zero-cost reads. `ProofCell` `Send` impl removed, `Sync` is irreducible to maintain zero-cost reads without locks. [Phase 2 confirmed].
 - `src/util/rust_util/zeroed_alloc.rs` — `new_zeroed_vec` requires manual zeroed allocation and `Vec::from_raw_parts` for performance; `bytemuck::zeroed_vec` is not available in version 1.14.0 [Phase 2 confirmed].
 - `src/mmtk.rs` — `ProofCell::get_ref` in `get_plan` is irreducible without threading proof tokens. Threading proof tokens would require updating ~50 call sites of `.get_plan()` across the codebase. [Phase 2 confirmed]
 - `src/policy/immix/line.rs` — All unsafe blocks removed after making SideMetadataSpec methods safe [Phase 2 confirmed].
