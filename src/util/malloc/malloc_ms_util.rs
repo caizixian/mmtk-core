@@ -1,6 +1,7 @@
 use crate::util::constants::BYTES_IN_ADDRESS;
 use crate::util::malloc::library::*;
 use crate::util::Address;
+use crate::util::metadata::side_metadata::helpers::MetadataCursor;
 use crate::vm::VMBinding;
 
 fn safe_calloc(count: usize, size: usize) -> Address {
@@ -38,32 +39,25 @@ pub fn align_offset_alloc<VM: VMBinding>(size: usize, align: usize, offset: usiz
     if result - BYTES_IN_ADDRESS < address {
         result += align;
     }
-    let malloc_res_ptr: *mut usize = (result - BYTES_IN_ADDRESS).to_mut_ptr();
-    // SAFETY: malloc_res_ptr points to valid memory within the allocated block, though it may not be aligned.
-    unsafe { malloc_res_ptr.write_unaligned(address.as_usize()) };
+    let cursor = MetadataCursor(result - BYTES_IN_ADDRESS);
+    cursor.store::<usize>(address.as_usize());
     result
 }
 
 /// Get the malloc usable size for an address that is returned by [`crate::util::malloc::malloc_ms_util::align_offset_alloc`].
 pub fn offset_malloc_usable_size(address: Address) -> usize {
-    let malloc_res_ptr: *mut usize = (address - BYTES_IN_ADDRESS).to_mut_ptr();
-    // SAFETY: malloc_res_ptr points to valid memory within the allocated block where the original pointer was stored,
-    // and malloc_res is a valid pointer returned by calloc.
-    unsafe {
-        let malloc_res = malloc_res_ptr.read_unaligned() as *mut libc::c_void;
-        malloc_usable_size(malloc_res)
-    }
+    let cursor = MetadataCursor(address - BYTES_IN_ADDRESS);
+    let malloc_res = cursor.load::<usize>() as *mut libc::c_void;
+    // SAFETY: malloc_res is a valid pointer returned by calloc and is safe to query.
+    unsafe { malloc_usable_size(malloc_res) }
 }
 
 /// Free an address that is allocated with an offset (returned by [`crate::util::malloc::malloc_ms_util::align_offset_alloc`]).
 pub fn offset_free(address: Address) {
-    let malloc_res_ptr: *mut usize = (address - BYTES_IN_ADDRESS).to_mut_ptr();
-    // SAFETY: malloc_res_ptr points to valid memory within the allocated block where the original pointer was stored,
-    // and malloc_res is a valid pointer returned by calloc and is safe to free.
-    unsafe {
-        let malloc_res = malloc_res_ptr.read_unaligned() as *mut libc::c_void;
-        free(malloc_res)
-    }
+    let cursor = MetadataCursor(address - BYTES_IN_ADDRESS);
+    let malloc_res = cursor.load::<usize>() as *mut libc::c_void;
+    // SAFETY: malloc_res is a valid pointer returned by calloc and is safe to free.
+    unsafe { free(malloc_res) }
 }
 
 pub use crate::util::malloc::library::free;

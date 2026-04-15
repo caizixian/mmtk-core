@@ -1,8 +1,9 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 81 | Δ: -250
+- Starting count: 331 | Current: 80 | Δ: -251
 - Phase: 3
+- Note: Used MetadataCursor in `malloc_ms_util.rs` to remove 1 unsafe block for unaligned write.
 - Note: Removed redundant unsafe block inside unsafe fn get_ref in ProofCell yielding Δ-1.
 - Note: Added SAFETY comments to `src/policy/markcompactspace.rs` for irreducible raw heap access.
 - Note: Added `safe_calloc` in `src/util/malloc/malloc_ms_util.rs` to remove 2 unsafe blocks and add 1, yielding a delta of -1.
@@ -85,7 +86,7 @@
 - `src/util/metadata/pin_bit.rs` — Fixed unsafe block by using load_atomic. Remaining code is safe [Phase 2 confirmed].
 - `src/util/memory.rs` — Irreducible FFI calls to mmap/munmap/mprotect/madvise. Re-evaluated Phase 2 abstraction (MmapRegion) but reverted as it didn't reduce count. [Phase 3 confirmed].
 - docs/dummyvm/src/api.rs — Refactored some FFI functions to use Option<&mut T>, removing 3 unsafe blocks. Remaining unsafe are irreducible FFI boundary operations. [Phase 3 confirmed].
-- `src/util/malloc/malloc_ms_util.rs` — Irreducible FFI calls to malloc/free/calloc. Analyzed `posix_memalign` and confirmed it is required to maintain consistency with feature-selected allocators. Insight: `write_unaligned` at line 43 might be aligned on 64-bit systems if alignment is 16, but kept for safety. [Phase 3 confirmed].
+- `src/util/malloc/malloc_ms_util.rs` — Used `MetadataCursor` to remove unsafe block at line 43. Remaining unsafe are irreducible FFI calls to malloc/free/calloc and `posix_memalign`. [Phase 3 confirmed].
 - `src/util/metadata/header_metadata.rs` — Unsafe functions `load`/`store` are non-atomic/racy by design; unsafe blocks in tests call them [Phase 2 confirmed].
 - `src/util/metadata/global.rs` — `load` and `store` are non-atomic and not thread-safe by design. Unsafe comes from `ObjectModel::load_metadata` trait method. [Phase 3 confirmed].
 - `src/util/rust_util/atomic_box.rs` — Removed in favor of `std::sync::OnceLock`. File is now empty. [Phase 3 confirmed].
