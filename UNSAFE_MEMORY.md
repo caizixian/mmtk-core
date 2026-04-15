@@ -14,8 +14,7 @@
 - `InitializeOnce` is used for `SFT_MAP` to allow zero-cost reads on extreme hot paths (object tracing).
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: `src/util/address.rs` — Audit and document safety invariants for remaining unsafe operations.
-2. 🟢 LOW: Audit other files in `src/util/` (e.g. `src/util/conversions.rs` or others) to see if they are clean but not listed.
+1. 🟢 LOW: Audit other files in `src/util/` to see if they are clean but not listed. (Audited conversions.rs, api_util.rs, constants.rs, finalizable_processor.rs, freelist.rs).
 
 ## Patterns Discovered
 - **Safe Abstraction**: Used `SFTHeader` wrapper to avoid `transmute` on fat pointers in `SFTRefStorage`, removing 3 unsafe blocks (and adding 1 unsafe impl Sync).
@@ -121,6 +120,11 @@
 - `benches/regular_bench/bulk_meta/bzero_bset.rs` — Clean: 0 unsafe blocks after using AlignedBuffer and slice::fill [Phase 2 confirmed].
 - `src/plan/mutator_context.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
 - `src/util/alloc/bumpallocator.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
+- `src/util/conversions.rs` — Clean: 0 unsafe blocks [Phase 3 confirmed].
+- `src/util/api_util.rs` — Clean: 0 unsafe blocks [Phase 3 confirmed].
+- `src/util/constants.rs` — Clean: 0 unsafe blocks [Phase 3 confirmed].
+- `src/util/finalizable_processor.rs` — Clean: 0 unsafe blocks [Phase 3 confirmed].
+- `src/util/freelist.rs` — Clean: 0 unsafe blocks [Phase 3 confirmed].
 
 ## Abstraction Proposals (for Phase 2)
 ### MetadataCursor for side_metadata
