@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 364 | Δ: -171
+- Starting count: 535 | Current: 365 | Δ: -170
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/side_metadata/side_metadata_tests.rs` — add helpers for `load_atomic` and `store_atomic` to reduce more unsafe blocks in tests.
-2. 🟡 MED: Identify other uses of `UnsafeCell` that can be replaced with `ProofCell` to enforce access control.
+1. 🔴 HIGH: `src/scheduler/mod.rs:39-45` — Restrict visibility of `ExclusivePlanAccessProof::new()` to `pub(in crate::scheduler)` to enforce capability token pattern.
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
