@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 97 | Δ: -234
+- Starting count: 331 | Current: 94 | Δ: -237
 - Phase: 3
 - Note: Reverted `MmapRegion` abstraction in `src/util/memory.rs` as it did not reduce unsafe code and increased count by 5. The count is back to 97.
 
@@ -65,7 +65,7 @@
 - `src/util/metadata/metadata_val_traits.rs` — Clean: 0 unsafe blocks after refactoring to use `with_atomic` [Phase 3 confirmed].
 - `src/util/metadata/pin_bit.rs` — Fixed unsafe block by using load_atomic. Remaining code is safe [Phase 2 confirmed].
 - `src/util/memory.rs` — Irreducible FFI calls to mmap/munmap/mprotect/madvise. Re-evaluated Phase 2 abstraction (MmapRegion) but reverted as it didn't reduce count. [Phase 3 confirmed].
-- `docs/dummyvm/src/api.rs` — Irreducible FFI boundary operations [Phase 2 confirmed].
+- docs/dummyvm/src/api.rs — Refactored some FFI functions to use Option<&mut T>, removing 3 unsafe blocks. Remaining unsafe are irreducible FFI boundary operations. [Phase 3 confirmed].
 - `src/util/malloc/malloc_ms_util.rs` — Irreducible FFI calls to malloc/free/calloc. Safety invariants documented in Phase 3. [Phase 2 confirmed].
 - `src/util/metadata/header_metadata.rs` — Unsafe functions `load`/`store` are non-atomic/racy by design; unsafe blocks in tests call them [Phase 2 confirmed].
 - `src/util/metadata/global.rs` — `load` and `store` are non-atomic and not thread-safe by design [Phase 2 confirmed].
