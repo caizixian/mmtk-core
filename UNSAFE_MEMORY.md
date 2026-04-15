@@ -8,6 +8,7 @@
 - Note: Verified remaining unsafe locations in `malloc_ms_util.rs`, `rust_util/mod.rs`, and `slot.rs` are irreducible or properly encapsulated, concluding the task.
 - Note: Re-evaluated `ProofCell` and `SimpleSlot` and confirmed they are good abstractions.
 - Note: Added SAFETY comment to `src/util/metadata/side_metadata/global.rs:422` for `std::ptr::copy`.
+- Note: Re-verified `src/util/malloc/malloc_ms_util.rs` and `src/util/memory.rs` and confirmed all remaining unsafe code is irreducible FFI or low-level memory operations.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
@@ -18,8 +19,7 @@
 - `InitializeOnce` was used for `SFT_MAP` to allow zero-cost reads on extreme hot paths (object tracing). Now replaced by `OnceLock` for safety.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: `src/util/metadata/side_metadata/global.rs:422` — Verify that the SAFETY comment remains accurate and sufficient — expected Δ: 0
-2. 🟢 LOW: Conclude the task as all remaining unsafe code has been verified and documented where needed.
+1. 🟢 LOW: Task concluded. All remaining unsafe code has been verified and documented as irreducible or properly encapsulated.
 
 ## Patterns Discovered
 - **Safe Abstraction**: Used `SFTHeader` wrapper to avoid `transmute` on fat pointers in `SFTRefStorage`, removing 3 unsafe blocks (and adding 1 unsafe impl Sync).
