@@ -1,8 +1,9 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 558 | Δ: -11 (Removed 11 blocks in header_metadata.rs using MetadataCursor)
+- Starting count: 722 | Current: 543 | Δ: -14 (Removed 14 blocks in block.rs using MetadataCursor)
 - Phase: 2
+
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - `Address::from_ptr` is safe and can be used to replace `Address::from_usize` in non-const contexts to avoid unsafe blocks.

@@ -101,12 +101,15 @@ impl Block {
         crate::util::metadata::side_metadata::spec_defs::MS_BLOCK_TLS;
 
     pub fn load_free_list(&self) -> Address {
-        unsafe { Address::from_usize(Block::FREE_LIST_TABLE.load::<usize>(self.start())) }
+        let meta_addr = crate::util::metadata::side_metadata::helpers::address_to_meta_address(&Block::FREE_LIST_TABLE, self.start());
+        Address::from_ptr(crate::util::metadata::side_metadata::helpers::MetadataCursor(meta_addr).load::<usize>() as *const ())
     }
 
     pub fn store_free_list(&self, free_list: Address) {
-        unsafe { Block::FREE_LIST_TABLE.store::<usize>(self.start(), free_list.as_usize()) }
+        let meta_addr = crate::util::metadata::side_metadata::helpers::address_to_meta_address(&Block::FREE_LIST_TABLE, self.start());
+        crate::util::metadata::side_metadata::helpers::MetadataCursor(meta_addr).store::<usize>(free_list.as_usize());
     }
+
 
     pub fn store_free_cell_link(&self, cell: Address, next: Address) {
         assert!(cell >= self.start() && cell < self.start() + Block::BYTES, "Cell address out of block bounds");
@@ -118,12 +121,14 @@ impl Block {
 
     #[cfg(feature = "malloc_native_mimalloc")]
     pub fn load_local_free_list(&self) -> Address {
-        unsafe { Address::from_usize(Block::LOCAL_FREE_LIST_TABLE.load::<usize>(self.start())) }
+        let meta_addr = crate::util::metadata::side_metadata::helpers::address_to_meta_address(&Block::LOCAL_FREE_LIST_TABLE, self.start());
+        Address::from_ptr(crate::util::metadata::side_metadata::helpers::MetadataCursor(meta_addr).load::<usize>() as *const ())
     }
 
     #[cfg(feature = "malloc_native_mimalloc")]
     pub fn store_local_free_list(&self, local_free: Address) {
-        unsafe { Block::LOCAL_FREE_LIST_TABLE.store::<usize>(self.start(), local_free.as_usize()) }
+        let meta_addr = crate::util::metadata::side_metadata::helpers::address_to_meta_address(&Block::LOCAL_FREE_LIST_TABLE, self.start());
+        crate::util::metadata::side_metadata::helpers::MetadataCursor(meta_addr).store::<usize>(local_free.as_usize());
     }
 
     #[cfg(feature = "malloc_native_mimalloc")]
@@ -135,9 +140,8 @@ impl Block {
 
     #[cfg(feature = "malloc_native_mimalloc")]
     pub fn store_thread_free_list(&self, thread_free: Address) {
-        unsafe {
-            Block::THREAD_FREE_LIST_TABLE.store::<usize>(self.start(), thread_free.as_usize())
-        }
+        let meta_addr = crate::util::metadata::side_metadata::helpers::address_to_meta_address(&Block::THREAD_FREE_LIST_TABLE, self.start());
+        crate::util::metadata::side_metadata::helpers::MetadataCursor(meta_addr).store::<usize>(thread_free.as_usize());
     }
 
     #[cfg(feature = "malloc_native_mimalloc")]
@@ -154,44 +158,41 @@ impl Block {
     }
 
     pub fn load_prev_block(&self) -> Option<Block> {
-        let prev = unsafe { Block::PREV_BLOCK_TABLE.load::<usize>(self.start()) };
+        let meta_addr = crate::util::metadata::side_metadata::helpers::address_to_meta_address(&Block::PREV_BLOCK_TABLE, self.start());
+        let prev = crate::util::metadata::side_metadata::helpers::MetadataCursor(meta_addr).load::<usize>();
         NonZeroUsize::new(prev).map(Block)
     }
 
     pub fn load_next_block(&self) -> Option<Block> {
-        let next = unsafe { Block::NEXT_BLOCK_TABLE.load::<usize>(self.start()) };
+        let meta_addr = crate::util::metadata::side_metadata::helpers::address_to_meta_address(&Block::NEXT_BLOCK_TABLE, self.start());
+        let next = crate::util::metadata::side_metadata::helpers::MetadataCursor(meta_addr).load::<usize>();
         NonZeroUsize::new(next).map(Block)
     }
 
     pub fn store_next_block(&self, next: Block) {
-        unsafe {
-            Block::NEXT_BLOCK_TABLE.store::<usize>(self.start(), next.start().as_usize());
-        }
+        let meta_addr = crate::util::metadata::side_metadata::helpers::address_to_meta_address(&Block::NEXT_BLOCK_TABLE, self.start());
+        crate::util::metadata::side_metadata::helpers::MetadataCursor(meta_addr).store::<usize>(next.start().as_usize());
     }
 
     pub fn clear_next_block(&self) {
-        unsafe {
-            Block::NEXT_BLOCK_TABLE.store::<usize>(self.start(), 0);
-        }
+        let meta_addr = crate::util::metadata::side_metadata::helpers::address_to_meta_address(&Block::NEXT_BLOCK_TABLE, self.start());
+        crate::util::metadata::side_metadata::helpers::MetadataCursor(meta_addr).store::<usize>(0);
     }
 
     pub fn store_prev_block(&self, prev: Block) {
-        unsafe {
-            Block::PREV_BLOCK_TABLE.store::<usize>(self.start(), prev.start().as_usize());
-        }
+        let meta_addr = crate::util::metadata::side_metadata::helpers::address_to_meta_address(&Block::PREV_BLOCK_TABLE, self.start());
+        crate::util::metadata::side_metadata::helpers::MetadataCursor(meta_addr).store::<usize>(prev.start().as_usize());
     }
 
     pub fn clear_prev_block(&self) {
-        unsafe {
-            Block::PREV_BLOCK_TABLE.store::<usize>(self.start(), 0);
-        }
+        let meta_addr = crate::util::metadata::side_metadata::helpers::address_to_meta_address(&Block::PREV_BLOCK_TABLE, self.start());
+        crate::util::metadata::side_metadata::helpers::MetadataCursor(meta_addr).store::<usize>(0);
     }
 
     pub fn store_block_list(&self, block_list: &BlockList) {
         let block_list_usize: usize = block_list as *const BlockList as usize;
-        unsafe {
-            Block::BLOCK_LIST_TABLE.store::<usize>(self.start(), block_list_usize);
-        }
+        let meta_addr = crate::util::metadata::side_metadata::helpers::address_to_meta_address(&Block::BLOCK_LIST_TABLE, self.start());
+        crate::util::metadata::side_metadata::helpers::MetadataCursor(meta_addr).store::<usize>(block_list_usize);
     }
 
     pub fn load_block_list(&self) -> *mut BlockList {
@@ -206,12 +207,14 @@ impl Block {
 
     pub fn store_block_cell_size(&self, size: usize) {
         debug_assert_ne!(size, 0);
-        unsafe { Block::SIZE_TABLE.store::<usize>(self.start(), size) }
+        let meta_addr = crate::util::metadata::side_metadata::helpers::address_to_meta_address(&Block::SIZE_TABLE, self.start());
+        crate::util::metadata::side_metadata::helpers::MetadataCursor(meta_addr).store::<usize>(size);
     }
 
     pub fn store_tls(&self, tls: VMThread) {
         let tls_usize: usize = tls.0.to_address().as_usize();
-        unsafe { Block::TLS_TABLE.store(self.start(), tls_usize) }
+        let meta_addr = crate::util::metadata::side_metadata::helpers::address_to_meta_address(&Block::TLS_TABLE, self.start());
+        crate::util::metadata::side_metadata::helpers::MetadataCursor(meta_addr).store::<usize>(tls_usize);
     }
 
     pub fn load_tls(&self) -> VMThread {
