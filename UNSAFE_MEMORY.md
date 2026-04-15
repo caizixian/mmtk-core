@@ -1,16 +1,16 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 140 | Δ: -191
-- Phase: 3
+- Starting count: 331 | Current: 138 | Δ: -193
+- Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
-- `GCWork` trait requires `'static` references for work packets, leading to lifetime extension unsafe blocks in space `prepare`/`release` methods.
+- `GCWork` trait requires `'static` references for work packets. We can avoid storing `'static` references by fetching the plan/space from `mmtk: &'static MMTK` in `do_work`.
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-(No actionable items at this time. All 46 files containing unsafe have been audited in this step and confirmed irreducible or justified by design constraints like performance or FFI boundaries.)
+1. 🔴 HIGH: Search for other work packets that store `'static` references and can be refactored to use `mmtk.get_plan()` to remove lifetime extension unsafe blocks.
 
 ## Patterns Discovered
 - Documented safety invariants for FFI calls in tests in `src/util/memory.rs`.
