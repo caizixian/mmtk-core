@@ -4,6 +4,7 @@
 - Starting count: 331 | Current: 86 | Δ: -245
 - Phase: 3
 - Note: Replaced `InitializeOnce` with `std::sync::OnceLock` in `src/util/rust_util/mod.rs`, reducing unsafe count by 3.
+- Note: Verified all remaining 86 unsafe instances against the "Files NOT to Revisit" list. All are accounted for as irreducible FFI, primitive pointer operations, or safe abstractions.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
@@ -14,7 +15,7 @@
 - `InitializeOnce` was used for `SFT_MAP` to allow zero-cost reads on extreme hot paths (object tracing). Now replaced by `OnceLock` for safety.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: Audit other files in `src/util/` to see if they are clean but not listed. (Audited conversions.rs, api_util.rs, constants.rs, finalizable_processor.rs, freelist.rs, is_mmtk_object.rs, epilogue.rs, int_array_freelist.rs, object_forwarding.rs, object_enum.rs, opaque_pointer.rs, logger.rs, mod.rs, options.rs, treadmill.rs).
+1. 🟢 LOW: All remaining unsafe code has been verified as irreducible or part of safe abstractions. Finalize documentation and safety invariants if needed, or conclude the task.
 
 ## Patterns Discovered
 - **Safe Abstraction**: Used `SFTHeader` wrapper to avoid `transmute` on fat pointers in `SFTRefStorage`, removing 3 unsafe blocks (and adding 1 unsafe impl Sync).
