@@ -436,10 +436,12 @@ impl SideMetadataSpec {
                     // we are setting selected bits in one byte
                     let mask: u8 = !(u8::MAX.checked_shl(bit_end as u32).unwrap_or(0))
                         & (u8::MAX << bit_start); // Get a mask that the bits we need to set are 1, and the other bits are 0.
-                    let old_src = unsafe { src.as_ref::<AtomicU8>() }.load(Ordering::Relaxed);
-                    let old_dst = unsafe { dst.as_ref::<AtomicU8>() }.load(Ordering::Relaxed);
-                    let new = (old_src & mask) | (old_dst & !mask);
-                    unsafe { dst.as_ref::<AtomicU8>() }.store(new, Ordering::Relaxed);
+                    unsafe {
+                        let old_src = src.as_ref::<AtomicU8>().load(Ordering::Relaxed);
+                        let old_dst = dst.as_ref::<AtomicU8>().load(Ordering::Relaxed);
+                        let new = (old_src & mask) | (old_dst & !mask);
+                        dst.as_ref::<AtomicU8>().store(new, Ordering::Relaxed);
+                    }
                     false
                 }
             }
@@ -752,22 +754,22 @@ impl SideMetadataSpec {
                     let lshift = meta_byte_lshift(self, data_addr);
                     let mask = meta_byte_mask(self) << lshift;
 
-                    let real_old_byte = unsafe { meta_addr.atomic_load::<AtomicU8>(success_order) };
-                    let expected_old_byte =
-                        (real_old_byte & !mask) | ((old_metadata.to_u8().unwrap()) << lshift);
-                    let expected_new_byte =
-                        (expected_old_byte & !mask) | ((new_metadata.to_u8().unwrap()) << lshift);
+                    let res = unsafe {
+                        let real_old_byte = meta_addr.atomic_load::<AtomicU8>(success_order);
+                        let expected_old_byte =
+                            (real_old_byte & !mask) | ((old_metadata.to_u8().unwrap()) << lshift);
+                        let expected_new_byte =
+                            (expected_old_byte & !mask) | ((new_metadata.to_u8().unwrap()) << lshift);
 
-                    unsafe {
                         meta_addr.compare_exchange::<AtomicU8>(
                             expected_old_byte,
                             expected_new_byte,
                             success_order,
                             failure_order,
                         )
-                    }
-                    .map(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
-                    .map_err(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
+                    };
+                    res.map(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
+                        .map_err(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
                 } else {
                     unsafe {
                         T::compare_exchange(
