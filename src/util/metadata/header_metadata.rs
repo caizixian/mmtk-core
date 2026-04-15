@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicU8;
 use crate::util::constants::{BITS_IN_BYTE, LOG_BITS_IN_BYTE};
 use crate::util::metadata::metadata_val_traits::*;
 use crate::util::Address;
+use crate::util::metadata::side_metadata::helpers::MetadataCursor;
 use num_traits::FromPrimitive;
 
 const LOG_BITS_IN_U16: usize = 4;
@@ -151,22 +152,21 @@ impl HeaderMetadataSpec {
             self.assert_spec::<T>();
         }
 
+        let cursor = MetadataCursor(self.meta_addr(header));
         // metadata smaller than 8-bits is special in that more than one metadata value may be included in one AtomicU8 operation, and extra shift and mask is required
-        let res: T = unsafe {
-            if self.num_of_bits < 8 {
-                let byte_val = if let Some(order) = atomic_ordering {
-                    (self.meta_addr(header)).atomic_load::<AtomicU8>(order)
-                } else {
-                    (self.meta_addr(header)).load::<u8>()
-                };
-
-                FromPrimitive::from_u8(self.get_bits_from_u8(byte_val)).unwrap()
+        let res: T = if self.num_of_bits < 8 {
+            let byte_val = if let Some(order) = atomic_ordering {
+                cursor.load_atomic_u8(order)
             } else {
-                if let Some(order) = atomic_ordering {
-                    T::load_atomic(self.meta_addr(header), order)
-                } else {
-                    (self.meta_addr(header)).load::<T>()
-                }
+                cursor.load::<u8>()
+            };
+
+            FromPrimitive::from_u8(self.get_bits_from_u8(byte_val)).unwrap()
+        } else {
+            if let Some(order) = atomic_ordering {
+                cursor.load_atomic(order)
+            } else {
+                cursor.load()
             }
         };
 
@@ -222,38 +222,36 @@ impl HeaderMetadataSpec {
         if self.num_of_bits < 8 {
             let val_u8 = val.to_u8().unwrap();
             let byte_addr = self.meta_addr(header);
-            unsafe {
-                if let Some(order) = atomic_ordering {
-                    let _ = <u8 as MetadataValue>::fetch_update(byte_addr, order, order, |old_val: u8| {
-                        Some(self.set_bits_to_u8(old_val, val_u8))
-                    });
-                } else {
-                    let old_byte_val = byte_addr.load::<u8>();
-                    let new_byte_val = self.set_bits_to_u8(old_byte_val, val_u8);
-                    byte_addr.store::<u8>(new_byte_val);
-                }
+            let cursor = MetadataCursor(byte_addr);
+            if let Some(order) = atomic_ordering {
+                let _ = cursor.fetch_update(order, order, |old_val: u8| {
+                    Some(self.set_bits_to_u8(old_val, val_u8))
+                });
+            } else {
+                let old_byte_val = cursor.load::<u8>();
+                let new_byte_val = self.set_bits_to_u8(old_byte_val, val_u8);
+                cursor.store::<u8>(new_byte_val);
             }
         } else {
             let addr = self.meta_addr(header);
-            unsafe {
-                if let Some(order) = atomic_ordering {
-                    // if the optional mask is provided (e.g. for forwarding pointer), we need to use compare_exchange
-                    if let Some(mask) = optional_mask {
-                        let _ = T::fetch_update(addr, order, order, |old_val: T| {
-                            Some(old_val.bitand(mask.inv()).bitor(val.bitand(mask)))
-                        });
-                    } else {
-                        T::store_atomic(addr, val, order);
-                    }
+            let cursor = MetadataCursor(addr);
+            if let Some(order) = atomic_ordering {
+                // if the optional mask is provided (e.g. for forwarding pointer), we need to use compare_exchange
+                if let Some(mask) = optional_mask {
+                    let _ = cursor.fetch_update(order, order, |old_val: T| {
+                        Some(old_val.bitand(mask.inv()).bitor(val.bitand(mask)))
+                    });
                 } else {
-                    let val = if let Some(mask) = optional_mask {
-                        let old_val = T::load(addr);
-                        old_val.bitand(mask.inv()).bitor(val.bitand(mask))
-                    } else {
-                        val
-                    };
-                    T::store(addr, val);
+                    cursor.store_atomic(val, order);
                 }
+            } else {
+                let val = if let Some(mask) = optional_mask {
+                    let old_val: T = cursor.load();
+                    old_val.bitand(mask.inv()).bitor(val.bitand(mask))
+                } else {
+                    val
+                };
+                cursor.store(val);
             }
         }
     }

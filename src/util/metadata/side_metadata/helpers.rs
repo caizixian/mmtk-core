@@ -8,6 +8,7 @@ use crate::util::memory::{MmapAnnotation, MmapStrategy};
 #[cfg(target_pointer_width = "32")]
 use crate::util::metadata::side_metadata::address_to_chunked_meta_address;
 use crate::util::Address;
+use crate::util::metadata::metadata_val_traits::MetadataValue;
 use crate::MMAPPER;
 use std::io::Result;
 
@@ -277,6 +278,36 @@ impl MetadataCursor {
     #[inline(always)]
     pub(crate) fn store_atomic_u8(&self, val: u8, order: std::sync::atomic::Ordering) {
         unsafe { self.0.as_ref::<std::sync::atomic::AtomicU8>().store(val, order) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn load<T: MetadataValue>(&self) -> T {
+        unsafe { T::load(self.0) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn load_atomic<T: MetadataValue>(&self, order: std::sync::atomic::Ordering) -> T {
+        unsafe { T::load_atomic(self.0, order) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn store<T: MetadataValue>(&self, value: T) {
+        unsafe { T::store(self.0, value) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn store_atomic<T: MetadataValue>(&self, value: T, order: std::sync::atomic::Ordering) {
+        unsafe { T::store_atomic(self.0, value, order) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn fetch_update<T: MetadataValue, F: FnMut(T) -> Option<T> + Copy>(
+        &self,
+        set_order: std::sync::atomic::Ordering,
+        fetch_order: std::sync::atomic::Ordering,
+        f: F,
+    ) -> std::result::Result<T, T> {
+        unsafe { T::fetch_update(self.0, set_order, fetch_order, f) }
     }
 }
 
