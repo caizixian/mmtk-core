@@ -130,3 +130,9 @@
 - Expected Δ: 20
 - Design sketch: Change `MetadataValue` trait methods to take `MetadataCursor` instead of `Address`, allowing them to be safe.
 - Status: done
+
+### MmapRegion for memory mapping
+- Target files: `src/util/memory.rs`, `src/util/heap/layout/mmapper/csm/mod.rs`
+- Expected Δ: TBD
+- Design sketch: A type that owns a memory mapping and guarantees safety for reads and writes within its bounds.
+- Status: proposed
