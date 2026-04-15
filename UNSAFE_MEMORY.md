@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 364 | Δ: -171 (estimated)
+- Starting count: 535 | Current: 364 | Δ: -171
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,8 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/mmtk.rs:437-446` — implement `ExclusivePlanAccessProof` token to remove unsafe blocks for plan access — expected Δ: 2
-2. 🟡 MED: `src/util/metadata/side_metadata/side_metadata_tests.rs` — add helpers for `load_atomic` and `store_atomic` to reduce more unsafe blocks in tests.
+1. 🔴 HIGH: `src/util/metadata/side_metadata/side_metadata_tests.rs` — add helpers for `load_atomic` and `store_atomic` to reduce more unsafe blocks in tests.
+2. 🟡 MED: Identify other uses of `UnsafeCell` that can be replaced with `ProofCell` to enforce access control.
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -63,3 +63,4 @@
 - `SweepProof` for `malloc_ms` (Implemented).
 - `MetadataCursor` to wrap raw loads/stores (Implemented in `helpers.rs`, extended with generic methods).
 - `ExclusivePlanAccessProof` token for safe mutable plan access during global phases (e.g., Prepare and Release).
+- `ProofCell` to enforce access control with proof tokens (Implemented in `rust_util/mod.rs`).

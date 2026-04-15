@@ -106,6 +106,34 @@ impl<T> std::ops::Deref for InitializeOnce<T> {
 
 unsafe impl<T> Sync for InitializeOnce<T> {}
 
+/// A cell that requires a proof token to access its contents mutably.
+pub struct ProofCell<T> {
+    value: UnsafeCell<T>,
+}
+
+impl<T> ProofCell<T> {
+    pub const fn new(value: T) -> Self {
+        Self {
+            value: UnsafeCell::new(value),
+        }
+    }
+
+    /// Get a shared reference.
+    /// # Safety
+    /// The caller must ensure there are no concurrent mutable accesses.
+    pub unsafe fn get_ref(&self) -> &T {
+        &*self.value.get()
+    }
+
+    /// Get a mutable reference with proof.
+    pub fn get_mut_with_proof(&self, _proof: &crate::scheduler::ExclusivePlanAccessProof) -> &mut T {
+        unsafe { &mut *self.value.get() }
+    }
+}
+
+unsafe impl<T: Sync> Sync for ProofCell<T> {}
+unsafe impl<T: Send> Send for ProofCell<T> {}
+
 /// Create a formatted string that makes the best effort idenfying the current process and thread.
 pub fn debug_process_thread_id() -> String {
     let pid = unsafe { libc::getpid() };

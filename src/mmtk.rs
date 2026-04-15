@@ -25,7 +25,6 @@ use crate::util::slot_logger::SlotLogger;
 use crate::util::statistics::stats::Stats;
 use crate::vm::ReferenceGlue;
 use crate::vm::VMBinding;
-use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::default::Default;
 #[cfg(feature = "sanity")]
@@ -112,7 +111,7 @@ impl Default for MMTKBuilder {
 pub struct MMTK<VM: VMBinding> {
     pub(crate) options: Arc<Options>,
     pub(crate) state: Arc<GlobalState>,
-    pub(crate) plan: UnsafeCell<Box<dyn Plan<VM = VM>>>,
+    pub(crate) plan: crate::util::rust_util::ProofCell<Box<dyn Plan<VM = VM>>>,
     pub(crate) reference_processors: ReferenceProcessors,
     pub(crate) finalizable_processor:
         Mutex<FinalizableProcessor<<VM::VMReferenceGlue as ReferenceGlue<VM>>::FinalizableType>>,
@@ -207,7 +206,7 @@ impl<VM: VMBinding> MMTK<VM> {
         MMTK {
             options,
             state,
-            plan: UnsafeCell::new(plan),
+            plan: crate::util::rust_util::ProofCell::new(plan),
             reference_processors: ReferenceProcessors::new(),
             finalizable_processor: Mutex::new(FinalizableProcessor::<
                 <VM::VMReferenceGlue as ReferenceGlue<VM>>::FinalizableType,
@@ -434,7 +433,7 @@ impl<VM: VMBinding> MMTK<VM> {
 
     /// Get a reference to the plan.
     pub fn get_plan(&self) -> &dyn Plan<VM = VM> {
-        unsafe { &**(self.plan.get()) }
+        unsafe { &**self.plan.get_ref() }
     }
 
     /// Get the plan as mutable reference.
@@ -443,7 +442,7 @@ impl<VM: VMBinding> MMTK<VM> {
     /// which guarantees that the plan is not used by other threads.
     #[allow(clippy::mut_from_ref)]
     pub fn get_plan_mut(&self, _proof: &crate::scheduler::ExclusivePlanAccessProof) -> &mut dyn Plan<VM = VM> {
-        unsafe { &mut **(self.plan.get()) }
+        &mut **self.plan.get_mut_with_proof(_proof)
     }
 
     /// Get the run time options.
