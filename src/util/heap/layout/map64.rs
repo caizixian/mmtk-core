@@ -24,8 +24,7 @@ struct Map64Inner {
     high_water: Vec<Address>,
 }
 
-unsafe impl Send for Map64 {}
-unsafe impl Sync for Map64 {}
+
 
 impl Map64 {
     pub fn new() -> Self {

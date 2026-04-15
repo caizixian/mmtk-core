@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 391 | Δ: -144 (estimated)
+- Starting count: 535 | Current: 378 | Δ: -157 (estimated)
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/vm/tests/mock_tests/mock_test_slots.rs` — refactor tests to use references instead of raw pointer dereference — expected Δ: 5-10
+1. 🔴 HIGH: `src/util/heap/layout/mmapper/csm/two_level_storage.rs:60-70` — check if `unsafe impl Send for TwoLevelStateStorage` is redundant — expected Δ: 1-2
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -27,6 +27,7 @@
 - Use `std::sync::OnceLock` instead of `MaybeUninit` for single-assignment fields in shared structures to eliminate unsafe initialization and access (e.g., in `GCTrigger`).
 - Use `Box::leak` instead of `Box::into_raw` to get a reference directly when initializing lock-free structures, reducing unsafe blocks.
 - Replace `[MaybeUninit<T>; N]` with `[Option<T>; N]` for lazily initialized arrays if N is small or overhead is acceptable, eliminating `assume_init_mut()` unsafe calls.
+- Refactor mock slots in tests to use references instead of raw pointers to eliminate unsafe blocks in tests.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — All unsafe blocks removed by replacing MaybeUninit with Option. [Phase 2 confirmed]
@@ -52,6 +53,8 @@
 - `src/policy/immix/immixspace.rs` — All unsafe blocks removed or moved to `schedule_collection` in previous steps. [Phase 2 confirmed]
 - `src/mmtk.rs` — Unsafe required for casting local plan to static reference for `gc_trigger` and dereferencing `UnsafeCell`. [Phase 2 confirmed]
 - `src/util/heap/blockpageresource.rs` — All unsafe blocks removed by replacing UnsafeCell with RwLock in BlockQueue. [Phase 2 confirmed]
+- `src/vm/tests/mock_tests/mock_test_slots.rs` — All unsafe blocks removed by refactoring tests to use references instead of raw pointers. [Phase 2 confirmed]
+- `src/util/heap/layout/map64.rs` — Redundant unsafe impl Send and Sync removed. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - `SweepProof` for `malloc_ms` (Implemented).
