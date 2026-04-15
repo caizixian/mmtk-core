@@ -10,7 +10,8 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/rust_util/mod.rs:74` — investigate InitializeOnce unsafe blocks — expected Δ: -3
+1. 🔴 HIGH: `src/scheduler/gc_work.rs:59` — investigate plan mutation in Prepare/Release — expected Δ: -2
+2. 🟡 MED: `src/util/memory.rs:173` — investigate memory mapping unsafe blocks — expected Δ: -0 (likely irreducible, but should confirm)
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -37,6 +38,8 @@
 - `src/policy/marksweepspace/malloc_ms/metadata.rs` — Remaining unsafe is `u128` load (primitive not implementing `MetadataValue`) and `SweepProof` constructor. [Phase 2 confirmed]
 - `src/util/metadata/vo_bit/mod.rs` — `find_prev_non_zero_value` is encapsulated in safe `find_object_from_internal_pointer`. Irreducible without capability tokens. [Phase 2 confirmed]
 - `src/util/heap/freelistpageresource.rs` — Remaining unsafe are `unsafe impl Send` and `unsafe impl Sync`. [Phase 2 confirmed]
+- `src/util/rust_util/mod.rs` — `InitializeOnce` avoids checks on reads for performance, and `get_mut` allows mutating from `&self` which is necessary for plan creation but inherently unsafe. [Phase 2 confirmed]
+- `src/vm/slot.rs` — `SimpleSlot` and `Address` as `Slot` require raw pointer dereference to avoid lifetimes in the `Slot` trait. [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - `SweepProof` for `malloc_ms` (Implemented).
