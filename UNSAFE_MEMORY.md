@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 365 | Δ: -170
+- Starting count: 535 | Current: 364 | Δ: -171
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/policy/copyspace.rs:367` and `src/policy/marksweepspace/malloc_ms/global.rs:557` — Investigate if we can avoid unsafe lifetime extension for work packets by refactoring `BumpAllocator` or using `Arc`.
+1. 🔴 HIGH: `src/policy/lockfreeimmortalspace.rs:130` — Investigate if `eager_initialize` can be made safe or if we can add a safety comment.
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
