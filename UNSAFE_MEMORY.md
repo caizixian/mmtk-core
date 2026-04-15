@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 454 | Δ: -81
+- Starting count: 535 | Current: 452 | Δ: -83
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,8 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `docs/dummyvm/src/api.rs:31-119` — analyze if raw pointer manipulation can be safe-wrapped or if it's irreducible FFI — expected Δ: 0-5
-2. 🟡 MED: `src/util/rust_util/atomic_box.rs:38-87` — analyze `Box::from_raw` and pointer derefs for potential safe wrapping — expected Δ: 1-3
+1. 🔴 HIGH: `src/util/address.rs:158-594` — analyze address primitives for potential safe wrapping or if they are irreducible — expected Δ: 0-5
+2. 🟡 MED: `src/util/rust_util/atomic_box.rs:87` — check if `unsafe impl Zeroable` can be justified or removed — expected Δ: 0-1
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -26,6 +26,7 @@
 - Removing `unsafe` from function signatures when the body contains no unsafe operations and preconditions are enforced by types (e.g., `MutexGuard` or `&mut` references).
 - Replace `*mut c_void` with `usize` in opaque pointer types to eliminate `unsafe impl Send` and `Sync`.
 - Use `std::sync::OnceLock` instead of `MaybeUninit` for single-assignment fields in shared structures to eliminate unsafe initialization and access (e.g., in `GCTrigger`).
+- Use `Box::leak` instead of `Box::into_raw` to get a reference directly when initializing lock-free structures, reducing unsafe blocks.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/util/copy/mod.rs` — remaining unsafe blocks are `assume_init_mut()` which are likely required for performance to avoid `Option` overhead in GC fast path.
@@ -45,6 +46,7 @@
 - `src/util/conversions.rs` — All unsafe blocks removed. [Phase 2 confirmed]
 - `src/util/memory.rs` — Irreducible FFI calls (`mmap`, `madvise`, `munmap`, `mprotect`) and core primitives (`ptr::write_bytes`). [Phase 2 confirmed]
 - `src/util/metadata/side_metadata/helpers.rs` — Implementation of `MetadataCursor` abstraction, irreducible without moving unsafe to call sites. [Phase 2 confirmed]
+- `docs/dummyvm/src/api.rs` — Irreducible FFI boundary operations (raw pointer dereferencing and Box::from_raw). [Phase 2 confirmed]
 
 ## Abstraction Proposals (for Phase 2)
 - `SweepProof` for `malloc_ms` (Implemented).

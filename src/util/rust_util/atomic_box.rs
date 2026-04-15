@@ -55,7 +55,8 @@ impl<T> OnceOptionBox<T> {
             return get_result;
         }
 
-        let new_inner = Box::into_raw(Box::new(init()));
+        let r = Box::leak(Box::new(init()));
+        let new_inner = r as *mut T;
         let cas_result = self.inner.compare_exchange(
             std::ptr::null_mut(),
             new_inner,
@@ -63,14 +64,11 @@ impl<T> OnceOptionBox<T> {
             Ordering::Relaxed,
         );
         match cas_result {
-            Ok(old_inner) => {
-                debug_assert_eq!(old_inner, std::ptr::null_mut());
-                unsafe { new_inner.as_ref().unwrap() }
-            }
-            Err(old_inner) => {
-                drop(unsafe { Box::from_raw(new_inner) });
-                unsafe { old_inner.as_ref().unwrap() }
-            }
+            Ok(_) => r,
+            Err(old_inner) => unsafe {
+                drop(Box::from_raw(new_inner));
+                old_inner.as_ref().unwrap()
+            },
         }
     }
 }
