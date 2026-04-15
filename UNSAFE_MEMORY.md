@@ -1,9 +1,9 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 93 | Δ: -238
+- Starting count: 331 | Current: 89 | Δ: -242
 - Phase: 3
-- Note: Reverted `MmapRegion` abstraction in `src/util/memory.rs` as it did not reduce unsafe code and increased count by 5. The count is back to 97.
+- Note: Removed `OnceOptionBox` in `src/util/rust_util/atomic_box.rs` and replaced with `std::sync::OnceLock` in `two_level_storage.rs`, reducing unsafe count by 4.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
@@ -69,7 +69,7 @@
 - `src/util/malloc/malloc_ms_util.rs` — Irreducible FFI calls to malloc/free/calloc. Safety invariants documented in Phase 3. [Phase 2 confirmed].
 - `src/util/metadata/header_metadata.rs` — Unsafe functions `load`/`store` are non-atomic/racy by design; unsafe blocks in tests call them [Phase 2 confirmed].
 - `src/util/metadata/global.rs` — `load` and `store` are non-atomic and not thread-safe by design. Unsafe comes from `ObjectModel::load_metadata` trait method. [Phase 3 confirmed].
-- `src/util/rust_util/atomic_box.rs` — Lock-free `OnceOptionBox` requires raw pointer manipulation. Attempted to use derive(Zeroable) in Phase 3, but AtomicPtr is not Zeroable in bytemuck 1.14.0. Confirmed irreducible to maintain minimal space overhead in `Vec<OnceOptionBox>`. [Phase 3 confirmed].
+- `src/util/rust_util/atomic_box.rs` — Removed in favor of `std::sync::OnceLock`. File is now empty. [Phase 3 confirmed].
 - `src/policy/marksweepspace/malloc_ms/global.rs` — Irreducible lifetime extension for `GCWork` packets [Phase 2 confirmed].
 - `src/util/malloc/mod.rs` — Irreducible FFI calls to malloc/free [Phase 2 confirmed].
 - `src/plan/global.rs` — Irreducible lifetime extension for `GCWork` packets [Phase 2 confirmed].

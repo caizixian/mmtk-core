@@ -2,7 +2,6 @@
 //! functionalities that we may expect the Rust programming language and its standard libraries
 //! to provide.
 
-pub mod atomic_box;
 pub mod rev_group;
 pub mod zeroed_alloc;
 
