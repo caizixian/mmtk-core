@@ -11,7 +11,8 @@
 - `SimpleSlot` uses `Address` instead of raw pointers, avoiding `unsafe impl Send`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-- No actionable items remain. All top files with unsafe are confirmed irreducible.
+- Re-evaluated `atomic_box.rs` and `mmtk.rs` and confirmed they are irreducible due to performance/space constraints.
+- Next step: Focus on documenting safety invariants for remaining irreducible unsafe or discuss with user if they accept refactoring cost for threading tokens.
 
 
 ## Patterns Discovered
@@ -63,14 +64,14 @@
 - `src/util/malloc/malloc_ms_util.rs` — Irreducible FFI calls to malloc/free/calloc. Safety invariants documented in Phase 3. [Phase 2 confirmed].
 - `src/util/metadata/header_metadata.rs` — Unsafe functions `load`/`store` are non-atomic/racy by design; unsafe blocks in tests call them [Phase 2 confirmed].
 - `src/util/metadata/global.rs` — `load` and `store` are non-atomic and not thread-safe by design [Phase 2 confirmed].
-- `src/util/rust_util/atomic_box.rs` — Lock-free `OnceOptionBox` requires raw pointer manipulation [Phase 2 confirmed].
+- `src/util/rust_util/atomic_box.rs` — Lock-free `OnceOptionBox` requires raw pointer manipulation. Re-evaluated: confirmed irreducible to maintain minimal space overhead in `Vec<OnceOptionBox>`. [Phase 2 confirmed].
 - `src/policy/marksweepspace/malloc_ms/global.rs` — Irreducible lifetime extension for `GCWork` packets [Phase 2 confirmed].
 - `src/util/malloc/mod.rs` — Irreducible FFI calls to malloc/free [Phase 2 confirmed].
 - `src/plan/global.rs` — Irreducible lifetime extension for `GCWork` packets [Phase 2 confirmed].
 - `src/plan/concurrent/concurrent_marking_work.rs` — All unsafe removed or made safe by refactoring [Phase 2 confirmed].
 - `src/util/rust_util/mod.rs` — `InitializeOnce` is irreducible to maintain zero-cost reads for `SFT_MAP` on hot path. `ProofCell` `Send` impl removed, `Sync` is irreducible to maintain zero-cost reads without locks. [Re-evaluated: confirmed].
 - `src/util/rust_util/zeroed_alloc.rs` — `new_zeroed_vec` requires manual zeroed allocation and `Vec::from_raw_parts` for performance; `bytemuck::zeroed_vec` is not available in version 1.14.0 [Phase 2 confirmed].
-- `src/mmtk.rs` — `ProofCell::get_ref` in `get_plan` is irreducible without threading proof tokens. Threading proof tokens would require updating ~50 call sites of `.get_plan()` across the codebase. [Phase 2 confirmed]
+- `src/mmtk.rs` — `ProofCell::get_ref` in `get_plan` is irreducible without threading proof tokens. Re-evaluated: confirmed irreducible to maintain zero-cost reads on hot allocation paths. [Phase 2 confirmed]
 - `src/policy/immix/line.rs` — All unsafe blocks removed after making SideMetadataSpec methods safe [Phase 2 confirmed].
 - `src/util/heap/chunk_map.rs` — All unsafe blocks removed after making SideMetadataSpec methods safe [Phase 2 confirmed].
 - `src/util/address.rs` — Irreducible primitive pointer operations (`load`, `store`, `as_ref`, etc.) [Phase 2 confirmed].
