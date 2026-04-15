@@ -1,15 +1,16 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: <file being analyzed>
-- Strategy: <what you're attempting>
+- File: `src/util/alloc/allocator.rs`
+- Strategy: Replace `RefCell` with `Mutex` in `AllocationOptionsHolder` to eliminate `unsafe impl Sync`.
 
 ## Findings
-- Line X: <unsafe type> — <eliminable? why/why not>
-- Line Y: <unsafe type> — <eliminable? why/why not>
+- Line 110: `unsafe impl Sync for AllocationOptionsHolder {}` is used because `RefCell` is not `Sync`.
+- The type is only used by a single thread at a time (mutator or GC worker), but Rust requires `Sync` because it is shared across allocators in an `Arc`.
+- Replacing `RefCell` with `Mutex` will make it safe and eliminate the `unsafe impl Sync`.
 
 ## Attempted Changes
-- <what you tried, what happened>
+- Planning to replace `RefCell` with `Mutex` and update call sites.
 
 ## Blockers / Insights for Next Step
-- <what prevented completion, what the next step should know>
+- None so far.
