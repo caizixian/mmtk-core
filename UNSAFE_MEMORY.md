@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 134 | Δ: -197
+- Starting count: 331 | Current: 133 | Δ: -198
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -72,7 +72,7 @@
 - `src/policy/copyspace.rs` — Irreducible FFI calls to `mprotect` and lifetime extension for `BumpAllocator` [Phase 2 confirmed].
 - `src/util/alloc/allocators.rs` — Irreducible `MaybeUninit` usage for FFI layout compatibility [Phase 2 confirmed].
 - `src/scheduler/affinity.rs` — Irreducible FFI calls for thread affinity [Phase 2 confirmed].
-- `src/util/alloc/allocator.rs` — Irreducible unsafe impl Sync for AllocationOptionsHolder and raw heap access in `fill_alignment_gap` [Phase 2 confirmed].
+- `src/util/alloc/allocator.rs` — Irreducible raw heap access in `fill_alignment_gap`. `unsafe impl Sync` for `AllocationOptionsHolder` removed by using `Mutex`. [Phase 2 confirmed].
 - `src/policy/immix/immixspace.rs` — Clean: 0 unsafe blocks, no unsafe impl Sync [Phase 2 confirmed].
 - `src/scheduler/gc_work.rs` — Irreducible raw pointer `worker: *mut GCWorker` in `ProcessEdgesBase` due to VM callback constraints and performance [Phase 2 confirmed].
 - `src/policy/marksweepspace/native_ms/global.rs` — All unsafe blocks removed by function pointer refactoring [Phase 2 confirmed].

@@ -10,7 +10,10 @@
 - Replacing `RefCell` with `Mutex` will make it safe and eliminate the `unsafe impl Sync`.
 
 ## Attempted Changes
-- Planning to replace `RefCell` with `Mutex` and update call sites.
+- Replaced `RefCell` with `Mutex` in `AllocationOptionsHolder` in `src/util/alloc/allocator.rs`.
+- Removed `unsafe impl Sync for AllocationOptionsHolder`.
+- Verified with `cargo check` and `cargo test`. All tests passed.
 
 ## Blockers / Insights for Next Step
-- None so far.
+- The file still has irreducible unsafe in `fill_alignment_gap` for raw heap access.
+- Delta: -1 unsafe impl.
