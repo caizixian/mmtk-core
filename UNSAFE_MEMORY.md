@@ -14,6 +14,7 @@
 - Note: Performed a holistic review of all remaining 83 unsafe items. Confirmed they are irreducible or properly encapsulated.
 - Note: Final verification completed. No reducible unsafe blocks found.
 - Note: Re-evaluated all remaining unsafe locations under Strategy Escalation and confirmed they are irreducible.
+- Note: Antigravity re-verified all remaining unsafe locations in the provided list and confirmed irreducibility.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
