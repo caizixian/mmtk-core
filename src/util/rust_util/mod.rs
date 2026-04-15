@@ -97,6 +97,9 @@ impl<T> std::ops::Deref for InitializeOnce<T> {
     }
 }
 
+// SAFETY: InitializeOnce uses Once to ensure that initialization happens only once.
+// Once initialized, the value is never mutated. Therefore, if T is Sync, InitializeOnce<T>
+// can be shared safely across threads because all accesses after initialization are read-only.
 unsafe impl<T: Sync> Sync for InitializeOnce<T> {}
 
 /// A cell that requires a proof token to access its contents mutably.
@@ -127,6 +130,10 @@ impl<T> ProofCell<T> {
     }
 }
 
+// SAFETY: ProofCell requires a proof token for mutable access, or the caller must ensure
+// no concurrent mutable access when calling the unsafe `get_ref`. Therefore, if T is Sync,
+// it is safe to share ProofCell<T> across threads because concurrent reads are safe,
+// and writes are restricted by proof tokens.
 unsafe impl<T: Sync> Sync for ProofCell<T> {}
 
 /// Create a formatted string that makes the best effort idenfying the current process and thread.

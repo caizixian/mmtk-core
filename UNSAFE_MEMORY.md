@@ -14,7 +14,7 @@
 - `InitializeOnce` is used for `SFT_MAP` to allow zero-cost reads on extreme hot paths (object tracing).
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: `src/util/rust_util/atomic_box.rs` — Audit and document safety invariants for remaining unsafe operations.
+1. 🟢 LOW: `src/util/address.rs` — Audit and document safety invariants for remaining unsafe operations.
 
 ## Patterns Discovered
 - **Safe Abstraction**: Used `SFTHeader` wrapper to avoid `transmute` on fat pointers in `SFTRefStorage`, removing 3 unsafe blocks (and adding 1 unsafe impl Sync).
@@ -74,7 +74,7 @@
 - `src/util/malloc/mod.rs` — Irreducible FFI calls to malloc/free [Phase 2 confirmed].
 - `src/plan/global.rs` — Irreducible lifetime extension for `GCWork` packets [Phase 2 confirmed].
 - `src/plan/concurrent/concurrent_marking_work.rs` — All unsafe removed or made safe by refactoring [Phase 2 confirmed].
-- `src/util/rust_util/mod.rs` — `InitializeOnce` is irreducible to maintain zero-cost reads for `SFT_MAP` on hot path. `ProofCell` `Send` impl removed, `Sync` is irreducible to maintain zero-cost reads without locks. [Phase 3 re-confirmed].
+- `src/util/rust_util/mod.rs` — `InitializeOnce` is irreducible to maintain zero-cost reads for `SFT_MAP` on hot path. `ProofCell` `Sync` is irreducible. Safety comments added for missing `unsafe impl Sync` in Phase 3. [Phase 3 confirmed].
 - `src/util/rust_util/zeroed_alloc.rs` — `new_zeroed_vec` requires manual zeroed allocation and `Vec::from_raw_parts` for performance; `bytemuck::zeroed_vec` is not available in version 1.14.0. Handled zero size case and added safety comments in Phase 3. [Phase 3 confirmed].
 - `src/mmtk.rs` — `ProofCell::get_ref` in `get_plan` is irreducible without threading proof tokens. Re-evaluated: confirmed irreducible to maintain zero-cost reads on hot allocation paths. [Phase 3 confirmed]
 - `src/policy/immix/line.rs` — All unsafe blocks removed after making SideMetadataSpec methods safe [Phase 2 confirmed].
