@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 146 | Δ: -185
+- Starting count: 331 | Current: 144 | Δ: -187
 - Phase: 3
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -49,7 +49,7 @@
 - `src/vm/slot.rs` — Irreducible raw pointer dereferences in `SimpleSlot` and `Address` impls [Phase 2 confirmed].
 - `src/util/metadata/metadata_val_traits.rs` — Trait methods refactored to be safe, remaining unsafe in impls is encapsulated [Phase 2 confirmed].
 - `src/util/metadata/pin_bit.rs` — Fixed unsafe block by using load_atomic. Remaining code is safe [Phase 2 confirmed].
-- `src/util/memory.rs` — Irreducible FFI calls to mmap/munmap/mprotect/madvise and tests [Phase 2 confirmed].
+- `src/util/memory.rs` — Irreducible FFI calls to mmap/munmap/mprotect/madvise. Cleaned up 2 unsafe blocks in tests. [Phase 2 confirmed].
 - `docs/dummyvm/src/api.rs` — Irreducible FFI boundary operations [Phase 2 confirmed].
 - `src/util/malloc/malloc_ms_util.rs` — Irreducible FFI calls to malloc/free/calloc. Safety invariants documented in Phase 3. [Phase 2 confirmed].
 - `src/util/metadata/header_metadata.rs` — Unsafe functions `load`/`store` are non-atomic/racy by design; unsafe blocks in tests call them [Phase 2 confirmed].

@@ -511,10 +511,12 @@ mod tests {
         serial_test(|| {
             with_cleanup(
                 || {
-                    // SAFETY: This is a test using a dedicated test memory region.
-                    let res = unsafe {
-                        dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!())
-                    };
+                    let res = dzmmap_noreplace(
+                        START,
+                        BYTES_IN_PAGE,
+                        MmapStrategy::TEST,
+                        mmap_anno_test!(),
+                    );
                     assert!(res.is_ok());
                     // We can overwrite with dzmmap
                     // SAFETY: This is a test using a dedicated test memory region. We are testing overwriting.
@@ -559,10 +561,12 @@ mod tests {
             with_cleanup(
                 || {
                     // Make sure we mmapped the memory
-                    // SAFETY: This is a test using a dedicated test memory region.
-                    let res = unsafe {
-                        dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!())
-                    };
+                    let res = dzmmap_noreplace(
+                        START,
+                        BYTES_IN_PAGE,
+                        MmapStrategy::TEST,
+                        mmap_anno_test!(),
+                    );
                     assert!(res.is_ok());
                     // Use dzmmap_noreplace will fail
                     let res = dzmmap_noreplace(
