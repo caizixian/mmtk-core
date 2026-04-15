@@ -104,7 +104,7 @@ impl<T> std::ops::Deref for InitializeOnce<T> {
     }
 }
 
-unsafe impl<T> Sync for InitializeOnce<T> {}
+unsafe impl<T: Sync> Sync for InitializeOnce<T> {}
 
 /// A cell that requires a proof token to access its contents mutably.
 pub struct ProofCell<T> {

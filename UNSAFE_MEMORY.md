@@ -10,11 +10,12 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/memory.rs:173` — Analyze if `set` can be made safe via a `MappedRegion` abstraction to encapsulate unsafe memory writes. — expected Δ: 1
+1. 🔴 HIGH: `src/mmtk.rs:185` — Analyze if the lifetime extension hack for `static_plan` can be avoided by using `Arc` or proper ownership in `GCTrigger`. — expected Δ: 1
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
 - Using `MockObject` in tests to encapsulate unsafe `load`/`store` calls on `HeaderMetadataSpec`.
+- **Tightened bounds**: Added `T: Sync` bound to `InitializeOnce` to ensure soundness when shared across threads.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/policy/marksweepspace/native_ms/global.rs` — Irreducible lifetime extension for `GCWork` packets [Phase 2 confirmed].

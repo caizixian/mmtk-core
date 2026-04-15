@@ -65,7 +65,7 @@ pub trait SFTMap {
     unsafe fn clear(&self, address: Address);
 }
 
-pub(crate) fn create_sft_map() -> Box<dyn SFTMap> {
+pub(crate) fn create_sft_map() -> Box<dyn SFTMap + Sync> {
     cfg_if::cfg_if! {
         if #[cfg(target_pointer_width = "64")] {
             // For 64bits, we generally want to use the space map, which requires using contiguous space and no off-heap memory.
