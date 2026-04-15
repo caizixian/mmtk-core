@@ -10,7 +10,7 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟡 MED: `src/vm/tests/mock_tests/mock_test_doc_avoid_resolving_allocator.rs:33-38` — check if manual offset arithmetic can be replaced with safe alternatives or if it's irreducible as a doc example — expected Δ: -1
+1. 🟡 MED: `src/util/metadata/side_metadata/ranges.rs:1-50` — analyze bit range operations for potential safe abstractions — expected Δ: -1
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
@@ -41,7 +41,8 @@
 - `src/util/metadata/side_metadata/helpers.rs` — Implementation of `MetadataCursor` abstraction, irreducible without moving unsafe to call sites [Phase 2 confirmed].
 - `src/util/metadata/side_metadata/side_metadata_tests.rs` — Irreducible raw pointer manipulations for test verification [Phase 1 analysis].
 - `src/util/metadata/side_metadata/ranges.rs` — Irreducible raw pointer manipulations for bit range operations [Phase 1 analysis].
-- `src/policy/sft_map.rs` — Irreducible transmute for atomic fat pointers in `SFTRefStorage` [Phase 2 confirmed].
+- src/policy/sft_map.rs — Irreducible transmute for atomic fat pointers in SFTRefStorage. Clear methods made safe. [Phase 2 confirmed].
+- src/vm/tests/mock_tests/mock_test_doc_avoid_resolving_allocator.rs — Irreducible manual offset arithmetic to demonstrate avoiding resolution in doc example [Phase 2 confirmed].
 - `src/vm/slot.rs` — Irreducible raw pointer dereferences in `SimpleSlot` and `Address` impls [Phase 2 confirmed].
 - `src/util/metadata/metadata_val_traits.rs` — Trait methods refactored to be safe, remaining unsafe in impls is encapsulated [Phase 2 confirmed].
 - `src/util/metadata/pin_bit.rs` — Fixed unsafe block by using load_atomic. Remaining code is safe [Phase 1 analysis].

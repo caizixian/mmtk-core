@@ -58,18 +58,15 @@ pub trait SFTMap {
     }
 
     /// Clear SFT for the address. The address must have a valid SFT entry in the table.
-    ///
-    /// # Safety
-    /// The address must have a valid SFT entry in the map. Usually we know this if the address is from an object reference, or from our space address range.
-    /// Otherwise, the caller should check with `has_sft_entry()` before calling this method.
-    unsafe fn clear(&self, address: Address);
+    fn clear(&self, address: Address);
 
     /// Clear SFT for the address safely. Panics if the address does not have a valid SFT entry.
     fn clear_safe(&self, address: Address) {
         assert!(self.has_sft_entry(address), "Attempted to clear SFT for an address without a valid entry: {}", address);
-        // SAFETY: We just checked that the address has a valid SFT entry.
-        unsafe { self.clear(address); }
+        self.clear(address);
     }
+
+
 }
 
 pub(crate) fn create_sft_map() -> Box<dyn SFTMap + Sync> {
@@ -240,10 +237,12 @@ mod space_map {
             self.sft[index].store(space);
         }
 
-        unsafe fn clear(&self, addr: Address) {
+        fn clear(&self, addr: Address) {
             let index = Self::addr_to_index(addr);
             self.sft[index].store(&EMPTY_SPACE_SFT as _);
         }
+
+
     }
 
     impl SFTSpaceMap {
@@ -432,13 +431,15 @@ mod dense_chunk_map {
             debug!("update done");
         }
 
-        unsafe fn clear(&self, address: Address) {
+        fn clear(&self, address: Address) {
             SFT_DENSE_CHUNK_MAP_INDEX.store_atomic::<u8>(
                 address,
                 Self::EMPTY_SFT_INDEX,
                 Ordering::SeqCst,
             );
         }
+
+
     }
 
     impl SFTDenseChunkMap {
@@ -520,7 +521,7 @@ mod sparse_chunk_map {
 
         // TODO: We should clear a SFT entry when a space releases a chunk.
         #[allow(dead_code)]
-        unsafe fn clear(&self, chunk_start: Address) {
+        fn clear(&self, chunk_start: Address) {
             if DEBUG_SFT {
                 debug!(
                     "Clear SFT for chunk {} (was {})",
@@ -532,6 +533,8 @@ mod sparse_chunk_map {
             let chunk_idx = chunk_start.chunk_index();
             self.set(chunk_idx, &EMPTY_SPACE_SFT);
         }
+
+
     }
 
     impl SFTSparseChunkMap {
