@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 245 | Δ: -86
+- Starting count: 331 | Current: 237 | Δ: -94
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,8 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/policy/marksweepspace/native_ms/block.rs:256` — Investigate if `Block::load_block_list` can return a safe reference or if the unsafe dereference in `attempt_release` can be encapsulated. — expected Δ: 1
+1. 🔴 HIGH: `src/policy/marksweepspace/native_ms/block.rs:117-125` — Use `MetadataCursor` to remove unsafe loads and stores of free cell links. — expected Δ: 2
+2. 🟡 MED: `src/policy/marksweepspace/native_ms/block.rs:256` — Investigate if `Block::load_block_list` can return a safe reference or if the unsafe dereference in `attempt_release` can be encapsulated. — expected Δ: 1
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
@@ -51,6 +52,7 @@
 - `src/policy/immix/line.rs` — All unsafe blocks removed after making SideMetadataSpec methods safe [Phase 2 confirmed].
 - `src/util/heap/chunk_map.rs` — All unsafe blocks removed after making SideMetadataSpec methods safe [Phase 2 confirmed].
 - `src/util/address.rs` — Irreducible primitive pointer operations (`load`, `store`, `as_ref`, etc.) [Phase 2 confirmed].
+- `src/util/raw_memory_freelist.rs` — Remaining unsafe is FFI call to `munmap` in `Drop` [Phase 2 confirmed].
 
 ## Abstraction Proposals (for Phase 2)
 ### MetadataCursor for side_metadata

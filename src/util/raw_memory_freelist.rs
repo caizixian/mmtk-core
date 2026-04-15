@@ -38,7 +38,7 @@ impl FreeList for RawMemoryFreeList {
     fn get_entry(&self, index: i32) -> i32 {
         let offset = (index << LOG_BYTES_IN_ENTRY) as usize;
         debug_assert!(self.base + offset >= self.base && self.base + offset < self.high_water);
-        unsafe { (self.base + offset).load() }
+        crate::util::metadata::side_metadata::helpers::MetadataCursor(self.base + offset).load::<u32>() as i32
     }
     fn set_entry(&mut self, index: i32, value: i32) {
         let offset = (index << LOG_BYTES_IN_ENTRY) as usize;
@@ -50,7 +50,7 @@ impl FreeList for RawMemoryFreeList {
             self.base + offset,
             self.high_water
         );
-        unsafe { (self.base + offset).store(value) }
+        crate::util::metadata::side_metadata::helpers::MetadataCursor(self.base + offset).store::<u32>(value as u32);
     }
     fn alloc(&mut self, size: i32) -> i32 {
         if self.current_units == 0 {
