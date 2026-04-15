@@ -88,7 +88,7 @@ pub struct MarkSweepSpace<VM: VMBinding> {
     pending_release_packets: AtomicUsize,
 }
 
-unsafe impl<VM: VMBinding> Sync for MarkSweepSpace<VM> {}
+
 
 pub struct AbandonedBlockLists {
     pub available: BlockLists,
