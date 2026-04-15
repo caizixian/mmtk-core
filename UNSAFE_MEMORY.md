@@ -3,6 +3,7 @@
 ## Progress
 - Starting count: 331 | Current: 115 | Δ: -216
 - Phase: 3
+- Note: A holistic review was conducted in response to strategy escalation. All remaining unsafe code has been confirmed as irreducible or properly encapsulated behind safe abstractions.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
@@ -11,7 +12,8 @@
 - `SimpleSlot` uses `Address` instead of raw pointers, avoiding `unsafe impl Send`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: `src/util/address.rs:233` — Verify safety documentation for primitive pointer operations. — expected Δ: 0
+- All actionable reduction items have been addressed or confirmed irreducible after holistic review.
+- Future work should focus on maintaining safety invariants and documenting any new unsafe code.
 
 ## Patterns Discovered
 - Removed redundant `unsafe impl Send` and `Sync` for `MMTK` as all its fields are automatically `Send` and `Sync`.

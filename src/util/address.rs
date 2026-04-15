@@ -229,14 +229,20 @@ impl Address {
 
     /// loads a value of type T from the address
     /// # Safety
-    /// This could throw a segment fault if the address is invalid
+    /// The caller must ensure that:
+    /// - The address is valid for reads.
+    /// - The memory is properly aligned for `T`.
+    /// - There are no concurrent mutable accesses to the same memory location.
     pub unsafe fn load<T: Copy>(self) -> T {
         *(self.0 as *mut T)
     }
 
     /// stores a value of type T to the address
     /// # Safety
-    /// This could throw a segment fault if the address is invalid
+    /// The caller must ensure that:
+    /// - The address is valid for writes.
+    /// - The memory is properly aligned for `T`.
+    /// - There are no concurrent accesses (reads or writes) to the same memory location.
     pub unsafe fn store<T>(self, value: T) {
         // We use a ptr.write() operation as directly setting the pointer would drop the old value
         // which may result in unexpected behaviour
@@ -245,7 +251,9 @@ impl Address {
 
     /// atomic operation: load
     /// # Safety
-    /// This could throw a segment fault if the address is invalid
+    /// The caller must ensure that:
+    /// - The address is valid for reads.
+    /// - The memory is properly aligned for `T::Atomic`.
     pub unsafe fn atomic_load<T: Atomic>(self, order: Ordering) -> T::Type {
         let loc = &*(self.0 as *const T);
         loc.load(order)
@@ -253,7 +261,9 @@ impl Address {
 
     /// atomic operation: store
     /// # Safety
-    /// This could throw a segment fault if the address is invalid
+    /// The caller must ensure that:
+    /// - The address is valid for writes.
+    /// - The memory is properly aligned for `T::Atomic`.
     pub unsafe fn atomic_store<T: Atomic>(self, val: T::Type, order: Ordering) {
         let loc = &*(self.0 as *const T);
         loc.store(val, order)
@@ -261,7 +271,9 @@ impl Address {
 
     /// atomic operation: compare and exchange usize
     /// # Safety
-    /// This could throw a segment fault if the address is invalid
+    /// The caller must ensure that:
+    /// - The address is valid for reads and writes.
+    /// - The memory is properly aligned for `T::Atomic`.
     pub unsafe fn compare_exchange<T: Atomic>(
         self,
         old: T::Type,
@@ -309,7 +321,8 @@ impl Address {
     /// converts the Address to a Rust reference
     ///
     /// # Safety
-    /// The caller must guarantee the address actually points to a Rust object.
+    /// The caller must guarantee the address actually points to a valid Rust object of type `T`
+    /// and that there are no concurrent mutable accesses.
     pub unsafe fn as_ref<'a, T>(self) -> &'a T {
         &*self.to_mut_ptr()
     }
@@ -317,7 +330,8 @@ impl Address {
     /// converts the Address to a mutable Rust reference
     ///
     /// # Safety
-    /// The caller must guarantee the address actually points to a Rust object.
+    /// The caller must guarantee the address actually points to a valid Rust object of type `T`
+    /// and that there are no concurrent accesses.
     pub unsafe fn as_mut_ref<'a, T>(self) -> &'a mut T {
         &mut *self.to_mut_ptr()
     }
