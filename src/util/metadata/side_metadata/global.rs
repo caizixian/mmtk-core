@@ -419,12 +419,15 @@ impl SideMetadataSpec {
                 BitByteRange::Bytes {
                     start: dst_start,
                     end: dst_end,
-                } => unsafe {
-                    let byte_offset = dst_start - dst_meta_start_addr;
-                    let src_start = src_meta_start_addr + byte_offset;
-                    let size = dst_end - dst_start;
-                    std::ptr::copy::<u8>(src_start.to_ptr(), dst_start.to_mut_ptr(), size);
-                    false
+                } => {
+                    // SAFETY: The memory ranges are valid and owned by this space, and the source and destination do not overlap.
+                    unsafe {
+                        let byte_offset = dst_start - dst_meta_start_addr;
+                        let src_start = src_meta_start_addr + byte_offset;
+                        let size = dst_end - dst_start;
+                        std::ptr::copy::<u8>(src_start.to_ptr(), dst_start.to_mut_ptr(), size);
+                        false
+                    }
                 },
                 BitByteRange::BitsInByte {
                     addr: dst,
