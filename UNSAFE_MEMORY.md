@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 345 | Δ: -190
+- Starting count: 535 | Current: 342 | Δ: -193
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -11,6 +11,7 @@
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
 1. 🔴 HIGH: `src/mmtk.rs:436` — Use `ExclusivePlanAccessProof` to remove unsafe in plan access (requires adding `get_ref_with_proof` or similar) — expected Δ: -1
+2. 🟢 LOW: `src/vm/tests/mock_tests/*.rs` — Remove unnecessary unsafe blocks around safe `Address::from_usize` in mock tests — expected Δ: -10+
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
