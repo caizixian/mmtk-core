@@ -432,16 +432,18 @@ mod tests {
         }
     }
 
-    const TEST_ADDRESS_8B_REGION: [Address; 8] = [
-        unsafe { Address::from_usize(0x8000_0000) },
-        unsafe { Address::from_usize(0x8000_0008) },
-        unsafe { Address::from_usize(0x8000_0010) },
-        unsafe { Address::from_usize(0x8000_0018) },
-        unsafe { Address::from_usize(0x8000_0020) },
-        unsafe { Address::from_usize(0x8001_0000) },
-        unsafe { Address::from_usize(0x8001_0008) },
-        unsafe { Address::from_usize(0xd000_0000) },
-    ];
+    fn get_test_address_8b_region() -> [Address; 8] {
+        [
+            Address::from_ptr(0x8000_0000 as *const u8),
+            Address::from_ptr(0x8000_0008 as *const u8),
+            Address::from_ptr(0x8000_0010 as *const u8),
+            Address::from_ptr(0x8000_0018 as *const u8),
+            Address::from_ptr(0x8000_0020 as *const u8),
+            Address::from_ptr(0x8001_0000 as *const u8),
+            Address::from_ptr(0x8001_0008 as *const u8),
+            Address::from_ptr(0xd000_0000 as *const u8),
+        ]
+    }
 
     #[test]
     fn test_contiguous_metadata_conversion_0_3() {
@@ -453,7 +455,7 @@ mod tests {
             log_bytes_in_region: 3,
         };
 
-        test_round_trip_conversion(&spec, &TEST_ADDRESS_8B_REGION);
+        test_round_trip_conversion(&spec, &get_test_address_8b_region());
     }
 
     #[test]
@@ -466,7 +468,7 @@ mod tests {
             log_bytes_in_region: 3,
         };
 
-        test_round_trip_conversion(&spec, &TEST_ADDRESS_8B_REGION);
+        test_round_trip_conversion(&spec, &get_test_address_8b_region());
     }
 
     #[test]
@@ -479,7 +481,7 @@ mod tests {
             log_bytes_in_region: 3,
         };
 
-        test_round_trip_conversion(&spec, &TEST_ADDRESS_8B_REGION);
+        test_round_trip_conversion(&spec, &get_test_address_8b_region());
     }
 
     #[test]
@@ -492,19 +494,8 @@ mod tests {
             log_bytes_in_region: 3,
         };
 
-        test_round_trip_conversion(&spec, &TEST_ADDRESS_8B_REGION);
+        test_round_trip_conversion(&spec, &get_test_address_8b_region());
     }
-
-    const TEST_ADDRESS_4KB_REGION: [Address; 8] = [
-        unsafe { Address::from_usize(0x8000_0000) },
-        unsafe { Address::from_usize(0x8000_1000) },
-        unsafe { Address::from_usize(0x8000_2000) },
-        unsafe { Address::from_usize(0x8000_3000) },
-        unsafe { Address::from_usize(0x8000_4000) },
-        unsafe { Address::from_usize(0x8001_0000) },
-        unsafe { Address::from_usize(0x8001_1000) },
-        unsafe { Address::from_usize(0xd000_0000) },
-    ];
 
     #[test]
     fn test_contiguous_metadata_conversion_0_12() {
@@ -516,7 +507,18 @@ mod tests {
             log_bytes_in_region: 12, // 4K
         };
 
-        test_round_trip_conversion(&spec, &TEST_ADDRESS_4KB_REGION);
+        let test_address_4kb_region = [
+            Address::from_ptr(0x8000_0000 as *const u8),
+            Address::from_ptr(0x8000_1000 as *const u8),
+            Address::from_ptr(0x8000_2000 as *const u8),
+            Address::from_ptr(0x8000_3000 as *const u8),
+            Address::from_ptr(0x8000_4000 as *const u8),
+            Address::from_ptr(0x8001_0000 as *const u8),
+            Address::from_ptr(0x8001_1000 as *const u8),
+            Address::from_ptr(0xd000_0000 as *const u8),
+        ];
+
+        test_round_trip_conversion(&spec, &test_address_4kb_region);
     }
 
     #[test]

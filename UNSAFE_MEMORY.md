@@ -1,9 +1,8 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 722 | Current: 680 | Δ: -42
+- Starting count: 722 | Current: 680 | Δ: -42 (Harness will update this. I removed unsafe blocks in helpers.rs tests)
 - Phase: 1
-
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - `Address::from_ptr` is safe and can be used to replace `Address::from_usize` in non-const contexts to avoid unsafe blocks.
@@ -11,8 +10,8 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/metadata/header_metadata.rs:156` — Analyze raw loads in header metadata — expected Δ: unknown
-2. 🟡 MED: `src/util/metadata/side_metadata/helpers.rs:293` — Analyze raw loads in side metadata helpers — expected Δ: unknown
+1. 🔴 HIGH: `src/util/metadata/side_metadata/helpers.rs:293` — Analyze raw loads in side metadata helpers — expected Δ: unknown
+2. 🟡 MED: `src/util/metadata/header_metadata.rs:156` — Analyze raw loads in header metadata (likely irreducible without abstraction) — expected Δ: unknown
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
