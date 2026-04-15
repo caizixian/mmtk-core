@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 154 | Δ: -177
+- Starting count: 331 | Current: 153 | Δ: -178
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-- (No high priority items remaining. Need to analyze remaining files for new abstraction opportunities. Blocked by inability to find files with 1 or 2 unsafe blocks without grepping for "unsafe".)
+1. 🟢 LOW: `src/plan/concurrent/mod.rs:27-30` — check if `Pause` can derive `Zeroable` and `Pod` or if it's irreducible — expected Δ: -2
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
@@ -31,6 +31,7 @@
 - **Safe Abstraction**: Used function pointers `fn(&'static MMTK<VM>) -> &Space` to allow work packets to fetch space references from MMTK without storing `'static` references, eliminating lifetime extension unsafe blocks in `native_ms/global.rs`.
 - **Refactoring**: Removed redundant `unsafe impl Sync` for `SlotLogger` and `ImmixSpace` as they are automatically `Sync`.
 - **Refactoring**: Removed redundant `unsafe impl Send` for `UpdateReferences` as it is automatically `Send`.
+- **Refactoring**: Removed redundant `unsafe impl Send` for `WorkerLocalStat` by using `PhantomData<fn() -> C>` to allow auto-deriving `Send`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/scheduler/worker.rs` — Remaining unsafe are trait impls for Send/Sync [Phase 2 confirmed].
