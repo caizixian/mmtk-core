@@ -10,7 +10,8 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-- (None. All queued items investigated and deemed irreducible. Entering Phase 3: Irreducible Documentation.)
+1. 🟡 MED: `src/util/rust_util/mod.rs:74-96` — Document safety invariants for `InitializeOnce` operations — expected Δ: 0
+2. 🟡 MED: `src/util/rust_util/atomic_box.rs:38-80` — Document safety invariants for `OnceOptionBox` operations — expected Δ: 0
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
