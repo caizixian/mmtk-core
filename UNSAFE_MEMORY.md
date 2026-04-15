@@ -75,7 +75,7 @@
 - `src/plan/global.rs` — Irreducible lifetime extension for `GCWork` packets [Phase 2 confirmed].
 - `src/plan/concurrent/concurrent_marking_work.rs` — All unsafe removed or made safe by refactoring [Phase 2 confirmed].
 - `src/util/rust_util/mod.rs` — InitializeOnce replaced with OnceLock. ProofCell Sync is irreducible. [Phase 3 confirmed].
-- `src/util/rust_util/zeroed_alloc.rs` — Merged two unsafe blocks in `new_zeroed_vec` to reduce count by 1. Remaining unsafe is irreducible due to performance requirements. [Phase 3 confirmed].
+- src/util/rust_util/zeroed_alloc.rs — Merged two unsafe blocks in `new_zeroed_vec` to reduce count by 1. Remaining unsafe is irreducible due to performance requirements and lack of `bytemuck::zeroed_vec` in 1.14.0. [Phase 3 confirmed].
 - `src/mmtk.rs` — `ProofCell::get_ref` in `get_plan` is irreducible without threading proof tokens. Re-evaluated: confirmed irreducible to maintain zero-cost reads on hot allocation paths. [Phase 3 confirmed]
 - `src/policy/immix/line.rs` — All unsafe blocks removed after making SideMetadataSpec methods safe [Phase 2 confirmed].
 - `src/util/heap/chunk_map.rs` — All unsafe blocks removed after making SideMetadataSpec methods safe [Phase 2 confirmed].
