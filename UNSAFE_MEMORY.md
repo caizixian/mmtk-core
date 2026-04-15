@@ -11,7 +11,7 @@
 - `SimpleSlot` uses `Address` instead of raw pointers, avoiding `unsafe impl Send`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: `src/util/rust_util/atomic_box.rs:95` — Investigate if upgrading `bytemuck` or using a wrapper can eliminate `unsafe impl Zeroable for OnceOptionBox`. — expected Δ: -1
+1. 🟢 LOW: `src/util/metadata/metadata_val_traits.rs:154` — Verify safety documentation for remaining unsafe impls. — expected Δ: 0
 
 
 ## Patterns Discovered
