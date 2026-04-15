@@ -20,7 +20,7 @@ pub struct NullableObjectReference(usize);
 
 impl From<NullableObjectReference> for Option<ObjectReference> {
     fn from(value: NullableObjectReference) -> Self {
-        ObjectReference::from_raw_address(unsafe { Address::from_usize(value.0) })
+        ObjectReference::from_raw_address(Address::from_usize(value.0))
     }
 }
 

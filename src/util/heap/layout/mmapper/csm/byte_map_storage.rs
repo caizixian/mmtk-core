@@ -89,8 +89,7 @@ impl MapStateStorage for ByteMapStateStorage {
         {
             let state = group.key;
             let group_end = group_start + group.len;
-            let group_start_addr =
-                unsafe { Address::from_usize(group_start << LOG_BYTES_IN_CHUNK) };
+            let group_start_addr = Address::from_usize(group_start << LOG_BYTES_IN_CHUNK);
             let group_bytes = group.len << LOG_BYTES_IN_CHUNK;
             let group_range = ChunkRange::new_aligned(group_start_addr, group_bytes);
             if let Some(new_state) = update_fn(group_range, state)? {

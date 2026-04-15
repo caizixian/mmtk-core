@@ -357,8 +357,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     fn set_limit_for_stress(&mut self) {
         if self.bump_pointer.cursor < self.bump_pointer.limit {
             let old_limit = self.bump_pointer.limit;
-            let new_limit =
-                unsafe { Address::from_usize(self.bump_pointer.limit - self.bump_pointer.cursor) };
+            let new_limit = Address::from_usize(self.bump_pointer.limit - self.bump_pointer.cursor);
             self.bump_pointer.limit = new_limit;
             trace!(
                 "{:?}: set_limit_for_stress. normal c {} l {} -> {}",
@@ -371,9 +370,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
         if self.large_bump_pointer.cursor < self.large_bump_pointer.limit {
             let old_lg_limit = self.large_bump_pointer.limit;
-            let new_lg_limit = unsafe {
-                Address::from_usize(self.large_bump_pointer.limit - self.large_bump_pointer.cursor)
-            };
+            let new_lg_limit = Address::from_usize(self.large_bump_pointer.limit - self.large_bump_pointer.cursor);
             self.large_bump_pointer.limit = new_lg_limit;
             trace!(
                 "{:?}: set_limit_for_stress. large c {} l {} -> {}",

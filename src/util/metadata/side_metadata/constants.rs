@@ -15,7 +15,7 @@ use crate::util::Address;
 // This is made public, as VM bingdings may need to use this.
 #[cfg(target_pointer_width = "32")]
 /// Global side metadata start address
-pub const GLOBAL_SIDE_METADATA_BASE_ADDRESS: Address = unsafe { Address::from_usize(0x1000_0000) };
+pub const GLOBAL_SIDE_METADATA_BASE_ADDRESS: Address = Address::from_usize(0x1000_0000);
 
 // FIXME: The 64-bit base address is changed from 0x0600_0000_0000 to 0x0c00_0000_0000 so that it
 // is less likely to overlap with any space.  But it does not solve the problem completely.
@@ -24,7 +24,7 @@ pub const GLOBAL_SIDE_METADATA_BASE_ADDRESS: Address = unsafe { Address::from_us
 #[cfg(target_pointer_width = "64")]
 /// Global side metadata start address
 pub const GLOBAL_SIDE_METADATA_BASE_ADDRESS: Address =
-    unsafe { Address::from_usize(0x0000_0c00_0000_0000usize) };
+    Address::from_usize(0x0000_0c00_0000_0000usize);
 
 pub(crate) const GLOBAL_SIDE_METADATA_BASE_OFFSET: SideMetadataOffset =
     SideMetadataOffset::addr(GLOBAL_SIDE_METADATA_BASE_ADDRESS);

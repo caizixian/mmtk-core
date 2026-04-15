@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 452 | Δ: -83
+- Starting count: 535 | Current: 435 | Δ: -100
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/address.rs:158-594` — analyze address primitives for potential safe wrapping or if they are irreducible — expected Δ: 0-5
-2. 🟡 MED: `src/util/rust_util/atomic_box.rs:87` — check if `unsafe impl Zeroable` can be justified or removed — expected Δ: 0-1
+1. 🔴 HIGH: `src/util/alloc/free_list_allocator.rs:155-409` — analyze unsafe blocks in free list allocator — expected Δ: 0-3
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
@@ -29,6 +28,7 @@
 - Use `Box::leak` instead of `Box::into_raw` to get a reference directly when initializing lock-free structures, reducing unsafe blocks.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
+- `src/util/rust_util/atomic_box.rs` — implements a safe abstraction (`OnceOptionBox`). Unsafe is required for raw pointer manipulation and justified `Zeroable` impl. [Phase 2 confirmed]
 - `src/util/copy/mod.rs` — remaining unsafe blocks are `assume_init_mut()` which are likely required for performance to avoid `Option` overhead in GC fast path.
 - `src/policy/sft_map.rs` — `transmute` of fat pointers is required for atomic trait object storage in `SFTRefStorage`. [Phase 2 confirmed]
 - `src/util/malloc/malloc_ms_util.rs` — mostly FFI calls to `libc` (malloc, calloc, free, etc.). [Phase 2 confirmed]
@@ -38,6 +38,7 @@
 - `src/util/metadata/side_metadata/global.rs` — Production unsafe in `load`/`store` is irreducible due to concurrent access invariants requiring `unsafe fn` signature. [Phase 2 confirmed]
 - `src/util/metadata/metadata_val_traits.rs` — Trait methods must remain unsafe because they take a raw `Address` and dereference it. [Phase 2 confirmed]
 - `src/util/metadata/side_metadata/side_metadata_tests.rs` — Remaining unsafe blocks in tests require complex bit extraction for sub-byte metadata. [Phase 2 confirmed]
+- `src/util/address.rs` — Remaining unsafe blocks are `load`, `store`, `as_ref`, etc., which are irreducible as they dereference raw pointers. [Phase 2 confirmed]
 - `src/policy/marksweepspace/malloc_ms/metadata.rs` — Remaining unsafe is `u128` load (primitive not implementing `MetadataValue`) and `SweepProof` constructor. [Phase 2 confirmed]
 - `src/util/metadata/vo_bit/mod.rs` — `find_prev_non_zero_value` is encapsulated in safe `find_object_from_internal_pointer`. Irreducible without capability tokens. [Phase 2 confirmed]
 - `src/util/heap/freelistpageresource.rs` — Remaining unsafe are `unsafe impl Send` and `unsafe impl Sync`. [Phase 2 confirmed]
