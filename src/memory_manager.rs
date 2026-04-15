@@ -91,7 +91,7 @@ pub fn mmtk_init<VM: VMBinding>(builder: &MMTKBuilder) -> Box<MMTK<VM>> {
 /// Currently we do not allow removing regions from VM space.
 #[cfg(feature = "vm_space")]
 pub fn set_vm_space<VM: VMBinding>(mmtk: &'static mut MMTK<VM>, start: Address, size: usize) {
-    unsafe { mmtk.get_plan_mut() }
+    mmtk.plan.get_mut()
         .base_mut()
         .vm_space
         .set_vm_region(start, size);

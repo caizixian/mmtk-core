@@ -95,7 +95,7 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
 
         // Prepare global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(Prepare::<MarkCompactGCWorkContext<VM>>::new());
+            .add(Prepare::<MarkCompactGCWorkContext<VM>>::new(crate::scheduler::ExclusivePlanAccessProof::new()));
 
         scheduler.work_buckets[WorkBucketStage::CalculateForwarding]
             .add(CalculateForwardingAddress::<VM>::new(&self.mc_space));
@@ -105,7 +105,7 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
 
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<MarkCompactGCWorkContext<VM>>::new());
+            .add(Release::<MarkCompactGCWorkContext<VM>>::new(crate::scheduler::ExclusivePlanAccessProof::new()));
 
         // Reference processing
         if !*self.base().options.no_reference_types {

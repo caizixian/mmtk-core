@@ -142,10 +142,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         self.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<C>::new());
 
         // Prepare global/collectors/mutators
-        self.work_buckets[WorkBucketStage::Prepare].add(Prepare::<C>::new());
+        self.work_buckets[WorkBucketStage::Prepare].add(Prepare::<C>::new(ExclusivePlanAccessProof::new()));
 
         // Release global/collectors/mutators
-        self.work_buckets[WorkBucketStage::Release].add(Release::<C>::new());
+        self.work_buckets[WorkBucketStage::Release].add(Release::<C>::new(ExclusivePlanAccessProof::new()));
 
         // Analysis GC work
         #[cfg(feature = "analysis")]
@@ -563,7 +563,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
         // All other workers are parked, so it is safe to access the Plan instance mutably.
         probe!(mmtk, plan_end_of_gc_begin);
-        let plan_mut: &mut dyn Plan<VM = VM> = unsafe { mmtk.get_plan_mut() };
+        let plan_mut: &mut dyn Plan<VM = VM> = mmtk.get_plan_mut(&ExclusivePlanAccessProof::new());
         plan_mut.end_of_gc(worker.tls);
         probe!(mmtk, plan_end_of_gc_end);
 

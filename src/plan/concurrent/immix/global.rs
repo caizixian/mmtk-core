@@ -359,7 +359,7 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
         >::new());
         scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
             ConcurrentImmixGCWorkContext<UnsupportedProcessEdges<VM>>,
-        >::new());
+        >::new(crate::scheduler::ExclusivePlanAccessProof::new()));
     }
 
     fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
@@ -372,7 +372,7 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
 
         scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
             ConcurrentImmixGCWorkContext<UnsupportedProcessEdges<VM>>,
-        >::new());
+        >::new(crate::scheduler::ExclusivePlanAccessProof::new()));
 
         // Deal with weak ref and finalizers
         // TODO: Check against schedule_common_work and see if we are still missing any work packet

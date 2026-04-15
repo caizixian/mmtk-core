@@ -439,12 +439,11 @@ impl<VM: VMBinding> MMTK<VM> {
 
     /// Get the plan as mutable reference.
     ///
-    /// # Safety
-    ///
-    /// This is unsafe because the caller must ensure that the plan is not used by other threads.
+    /// This is safe because the caller must provide an `ExclusivePlanAccessProof` token
+    /// which guarantees that the plan is not used by other threads.
     #[allow(clippy::mut_from_ref)]
-    pub unsafe fn get_plan_mut(&self) -> &mut dyn Plan<VM = VM> {
-        &mut **(self.plan.get())
+    pub fn get_plan_mut(&self, _proof: &crate::scheduler::ExclusivePlanAccessProof) -> &mut dyn Plan<VM = VM> {
+        unsafe { &mut **(self.plan.get()) }
     }
 
     /// Get the run time options.

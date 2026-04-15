@@ -42,13 +42,14 @@ impl<VM: VMBinding> GCWork<VM> for ScheduleCollection {
 /// be a race condition.
 pub struct Prepare<C: GCWorkContext> {
     phantom: PhantomData<C>,
+    _proof: crate::scheduler::ExclusivePlanAccessProof,
 }
 
 
 
 impl<C: GCWorkContext> Prepare<C> {
-    pub fn new() -> Self {
-        Self { phantom: PhantomData }
+    pub fn new(proof: crate::scheduler::ExclusivePlanAccessProof) -> Self {
+        Self { phantom: PhantomData, _proof: proof }
     }
 }
 
@@ -56,7 +57,7 @@ impl<C: GCWorkContext> GCWork<C::VM> for Prepare<C> {
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
         trace!("Prepare Global");
         // We assume this is the only running work packet that accesses plan at the point of execution
-        let plan_mut = unsafe { mmtk.get_plan_mut() };
+        let plan_mut = mmtk.get_plan_mut(&self._proof);
         plan_mut.prepare(worker.tls);
 
         if plan_mut.constraints().needs_prepare_mutator {
@@ -119,11 +120,12 @@ impl<VM: VMBinding> GCWork<VM> for PrepareCollector {
 /// be a race condition.
 pub struct Release<C: GCWorkContext> {
     phantom: PhantomData<C>,
+    _proof: crate::scheduler::ExclusivePlanAccessProof,
 }
 
 impl<C: GCWorkContext> Release<C> {
-    pub fn new() -> Self {
-        Self { phantom: PhantomData }
+    pub fn new(proof: crate::scheduler::ExclusivePlanAccessProof) -> Self {
+        Self { phantom: PhantomData, _proof: proof }
     }
 }
 
@@ -136,7 +138,7 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
         mmtk.gc_trigger.policy.on_gc_release(mmtk);
         // We assume this is the only running work packet that accesses plan at the point of execution
 
-        let plan_mut = unsafe { mmtk.get_plan_mut() };
+        let plan_mut = mmtk.get_plan_mut(&self._proof);
         plan_mut.release(worker.tls);
 
         let release_mutator_packets = <C::VM as VMBinding>::VMActivePlan::mutators()

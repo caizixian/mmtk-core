@@ -91,7 +91,7 @@ impl<VM: VMBinding> Plan for Compressor<VM> {
 
         // Prepare global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(Prepare::<CompressorWorkContext<VM>>::new());
+            .add(Prepare::<CompressorWorkContext<VM>>::new(crate::scheduler::ExclusivePlanAccessProof::new()));
 
         scheduler.work_buckets[WorkBucketStage::CalculateForwarding].add(GenerateWork::new(
             &self.compressor_space,
@@ -112,7 +112,7 @@ impl<VM: VMBinding> Plan for Compressor<VM> {
 
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<CompressorWorkContext<VM>>::new());
+            .add(Release::<CompressorWorkContext<VM>>::new(crate::scheduler::ExclusivePlanAccessProof::new()));
 
         // Reference processing
         if !*self.base().options.no_reference_types {
