@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 475 | Δ: -60
+- Starting count: 535 | Current: 474 | Δ: -61
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,8 +10,9 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/scheduler/gc_work.rs:59` — investigate plan mutation in Prepare/Release — expected Δ: -2
-2. 🟡 MED: `src/util/memory.rs:173` — investigate memory mapping unsafe blocks — expected Δ: -0 (likely irreducible, but should confirm)
+1. 🔴 HIGH: `src/util/opaque_pointer.rs:9` — replace `*mut c_void` with `usize` in `OpaquePointer` — expected Δ: -2
+2. 🔴 HIGH: `src/scheduler/gc_work.rs:59` — investigate plan mutation in Prepare/Release — expected Δ: -2
+3. 🟡 MED: `src/util/memory.rs:173` — investigate memory mapping unsafe blocks — expected Δ: -0 (likely irreducible, but should confirm)
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
