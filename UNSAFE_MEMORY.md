@@ -14,7 +14,7 @@
 - `InitializeOnce` is used for `SFT_MAP` to allow zero-cost reads on extreme hot paths (object tracing).
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/scheduler/gc_work.rs:487` — Investigate if `ProcessEdgesBase` can be refactored to use a safe wrapper instead of raw pointer to avoid `unsafe impl Send` — expected Δ: 0 to -1.
+1. 🔴 HIGH: `src/util/metadata/metadata_val_traits.rs:155-183` — Investigate if `Address` can provide safe or encapsulated atomic fetch operations to remove unsafe blocks — expected Δ: 0 to -5.
 
 ## Patterns Discovered
 - Removed redundant `unsafe impl Send` and `Sync` for `MMTK` as all its fields are automatically `Send` and `Sync`.
