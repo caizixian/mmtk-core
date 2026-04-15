@@ -10,8 +10,8 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/policy/marksweepspace/native_ms/block.rs:252` — Investigate if `Block::load_block_list` can return a safe reference or if the unsafe dereference in `attempt_release` can be encapsulated. — expected Δ: 1
-2. 🟡 MED: `src/util/metadata/side_metadata/global.rs` — Re-evaluate if `MetadataCursor` can be used to reduce unsafe in `load`/`store` operations after Phase 2 entry. — expected Δ: unknown
+1. 🔴 HIGH: `src/util/heap/layout/map32.rs:67` — Investigate if `SFT_MAP.clear` can be made safe or if the unsafe block can be encapsulated. — expected Δ: 1
+2. 🟡 MED: `src/policy/marksweepspace/native_ms/block.rs:252` — Investigate if `Block::load_block_list` can return a safe reference or if the unsafe dereference in `attempt_release` can be encapsulated. — expected Δ: 1
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
@@ -26,6 +26,7 @@
 - **Refactoring**: Made `find_prev_non_zero_value` safe by using atomic loads in its implementation and helpers, removing `unsafe` from signature and 1 unsafe block at call site.
 - **Refactoring**: Made `SFTMap::update` and `eager_initialize` safe by taking references instead of raw pointers, removing 6 unsafe blocks at call sites.
 - **Refactoring**: Used `MetadataCursor` in `src/policy/marksweepspace/native_ms/block.rs` to remove unsafe loads and stores of free cell links.
+- **Refactoring**: Removed redundant unsafe blocks in `global.rs` tests wrapping safe `load` and `store` calls.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/scheduler/worker.rs` — Remaining unsafe are trait impls for Send/Sync [Phase 2 confirmed].

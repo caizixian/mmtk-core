@@ -1725,13 +1725,13 @@ mod tests {
                         let meta_ptr: *mut $type = meta_addr.to_mut_ptr();
 
                         // Initial value should be 0
-                        assert_eq!(unsafe { spec.load::<$type>(data_addr) }, 0);
+                        assert_eq!(spec.load::<$type>(data_addr), 0);
                         assert_eq!(spec.load_atomic::<$type>(data_addr, Ordering::SeqCst), 0);
 
                         // Set to max
                         let max_value: $type = max_value($log_bits) as _;
-                        unsafe { spec.store::<$type>(data_addr, max_value); }
-                        assert_eq!(unsafe { spec.load::<$type>(data_addr) }, max_value);
+                        spec.store::<$type>(data_addr, max_value);
+                        assert_eq!(spec.load::<$type>(data_addr), max_value);
                         assert_eq!(spec.load_atomic::<$type>(data_addr, Ordering::SeqCst), max_value);
                         assert_eq!(unsafe { *meta_ptr }, max_value);
                     });
@@ -1746,8 +1746,8 @@ mod tests {
                         // Set the metadata byte(s) to all 1s
                         unsafe { *meta_ptr = <$type>::MAX; }
                         // Store 0 to the side metadata
-                        unsafe { spec.store::<$type>(data_addr, 0); }
-                        assert_eq!(unsafe { spec.load::<$type>(data_addr) }, 0);
+                        spec.store::<$type>(data_addr, 0);
+                        assert_eq!(spec.load::<$type>(data_addr), 0);
                         // Only the affected bits are set to 0
                         assert_eq!(unsafe { *meta_ptr }, <$type>::MAX & (!max_value));
                     });
@@ -1763,7 +1763,7 @@ mod tests {
                         unsafe { *meta_ptr = <$type>::MAX; }
                         // Store 0 to the side metadata
                         spec.store_atomic::<$type>(data_addr, 0, Ordering::SeqCst);
-                        assert_eq!(unsafe { spec.load::<$type>(data_addr) }, 0);
+                        assert_eq!(spec.load::<$type>(data_addr), 0);
                         // Only the affected bits are set to 0
                         assert_eq!(unsafe { *meta_ptr }, <$type>::MAX & (!max_value));
                     });
