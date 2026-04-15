@@ -96,6 +96,24 @@ impl<VM: VMBinding> Plan for StickyImmix<VM> {
             info!("Nursery GC");
             // nursery GC -- we schedule it
             scheduler.schedule_common_work::<StickyImmixNurseryGCWorkContext<VM>>(self);
+
+            // Schedule SweepChunk tasks for nursery GC
+            let immix_space = &self.immix.immix_space;
+            immix_space.defrag.mark_histograms.lock().clear();
+            let epilogue = std::sync::Arc::new(crate::policy::immix::immixspace::FlushPageResource {
+                space: immix_space,
+                counter: std::sync::atomic::AtomicUsize::new(0),
+            });
+            let tasks = immix_space.chunk_map.generate_tasks(|chunk| {
+                Box::new(crate::policy::immix::immixspace::SweepChunk {
+                    space: immix_space,
+                    chunk,
+                    unlog_bits_op: UnlogBitsOperation::NoOp,
+                    epilogue: epilogue.clone(),
+                })
+            });
+            epilogue.counter.store(tasks.len(), std::sync::atomic::Ordering::SeqCst);
+            scheduler.work_buckets[crate::scheduler::WorkBucketStage::Release].bulk_add(tasks);
         } else {
             info!("Full heap GC");
             use crate::plan::immix::Immix;
@@ -104,7 +122,7 @@ impl<VM: VMBinding> Plan for StickyImmix<VM> {
                 StickyImmix<VM>,
                 StickyImmixMatureGCWorkContext<VM, TRACE_KIND_FAST>,
                 StickyImmixMatureGCWorkContext<VM, TRACE_KIND_DEFRAG>,
-            >(self, &self.immix.immix_space, scheduler);
+            >(self, &self.immix.immix_space, scheduler, UnlogBitsOperation::BulkClear, UnlogBitsOperation::NoOp);
         }
     }
 

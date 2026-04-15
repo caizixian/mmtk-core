@@ -48,7 +48,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     /// A list of all reusable blocks
     pub reusable_blocks: ReusableBlockPool,
     /// Defrag utilities
-    pub(super) defrag: Defrag,
+    pub(crate) defrag: Defrag,
     /// How many lines have been consumed since last GC?
     lines_consumed: AtomicUsize,
     /// Object mark state
@@ -444,23 +444,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 self.defrag.prepare(self, plan_stats.unwrap());
             }
 
-            // Prepare each block for GC
-            let threshold = self.defrag.defrag_spill_threshold.load(Ordering::Acquire);
-            // # Safety: ImmixSpace reference is always valid within this collection cycle.
-            let space = unsafe { &*(self as *const Self) };
-            let work_packets = self.chunk_map.generate_tasks(|chunk| {
-                Box::new(PrepareBlockState {
-                    space,
-                    chunk,
-                    defrag_threshold: if space.in_defrag() {
-                        Some(threshold)
-                    } else {
-                        None
-                    },
-                    unlog_bits_op,
-                })
-            });
-            self.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
+
 
             if !super::BLOCK_ONLY {
                 self.line_mark_state.fetch_add(1, Ordering::AcqRel);
@@ -523,9 +507,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if !super::BLOCK_ONLY {
             self.reusable_blocks.reset();
         }
-        // Sweep chunks and blocks
-        let work_packets = self.generate_sweep_tasks(unlog_bits_op);
-        self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
+
 
         self.lines_consumed.store(0, Ordering::Relaxed);
     }
@@ -540,26 +522,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         did_defrag
     }
 
-    /// Generate chunk sweep tasks
-    fn generate_sweep_tasks(&self, unlog_bits_op: UnlogBitsOperation) -> Vec<Box<dyn GCWork<VM>>> {
-        self.defrag.mark_histograms.lock().clear();
-        // # Safety: ImmixSpace reference is always valid within this collection cycle.
-        let space = unsafe { &*(self as *const Self) };
-        let epilogue = Arc::new(FlushPageResource {
-            space,
-            counter: AtomicUsize::new(0),
-        });
-        let tasks = self.chunk_map.generate_tasks(|chunk| {
-            Box::new(SweepChunk {
-                space,
-                chunk,
-                unlog_bits_op,
-                epilogue: epilogue.clone(),
-            })
-        });
-        epilogue.counter.store(tasks.len(), Ordering::SeqCst);
-        tasks
-    }
+
 
     /// Release a block.
     pub fn release_block(&self, block: Block) {
@@ -975,7 +938,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
 }
 
 /// Chunk sweeping work packet.
-struct SweepChunk<VM: VMBinding> {
+pub(crate) struct SweepChunk<VM: VMBinding> {
     space: &'static ImmixSpace<VM>,
     chunk: Chunk,
     unlog_bits_op: UnlogBitsOperation,
@@ -1048,9 +1011,9 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
 }
 
 /// Count number of remaining work pacets, and flush page resource if all packets are finished.
-struct FlushPageResource<VM: VMBinding> {
+pub(crate) struct FlushPageResource<VM: VMBinding> {
     space: &'static ImmixSpace<VM>,
-    counter: AtomicUsize,
+    pub(crate) counter: AtomicUsize,
 }
 
 impl<VM: VMBinding> FlushPageResource<VM> {

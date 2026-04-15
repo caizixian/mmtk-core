@@ -148,7 +148,7 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
                     ConcurrentImmix<VM>,
                     ConcurrentImmixSTWGCWorkContext<VM, TRACE_KIND_FAST>,
                     ConcurrentImmixSTWGCWorkContext<VM, TRACE_KIND_DEFRAG>,
-                >(self, &self.immix_space, scheduler);
+                >(self, &self.immix_space, scheduler, UnlogBitsOperation::NoOp, UnlogBitsOperation::BulkClear);
             }
             Pause::InitialMark => self.schedule_concurrent_marking_initial_pause(scheduler),
             Pause::FinalMark => self.schedule_concurrent_marking_final_pause(scheduler),

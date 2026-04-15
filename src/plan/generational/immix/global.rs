@@ -119,7 +119,7 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
                 GenImmix<VM>,
                 GenImmixMatureGCWorkContext<VM, TRACE_KIND_FAST>,
                 GenImmixMatureGCWorkContext<VM, TRACE_KIND_DEFRAG>,
-            >(self, &self.immix_space, scheduler);
+            >(self, &self.immix_space, scheduler, UnlogBitsOperation::BulkClear, UnlogBitsOperation::NoOp);
         }
     }
 

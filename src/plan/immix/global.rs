@@ -77,7 +77,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             Immix<VM>,
             ImmixGCWorkContext<VM, TRACE_KIND_FAST>,
             ImmixGCWorkContext<VM, TRACE_KIND_DEFRAG>,
-        >(self, &self.immix_space, scheduler)
+        >(self, &self.immix_space, scheduler, UnlogBitsOperation::NoOp, UnlogBitsOperation::NoOp)
     }
 
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
@@ -179,8 +179,10 @@ impl<VM: VMBinding> Immix<VM> {
         DefragContext: GCWorkContext<VM = VM, PlanType = PlanType>,
     >(
         plan: &'static DefragContext::PlanType,
-        immix_space: &ImmixSpace<VM>,
+        immix_space: &'static ImmixSpace<VM>,
         scheduler: &GCWorkScheduler<VM>,
+        prepare_unlog_op: UnlogBitsOperation,
+        release_unlog_op: UnlogBitsOperation,
     ) {
         let in_defrag = immix_space.decide_whether_to_defrag(
             plan.base().global_state.is_emergency_collection(),
@@ -192,6 +194,34 @@ impl<VM: VMBinding> Immix<VM> {
             plan.base().global_state.is_user_triggered_collection(),
             *plan.base().options.full_heap_system_gc,
         );
+
+        // Schedule PrepareBlockState tasks
+        let threshold = immix_space.defrag.defrag_spill_threshold.load(Ordering::Acquire);
+        let work_packets = immix_space.chunk_map.generate_tasks(|chunk| {
+            Box::new(crate::policy::immix::immixspace::PrepareBlockState {
+                space: immix_space,
+                chunk,
+                defrag_threshold: if in_defrag { Some(threshold) } else { None },
+                unlog_bits_op: prepare_unlog_op,
+            })
+        });
+        scheduler.work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
+
+        // Schedule SweepChunk tasks
+        let epilogue = std::sync::Arc::new(crate::policy::immix::immixspace::FlushPageResource {
+            space: immix_space,
+            counter: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let tasks = immix_space.chunk_map.generate_tasks(|chunk| {
+            Box::new(crate::policy::immix::immixspace::SweepChunk {
+                space: immix_space,
+                chunk,
+                unlog_bits_op: release_unlog_op,
+                epilogue: epilogue.clone(),
+            })
+        });
+        epilogue.counter.store(tasks.len(), Ordering::SeqCst);
+        scheduler.work_buckets[WorkBucketStage::Release].bulk_add(tasks);
 
         if in_defrag {
             scheduler.schedule_common_work::<DefragContext>(plan);
