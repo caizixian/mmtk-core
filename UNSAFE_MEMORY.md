@@ -3,7 +3,7 @@
 ## Progress
 - Starting count: 331 | Current: 115 | Δ: -216
 - Phase: 3
-- Note: A holistic review was conducted in response to strategy escalation. All remaining unsafe code has been confirmed as irreducible or properly encapsulated behind safe abstractions. A subsequent review confirmed these findings, specifically regarding `InitializeOnce` and `MetadataCursor`.
+- Note: A holistic review was conducted in response to strategy escalation. All remaining unsafe code has been confirmed as irreducible or properly encapsulated behind safe abstractions. A subsequent review confirmed these findings, specifically regarding `InitializeOnce`, `MetadataCursor`, and `SimpleSlot`.
 
 ## Codebase Invariants (PROTECTED — do not prune)
 - Delayed initialization of `SFT_MAP` to `create_plan` allows populating it safely before making it globally visible, eliminating the need for `unsafe` access to it.
