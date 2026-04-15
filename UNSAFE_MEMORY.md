@@ -11,8 +11,7 @@
 - `SimpleSlot` uses `Address` instead of raw pointers, avoiding `unsafe impl Send`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: `src/util/memory.rs:175-597` — Document safety invariants for irreducible FFI calls — expected Δ: 0
-2. 🟢 LOW: `docs/dummyvm/src/api.rs:33-131` — Document safety invariants for irreducible FFI calls — expected Δ: 0
+1. 🟢 LOW: `src/util/rust_util/atomic_box.rs:40-95` — Review `OnceOptionBox` for potential safe alternatives if space overhead is not critical — expected Δ: 0
 
 
 ## Patterns Discovered
