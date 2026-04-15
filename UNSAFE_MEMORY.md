@@ -10,8 +10,8 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: Continue searching for other files in `src/policy` that are not in the NOT to Revisit list and verify if they are clean or have addressable unsafe blocks.
-2. 🟡 MED: Check if other trait objects in `src/util` need `Send` bound to allow removing more unsafe impls.
+1. 🔴 HIGH: Check if other trait objects in `src/util` need `Send` bound to allow removing more unsafe impls.
+2. 🟡 MED: Continue searching for other files in `src/policy` subdirectories (e.g., `marksweepspace/malloc_ms`) that are not in the NOT to Revisit list.
 
 ## Patterns Discovered
 - Replaced `unsafe impl Sync for GCWorkScheduler` by making `BucketOpenCondition` `Sync`, removing 1 unsafe impl.
@@ -97,6 +97,12 @@
 - `src/policy/immortalspace.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
 - `src/policy/largeobjectspace.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
 - `src/policy/lockfreeimmortalspace.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
+- `src/policy/mod.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
+- `src/policy/sft.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
+- `src/policy/space.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
+- `src/policy/vmspace.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
+- `src/policy/marksweepspace/native_ms/block_list.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
+- `src/policy/compressor/compressorspace.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
 
 ## Abstraction Proposals (for Phase 2)
 ### MetadataCursor for side_metadata
