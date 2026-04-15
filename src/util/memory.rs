@@ -506,6 +506,11 @@ mod tests {
     // In the tests, we will mmap this address. This address should not be in our heap (in case we mess up with other tests)
     const START: Address = MEMORY_TEST_REGION.start;
 
+    fn dzmmap_test(start: Address, size: usize) -> Result<()> {
+        // SAFETY: This is a test using a dedicated test memory region.
+        unsafe { dzmmap(start, size, MmapStrategy::TEST, mmap_anno_test!()) }
+    }
+
     #[test]
     fn test_mmap() {
         serial_test(|| {
@@ -519,10 +524,7 @@ mod tests {
                     );
                     assert!(res.is_ok());
                     // We can overwrite with dzmmap
-                    // SAFETY: This is a test using a dedicated test memory region. We are testing overwriting.
-                    let res = unsafe {
-                        dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!())
-                    };
+                    let res = dzmmap_test(START, BYTES_IN_PAGE);
                     assert!(res.is_ok());
                 },
                 || {
@@ -593,10 +595,7 @@ mod tests {
                         mmap_noreserve(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!());
                     assert!(res.is_ok());
                     // Try reserve it
-                    // SAFETY: This is a test using a dedicated test memory region.
-                    let res = unsafe {
-                        dzmmap(START, BYTES_IN_PAGE, MmapStrategy::TEST, mmap_anno_test!())
-                    };
+                    let res = dzmmap_test(START, BYTES_IN_PAGE);
                     assert!(res.is_ok());
                 },
                 || {

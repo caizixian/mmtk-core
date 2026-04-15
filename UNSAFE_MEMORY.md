@@ -1,8 +1,9 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 86 | Δ: -245
+- Starting count: 331 | Current: 85 | Δ: -246
 - Phase: 3
+- Note: Added `dzmmap_test` helper in tests to reduce unsafe blocks at call sites in `src/util/memory.rs`.
 - Note: Added SAFETY comments to `src/util/malloc/mod.rs`, `src/scheduler/affinity.rs`, and `src/util/alloc/allocators.rs` in Phase 3.
 
 ## Codebase Invariants (PROTECTED — do not prune)
