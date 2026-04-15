@@ -1,16 +1,15 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: All remaining files with unsafe (`src/util/memory.rs`, `docs/dummyvm/src/api.rs`, etc.)
-- Strategy: Verification of irreducible unsafe and documentation.
+- File: <file being analyzed>
+- Strategy: <what you're attempting>
 
 ## Findings
-- Verified that all listed unsafe locations in `src/util/memory.rs`, `src/util/malloc/malloc_ms_util.rs`, and `docs/dummyvm/src/api.rs` are either FFI calls or required primitives with proper `// SAFETY:` comments.
-- Confirmed that they are correctly classified as irreducible in `UNSAFE_MEMORY.md`.
+- Line X: <unsafe type> — <eliminable? why/why not>
+- Line Y: <unsafe type> — <eliminable? why/why not>
 
 ## Attempted Changes
-- None. Focused on analysis and verification as all items were marked irreducible.
+- <what you tried, what happened>
 
 ## Blockers / Insights for Next Step
-- Proposed a new abstraction `MmapRegion` in `UNSAFE_MEMORY.md` to potentially encapsulate raw memory mappings and reduce unsafe reads/writes in the future.
-
+- <what prevented completion, what the next step should know>
