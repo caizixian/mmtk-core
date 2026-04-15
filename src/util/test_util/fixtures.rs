@@ -156,6 +156,8 @@ impl MMTKFixture {
     }
 
     pub fn get_mmtk_mut(&mut self) -> &'static mut MMTK<MockVM> {
+        // SAFETY: This is in tests. We leak the MMTK instance in `create_with_builder` and get a `'static mut` reference.
+        // We store it as a shared reference to allow sharing, but we cast it back to mutable here when exclusive access is guaranteed by `&mut self`.
         unsafe { &mut *(self.mmtk as *const MMTK<MockVM> as *mut MMTK<MockVM>) }
     }
 }
@@ -163,6 +165,7 @@ impl MMTKFixture {
 impl Drop for MMTKFixture {
     fn drop(&mut self) {
         let mmtk_ptr: *const MMTK<MockVM> = self.mmtk as _;
+        // SAFETY: This is in tests. We take ownership of the leaked MMTK instance to reclaim its memory when the fixture is dropped.
         let _ = unsafe { Box::from_raw(mmtk_ptr as *mut MMTK<MockVM>) };
     }
 }
