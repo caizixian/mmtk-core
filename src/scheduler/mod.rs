@@ -35,12 +35,13 @@ pub use gc_work::ProcessEdgesWork;
 
 /// A proof token that guarantees exclusive access to the plan.
 /// This token can only be constructed within the scheduler module.
+#[derive(Clone, Copy)]
 pub struct ExclusivePlanAccessProof {
     _private: (),
 }
 
 impl ExclusivePlanAccessProof {
-    pub(crate) fn new() -> Self {
+    pub(in crate::scheduler) fn new() -> Self {
         Self { _private: () }
     }
 }

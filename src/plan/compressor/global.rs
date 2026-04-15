@@ -80,7 +80,7 @@ impl<VM: VMBinding> Plan for Compressor<VM> {
         &ALLOCATOR_MAPPING
     }
 
-    fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
+    fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>, proof: crate::scheduler::ExclusivePlanAccessProof) {
         // TODO use schedule_common once it can work with the Compressor
         // The main issue there is that we need to ForwardingProcessEdges
         // in FinalizableForwarding.
@@ -91,7 +91,7 @@ impl<VM: VMBinding> Plan for Compressor<VM> {
 
         // Prepare global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(Prepare::<CompressorWorkContext<VM>>::new(crate::scheduler::ExclusivePlanAccessProof::new()));
+            .add(Prepare::<CompressorWorkContext<VM>>::new(proof));
 
         scheduler.work_buckets[WorkBucketStage::CalculateForwarding].add(GenerateWork::new(
             &self.compressor_space,
@@ -112,7 +112,7 @@ impl<VM: VMBinding> Plan for Compressor<VM> {
 
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<CompressorWorkContext<VM>>::new(crate::scheduler::ExclusivePlanAccessProof::new()));
+            .add(Release::<CompressorWorkContext<VM>>::new(proof));
 
         // Reference processing
         if !*self.base().options.no_reference_types {

@@ -72,7 +72,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         }
     }
 
-    fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
+    fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>, _proof: crate::scheduler::ExclusivePlanAccessProof) {
         Self::schedule_immix_full_heap_collection::<
             Immix<VM>,
             ImmixGCWorkContext<VM, TRACE_KIND_FAST>,

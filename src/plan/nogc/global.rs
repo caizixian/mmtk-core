@@ -74,7 +74,7 @@ impl<VM: VMBinding> Plan for NoGC<VM> {
         &ALLOCATOR_MAPPING
     }
 
-    fn schedule_collection(&'static self, _scheduler: &GCWorkScheduler<VM>) {
+    fn schedule_collection(&'static self, _scheduler: &GCWorkScheduler<VM>, _proof: crate::scheduler::ExclusivePlanAccessProof) {
         unreachable!("GC triggered in nogc")
     }
 

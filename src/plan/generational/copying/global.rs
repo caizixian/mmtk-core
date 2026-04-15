@@ -73,7 +73,7 @@ impl<VM: VMBinding> Plan for GenCopy<VM> {
         self.gen.collection_required(self, space_full, space)
     }
 
-    fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
+    fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>, _proof: crate::scheduler::ExclusivePlanAccessProof) {
         let is_full_heap = self.requires_full_heap_collection();
         if is_full_heap {
             scheduler.schedule_common_work::<GenCopyGCWorkContext<VM>>(self);

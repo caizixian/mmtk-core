@@ -48,7 +48,7 @@ pub const MS_CONSTRAINTS: PlanConstraints = PlanConstraints {
 };
 
 impl<VM: VMBinding> Plan for MarkSweep<VM> {
-    fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
+    fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>, _proof: crate::scheduler::ExclusivePlanAccessProof) {
         scheduler.schedule_common_work::<MSGCWorkContext<VM>>(self);
     }
 

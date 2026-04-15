@@ -63,7 +63,7 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
         }
     }
 
-    fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
+    fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>, _proof: crate::scheduler::ExclusivePlanAccessProof) {
         scheduler.schedule_common_work::<SSGCWorkContext<VM>>(self);
     }
 

@@ -123,7 +123,7 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
         }
     }
 
-    fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
+    fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>, proof: crate::scheduler::ExclusivePlanAccessProof) {
         let pause = if self.concurrent_marking_in_progress() {
             // FIXME: Currently it is unsafe to bypass `FinalMark` and go directly from `InitialMark` to `Full`.
             // It is related to defragmentation.  See https://github.com/mmtk/mmtk-core/issues/1357 for more details.
@@ -150,8 +150,8 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
                     ConcurrentImmixSTWGCWorkContext<VM, TRACE_KIND_DEFRAG>,
                 >(self, &self.immix_space, scheduler, UnlogBitsOperation::NoOp, UnlogBitsOperation::BulkClear);
             }
-            Pause::InitialMark => self.schedule_concurrent_marking_initial_pause(scheduler),
-            Pause::FinalMark => self.schedule_concurrent_marking_final_pause(scheduler),
+            Pause::InitialMark => self.schedule_concurrent_marking_initial_pause(scheduler, proof),
+            Pause::FinalMark => self.schedule_concurrent_marking_final_pause(scheduler, proof),
         }
     }
 
@@ -349,6 +349,7 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
     pub(crate) fn schedule_concurrent_marking_initial_pause(
         &'static self,
         scheduler: &GCWorkScheduler<VM>,
+        proof: crate::scheduler::ExclusivePlanAccessProof,
     ) {
         use crate::scheduler::gc_work::Prepare;
 
@@ -359,10 +360,10 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
         >::new());
         scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
             ConcurrentImmixGCWorkContext<UnsupportedProcessEdges<VM>>,
-        >::new(crate::scheduler::ExclusivePlanAccessProof::new()));
+        >::new(proof));
     }
 
-    fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
+    fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>, proof: crate::scheduler::ExclusivePlanAccessProof) {
         self.set_ref_closure_buckets_enabled(true);
 
         // Skip root scanning in the final mark
@@ -372,7 +373,7 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
 
         scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
             ConcurrentImmixGCWorkContext<UnsupportedProcessEdges<VM>>,
-        >::new(crate::scheduler::ExclusivePlanAccessProof::new()));
+        >::new(proof));
 
         // Deal with weak ref and finalizers
         // TODO: Check against schedule_common_work and see if we are still missing any work packet

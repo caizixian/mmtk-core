@@ -80,7 +80,7 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
         &ALLOCATOR_MAPPING
     }
 
-    fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
+    fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>, proof: crate::scheduler::ExclusivePlanAccessProof) {
         // TODO use schedule_common once it can work with markcompact
         // self.common()
         //     .schedule_common::<Self, MarkingProcessEdges<VM>, NoCopy<VM>>(
@@ -95,7 +95,7 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
 
         // Prepare global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(Prepare::<MarkCompactGCWorkContext<VM>>::new(crate::scheduler::ExclusivePlanAccessProof::new()));
+            .add(Prepare::<MarkCompactGCWorkContext<VM>>::new(proof));
 
         scheduler.work_buckets[WorkBucketStage::CalculateForwarding]
             .add(CalculateForwardingAddress::<VM>::new(&self.mc_space));
@@ -105,7 +105,7 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
 
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<MarkCompactGCWorkContext<VM>>::new(crate::scheduler::ExclusivePlanAccessProof::new()));
+            .add(Release::<MarkCompactGCWorkContext<VM>>::new(proof));
 
         // Reference processing
         if !*self.base().options.no_reference_types {

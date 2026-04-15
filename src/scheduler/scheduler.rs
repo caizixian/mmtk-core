@@ -132,7 +132,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     fn add_schedule_collection_packet(&self) {
         // We are still holding the mutex `WorkerMonitor::sync`.  Do not notify now.
         probe!(mmtk, add_schedule_collection_packet);
-        self.work_buckets[WorkBucketStage::Unconstrained].add_no_notify(ScheduleCollection);
+        self.work_buckets[WorkBucketStage::Unconstrained].add_no_notify(ScheduleCollection(ExclusivePlanAccessProof::new()));
     }
 
     /// Schedule all the common work packets

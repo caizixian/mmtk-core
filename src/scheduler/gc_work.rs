@@ -10,7 +10,7 @@ use crate::*;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
-pub struct ScheduleCollection;
+pub struct ScheduleCollection(pub crate::scheduler::ExclusivePlanAccessProof);
 
 impl<VM: VMBinding> GCWork<VM> for ScheduleCollection {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
@@ -29,7 +29,7 @@ impl<VM: VMBinding> GCWork<VM> for ScheduleCollection {
         mmtk.set_gc_status(GcStatus::GcPrepare);
 
         // Let the plan to schedule collection work
-        mmtk.get_plan().schedule_collection(worker.scheduler());
+        mmtk.get_plan().schedule_collection(worker.scheduler(), self.0);
     }
 }
 

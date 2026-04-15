@@ -106,7 +106,7 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
     // in different if branches.
     #[allow(clippy::if_same_then_else)]
     #[allow(clippy::branches_sharing_code)]
-    fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<Self::VM>) {
+    fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<Self::VM>, _proof: crate::scheduler::ExclusivePlanAccessProof) {
         let is_full_heap = self.requires_full_heap_collection();
         probe!(mmtk, gen_full_heap, is_full_heap);
 

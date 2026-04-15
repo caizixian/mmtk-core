@@ -1,25 +1,19 @@
 # Step Analysis (auto-saved)
 
 ## Target
-- File: `src/mmtk.rs` and `src/util/rust_util/mod.rs`
-- Strategy: Implement `ProofCell` in `rust_util` and use it for `plan` in `mmtk.rs` to remove unsafe blocks.
+- File: `src/scheduler/mod.rs`, `src/scheduler/gc_work.rs`, `src/plan/global.rs` and all files implementing `Plan`.
+- Strategy: Restrict `ExclusivePlanAccessProof` creation to the `scheduler` module and thread it through `schedule_collection` to enforce safe capability token usage.
 
 ## Findings
-- `src/mmtk.rs:437`: `unsafe { &**(self.plan.get()) }` in `get_plan`.
-- `src/mmtk.rs:446`: `unsafe { &mut **(self.plan.get()) }` in `get_plan_mut`.
-- Added `ProofCell` to `src/util/rust_util/mod.rs` to encapsulate `UnsafeCell`.
-- Fixed escapes in `ProofCell` definition.
-- Replaced `UnsafeCell` with `ProofCell` in `src/mmtk.rs`.
-- Removed `unsafe` block from `get_plan_mut` in `src/mmtk.rs`.
-- Fixed lifetime in `ProofCell::get_mut_with_proof`.
-- Removed unused import in `src/mmtk.rs`.
+- `ExclusivePlanAccessProof::new()` is currently `pub(crate)` and not unsafe, allowing any file in the crate to manufacture it without audit.
+- This violates Anti-pattern #10 (Manufacturing proof/capability tokens at every call site).
+- The token is zero-sized and can be made `Copy`.
+- `ScheduleCollection` work packet is created in `scheduler.rs` (which is in the `scheduler` module) and can be passed the token.
+- `ScheduleCollection` can pass the token to `Plan::schedule_collection`.
+- `Plan::schedule_collection` can pass the token to `Prepare` and `Release` work packets instead of them manufacturing it.
 
 ## Attempted Changes
-- Added `ProofCell` to `src/util/rust_util/mod.rs`.
-- Fixed escapes in `src/util/rust_util/mod.rs`.
-- Refactored `src/mmtk.rs` to use `ProofCell`.
-- Fixed lifetime in `ProofCell::get_mut_with_proof`.
-- Removed unused import in `src/mmtk.rs`.
+- None yet. Planning to modify the trait and all implementations in this step to keep the build working.
 
 ## Blockers / Insights for Next Step
-- Need to verify if tests pass.
+- Need to update 12 files implementing `schedule_collection`. This is a large edit but necessary to avoid breaking the build.

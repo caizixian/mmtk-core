@@ -173,7 +173,7 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     fn base_mut(&mut self) -> &mut BasePlan<Self::VM>;
 
     /// Schedule work for the upcoming GC.
-    fn schedule_collection(&'static self, _scheduler: &GCWorkScheduler<Self::VM>);
+    fn schedule_collection(&'static self, _scheduler: &GCWorkScheduler<Self::VM>, proof: crate::scheduler::ExclusivePlanAccessProof);
 
     /// Get the common plan. CommonPlan is included by most of MMTk GC plans.
     fn common(&self) -> &CommonPlan<Self::VM> {

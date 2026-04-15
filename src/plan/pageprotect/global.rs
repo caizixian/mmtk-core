@@ -39,7 +39,7 @@ impl<VM: VMBinding> Plan for PageProtect<VM> {
         &CONSTRAINTS
     }
 
-    fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
+    fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>, _proof: crate::scheduler::ExclusivePlanAccessProof) {
         scheduler.schedule_common_work::<PPGCWorkContext<VM>>(self);
     }
 
