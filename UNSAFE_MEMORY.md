@@ -10,7 +10,7 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🟢 LOW: `src/plan/concurrent/mod.rs:27-30` — check if `Pause` can derive `Zeroable` and `Pod` or if it's irreducible — expected Δ: -2
+1. 🟡 MED: `src/vm/tests/mock_tests/mock_test_doc_avoid_resolving_allocator.rs:33-38` — check if manual offset arithmetic can be replaced with safe alternatives or if it's irreducible as a doc example — expected Δ: -1
 
 ## Patterns Discovered
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
@@ -34,6 +34,7 @@
 - **Refactoring**: Removed redundant `unsafe impl Send` for `WorkerLocalStat` by using `PhantomData<fn() -> C>` to allow auto-deriving `Send`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
+- `src/plan/concurrent/mod.rs` — Irreducible manual unsafe impls for bytemuck traits to use niche [Phase 2 confirmed].
 - `src/scheduler/worker.rs` — Remaining unsafe are trait impls for Send/Sync [Phase 2 confirmed].
 - `src/util/metadata/side_metadata/sanity.rs` — Fixed redundant unsafe block, remaining are irreducible or valid assertions [Phase 2 confirmed].
 - `src/util/metadata/side_metadata/global.rs` — Production unsafe in `load`/`store` is irreducible due to concurrent access invariants; tests were cleaned up [Phase 2 confirmed].
