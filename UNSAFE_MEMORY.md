@@ -14,8 +14,7 @@
 - `InitializeOnce` is used for `SFT_MAP` to allow zero-cost reads on extreme hot paths (object tracing).
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-- All actionable reduction items have been addressed or confirmed irreducible after holistic review.
-- Future work should focus on maintaining safety invariants and documenting any new unsafe code.
+1. 🟡 MED: `src/util/metadata/side_metadata/helpers.rs:256-320` — Investigate if we can use a safe wrapper for `Address` that guarantees validity, allowing removal of unsafe blocks in `MetadataCursor` — expected Δ: -12
 
 ## Patterns Discovered
 - Removed redundant `unsafe impl Send` and `Sync` for `MMTK` as all its fields are automatically `Send` and `Sync`.
