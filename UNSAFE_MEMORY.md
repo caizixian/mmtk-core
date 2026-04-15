@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 535 | Current: 376 | Δ: -159 (estimated)
+- Starting count: 535 | Current: 375 | Δ: -160 (estimated)
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,7 +10,7 @@
 - `ObjectReference::from_raw_address` is safe and can replace `ObjectReference::from_raw_address_unchecked` when the address is known to be non-zero.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/test_util/fixtures.rs:156-167` — check if `MMTKFixture` can use references instead of raw pointers to eliminate unsafe blocks in tests — expected Δ: 1-3
+1. 🔴 HIGH: `src/mmtk.rs:437-446` — implement `ExclusivePlanAccessProof` token to remove unsafe blocks for plan access — expected Δ: 2
 
 ## Patterns Discovered
 - `unsafe { Address::from_usize(x) }` → `Address::from_ptr(x as *const T)` where `x` is a `usize` and context is not `const`.
