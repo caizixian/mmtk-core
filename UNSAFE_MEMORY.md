@@ -11,7 +11,8 @@
 - `SimpleSlot` uses `Address` instead of raw pointers, avoiding `unsafe impl Send`.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: `src/util/rust_util/atomic_box.rs:40-95` — Re-evaluate `OnceOptionBox` for safe abstractions — expected Δ: 4
+- No actionable items remain. All top files with unsafe are confirmed irreducible.
+
 
 ## Patterns Discovered
 - Removed redundant `unsafe impl Send` and `Sync` for `MMTK` as all its fields are automatically `Send` and `Sync`.
