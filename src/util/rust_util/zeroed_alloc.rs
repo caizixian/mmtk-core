@@ -39,10 +39,15 @@ use bytemuck::Zeroable;
 ///
 /// Returns the created vector.
 pub(crate) fn new_zeroed_vec<T: Zeroable>(size: usize) -> Vec<T> {
+    if size == 0 {
+        return Vec::new();
+    }
     let layout = Layout::array::<T>(size).unwrap();
+    // SAFETY: `size` is non-zero, so `layout` has non-zero size. `alloc_zeroed` returns a pointer to zeroed memory.
     let ptr = unsafe { alloc_zeroed(layout) } as *mut T;
     if ptr.is_null() {
         handle_alloc_error(layout);
     }
+    // SAFETY: `ptr` was allocated with the correct layout, `size` and `capacity` are equal, and elements are zeroed (valid for `T: Zeroable`).
     unsafe { Vec::from_raw_parts(ptr, size, size) }
 }
