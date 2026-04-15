@@ -190,8 +190,8 @@ mod tests {
 
     #[test]
     fn test_region_methods() {
-        let addr4k = unsafe { Address::from_usize(PAGE_SIZE) };
-        let addr4k1 = unsafe { Address::from_usize(PAGE_SIZE + 1) };
+        let addr4k = Address::from_ptr(PAGE_SIZE as *const ());
+        let addr4k1 = Address::from_ptr((PAGE_SIZE + 1) as *const ());
 
         // align
         debug_assert_eq!(Page::align(addr4k), addr4k);
@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn test_region_iterator_normal() {
-        let addr4k = unsafe { Address::from_usize(PAGE_SIZE) };
+        let addr4k = Address::from_ptr(PAGE_SIZE as *const ());
         let page = Page::from_aligned_address(addr4k);
         let end_page = page.next_nth(5);
 
@@ -234,7 +234,7 @@ mod tests {
 
     #[test]
     fn test_region_iterator_same_start_end() {
-        let addr4k = unsafe { Address::from_usize(PAGE_SIZE) };
+        let addr4k = Address::from_ptr(PAGE_SIZE as *const ());
         let page = Page::from_aligned_address(addr4k);
 
         let mut results = vec![];
@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn test_region_iterator_smaller_end() {
-        let addr4k = unsafe { Address::from_usize(PAGE_SIZE) };
+        let addr4k = Address::from_ptr(PAGE_SIZE as *const ());
         let page = Page::from_aligned_address(addr4k);
         let end = Page::from_aligned_address(Address::ZERO);
 
