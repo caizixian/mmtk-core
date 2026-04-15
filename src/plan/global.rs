@@ -214,7 +214,7 @@ pub trait Plan: 'static + HasSpaces + Sync + Send + Downcast {
 
     /// Prepare a worker for a GC. Each worker has its own prepare method. This hook is for plan-specific
     /// per-worker preparation. This method is invoked once per worker by the worker thread passed as the argument.
-    fn prepare_worker(&self, _worker: &mut GCWorker<Self::VM>) {}
+    fn prepare_worker(&'static self, _worker: &mut GCWorker<Self::VM>) {}
 
     /// Release the plan after transitive closure. A plan can implement this method to call each policy's release,
     /// or create any work packet that should be done in release.

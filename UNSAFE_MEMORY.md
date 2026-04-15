@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 116 | Δ: -215
+- Starting count: 331 | Current: 115 | Δ: -216
 - Phase: 3
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -44,6 +44,7 @@
 - **API Cleanup**: Refactored `notify_space_creation` to take a reference instead of a raw pointer, removing 1 unsafe block in `sft_map.rs`.
 - **Refactoring**: Removed `impl Slot for Address` and updated `Range<Address>` to yield `SimpleSlot`, removing 2 unsafe blocks and moving towards recommended practice.
 - **Refactoring**: Removed redundant `unsafe impl Send` and `Sync` for `FreeListPageResource` by adding `Send` bound to `FreeList` trait and updating `CreateFreeListResult` to use `Box<dyn FreeList + Send>`.
+- **Refactoring**: Tightened lifetime bounds in `Plan::prepare_worker` to take `&'static self`, eliminating unsafe lifetime extension in `CopySpace::rebind`.
 
 ## Files NOT to Revisit (all remaining unsafe is irreducible)
 - `src/plan/concurrent/mod.rs` — Irreducible manual unsafe impls for bytemuck traits to use niche [Phase 2 confirmed].
@@ -75,7 +76,7 @@
 - `src/util/heap/chunk_map.rs` — All unsafe blocks removed after making SideMetadataSpec methods safe [Phase 2 confirmed].
 - `src/util/address.rs` — Irreducible primitive pointer operations (`load`, `store`, `as_ref`, etc.) [Phase 2 confirmed].
 - `src/util/raw_memory_freelist.rs` — Remaining unsafe is FFI call to `munmap` in `Drop` [Phase 2 confirmed].
-- `src/policy/copyspace.rs` — Irreducible FFI calls to `mprotect` and lifetime extension for `BumpAllocator`. Safety invariants documented in Phase 3. [Phase 3 confirmed].
+- `src/policy/copyspace.rs` — Irreducible FFI calls to `mprotect`. Lifetime extension for `BumpAllocator` removed by tightening bounds in `Plan::prepare_worker`. [Phase 3 confirmed].
 - `src/util/alloc/allocators.rs` — Irreducible `MaybeUninit` usage for FFI layout compatibility [Phase 2 confirmed].
 - `src/scheduler/affinity.rs` — Irreducible FFI calls for thread affinity [Phase 2 confirmed].
 - `src/util/alloc/allocator.rs` — Irreducible raw heap access in `fill_alignment_gap`. `unsafe impl Sync` for `AllocationOptionsHolder` removed by using `Mutex`. [Phase 2 confirmed].

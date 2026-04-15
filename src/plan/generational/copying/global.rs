@@ -102,7 +102,7 @@ impl<VM: VMBinding> Plan for GenCopy<VM> {
         self.tospace_mut().set_copy_for_sft_trace(None);
     }
 
-    fn prepare_worker(&self, worker: &mut GCWorker<Self::VM>) {
+    fn prepare_worker(&'static self, worker: &mut GCWorker<Self::VM>) {
         worker.get_copy_context_mut().copy[0].as_mut().unwrap().rebind(self.tospace());
     }
 

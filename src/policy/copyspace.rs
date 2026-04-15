@@ -364,10 +364,7 @@ impl<VM: VMBinding> CopySpaceCopyContext<VM> {
         }
     }
 
-    pub fn rebind(&mut self, space: &CopySpace<VM>) {
-        // SAFETY: The space reference is assumed to live long enough (typically 'static in MMTk plans).
-        // This is a lifetime extension to satisfy the BumpAllocator's requirement for a 'static space.
-        self.copy_allocator
-            .rebind(unsafe { &*{ space as *const _ } });
+    pub fn rebind(&mut self, space: &'static CopySpace<VM>) {
+        self.copy_allocator.rebind(space);
     }
 }
