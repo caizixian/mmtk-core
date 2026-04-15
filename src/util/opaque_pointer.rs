@@ -6,11 +6,9 @@ use libc::c_void;
 /// The type does not provide any method for dereferencing.
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct OpaquePointer(*mut c_void);
+pub struct OpaquePointer(usize);
 
 // We never really dereference an opaque pointer in mmtk-core.
-unsafe impl Sync for OpaquePointer {}
-unsafe impl Send for OpaquePointer {}
 
 impl Default for OpaquePointer {
     fn default() -> Self {
@@ -20,21 +18,21 @@ impl Default for OpaquePointer {
 
 impl OpaquePointer {
     /// Represents an uninitialized value for [`OpaquePointer`].
-    pub const UNINITIALIZED: Self = Self(std::ptr::null_mut::<c_void>());
+    pub const UNINITIALIZED: Self = Self(0);
 
     /// Cast an [`Address`] type to an [`OpaquePointer`].
     pub fn from_address(addr: Address) -> Self {
-        OpaquePointer(addr.to_mut_ptr::<c_void>())
+        OpaquePointer(addr.as_usize())
     }
 
     /// Cast the opaque pointer to an [`Address`] type.
     pub fn to_address(self) -> Address {
-        Address::from_mut_ptr(self.0)
+        Address::from_ptr(self.0 as *const c_void)
     }
 
     /// Is this opaque pointer null?
     pub fn is_null(self) -> bool {
-        self.0.is_null()
+        self.0 == 0
     }
 }
 
