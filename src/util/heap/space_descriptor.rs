@@ -27,11 +27,9 @@ const INDEX_SHIFT: usize = TYPE_BITS;
 static DISCONTIGUOUS_SPACE_INDEX: AtomicUsize = AtomicUsize::new(DISCONTIG_INDEX_INCREMENT);
 const DISCONTIG_INDEX_INCREMENT: usize = 1 << TYPE_BITS;
 
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, PartialEq, Debug, Zeroable)]
 #[repr(transparent)]
 pub struct SpaceDescriptor(usize);
-
-unsafe impl Zeroable for SpaceDescriptor {}
 
 impl SpaceDescriptor {
     pub const UNINITIALIZED: Self = SpaceDescriptor(0);

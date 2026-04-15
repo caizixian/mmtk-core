@@ -1,7 +1,7 @@
 # Unsafe Analysis Knowledge Base
 
 ## Progress
-- Starting count: 331 | Current: 133 | Δ: -198
+- Starting count: 331 | Current: 131 | Δ: -200
 - Phase: 2
 
 ## Codebase Invariants (PROTECTED — do not prune)
@@ -10,10 +10,13 @@
 - `Address::from_usize` is a safe `const fn` now. Unsafe blocks wrapping only this call are redundant.
 
 ## Work Queue (NEXT STEP: pick the first actionable item)
-1. 🔴 HIGH: Search for other files in `src/util/heap` or `src/policy` that are not in the NOT to Revisit list and verify if they are clean or have addressable unsafe blocks.
+1. 🔴 HIGH: Continue searching for other files in `src/policy` that are not in the NOT to Revisit list and verify if they are clean or have addressable unsafe blocks.
 2. 🟡 MED: Check if other trait objects in `src/util` need `Send` bound to allow removing more unsafe impls.
 
 ## Patterns Discovered
+- Replaced `unsafe impl Sync for GCWorkScheduler` by making `BucketOpenCondition` `Sync`, removing 1 unsafe impl.
+- Replaced `unsafe impl Zeroable for SpaceDescriptor` with `#[derive(Zeroable)]`, removing 1 unsafe impl.
+- Verified that most files in `src/util/heap` are clean of unsafe blocks.
 - Refactoring: Removed raw pointer cast in `MallocSpace::release` by passing a function pointer to `MSSweepChunk` to fetch the space from `MMTK`.
 - Documented safety invariants for FFI calls in tests in `src/util/memory.rs`.
 - Redundant `unsafe` blocks wrapping safe functions like `Address::from_usize`.
@@ -82,6 +85,15 @@
 - `src/policy/markcompactspace.rs` — Irreducible raw heap access for forwarding pointer. Encapsulated in safe functions. [Phase 2 confirmed].
 - `src/policy/marksweepspace/native_ms/block.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
 - `src/util/erase_vm.rs` — Irreducible unsafe in macro for type erasure [Phase 2 confirmed].
+- `src/util/heap/accounting.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
+- `src/util/heap/externalpageresource.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
+- `src/util/heap/vmrequest.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
+- `src/util/heap/heap_meta.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
+- `src/util/heap/blockpageresource.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
+- `src/util/heap/freelistpageresource.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
+- `src/util/heap/monotonepageresource.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
+- `src/policy/copy_context.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
+- `src/policy/gc_work.rs` — Clean: 0 unsafe blocks [Phase 2 confirmed].
 
 ## Abstraction Proposals (for Phase 2)
 ### MetadataCursor for side_metadata

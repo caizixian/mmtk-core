@@ -74,7 +74,7 @@ impl<VM: VMBinding> BucketQueue<VM> {
     }
 }
 
-pub type BucketOpenCondition<VM> = Box<dyn (Fn(&GCWorkScheduler<VM>) -> bool) + Send>;
+pub type BucketOpenCondition<VM> = Box<dyn (Fn(&GCWorkScheduler<VM>) -> bool) + Send + Sync>;
 
 pub struct WorkBucket<VM: VMBinding> {
     /// Whether this bucket has been opened. Work from an open bucket can be fetched by workers.
@@ -247,7 +247,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
 
     pub fn set_open_condition(
         &mut self,
-        pred: impl Fn(&GCWorkScheduler<VM>) -> bool + Send + 'static,
+        pred: impl Fn(&GCWorkScheduler<VM>) -> bool + Send + Sync + 'static,
     ) {
         self.can_open = Some(Box::new(pred));
     }

@@ -31,10 +31,7 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     affinity: AffinityKind,
 }
 
-// FIXME: GCWorkScheduler should be naturally Sync, but we cannot remove this `impl` yet.
-// Some subtle interaction between ObjectRememberingBarrier, Mutator and some GCWork instances
-// makes the compiler think WorkBucket is not Sync.
-unsafe impl<VM: VMBinding> Sync for GCWorkScheduler<VM> {}
+
 
 impl<VM: VMBinding> GCWorkScheduler<VM> {
     pub fn new(num_workers: usize, affinity: AffinityKind) -> Arc<Self> {
