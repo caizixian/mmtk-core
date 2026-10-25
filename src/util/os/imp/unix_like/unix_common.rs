@@ -25,11 +25,16 @@ pub fn mmap(
     let flags = strategy.get_posix_mmap_flags(true);
     wrap_libc_call(
         // SAFETY: Public `OSMemory::dzmmap` implementation. `MAP_PRIVATE | MAP_ANONYMOUS` with
-        // `fd == -1` and `offset == 0` maps anonymous zero-filled pages. When `strategy.replace`
-        // is `false`, `MAP_FIXED_NOREPLACE` atomically fails with `EEXIST` rather than overwriting
-        // any existing mapping; when `strategy.replace` is `true` (`MAP_FIXED`), MMTk callers
-        // restrict `[start, start + size)` to MMTk-quarantined/test virtual address ranges so live
-        // Rust stack/heap/code mappings are never overwritten.
+        // `fd == -1` and `offset == 0` maps anonymous pages (zero-filled by the kernel on Linux,
+        // or explicitly zeroed by `MacOS::dzmmap` when `strategy.reserve` is true). On Linux and
+        // Android (`linux_common.rs`), `!strategy.replace` passes `MAP_FIXED_NOREPLACE`, which
+        // atomically fails with `EEXIST` rather than overwriting any existing mapping, whereas
+        // `strategy.replace` passes `MAP_FIXED`. On macOS (`macos.rs`), `get_posix_mmap_flags(true)`
+        // unconditionally passes `MAP_FIXED` regardless of `strategy.replace`. Whenever `MAP_FIXED`
+        // is in effect (`strategy.replace == true` or macOS), soundness relies on MMTk callers
+        // restricting `[start, start + size)` to unmapped or MMTk-quarantined/test virtual address
+        // ranges so live Rust stack/heap/code/library mappings are never overwritten (flagged for
+        // Stage-2 `OSMemory` tightening).
         &|| unsafe { libc::mmap(start.to_mut_ptr(), size, prot, flags, -1, 0) },
         ptr,
     )

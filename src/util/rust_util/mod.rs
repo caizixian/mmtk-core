@@ -121,13 +121,37 @@ impl<T> std::ops::Deref for InitializeOnce<T> {
     }
 }
 
-// SAFETY: Concurrent initialization of `self.v` is synchronized by `std::sync::Once`, after which
-// `get_ref` only exposes shared `&T` references (while `get_mut` is `unsafe` and requires caller-
-// guaranteed exclusive access). Note: all concrete types stored in static `InitializeOnce<T>` in
-// `mmtk-core` (`VMLayout`, `Box<dyn SFTMap>` whose concrete impls are `Sync`, `Box<dyn VMMap>`,
-// `Box<dyn Mmapper>`) are safe to share across threads; tightening the bound to `T: Send + Sync`
-// requires adding `: Send + Sync` to `trait SFTMap` in Stage 2.
-unsafe impl<T> Sync for InitializeOnce<T> {}
+/// Marker trait for types that can be safely stored in a shared [`InitializeOnce<T>`].
+///
+/// # Safety
+///
+/// Implementing `InitializeOnceSync` for `T` requires `T` to satisfy the thread-safety invariants
+/// of `Send + Sync`: moving the initialized `T` from the thread executing `initialize_once` and
+/// concurrently accessing `&T` across arbitrary threads after initialization must not cause data
+/// races or undefined behavior. (This private marker exists in Stage 1 because `trait SFTMap` does
+/// not yet declare `: Send + Sync` in `src/policy/sft_map.rs`.)
+unsafe trait InitializeOnceSync {}
+
+// SAFETY: Every concrete implementation of `SFTMap` in `mmtk-core` (`SFTSpaceMap`,
+// `SFTDenseChunkMap`, and `SFTSparseChunkMap` in `src/policy/sft_map.rs`) is both `Send` and
+// `Sync`: each stores only `Vec<SFTRefStorage>` (backed by `AtomicDoubleWord`), `Address`, and/or
+// `HashMap<String, usize>` (mutated only under `&mut self` during single-threaded plan startup)
+// with explicit `unsafe impl Sync`, and all stored `SFTRawPointer` entries point to `'static`
+// space instances or `EMPTY_SPACE_SFT` whose `SFT` methods are safe for concurrent GC access.
+unsafe impl InitializeOnceSync for Box<dyn crate::policy::sft_map::SFTMap> {}
+
+#[cfg(test)]
+// SAFETY: `usize` is a plain primitive integer (`Send + Sync`).
+unsafe impl InitializeOnceSync for usize {}
+
+// SAFETY: Concurrent initialization of `self.v` is synchronized by `std::sync::Once::call_once`
+// (establishing happens-before synchronization from the single `init_fn()` write to all subsequent
+// readers), after which `get_ref` only exposes shared `&T` references (while `get_mut` is `unsafe`
+// and requires caller-guaranteed exclusive access). The `T: InitializeOnceSync` bound guarantees
+// that transferring the initialized `T` across threads and sharing `&T` concurrently across
+// threads cannot introduce data races (in `mmtk-core`, only `SFT_MAP: InitializeOnce<Box<dyn SFTMap>>`
+// in `src/mmtk.rs` and `#[cfg(test)] static I: InitializeOnce<usize>` below use `InitializeOnce`).
+unsafe impl<T: InitializeOnceSync> Sync for InitializeOnce<T> {}
 
 /// Create a formatted string that makes the best effort idenfying the current process and thread.
 pub fn debug_process_thread_id() -> String {
@@ -145,6 +169,14 @@ pub fn debug_process_thread_id() -> String {
 #[cfg(test)]
 mod initialize_once_tests {
     use super::*;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    assert_impl_all!(InitializeOnce<Box<dyn crate::policy::sft_map::SFTMap>>: Sync);
+    assert_impl_all!(InitializeOnce<usize>: Sync);
+    assert_not_impl_any!(InitializeOnce<Rc<usize>>: Sync);
+    assert_not_impl_any!(InitializeOnce<Cell<usize>>: Sync);
 
     #[test]
     fn test_threads_compete_initialize() {

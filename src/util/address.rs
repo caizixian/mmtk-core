@@ -245,10 +245,10 @@ impl Address {
     /// - No concurrent non-atomic write (or atomic write) may race with this read, and no active
     ///   exclusive reference (`&mut T`) may alias this memory location.
     pub unsafe fn load<T: Copy>(self) -> T {
-        debug_assert!(!self.is_zero() || mem::size_of::<T>() == 0);
+        debug_assert!(!self.is_zero());
         debug_assert!(self.is_aligned_to(mem::align_of::<T>()));
-        // SAFETY: Upheld by the caller: `self` is properly aligned, dereferenceable, initialized
-        // for `T: Copy`, and free of conflicting mutable aliases or data races.
+        // SAFETY: Upheld by the caller: `self` is non-null, properly aligned, dereferenceable,
+        // initialized for `T: Copy`, and free of conflicting mutable aliases or data races.
         unsafe { *self.to_ptr::<T>() }
     }
 
@@ -261,12 +261,12 @@ impl Address {
     /// - No other thread may concurrently read or write this memory location, and no Rust
     ///   reference (`&T` or `&mut T`) may alias it during the write.
     pub unsafe fn store<T>(self, value: T) {
-        debug_assert!(!self.is_zero() || mem::size_of::<T>() == 0);
+        debug_assert!(!self.is_zero());
         debug_assert!(self.is_aligned_to(mem::align_of::<T>()));
         // We use `ptr::write` as dereference-assigning would drop the old (potentially
         // uninitialized) value at `self`.
-        // SAFETY: Upheld by the caller: `self` is properly aligned, valid for writes of `T`, and
-        // unaliased during the store.
+        // SAFETY: Upheld by the caller: `self` is non-null, properly aligned, valid for writes of
+        // `T`, and unaliased during the store.
         unsafe {
             self.to_mut_ptr::<T>().write(value);
         }
@@ -374,7 +374,7 @@ impl Address {
     ///   for the entire lifetime `'a`.
     /// - No active `&mut T` may alias the referent during `'a`.
     pub unsafe fn as_ref<'a, T>(self) -> &'a T {
-        debug_assert!(!self.is_zero() || mem::size_of::<T>() == 0);
+        debug_assert!(!self.is_zero());
         debug_assert!(self.is_aligned_to(mem::align_of::<T>()));
         // SAFETY: Upheld by the caller: `self` is non-null, aligned, initialized for `T`, and
         // satisfies Rust's shared borrowing rules for lifetime `'a`.
@@ -389,7 +389,7 @@ impl Address {
     ///   initialized instance of `T` that remains alive and writable for the entire lifetime `'a`.
     /// - No other `&T`, `&mut T`, or concurrent pointer access to the referent may exist during `'a`.
     pub unsafe fn as_mut_ref<'a, T>(self) -> &'a mut T {
-        debug_assert!(!self.is_zero() || mem::size_of::<T>() == 0);
+        debug_assert!(!self.is_zero());
         debug_assert!(self.is_aligned_to(mem::align_of::<T>()));
         // SAFETY: Upheld by the caller: `self` is non-null, aligned, initialized for `T`, and
         // exclusively borrowed with no aliasing references or concurrent accesses for `'a`.
@@ -753,36 +753,28 @@ impl ObjectReference {
     pub fn is_reachable(self) -> bool {
         let addr = self.to_raw_address();
         debug_assert!(SFT_MAP.has_sft_entry(addr));
-        // SAFETY: `self` is a valid MMTk `ObjectReference` in an initialized MMTk space (verified
-        // by `debug_assert!` above), so `addr` has an in-bounds entry in `SFT_MAP`.
-        unsafe { SFT_MAP.get_unchecked(addr) }.is_reachable(self)
+        SFT_MAP.get_checked(addr).is_reachable(self)
     }
 
     /// Is the object live, determined by the policy?
     pub fn is_live(self) -> bool {
         let addr = self.to_raw_address();
         debug_assert!(SFT_MAP.has_sft_entry(addr));
-        // SAFETY: `self` is a valid MMTk `ObjectReference` in an initialized MMTk space (verified
-        // by `debug_assert!` above), so `addr` has an in-bounds entry in `SFT_MAP`.
-        unsafe { SFT_MAP.get_unchecked(addr) }.is_live(self)
+        SFT_MAP.get_checked(addr).is_live(self)
     }
 
     /// Can the object be moved?
     pub fn is_movable(self) -> bool {
         let addr = self.to_raw_address();
         debug_assert!(SFT_MAP.has_sft_entry(addr));
-        // SAFETY: `self` is a valid MMTk `ObjectReference` in an initialized MMTk space (verified
-        // by `debug_assert!` above), so `addr` has an in-bounds entry in `SFT_MAP`.
-        unsafe { SFT_MAP.get_unchecked(addr) }.is_movable()
+        SFT_MAP.get_checked(addr).is_movable()
     }
 
     /// Get forwarding pointer if the object is forwarded.
     pub fn get_forwarded_object(self) -> Option<Self> {
         let addr = self.to_raw_address();
         debug_assert!(SFT_MAP.has_sft_entry(addr));
-        // SAFETY: `self` is a valid MMTk `ObjectReference` in an initialized MMTk space (verified
-        // by `debug_assert!` above), so `addr` has an in-bounds entry in `SFT_MAP`.
-        unsafe { SFT_MAP.get_unchecked(addr) }.get_forwarded_object(self)
+        SFT_MAP.get_checked(addr).get_forwarded_object(self)
     }
 
     /// Is the object in any MMTk spaces?
