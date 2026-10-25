@@ -1,5 +1,8 @@
 //! The module defines virutal memory layout parameters.
 
+#[cfg(debug_assertions)]
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::OnceLock;
 
 use super::heap_parameters::*;
@@ -178,10 +181,22 @@ impl VMLayout {
     /// Custom VM layout constants. VM bindings may use this function for compressed or 39-bit heap support.
     /// This function must be called before MMTk::new()
     pub(crate) fn set_custom_vm_layout(constants: VMLayout) {
+        #[cfg(debug_assertions)]
+        assert!(
+            !VM_LAYOUT_FETCHED.load(Ordering::SeqCst),
+            "vm_layout is already been used before setup"
+        );
         constants.validate();
-        VM_LAYOUT
+        CUSTOM_VM_LAYOUT
             .set(constants)
             .expect("vm_layout is already been used before setup");
+        let custom_ref: &'static VMLayout = CUSTOM_VM_LAYOUT
+            .get()
+            .expect("CUSTOM_VM_LAYOUT was just initialized");
+        VM_LAYOUT_PTR.store(
+            (custom_ref as *const VMLayout).cast_mut(),
+            Ordering::Release,
+        );
     }
 }
 
@@ -198,12 +213,30 @@ impl std::default::Default for VMLayout {
     }
 }
 
-static VM_LAYOUT: OnceLock<VMLayout> = OnceLock::new();
+#[cfg(target_pointer_width = "32")]
+static DEFAULT_VM_LAYOUT: VMLayout = VMLayout::new_32bit();
+#[cfg(target_pointer_width = "64")]
+static DEFAULT_VM_LAYOUT: VMLayout = VMLayout::new_64bit();
+
+static CUSTOM_VM_LAYOUT: OnceLock<VMLayout> = OnceLock::new();
+static VM_LAYOUT_PTR: AtomicPtr<VMLayout> =
+    AtomicPtr::new((&DEFAULT_VM_LAYOUT as *const VMLayout).cast_mut());
+#[cfg(debug_assertions)]
+static VM_LAYOUT_FETCHED: AtomicBool = AtomicBool::new(false);
 
 /// Get the current virtual memory layout in use.
 /// If the binding would like to set a custom virtual memory layout ([`crate::mmtk::MMTKBuilder::set_vm_layout`]), they should not
 /// call this function before they set a custom layout.
 #[inline]
 pub fn vm_layout() -> &'static VMLayout {
-    VM_LAYOUT.get_or_init(VMLayout::default)
+    #[cfg(debug_assertions)]
+    VM_LAYOUT_FETCHED.store(true, Ordering::SeqCst);
+    let ptr = VM_LAYOUT_PTR.load(Ordering::Acquire);
+    // SAFETY: `VM_LAYOUT_PTR` is initialized to `&DEFAULT_VM_LAYOUT` and is only ever updated once
+    // in `set_custom_vm_layout` via `Ordering::Release` to point to the `'static` value inside
+    // `CUSTOM_VM_LAYOUT` (`OnceLock<VMLayout>`). The `Ordering::Acquire` load above synchronizes
+    // with that `Release` store, so `ptr` is always non-null, aligned, and points to a fully
+    // initialized `VMLayout` in `'static` storage that is never mutated or dropped after
+    // publication (no `&mut VMLayout` ever aliases `*ptr`).
+    unsafe { &*ptr }
 }

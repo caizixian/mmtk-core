@@ -108,7 +108,7 @@ impl VMMap for Map32 {
         }
     }
 
-    unsafe fn allocate_contiguous_chunks(
+    fn allocate_contiguous_chunks(
         &self,
         descriptor: SpaceDescriptor,
         chunks: usize,
@@ -119,7 +119,17 @@ impl VMMap for Map32 {
             self.finalized.load(Ordering::Acquire),
             "allocate_contiguous_chunks called before finalize_static_space_map"
         );
+        assert!(
+            head.is_zero() || head.is_aligned_to(BYTES_IN_CHUNK),
+            "head {head} must be zero or chunk-aligned"
+        );
         let mut sync = self.sync.lock().unwrap();
+        if !head.is_zero() {
+            assert!(
+                head.chunk_index() < sync.prev_link.len(),
+                "head {head} chunk index out of bounds"
+            );
+        }
         let chunk = sync.region_map.alloc(chunks as _);
         debug_assert!(chunk >= -1);
         if chunk == -1 {
@@ -174,30 +184,62 @@ impl VMMap for Map32 {
         self.shared_discontig_fl_count.load(Ordering::Relaxed)
     }
 
-    fn free_all_chunks(&self, any_chunk: Address) {
+    unsafe fn free_all_chunks(&self, any_chunk: Address) {
         debug!("free_all_chunks: {}", any_chunk);
-        let mut sync = self.sync.lock().unwrap();
-        debug_assert!(any_chunk == conversions::chunk_align_down(any_chunk));
+        assert!(
+            any_chunk.is_aligned_to(BYTES_IN_CHUNK),
+            "any_chunk {any_chunk} is not chunk-aligned"
+        );
         if !any_chunk.is_zero() {
+            assert!(
+                self.finalized.load(Ordering::Acquire),
+                "free_all_chunks called before finalize_static_space_map"
+            );
+            let mut sync = self.sync.lock().unwrap();
             let chunk = any_chunk.chunk_index();
+            assert!(chunk < sync.next_link.len(), "chunk index out of bounds");
             while sync.next_link[chunk] != -1 {
                 let x = sync.next_link[chunk];
-                self.free_contiguous_chunks_locked(&mut sync, x);
+                // SAFETY: The caller of `free_all_chunks` guarantees that `any_chunk` and every
+                // region reachable via `next_link` are currently allocated region-start chunks in
+                // `self` with no live objects referencing them, and `sync` is locked.
+                unsafe {
+                    self.free_contiguous_chunks_locked(&mut sync, x);
+                }
             }
             while sync.prev_link[chunk] != -1 {
                 let x = sync.prev_link[chunk];
-                self.free_contiguous_chunks_locked(&mut sync, x);
+                // SAFETY: The caller of `free_all_chunks` guarantees that `any_chunk` and every
+                // region reachable via `prev_link` are currently allocated region-start chunks in
+                // `self` with no live objects referencing them, and `sync` is locked.
+                unsafe {
+                    self.free_contiguous_chunks_locked(&mut sync, x);
+                }
             }
-            self.free_contiguous_chunks_locked(&mut sync, chunk as _);
+            // SAFETY: The caller of `free_all_chunks` guarantees that `any_chunk` (`chunk`) is a
+            // currently allocated region-start chunk in `self` with no live objects referencing it,
+            // and `sync` is locked.
+            unsafe {
+                self.free_contiguous_chunks_locked(&mut sync, chunk as _);
+            }
         }
     }
 
     unsafe fn free_contiguous_chunks(&self, start: Address) -> usize {
         debug!("free_contiguous_chunks: {}", start);
+        assert!(
+            self.finalized.load(Ordering::Acquire),
+            "free_contiguous_chunks called before finalize_static_space_map"
+        );
+        assert!(
+            !start.is_zero() && start.is_aligned_to(BYTES_IN_CHUNK),
+            "start {start} must be non-zero and chunk-aligned"
+        );
         let mut sync = self.sync.lock().unwrap();
-        debug_assert!(start == conversions::chunk_align_down(start));
         let chunk = start.chunk_index();
-        self.free_contiguous_chunks_locked(&mut sync, chunk as _)
+        // SAFETY: The caller of `free_contiguous_chunks` guarantees that `start` (`chunk`) is a
+        // currently allocated region-start chunk in `self`, and `sync` is locked.
+        unsafe { self.free_contiguous_chunks_locked(&mut sync, chunk as _) }
     }
 
     fn finalize_static_space_map(
@@ -285,9 +327,24 @@ impl VMMap for Map32 {
 }
 
 impl Map32 {
-    fn free_contiguous_chunks_locked(&self, sync: &mut Map32Sync, chunk: i32) -> usize {
+    /// Free the contiguous chunk region starting at `chunk` while holding `self.sync`.
+    ///
+    /// # Safety
+    ///
+    /// `chunk` must be the start chunk index of a contiguous region currently allocated from
+    /// `sync.region_map` via [`Self::allocate_contiguous_chunks`] (and not an unallocated chunk or
+    /// an interior chunk of a multi-chunk region).
+    unsafe fn free_contiguous_chunks_locked(&self, sync: &mut Map32Sync, chunk: i32) -> usize {
+        assert!(
+            chunk >= 0 && (chunk as usize) < self.descriptor_map.len(),
+            "chunk index {chunk} out of bounds"
+        );
+        assert!(
+            !sync.region_map.get_free(chunk),
+            "attempt to free unallocated chunk {chunk}"
+        );
         let chunks = sync.region_map.free(chunk, false);
-        debug_assert!(chunks >= 0);
+        assert!(chunks > 0, "freed chunk count ({chunks}) must be positive");
         self.total_available_discontiguous_chunks
             .fetch_add(chunks as usize, Ordering::Relaxed);
         let chunk_idx = chunk as usize;
@@ -301,14 +358,17 @@ impl Map32 {
         }
         sync.prev_link[chunk_idx] = -1;
         sync.next_link[chunk_idx] = -1;
+        SFT_MAP.initialize_once(&crate::policy::sft_map::create_sft_map);
         for offset in 0..chunks {
             let index = (chunk + offset) as usize;
             let chunk_start = conversions::chunk_index_to_address(index);
             debug!("Clear descriptor for Chunk {}", chunk_start);
             self.descriptor_map[index].store(SpaceDescriptor::UNINITIALIZED, Ordering::Relaxed);
             if SFT_MAP.has_sft_entry(chunk_start) {
-                // SAFETY: `SFT_MAP.has_sft_entry(chunk_start)` verified that `chunk_start` has a
-                // valid, mapped entry in `SFT_MAP`, satisfying `SFTMap::clear`'s precondition.
+                // SAFETY: `SFT_MAP.initialize_once` above ensured `SFT_MAP` is initialized before
+                // dereferencing `InitializeOnce`, `chunk_start` is `BYTES_IN_CHUNK`-aligned, and
+                // `SFT_MAP.has_sft_entry(chunk_start)` verified that `chunk_start` has a valid,
+                // mapped entry in `SFT_MAP`, satisfying `SFTMap::clear`'s precondition.
                 unsafe {
                     SFT_MAP.clear(chunk_start);
                 }

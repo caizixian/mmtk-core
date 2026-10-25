@@ -19,11 +19,12 @@ pub struct CreateFreeListResult {
 pub trait VMMap: Sync {
     fn insert(&self, start: Address, extent: usize, descriptor: SpaceDescriptor);
 
-    /// Create a free-list for a discontiguous space. Must only be called at boot time before
-    /// [`Self::finalize_static_space_map`].
+    /// Create a free-list for a discontiguous space. Must only be called at boot time once the
+    /// discontiguous address range has been initialized by [`Self::finalize_static_space_map`]
+    /// (e.g., from its `on_discontig_start_determined` callback).
     ///
     /// Requires `&'static self` because discontiguous child free lists (in `Map32`) store a
-    /// pointer into the global parent free list owned by `self`.
+    /// shared reference to the global parent free list owned by `self`.
     fn create_freelist(&'static self, start: Address) -> CreateFreeListResult;
 
     /// Create a free-list for a contiguous space. Must only be called at boot time.
@@ -35,13 +36,7 @@ pub trait VMMap: Sync {
     ) -> CreateFreeListResult;
 
     /// Allocate `chunks` contiguous chunks for the space identified by `descriptor`.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that no other thread is concurrently allocating or freeing chunks
-    /// for the same space (`descriptor`), and that `head` is either [`Address::ZERO`] or a valid
-    /// chunk-aligned region start address previously allocated for this space.
-    unsafe fn allocate_contiguous_chunks(
+    fn allocate_contiguous_chunks(
         &self,
         descriptor: SpaceDescriptor,
         chunks: usize,
@@ -63,15 +58,27 @@ pub trait VMMap: Sync {
     /// conservative bounds on the number of remaining chunks.
     fn get_chunk_consumer_count(&self) -> usize;
 
-    fn free_all_chunks(&self, any_chunk: Address);
+    /// Free all contiguous chunk regions linked to `any_chunk` (or do nothing if `any_chunk` is
+    /// [`Address::ZERO`]).
+    ///
+    /// # Safety
+    ///
+    /// - `any_chunk` must be either [`Address::ZERO`] or the `BYTES_IN_CHUNK`-aligned start address
+    ///   of a contiguous chunk region currently allocated from `self` via
+    ///   [`Self::allocate_contiguous_chunks`], and every linked region reachable from `any_chunk`
+    ///   must likewise be a currently allocated region start of that space.
+    /// - No live objects or active allocator cursors may still reference any chunk in the freed
+    ///   chain, because freeing clears their chunk descriptors and `SFT_MAP` entries and returns
+    ///   the chunks to the global pool for reuse.
+    unsafe fn free_all_chunks(&self, any_chunk: Address);
 
     /// Free the contiguous region of chunks starting at `start`, returning the number of chunks freed.
     ///
     /// # Safety
     ///
-    /// The caller must ensure that no other thread is concurrently allocating or freeing chunks
-    /// for the space owning `start`, and that `start` is a valid chunk-aligned region start address
-    /// previously returned by [`Self::allocate_contiguous_chunks`].
+    /// `start` must be the non-zero, `BYTES_IN_CHUNK`-aligned start address of a contiguous chunk
+    /// region currently allocated from `self` via [`Self::allocate_contiguous_chunks`] (and not an
+    /// unallocated chunk or an interior chunk of a multi-chunk region).
     unsafe fn free_contiguous_chunks(&self, start: Address) -> usize;
 
     /// Finalize the globlal maps in the implementations of `VMMap`.  This should be called after

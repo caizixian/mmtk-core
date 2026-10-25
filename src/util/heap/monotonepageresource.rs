@@ -222,7 +222,11 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
     pub unsafe fn reset(&self) {
         let mut guard = self.sync.lock().unwrap();
         self.common().accounting.reset();
-        self.release_pages(&mut guard);
+        // SAFETY: The caller of `reset` guarantees that no live objects or active allocator cursors
+        // reference any pages or discontiguous chunks owned by `self`, and `guard` holds `self.sync`.
+        unsafe {
+            self.release_pages(&mut guard);
+        }
         drop(guard);
     }
 
@@ -320,7 +324,12 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
         }
     }
 
-    fn release_pages(&self, guard: &mut MutexGuard<MonotonePageResourceSync>) {
+    /// Release all pages and discontiguous chunks associated with this page resource.
+    ///
+    /// # Safety
+    /// The caller must ensure that no live objects or active allocator cursors still reference any
+    /// pages or discontiguous chunks managed by this page resource.
+    unsafe fn release_pages(&self, guard: &mut MutexGuard<MonotonePageResourceSync>) {
         // TODO: concurrent zeroing
         if self.common().contiguous {
             guard.cursor = match guard.conditional {
@@ -339,7 +348,12 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
             guard.current_chunk = Address::ZERO;
             guard.sentinel = Address::ZERO;
             guard.cursor = Address::ZERO;
-            self.common.release_all_chunks();
+            // SAFETY: All cursors for `self` have been cleared under `guard`, and the caller of
+            // `release_pages` guarantees no live objects or active allocator cursors reference any
+            // discontiguous chunks owned by `self.common`.
+            unsafe {
+                self.common.release_all_chunks();
+            }
         }
     }
 

@@ -18,9 +18,12 @@ const NON_MAP_FRACTION: f64 = 1.0 - 8.0 / 4096.0;
 struct SpaceState {
     base_address: Address,
     high_water: Address,
+    freelist_created: bool,
 }
 
 pub struct Map64 {
+    heap_end: Address,
+    log_space_extent: usize,
     finalized: AtomicBool,
     descriptor_map: [AtomicSpaceDescriptor; MAX_SPACES],
     space_state: [Mutex<SpaceState>; MAX_SPACES],
@@ -30,23 +33,31 @@ assert_impl_all!(Map64: Send, Sync);
 
 impl Map64 {
     pub fn new() -> Self {
-        let log_space_extent = vm_layout().log_space_extent;
+        let layout = vm_layout();
+        let heap_end = layout.heap_end;
+        let log_space_extent = layout.log_space_extent;
+        assert!(
+            log_space_extent <= usize::BITS as usize - LOG_MAX_SPACES,
+            "log_space_extent ({log_space_extent}) exceeds address bits for MAX_SPACES"
+        );
         let space_state = std::array::from_fn(|i| {
-            // SAFETY: `i < MAX_SPACES` (`16`) and `vm_layout().validate()` ensures that in 64-bit
-            // contiguous layouts (`force_use_contiguous_spaces == true`),
-            // `log_space_extent <= log_address_space - LOG_MAX_SPACES < usize::BITS`, so
-            // `i << log_space_extent` is a non-overflowing virtual base address boundary.
-            // `Address::from_usize` only wraps the raw integer address without dereferencing it.
+            // SAFETY: `i < MAX_SPACES` (`1 << LOG_MAX_SPACES`) and the `assert!` above verified
+            // `log_space_extent <= usize::BITS as usize - LOG_MAX_SPACES`, so
+            // `i << log_space_extent` cannot overflow `usize`. `Address::from_usize` only wraps the
+            // raw integer address without dereferencing memory.
             let base = unsafe { Address::from_usize(i << log_space_extent) };
             Mutex::new(SpaceState {
                 base_address: base,
                 high_water: base,
+                freelist_created: false,
             })
         });
         let descriptor_map =
             std::array::from_fn(|_| AtomicSpaceDescriptor::new(SpaceDescriptor::UNINITIALIZED));
 
         Self {
+            heap_end,
+            log_space_extent,
             finalized: AtomicBool::new(false),
             descriptor_map,
             space_state,
@@ -56,15 +67,31 @@ impl Map64 {
 
 impl VMMap for Map64 {
     fn insert(&self, start: Address, extent: usize, descriptor: SpaceDescriptor) {
-        debug_assert!(Self::is_space_start(start));
-        debug_assert!(extent <= vm_layout().space_size_64());
-        debug_assert!(extent >= self.min_contiguous_extent());
-        let index = Self::space_index(start).unwrap();
-        self.descriptor_map[index].store(descriptor, Ordering::Relaxed);
+        assert!(
+            self.is_space_start(start),
+            "Space start {start} is not aligned to space boundary"
+        );
+        assert!(extent <= self.space_size());
+        assert!(extent >= self.min_contiguous_extent());
+        let index = self
+            .space_index(start)
+            .expect("Space start exceeds heap_end");
+        self.descriptor_map[index]
+            .compare_exchange(
+                SpaceDescriptor::UNINITIALIZED,
+                descriptor,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            )
+            .unwrap_or_else(|existing| {
+                panic!(
+                    "Conflicting virtual address request at space {start} (index {index}, existing {existing:?})"
+                )
+            });
     }
 
     fn create_freelist(&'static self, start: Address) -> CreateFreeListResult {
-        let units = vm_layout().space_size_64() >> LOG_BYTES_IN_PAGE;
+        let units = self.space_size() >> LOG_BYTES_IN_PAGE;
         self.create_parent_freelist(start, units, units as _)
     }
 
@@ -74,12 +101,22 @@ impl VMMap for Map64 {
         mut units: usize,
         grain: i32,
     ) -> CreateFreeListResult {
-        debug_assert!(start.is_aligned_to(BYTES_IN_CHUNK));
+        assert!(
+            self.is_space_start(start) && start.is_aligned_to(BYTES_IN_CHUNK),
+            "Space start {start} must be space-aligned and chunk-aligned"
+        );
 
         assert!(units >= conversions::bytes_to_pages_up(self.min_contiguous_extent()));
 
-        let index = Self::space_index(start).unwrap();
+        let index = self
+            .space_index(start)
+            .expect("Space start exceeds heap_end");
         let mut state = self.space_state[index].lock().unwrap();
+        assert!(
+            !state.freelist_created,
+            "create_parent_freelist called more than once for space index {index} ({start})"
+        );
+        state.freelist_created = true;
 
         units = (units as f64 * NON_MAP_FRACTION) as _;
         let list_extent =
@@ -110,16 +147,16 @@ impl VMMap for Map64 {
         }
     }
 
-    unsafe fn allocate_contiguous_chunks(
+    fn allocate_contiguous_chunks(
         &self,
         descriptor: SpaceDescriptor,
         chunks: usize,
         _head: Address,
         maybe_freelist: Option<&mut dyn FreeList>,
     ) -> Address {
-        debug_assert!(Self::space_index(descriptor.get_start()) == Some(descriptor.get_index()));
-
         let index = descriptor.get_index();
+        assert_eq!(self.space_index(descriptor.get_start()), Some(index));
+
         let mut state = self.space_state[index].lock().unwrap();
         let rtn = state.high_water;
         let extent = chunks << LOG_BYTES_IN_CHUNK;
@@ -165,7 +202,7 @@ impl VMMap for Map64 {
         panic!("We don't use discontiguous chunks for 64-bit!");
     }
 
-    fn free_all_chunks(&self, _any_chunk: Address) {
+    unsafe fn free_all_chunks(&self, _any_chunk: Address) {
         unreachable!()
     }
 
@@ -191,7 +228,7 @@ impl VMMap for Map64 {
     }
 
     fn get_descriptor_for_address(&self, address: Address) -> SpaceDescriptor {
-        if let Some(index) = Self::space_index(address) {
+        if let Some(index) = self.space_index(address) {
             self.descriptor_map
                 .get(index)
                 .map(|slot| slot.load(Ordering::Relaxed))
@@ -210,15 +247,27 @@ impl VMMap for Map64 {
 }
 
 impl Map64 {
-    fn space_index(addr: Address) -> Option<usize> {
-        if addr > vm_layout().heap_end {
-            return None;
-        }
-        Some(addr >> vm_layout().space_shift_64())
+    #[inline]
+    fn space_size(&self) -> usize {
+        1usize << self.log_space_extent
     }
 
-    fn is_space_start(base: Address) -> bool {
-        (base & !vm_layout().space_mask_64()) == 0
+    #[inline]
+    fn space_mask(&self) -> usize {
+        ((1usize << LOG_MAX_SPACES) - 1) << self.log_space_extent
+    }
+
+    #[inline]
+    fn space_index(&self, addr: Address) -> Option<usize> {
+        if addr > self.heap_end {
+            return None;
+        }
+        Some(addr >> self.log_space_extent)
+    }
+
+    #[inline]
+    fn is_space_start(&self, base: Address) -> bool {
+        (base & !self.space_mask()) == 0
     }
 }
 

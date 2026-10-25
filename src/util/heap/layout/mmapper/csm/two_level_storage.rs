@@ -176,8 +176,10 @@ impl TwoLevelStateStorage {
     fn slab_table(&self, addr: Address) -> Option<&Slab> {
         let index: usize = Self::slab_index(addr);
         let slot = self.slabs.get(index)?;
-        // Note: We don't need acquire here.  See `get_or_allocate_slab_table`.
-        slot.get(Ordering::Relaxed)
+        // `Acquire` pairs with the `Release` store in `get_or_allocate_slab_table` so all
+        // `MapState::Unmapped` initialization writes to the newly allocated `Slab` happen-before
+        // any reader loads from it on weakly-ordered architectures.
+        slot.get(Ordering::Acquire)
     }
 
     fn get_or_allocate_slab_table(&self, addr: Address) -> &Slab {
@@ -185,10 +187,11 @@ impl TwoLevelStateStorage {
         let Some(slot) = self.slabs.get(index) else {
             panic!("Cannot allocate slab for address: {addr}");
         };
-        // Note: We set both order_load and order_store to `Relaxed` because we never populate the
-        // content of the slab before making the `OnceOptionBox` point to the new slab. For this
-        // reason, the release-acquire relation is not needed here.
-        slot.get_or_init(Ordering::Relaxed, Ordering::Relaxed, Self::new_slab)
+        // `Box::new(Self::new_slab())` inside `OnceOptionBox::get_or_init` writes
+        // `MapState::Unmapped` into heap memory allocated via `alloc()` before publishing the
+        // pointer, so `Release` store and `Acquire` load are required to synchronize those
+        // initializing writes with concurrent readers.
+        slot.get_or_init(Ordering::Acquire, Ordering::Release, Self::new_slab)
     }
 
     fn slab_index(addr: Address) -> usize {
