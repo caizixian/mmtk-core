@@ -131,18 +131,14 @@ In `mutator.rs`:
          mutator: &mut Mutator<VM>,
          _tls: OpaquePointer
      ) {
-         // SAFETY: `allocator_mapping[AllocationType::Default]` selects `BumpPointer(0)`, which
-         // `create_triplespace_mutator` initialized in `mutator.allocators` as `BumpAllocator<VM>`.
-         let bump_allocator = unsafe {
-             mutator
-                 .allocators
-                 . get_allocator_mut(
-                     mutator.config.allocator_mapping[AllocationType::Default]
-                 )
-             }
-             .downcast_mut::<BumpAllocator<VM>>()
-             .unwrap();
-             bump_allocator.rebind(Some(mutator.plan.youngspace())); // Change this!
+         let youngspace = mutator
+             .plan
+             .downcast_ref::<TripleSpace<VM>>()
+             .unwrap()
+             .youngspace();
+         let bump_allocator = mutator
+             .allocator_downcast_mut_for_semantic::<BumpAllocator<VM>>(AllocationSemantics::Default);
+         bump_allocator.rebind(youngspace); // Change this!
      }
      ```
 

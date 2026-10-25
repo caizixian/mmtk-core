@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use crate::mmtk::SFT_MAP;
 use crate::plan::tracing::OptionObjectQueue;
 use crate::plan::ObjectQueue;
@@ -227,7 +229,7 @@ impl<VM: VMBinding> VMSpace<VM> {
         space
     }
 
-    pub fn set_vm_region(&mut self, start: Address, size: usize) {
+    pub fn set_vm_region(&self, start: Address, size: usize) {
         self.set_vm_region_inner(start, size, false);
     }
 

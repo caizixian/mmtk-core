@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use super::gc_work::GenCopyGCWorkContext;
 use super::gc_work::GenCopyNurseryGCWorkContext;
 use super::mutator::ALLOCATOR_MAPPING;
@@ -104,20 +106,18 @@ impl<VM: VMBinding> Plan for GenCopy<VM> {
     }
 
     fn prepare_worker(&self, worker: &mut GCWorker<Self::VM>) {
+        let plan = worker
+            .mmtk
+            .get_plan()
+            .downcast_ref::<Self>()
+            .expect("GCWorker MMTK plan is not GenCopy");
         assert!(
-            worker.is_copy_context_initialized()
-                && std::ptr::eq(
-                    worker.mmtk.get_plan() as *const dyn Plan<VM = Self::VM> as *const (),
-                    self as *const Self as *const (),
-                ),
+            worker.is_copy_context_initialized() && std::ptr::eq(plan, self),
             "GCWorker copy context was not initialized for this GenCopy plan",
         );
-        // SAFETY: `worker` belongs to this `GenCopy` plan and `GCWorker::run` has initialized
-        // `worker.copy` via `GenCopy::create_copy_config`, which maps `CopySelector::CopySpace(0)`
-        // in `space_mapping` so `copy[0]` was written by `GCWorkerCopyContext::new` (assuming
-        // `GCWorkerCopyContext::copy[0]`, currently `pub` in `src/util/copy/mod.rs`, has not been
-        // overwritten with `MaybeUninit::uninit()` via `worker.get_copy_context_mut()`).
-        unsafe { worker.get_copy_context_mut().copy[0].assume_init_mut() }.rebind(self.tospace());
+        worker
+            .get_copy_context_mut()
+            .rebind_copy_space(0, plan.tospace());
     }
 
     fn release(&mut self, tls: VMWorkerThread) {

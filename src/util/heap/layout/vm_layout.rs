@@ -1,4 +1,5 @@
 //! The module defines virutal memory layout parameters.
+#![deny(unsafe_op_in_unsafe_fn)]
 
 #[cfg(debug_assertions)]
 use std::sync::atomic::AtomicBool;
@@ -73,13 +74,19 @@ impl VMLayout {
     pub const fn available_bytes(&self) -> usize {
         self.available_end().get_extent(self.available_start())
     }
-    /// Maximum number of chunks we need to track.  Only used in 32-bit layout.
+    /// Maximum number of chunks we need to track.  Only used in discontiguous / sparse chunk layouts.
     pub const fn max_chunks(&self) -> usize {
-        1 << self.log_max_chunks()
+        let by_log = 1usize << self.log_max_chunks();
+        let by_heap_end = self.heap_end.as_usize() >> LOG_BYTES_IN_CHUNK;
+        if by_heap_end > by_log {
+            by_heap_end
+        } else {
+            by_log
+        }
     }
-    /// log_2 of the maximum number of chunks we need to track.  Only used in 32-bit layout.
+    /// log_2 of the maximum number of chunks in `log_address_space`.
     pub const fn log_max_chunks(&self) -> usize {
-        Self::LOG_ARCH_ADDRESS_SPACE - LOG_BYTES_IN_CHUNK
+        self.log_address_space - LOG_BYTES_IN_CHUNK
     }
     /// Number of bits to shift a space index into/out of a virtual address.
     /// In a 32-bit model, use a dummy value so that the compiler doesn't barf.
@@ -118,6 +125,7 @@ impl VMLayout {
         assert!(self.heap_start.is_aligned_to(BYTES_IN_CHUNK));
         assert!(self.heap_end.is_aligned_to(BYTES_IN_CHUNK));
         assert!(self.heap_start.as_usize() < self.heap_end.as_usize());
+        assert!(self.log_address_space >= LOG_BYTES_IN_CHUNK);
         assert!(self.log_address_space <= Self::LOG_ARCH_ADDRESS_SPACE);
         assert!(self.log_space_extent <= self.log_address_space);
         if self.force_use_contiguous_spaces {

@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 //! GC algorithms from the MMTk suite.
 //!
 //! This module provides various GC plans, each of which implements a GC algorithm.
@@ -25,6 +27,9 @@ pub(crate) use global::create_mutator;
 pub(crate) use global::create_plan;
 pub(crate) use global::finish_plan_pause;
 pub(crate) use global::on_collection_initialized;
+pub(crate) use global::release_after_plan_mut;
+pub(crate) use global::release_before_plan_mut;
+pub(crate) use global::release_plan_local;
 pub use global::AllocationSemantics;
 pub(crate) use global::CreateGeneralPlanArgs;
 pub(crate) use global::HasSpaces;

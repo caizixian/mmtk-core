@@ -1,4 +1,5 @@
 //! The global part of a plan implementation.
+#![deny(unsafe_op_in_unsafe_fn)]
 
 use super::PlanConstraints;
 use crate::global_state::GlobalState;
@@ -182,6 +183,33 @@ pub(crate) fn compute_next_gc_full_heap<VM: VMBinding>(plan: &dyn Plan<VM = VM>)
     plan.generational().map(|_| {
         crate::plan::generational::global::CommonGenPlan::should_next_gc_be_full_heap(plan)
     })
+}
+
+/// Run plan-specific pre-release VM callbacks (`LXR::release_before_plan_mut`) on `&dyn Plan`
+/// strictly before acquiring `&mut dyn Plan` in `Release`.
+pub(crate) fn release_before_plan_mut<VM: VMBinding>(plan: &dyn Plan<VM = VM>) {
+    if let Some(lxr) = plan.downcast_ref::<crate::plan::lxr::LXR<VM>>() {
+        lxr.release_before_plan_mut();
+    }
+}
+
+/// Run plan-local `&mut` release state updates without invoking external VM callbacks while `&mut`
+/// is live.
+pub(crate) fn release_plan_local<P: Plan>(plan_mut: &mut P, tls: VMWorkerThread) {
+    let plan_any: &mut dyn Plan<VM = P::VM> = plan_mut;
+    if let Some(lxr) = plan_any.downcast_mut::<crate::plan::lxr::LXR<P::VM>>() {
+        lxr.release_plan_local(tls);
+    } else {
+        plan_mut.release(tls);
+    }
+}
+
+/// Run plan-specific post-release shared tasks (`LXR::release_after_plan_mut`) strictly after
+/// `&mut dyn Plan` has been dropped in `Release`.
+pub(crate) fn release_after_plan_mut<VM: VMBinding>(plan: &dyn Plan<VM = VM>) {
+    if let Some(lxr) = plan.downcast_ref::<crate::plan::lxr::LXR<VM>>() {
+        lxr.release_after_plan_mut();
+    }
 }
 
 /// Create thread local GC worker.
@@ -467,24 +495,15 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     /// This method should only be called after 1. side metadata is initialized (as some SFT maps may use side metadata), 2. the plan is created in the heap and won't be moved,
     /// and 3. the side metadata sanity is initialized (otherwise we may try access side metadata and trigger sanity check before side metadata sanity is initialized)
     fn initialize_sft(&self) {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        static SFT_INITIALIZED: AtomicBool = AtomicBool::new(false);
+        use crate::policy::sft_map::{ensure_sft_map_initialized, SFTMap, SftMapInitHandle};
         assert!(
-            !SFT_INITIALIZED.swap(true, Ordering::AcqRel),
-            "Plan::initialize_sft may only be called once during MMTK::new"
+            !self.base().sft_initialized.swap(true, Ordering::AcqRel),
+            "Plan::initialize_sft may only be called once per Plan instance"
         );
-        crate::mmtk::SFT_MAP.initialize_once(&crate::policy::sft_map::create_sft_map);
-        // SAFETY: `SFT_INITIALIZED.swap(true, Ordering::AcqRel)` enforces at runtime that this
-        // block executes at most once across the entire process lifetime; `MMTK::new` calls
-        // `plan.initialize_sft()` single-threaded after side metadata setup and before returning
-        // `MMTK<VM>` or spawning any mutator/GC worker threads (any second or post-init call via
-        // `&dyn Plan` panics above before reaching `get_mut()`), and `SFT_MAP.initialize_once`
-        // guarantees `SFT_MAP` is initialized before obtaining an exclusive `&mut`.
-        let sft_map: &mut dyn crate::policy::sft_map::SFTMap =
-            unsafe { crate::mmtk::SFT_MAP.get_mut() }.as_mut();
+        let mut sft_map = SftMapInitHandle::new(ensure_sft_map_initialized());
         self.for_each_space(&mut |s| {
             sft_map.notify_space_creation(s.as_sft());
-            s.initialize_sft(sft_map);
+            s.initialize_sft(&mut sft_map);
         });
     }
 
@@ -507,6 +526,7 @@ pub struct BasePlan<VM: VMBinding> {
     pub options: Arc<Options>,
     pub gc_trigger: Arc<GCTrigger<VM>>,
     pub scheduler: Arc<GCWorkScheduler<VM>>,
+    pub(crate) sft_initialized: std::sync::atomic::AtomicBool,
 
     // Spaces in base plan
     #[cfg(feature = "code_space")]
@@ -710,6 +730,7 @@ impl<VM: VMBinding> BasePlan<VM> {
             gc_trigger: args.global_args.gc_trigger,
             options: args.global_args.options,
             scheduler: args.global_args.scheduler,
+            sft_initialized: std::sync::atomic::AtomicBool::new(false),
         }
     }
 

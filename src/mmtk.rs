@@ -1,8 +1,10 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 //! MMTk instance.
 use crate::global_state::{GcStatus, GlobalState};
 use crate::plan::CreateGeneralPlanArgs;
 use crate::plan::Plan;
-use crate::policy::sft_map::{create_sft_map, SFTMap};
+use crate::policy::sft_map::{ensure_sft_map_initialized, GlobalSftMap};
 use crate::scheduler::GCWorkScheduler;
 
 #[cfg(feature = "vo_bit")]
@@ -18,6 +20,7 @@ use crate::util::heap::HeapMeta;
 use crate::util::opaque_pointer::*;
 use crate::util::options::Options;
 use crate::util::reference_processor::ReferenceProcessors;
+use crate::util::rust_util::phase_cell::{MmtkId, PlanPhaseAuth};
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::SanityChecker;
 #[cfg(feature = "extreme_assertions")]
@@ -30,9 +33,7 @@ use crate::vm::VMBinding;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::default::Default;
-#[cfg(feature = "sanity")]
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -52,10 +53,8 @@ lazy_static! {
     pub static ref MMAPPER: Box<dyn Mmapper> = layout::create_mmapper();
 }
 
-use crate::util::rust_util::InitializeOnce;
-
 // A global space function table that allows efficient dispatch space specific code for addresses in our heap.
-pub static SFT_MAP: InitializeOnce<Box<dyn SFTMap>> = InitializeOnce::new();
+pub static SFT_MAP: GlobalSftMap = GlobalSftMap;
 
 /// MMTk builder. This is used to set options and other settings before actually creating an MMTk instance.
 pub struct MMTKBuilder {
@@ -111,9 +110,24 @@ impl Default for MMTKBuilder {
     }
 }
 
+/// RAII guard tracking an active `MMTK::get_plan_mut` exclusive borrow so non-reentrancy is
+/// enforced in all builds and concurrent/re-entrant `MMTK::get_plan` reads are caught in debug
+/// builds.
+pub(crate) struct PlanMutLeaseGuard<'a>(&'a AtomicBool);
+
+impl Drop for PlanMutLeaseGuard<'_> {
+    #[inline]
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
 /// An MMTk instance. MMTk allows multiple instances to run independently, and each instance gives users a separate heap.
 /// *Note that multi-instances is not fully supported yet*
 pub struct MMTK<VM: VMBinding> {
+    pub(crate) id: MmtkId,
+    pub(crate) phase_auth: PlanPhaseAuth,
+    pub(crate) plan_mut_leased: AtomicBool,
     pub(crate) options: Arc<Options>,
     pub(crate) state: Arc<GlobalState>,
     pub(crate) plan: std::ptr::NonNull<UnsafeCell<dyn Plan<VM = VM>>>,
@@ -134,13 +148,14 @@ pub struct MMTK<VM: VMBinding> {
     pub(crate) analysis_manager: Arc<AnalysisManager<VM>>,
 }
 
-// SAFETY: Every field of `MMTK<VM>` is `Sync` except `plan: NonNull<UnsafeCell<dyn Plan<VM = VM>>>`
-// (`NonNull` and `UnsafeCell` are `!Sync`). `plan` points to a leaked `'static` heap allocation,
-// and `Plan: Sync`, so concurrent shared accesses via `MMTK::get_plan` are thread-safe. Mutable
-// access via `MMTK::get_plan_mut` is `unsafe` and restricted by its safety contract to
-// single-worker stop-the-world scopes (such as `Prepare`, `Release`, `UpdateReferences`, and
-// `on_gc_finished`) when all mutators are paused, all other GC workers are parked, and no
-// concurrent or re-entrant read or write access to `plan` occurs while the `&mut` borrow is live.
+// SAFETY: Every field of `MMTK<VM>` (`MmtkId`, `PlanPhaseAuth`, `Arc`, `Mutex`, atomics, etc.) is
+// `Sync` except `plan: NonNull<UnsafeCell<dyn Plan<VM = VM>>>` (`NonNull` and `UnsafeCell` are
+// `!Sync`). `plan` points to a leaked `'static` heap allocation, and `Plan: Sync`, so concurrent
+// shared accesses via `MMTK::get_plan` are thread-safe. Mutable access via `MMTK::get_plan_mut` is
+// `unsafe` and restricted by its safety contract to single-worker stop-the-world scopes (such as
+// `Prepare`, `Release`, `UpdateReferences`, and `on_gc_finished` under `PlanPhaseAuth`) when all
+// mutators are paused, all other GC workers are parked, and no concurrent or re-entrant read or
+// write access to `plan` occurs while the `&mut` borrow is live.
 unsafe impl<VM: VMBinding> Sync for MMTK<VM> {}
 // SAFETY: Every field of `MMTK<VM>` is `Send` except `plan: NonNull<UnsafeCell<dyn Plan<VM = VM>>>`
 // (`NonNull` is `!Send` and the `Plan` trait bounds `Sync` rather than `Send`). Every concrete
@@ -158,7 +173,10 @@ impl<VM: VMBinding> MMTK<VM> {
         // Initialize SFT first in case we need to use this in the constructor.
         // The first call will initialize SFT map. Other calls will be blocked until SFT map is initialized.
         crate::policy::sft_map::SFTRefStorage::pre_use_check();
-        SFT_MAP.initialize_once(&create_sft_map);
+        ensure_sft_map_initialized();
+
+        let id = MmtkId::fresh();
+        let phase_auth = PlanPhaseAuth::new(id);
 
         let num_workers = if cfg!(feature = "single_worker") {
             1
@@ -166,7 +184,8 @@ impl<VM: VMBinding> MMTK<VM> {
             *options.threads
         };
 
-        let scheduler = GCWorkScheduler::new(num_workers, (*options.thread_affinity).clone());
+        let scheduler =
+            GCWorkScheduler::new_for_instance(id, num_workers, (*options.thread_affinity).clone());
 
         let state = Arc::new(GlobalState::default());
 
@@ -246,19 +265,14 @@ impl<VM: VMBinding> MMTK<VM> {
             // Then initialize SFT because it may use side metadata.
             static_plan.initialize_sft();
 
-            // TODO: use Arc::get_mut_unchecked() when it is availble.
-            // SAFETY: `MMTK::new` runs single-threaded before returning `MMTK` or spawning any
-            // mutator/worker threads. Although `Arc<GCTrigger<VM>>` handles have been cloned into
-            // `plan` and its spaces (`Arc` stores a raw `NonNull` internally, not `&T`), no shared
-            // or mutable reference to `*gc_trigger` exists on the call stack during this block,
-            // and `Arc::as_ptr` yields a valid, aligned pointer to the initialized `GCTrigger<VM>`.
-            let gc_trigger: &mut GCTrigger<VM> =
-                unsafe { &mut *(Arc::as_ptr(&gc_trigger) as *mut _) };
-            // Set the plan so we can trigger GC and check GC condition without using plan
+            // Set the plan via `OnceLock` so `GCTrigger` can check GC conditions without `&mut`.
             gc_trigger.set_plan(static_plan);
         }
 
         MMTK {
+            id,
+            phase_auth,
+            plan_mut_leased: AtomicBool::new(false),
             options,
             state,
             plan,
@@ -522,8 +536,23 @@ impl<VM: VMBinding> MMTK<VM> {
         self.gc_trigger.trigger_internal_collection_request();
     }
 
+    /// Acquire a non-reentrant runtime guard witnessing an active internal `get_plan_mut` borrow.
+    #[inline]
+    pub(crate) fn enter_plan_mut_lease(&self) -> PlanMutLeaseGuard<'_> {
+        assert!(
+            !self.plan_mut_leased.swap(true, Ordering::Acquire),
+            "Reentrant or concurrent MMTK::get_plan_mut() lease for {:?}",
+            self.id
+        );
+        PlanMutLeaseGuard(&self.plan_mut_leased)
+    }
+
     /// Get a reference to the plan.
     pub fn get_plan(&self) -> &dyn Plan<VM = VM> {
+        debug_assert!(
+            !self.plan_mut_leased.load(Ordering::Acquire),
+            "MMTK::get_plan() called while an exclusive get_plan_mut() borrow is live"
+        );
         // SAFETY: `self.plan` is a valid, aligned `NonNull<UnsafeCell<dyn Plan<VM = VM>>>` leaked
         // via `Box::into_raw` in `MMTK::new` and never freed or borrowed as `&mut UnsafeCell<...>`.
         // By the safety contract of `get_plan_mut` (and single-threaded `&mut MMTK` exclusivity on

@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use super::map::CreateFreeListResult;
 use super::map::VMMap;
 use crate::mmtk::SFT_MAP;
@@ -358,21 +360,12 @@ impl Map32 {
         }
         sync.prev_link[chunk_idx] = -1;
         sync.next_link[chunk_idx] = -1;
-        SFT_MAP.initialize_once(&crate::policy::sft_map::create_sft_map);
         for offset in 0..chunks {
             let index = (chunk + offset) as usize;
             let chunk_start = conversions::chunk_index_to_address(index);
             debug!("Clear descriptor for Chunk {}", chunk_start);
             self.descriptor_map[index].store(SpaceDescriptor::UNINITIALIZED, Ordering::Relaxed);
-            if SFT_MAP.has_sft_entry(chunk_start) {
-                // SAFETY: `SFT_MAP.initialize_once` above ensured `SFT_MAP` is initialized before
-                // dereferencing `InitializeOnce`, `chunk_start` is `BYTES_IN_CHUNK`-aligned, and
-                // `SFT_MAP.has_sft_entry(chunk_start)` verified that `chunk_start` has a valid,
-                // mapped entry in `SFT_MAP`, satisfying `SFTMap::clear`'s precondition.
-                unsafe {
-                    SFT_MAP.clear(chunk_start);
-                }
-            }
+            SFT_MAP.clear_checked(chunk_start);
         }
         chunks as _
     }

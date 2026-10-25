@@ -105,8 +105,8 @@ we will simply panic.
 As we flip tospace for the plan, we also need to rebind the copy context
 to the new tospace. We will override `prepare_worker()` in our `Plan` implementation.
 `Plan.prepare_worker()` is executed by each GC worker in the preparation phase of a GC. The code
-is straightforward -- we get the first `CopySpaceCopyContext`, and call `rebind()` on it with
-the new `tospace`.
+is straightforward -- we obtain the `'static` plan reference from `worker.mmtk` and call
+`rebind_copy_space(0, plan.tospace())` on the worker's copy context.
 
 ```rust
 {{#include ../../code/mygc_semispace/global.rs:prepare_worker}}

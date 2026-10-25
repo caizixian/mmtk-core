@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use downcast_rs::{impl_downcast, Downcast};
 
 pub const FAILURE: i32 = -1;
@@ -14,15 +16,23 @@ const MULTI_MASK: i32 = 1 << (TOTAL_BITS - 1);
 const COALESC_MASK: i32 = 1 << (TOTAL_BITS - 2);
 const SIZE_MASK: i32 = (1 << UNIT_BITS) - 1;
 
-pub trait FreeList: Sync + Downcast {
+pub trait FreeList: Send + Sync + Downcast {
     fn head(&self) -> i32;
     // fn head_mut(&mut self) -> &mut i32;
     fn heads(&self) -> i32;
     // fn heads_mut(&mut self) -> &mut i32;
-    // fn resize_freelist(&mut self);
-    // fn resize_freelist(&mut self, units: i32, heads: i32);
     fn get_entry(&self, index: i32) -> i32;
     fn set_entry(&mut self, index: i32, value: i32);
+
+    fn or_entry(&mut self, index: i32, mask: i32) {
+        let old = self.get_entry(index);
+        self.set_entry(index, old | mask);
+    }
+
+    fn and_entry(&mut self, index: i32, mask: i32) {
+        let old = self.get_entry(index);
+        self.set_entry(index, old & mask);
+    }
 
     fn alloc(&mut self, size: i32) -> i32 {
         let mut unit = self.head();
@@ -147,13 +157,14 @@ pub trait FreeList: Sync + Downcast {
     }
 
     fn set_size(&mut self, unit: i32, size: i32) {
-        let hi = self.get_hi_entry(unit);
+        let heads = self.heads();
+        let hi_idx = ((unit + heads) << 1) + 1;
         if size > 1 {
-            self.set_hi_entry(unit, hi | MULTI_MASK);
+            self.or_entry(hi_idx, MULTI_MASK);
             self.set_hi_entry(unit + 1, MULTI_MASK | size);
             self.set_hi_entry(unit + size - 1, MULTI_MASK | size);
         } else {
-            self.set_hi_entry(unit, hi & !MULTI_MASK);
+            self.and_entry(hi_idx, !MULTI_MASK);
         }
     }
 
@@ -162,21 +173,18 @@ pub trait FreeList: Sync + Downcast {
     }
 
     fn set_free(&mut self, unit: i32, is_free: bool) {
-        let size;
-        let lo = self.get_lo_entry(unit);
+        let heads = self.heads();
+        let lo_idx = (unit + heads) << 1;
+        let size = self.get_size(unit);
         if is_free {
-            self.set_lo_entry(unit, lo | FREE_MASK);
-            size = self.get_size(unit);
+            self.or_entry(lo_idx, FREE_MASK);
             if size > 1 {
-                let lo = self.get_lo_entry(unit + size - 1);
-                self.set_lo_entry(unit + size - 1, lo | FREE_MASK);
+                self.or_entry((unit + size - 1 + heads) << 1, FREE_MASK);
             }
         } else {
-            self.set_lo_entry(unit, lo & !FREE_MASK);
-            size = self.get_size(unit);
+            self.and_entry(lo_idx, !FREE_MASK);
             if size > 1 {
-                let lo = self.get_lo_entry(unit + size - 1);
-                self.set_lo_entry(unit + size - 1, lo & !FREE_MASK);
+                self.and_entry((unit + size - 1 + heads) << 1, !FREE_MASK);
             }
         }
     }
@@ -228,13 +236,16 @@ pub trait FreeList: Sync + Downcast {
     }
 
     fn clear_uncoalescable(&mut self, unit: i32) {
-        let lo = self.get_lo_entry(unit);
-        self.set_lo_entry(unit, lo & !COALESC_MASK);
+        let heads = self.heads();
+        self.and_entry((unit + heads) << 1, !COALESC_MASK);
     }
 
     fn set_uncoalescable(&mut self, unit: i32) {
-        let lo = self.get_lo_entry(unit);
-        self.set_lo_entry(unit, lo | COALESC_MASK);
+        if !self.is_coalescable(unit) {
+            return;
+        }
+        let heads = self.heads();
+        self.or_entry((unit + heads) << 1, COALESC_MASK);
     }
 
     fn is_multi(&self, i: i32) -> bool {

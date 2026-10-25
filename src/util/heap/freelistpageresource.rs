@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use std::sync::Mutex;
 
 use super::layout::vm_layout::PAGES_IN_CHUNK;
@@ -34,21 +36,7 @@ assert_impl_all!(CommonPageResource: Send, Sync);
 assert_impl_all!(Option<MmapProtection>: Send, Sync);
 assert_impl_all!(crate::util::int_array_freelist::IntArrayFreeList: Send, Sync);
 assert_impl_all!(RawMemoryFreeList: Send, Sync);
-
-// SAFETY: Every field of `FreeListPageResource<VM>` is `Send`: `CommonPageResource` and
-// `Option<MmapProtection>` are `Send + Sync` (verified by `assert_impl_all!` above), `VM: VMBinding`
-// requires `VM: Send + Sync`, and `FreeListPageResourceSync` only lacks auto-`Send` because the
-// private trait `crate::util::freelist::FreeList` bounds `Sync + Downcast` without `+ Send`.
-// Because `crate::util::freelist` is private to `crate::util`, the only concrete types that can
-// inhabit `Box<dyn FreeList>` are `IntArrayFreeList` and `RawMemoryFreeList`, both of which
-// implement `Send + Sync` (verified by `assert_impl_all!` above).
-unsafe impl<VM: VMBinding> Send for FreeListPageResource<VM> {}
-
-// SAFETY: All non-mutex fields (`CommonPageResource`, `PhantomData<VM>`, `Option<MmapProtection>`)
-// are `Sync`, and `FreeListPageResourceSync` is protected by `std::sync::Mutex`. As established on
-// the `Send` impl above, `FreeListPageResourceSync` is soundly `Send`, which suffices for
-// `Mutex<FreeListPageResourceSync>: Sync`.
-unsafe impl<VM: VMBinding> Sync for FreeListPageResource<VM> {}
+assert_impl_all!(FreeListPageResourceSync: Send, Sync);
 
 struct FreeListPageResourceSync {
     pub(crate) free_list: Box<dyn FreeList>,

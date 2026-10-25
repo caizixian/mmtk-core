@@ -1,11 +1,13 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use self::worker::PollResult;
 
 use super::gc_work::ScheduleCollection;
 use super::stat::SchedulerStat;
 use super::work_bucket::*;
-use super::worker::{GCWorker, ThreadId, WorkerGroup};
+use super::worker::{GCWorker, GCWorkerShared, ThreadId, WorkerGroup};
 use super::worker_goals::{WorkerGoal, WorkerGoals};
-use super::worker_monitor::{LastParkedResult, WorkerMonitor};
+use super::worker_monitor::{LastParkedResult, SoloWorkerToken, WorkerMonitor};
 use super::*;
 use crate::mmtk::MMTK;
 use crate::plan::tracing::gc_work::weakref::{
@@ -15,17 +17,93 @@ use crate::plan::Pause;
 use crate::util::opaque_pointer::*;
 use crate::util::options::AffinityKind;
 use crate::util::options::PlanSelector;
+use crate::util::rust_util::phase_cell::{MmtkId, WorkersParkedToken};
 use crate::vm::Collection;
 use crate::vm::VMBinding;
 use crate::Plan;
 use crossbeam::deque::Steal;
 use enum_map::{Enum, EnumMap};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::marker::PhantomData;
+use std::sync::{Arc, Mutex};
+
+/// Stage-initial work executed exclusively on a single GC worker in `WakeSelfSolo` mode before the
+/// target [`WorkBucketStage`] opens for parallel workers.
+pub(crate) trait SoloStageWork<VM: VMBinding>: Send + 'static {
+    fn do_solo_work(
+        &mut self,
+        worker: &mut GCWorker<VM>,
+        mmtk: &'static MMTK<VM>,
+        solo: SoloWorkerToken<'_>,
+    );
+}
+
+struct SoloPacketRunner<VM: VMBinding, S: SoloStageWork<VM>> {
+    monitor: Arc<WorkerMonitor>,
+    ordinal: usize,
+    work: Option<S>,
+    _p: PhantomData<fn() -> VM>,
+}
+
+impl<VM: VMBinding, S: SoloStageWork<VM>> SoloPacketRunner<VM, S> {
+    fn new(monitor: Arc<WorkerMonitor>, ordinal: usize, work: S) -> Self {
+        Self {
+            monitor,
+            ordinal,
+            work: Some(work),
+            _p: PhantomData,
+        }
+    }
+}
+
+impl<VM: VMBinding, S: SoloStageWork<VM>> Drop for SoloPacketRunner<VM, S> {
+    fn drop(&mut self) {
+        if self.work.is_some() {
+            // Packet was dropped before `do_work` entered `SoloExecutionGuard`: release solo mode
+            // so parked workers are never stranded.
+            self.monitor.cancel_unentered_solo_execution(self.ordinal);
+        }
+    }
+}
+
+impl<VM: VMBinding, S: SoloStageWork<VM>> GCWork<VM> for SoloPacketRunner<VM, S> {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        let mut work = self
+            .work
+            .take()
+            .expect("SoloPacketRunner executed more than once");
+        assert_eq!(worker.ordinal, self.ordinal);
+        let mut solo_guard = self.monitor.enter_solo_packet(&worker.perm);
+        work.do_solo_work(worker, mmtk, solo_guard.token());
+        let wake_all = mmtk.scheduler.worker_group.has_designated_work();
+        solo_guard.finish(wake_all);
+    }
+}
+
+type SoloStageFactory<VM> =
+    Box<dyn FnOnce(Arc<WorkerMonitor>, usize) -> Box<dyn GCWork<VM>> + Send>;
+
+enum BucketUpdateResult<VM: VMBinding> {
+    NoWork,
+    OpenedWithPackets(usize),
+    SoloStage(SoloStageFactory<VM>),
+}
+
+enum MoreWorkResult<VM: VMBinding> {
+    None,
+    Wake(usize),
+    WakeAll,
+    SoloStage(SoloStageFactory<VM>),
+}
 
 pub struct GCWorkScheduler<VM: VMBinding> {
+    /// Brand of the owning `MMTK<VM>` instance.
+    instance_id: MmtkId,
     /// Work buckets
     pub work_buckets: EnumMap<WorkBucketStage, WorkBucket<VM>>,
+    /// Stage-keyed solo packets (`Prepare`, `SecondRoots`, `Release`) executed on a single worker
+    /// while all other workers stay gated in `WorkerMonitor` and before the stage bucket opens.
+    solo_stage_work: EnumMap<WorkBucketStage, Mutex<Option<SoloStageFactory<VM>>>>,
     /// Workers
     pub(crate) worker_group: Arc<WorkerGroup<VM>>,
     /// For synchronized communication between workers and with mutators.
@@ -36,14 +114,24 @@ pub struct GCWorkScheduler<VM: VMBinding> {
 
 impl<VM: VMBinding> GCWorkScheduler<VM> {
     pub fn new(num_workers: usize, affinity: AffinityKind) -> Arc<Self> {
+        Self::new_for_instance(MmtkId::fresh(), num_workers, affinity)
+    }
+
+    pub(crate) fn new_for_instance(
+        instance_id: MmtkId,
+        num_workers: usize,
+        affinity: AffinityKind,
+    ) -> Arc<Self> {
         assert!(num_workers > 0);
-        let worker_monitor: Arc<WorkerMonitor> = Arc::new(WorkerMonitor::new(num_workers));
-        let worker_group = WorkerGroup::new(num_workers);
+        let (monitor, perms) = WorkerMonitor::new(instance_id, num_workers);
+        let worker_monitor: Arc<WorkerMonitor> = Arc::new(monitor);
+        let worker_group = WorkerGroup::new(instance_id, num_workers, perms);
 
         // Create work buckets for workers.
         let mut work_buckets = EnumMap::from_fn(|stage: WorkBucketStage| {
             WorkBucket::new(stage, worker_monitor.clone())
         });
+        let solo_stage_work = EnumMap::from_fn(|_| Mutex::new(None));
 
         // Set the open condition of each bucket.
         {
@@ -69,11 +157,65 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
 
         Arc::new(Self {
+            instance_id,
             work_buckets,
+            solo_stage_work,
             worker_group,
             worker_monitor,
             affinity,
         })
+    }
+
+    /// Register a stage-initial solo work packet to run exclusively on a single worker right
+    /// before `stage` opens.
+    pub(crate) fn set_solo_stage_work<S: SoloStageWork<VM>>(
+        &self,
+        stage: WorkBucketStage,
+        work: S,
+    ) {
+        assert!(
+            stage.is_sequentially_opened(),
+            "set_solo_stage_work requires a sequentially-opened STW stage, got {:?}",
+            stage
+        );
+        assert!(
+            self.work_buckets[stage].is_enabled(),
+            "set_solo_stage_work called on disabled stage {:?}",
+            stage
+        );
+        assert!(
+            !self.work_buckets[stage].is_open(),
+            "set_solo_stage_work called on already-open stage {:?}",
+            stage
+        );
+        let mut slot = self.solo_stage_work[stage].lock().unwrap();
+        assert!(
+            slot.is_none(),
+            "duplicate solo stage work registered for {:?}",
+            stage
+        );
+        *slot = Some(Box::new(move |monitor, ordinal| {
+            Box::new(SoloPacketRunner::<VM, S>::new(monitor, ordinal, work))
+        }));
+    }
+
+    fn take_solo_stage_work(&self, stage: WorkBucketStage) -> Option<SoloStageFactory<VM>> {
+        self.solo_stage_work[stage].lock().unwrap().take()
+    }
+
+    fn assert_no_pending_solo_stage_work(&self) {
+        for (stage, slot) in self.solo_stage_work.iter() {
+            assert!(
+                slot.lock().unwrap().is_none(),
+                "Unconsumed solo stage work remaining for {:?}",
+                stage
+            );
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) const fn instance_id(&self) -> MmtkId {
+        self.instance_id
     }
 
     pub fn process_concurrent_packets_in_pause(&self) {
@@ -274,6 +416,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn debug_assert_all_stw_buckets_empty(&self) {
+        self.assert_no_pending_solo_stage_work();
         debug_assert!(self
             .work_buckets
             .values()
@@ -307,18 +450,13 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         new_packets
     }
 
-    /// Open buckets if their conditions are met.
+    /// Open buckets if their conditions are met, or return stage-initial solo work before opening
+    /// a stage that registered solo work.
     ///
     /// This function should only be called after all the workers are parked.
     /// No workers will be waked up by this function. The caller is responsible for that.
-    ///
-    /// Returns the number of packets made available by the buckets that were opened, so the
-    /// caller can wake just that many workers.  Returns 0 if no bucket was opened, or if the
-    /// opened buckets were all empty.
-    pub(crate) fn update_buckets(&self) -> usize {
+    fn update_buckets(&self) -> BucketUpdateResult<VM> {
         debug!("update_buckets");
-        let mut buckets_updated = false;
-        let mut new_packets = 0;
         for i in 0..WorkBucketStage::LENGTH {
             let id = WorkBucketStage::from_usize(i);
             if id.is_always_open() {
@@ -330,33 +468,36 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 continue;
             }
             debug!("Checking if {:?} can be opened...", id);
-            let bucket_opened = bucket.update(self);
-            buckets_updated = buckets_updated || bucket_opened;
-            if bucket_opened {
+            if bucket.can_open(self) {
+                if let Some(solo_work) = self.take_solo_stage_work(id) {
+                    // Keep `bucket` closed while its solo stage work runs exclusively on the
+                    // last-parked worker; once the solo packet (and any designated collector work
+                    // it enqueues) drains and all workers park again, `solo_stage_work[id]` is
+                    // `None` and `bucket` opens below.
+                    debug!("Scheduling solo stage work before opening {:?}", id);
+                    return BucketUpdateResult::SoloStage(solo_work);
+                }
+                debug!("Opening work bucket: {:?}", id);
+                bucket.open();
                 probe!(mmtk, bucket_opened, id);
                 if !bucket.is_drained() {
-                    // Quit the loop. There are already new packets in the newly opened buckets.
-                    new_packets = bucket.len();
+                    // Quit the loop. There are already new packets in the newly opened bucket.
+                    let new_packets = bucket.len();
                     trace!(
                         "Found {} new packets at stage {:?}.  Break.",
                         new_packets,
                         id
                     );
-                    break;
+                    return BucketUpdateResult::OpenedWithPackets(new_packets);
                 }
                 if bucket.maybe_schedule_sentinel() {
-                    // Quit the loop. A sentinel packet is added to the newly opened buckets.
-                    new_packets = 1;
+                    // Quit the loop. A sentinel packet is added to the newly opened bucket.
                     trace!("Sentinel is scheduled at stage {:?}.  Break.", id);
-                    break;
+                    return BucketUpdateResult::OpenedWithPackets(1);
                 }
             }
         }
-        if buckets_updated {
-            new_packets
-        } else {
-            0
-        }
+        BucketUpdateResult::NoWork
     }
 
     pub fn close_all_stw_buckets(&self) {
@@ -368,6 +509,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn reset_state(&self) {
+        self.assert_no_pending_solo_stage_work();
         self.work_buckets.iter().for_each(|(id, bkt)| {
             if id.is_stw() && !id.is_first_stw_stage() {
                 bkt.close();
@@ -450,7 +592,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     /// Get a schedulable work packet.
-    fn poll_schedulable_work(&self, worker: &GCWorker<VM>) -> Option<Box<dyn GCWork<VM>>> {
+    pub(super) fn poll_schedulable_work(
+        &self,
+        worker: &GCWorker<VM>,
+    ) -> Option<Box<dyn GCWork<VM>>> {
         // Loop until we successfully get a packet.
         loop {
             match self.poll_schedulable_work_once(worker) {
@@ -470,14 +615,15 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     /// Called by workers to get a schedulable work packet.
     /// Park the worker if there're no available packets.
-    pub(crate) fn poll(&self, worker: &GCWorker<VM>) -> PollResult<VM> {
+    #[allow(dead_code)]
+    pub(crate) fn poll(&self, worker: &mut GCWorker<VM>) -> PollResult<VM> {
         if let Some(work) = self.poll_schedulable_work(worker) {
             return Ok(work);
         }
         self.poll_slow(worker)
     }
 
-    fn poll_slow(&self, worker: &GCWorker<VM>) -> PollResult<VM> {
+    pub(super) fn poll_slow(&self, worker: &mut GCWorker<VM>) -> PollResult<VM> {
         loop {
             // Retry polling
             if let Some(work) = self.poll_schedulable_work(worker) {
@@ -485,17 +631,30 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             }
 
             let ordinal = worker.ordinal;
+            let tls = worker.tls;
+            let mmtk = worker.mmtk;
+            let worker_shared = &worker.shared;
             self.worker_monitor
-                .park_and_wait(ordinal, |goals| self.on_last_parked(worker, goals))?;
+                .park_and_wait(&mut worker.perm, |goals, parked| {
+                    self.on_last_parked(ordinal, tls, mmtk, worker_shared, goals, parked)
+                })?;
         }
     }
 
     /// Called when the last worker parked.  `goal` allows this function to inspect and change the
     /// current goal.
-    fn on_last_parked(&self, worker: &GCWorker<VM>, goals: &mut WorkerGoals) -> LastParkedResult {
+    fn on_last_parked(
+        &self,
+        ordinal: ThreadId,
+        tls: VMWorkerThread,
+        mmtk: &'static MMTK<VM>,
+        worker_shared: &GCWorkerShared<VM>,
+        goals: &mut WorkerGoals,
+        parked: WorkersParkedToken<'_>,
+    ) -> LastParkedResult {
         let Some(ref current_goal) = goals.current() else {
             // There is no goal.  Find a request to respond to.
-            return self.respond_to_requests(worker, goals);
+            return self.respond_to_requests(mmtk, goals);
         };
 
         match current_goal {
@@ -516,35 +675,37 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 self.assert_all_open_buckets_are_empty();
 
                 // Find more work for workers to do.
-                let found_more_work = self.find_more_work_for_workers();
-
-                if found_more_work != 0 {
-                    if found_more_work == usize::MAX {
-                        LastParkedResult::WakeAll
-                    } else {
-                        LastParkedResult::Wake(found_more_work)
+                match self.find_more_work_for_workers() {
+                    MoreWorkResult::WakeAll => LastParkedResult::WakeAll,
+                    MoreWorkResult::Wake(n) => LastParkedResult::Wake(n),
+                    MoreWorkResult::SoloStage(factory) => {
+                        let runner = factory(self.worker_monitor.clone(), ordinal);
+                        let push_res = worker_shared.designated_work.push(runner);
+                        assert!(
+                            push_res.is_ok(),
+                            "designated_work unexpectedly full when scheduling solo stage packet"
+                        );
+                        LastParkedResult::WakeSelfSolo
                     }
-                } else {
-                    // GC finished.
-                    let concurrent_work_scheduled = self.on_gc_finished(worker);
+                    MoreWorkResult::None => {
+                        // GC finished.
+                        let concurrent_work_scheduled = self.on_gc_finished(tls, mmtk, parked);
 
-                    // Clear the current goal
-                    goals.on_current_goal_completed();
+                        // Clear the current goal
+                        goals.on_current_goal_completed();
 
-                    if concurrent_work_scheduled {
-                        // We just scheduled concurrent work. Wake up all GC workers to do concurrent work.
-                        LastParkedResult::WakeAll
-                    } else {
-                        // No scheduled concurrent work. Respond to another goal.
-                        self.respond_to_requests(worker, goals)
+                        if concurrent_work_scheduled {
+                            // We just scheduled concurrent work. Wake up all GC workers to do concurrent work.
+                            LastParkedResult::WakeAll
+                        } else {
+                            // No scheduled concurrent work. Respond to another goal.
+                            self.respond_to_requests(mmtk, goals)
+                        }
                     }
                 }
             }
             WorkerGoal::StopForFork | WorkerGoal::Shutdown => {
-                panic!(
-                    "Worker {} parked again when it is asked to exit.",
-                    worker.ordinal
-                )
+                panic!("Worker {} parked again when it is asked to exit.", ordinal)
             }
         }
     }
@@ -552,7 +713,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     /// Respond to a worker reqeust.
     fn respond_to_requests(
         &self,
-        worker: &GCWorker<VM>,
+        mmtk: &'static MMTK<VM>,
         goals: &mut WorkerGoals,
     ) -> LastParkedResult {
         assert!(goals.current().is_none());
@@ -560,7 +721,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let mut next_goal = goals.poll_next_goal();
         if next_goal.is_none() {
             // No work now. Check if we would like to do a GC poll from GC workers.
-            if worker.mmtk.gc_trigger.poll_from_last_parked_worker() {
+            if mmtk.gc_trigger.poll_from_last_parked_worker() {
                 goals.set_request(WorkerGoal::Gc);
                 next_goal = goals.poll_next_goal();
             }
@@ -569,8 +730,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let Some(goal) = next_goal else {
             // No requests, and the poll above did not ask for one either. If a concurrent phase
             // was running, its work packets have now drained, tell the plan.
-            if worker.mmtk.state.gc_status.load() == crate::global_state::GcStatus::InConcurrentGC {
-                let plan = worker.mmtk.get_plan().concurrent().unwrap();
+            if mmtk.state.gc_status.load() == crate::global_state::GcStatus::InConcurrentGC {
+                let plan = mmtk.get_plan().concurrent().unwrap();
                 plan.on_concurrent_work_drained();
             }
             // Park this worker, too.
@@ -596,33 +757,33 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     /// Find more work for workers to do.
-    ///
-    /// Returns the number of workers worth waking: `0` if there is no more work (the GC is done),
-    /// or `usize::MAX` to mean "wake everyone".
-    fn find_more_work_for_workers(&self) -> usize {
+    fn find_more_work_for_workers(&self) -> MoreWorkResult<VM> {
         if self.worker_group.has_designated_work() {
             trace!("Some workers have designated work.");
             // Designated work belongs to specific workers, and `notify_one` cannot choose which
             // waiter it wakes, so everyone has to be given the chance to check.
-            return usize::MAX;
+            return MoreWorkResult::WakeAll;
         }
 
         // See if any bucket has a sentinel.
         let sentinels = self.schedule_sentinels();
         if sentinels != 0 {
             trace!("Some sentinels are scheduled.");
-            return sentinels;
+            return MoreWorkResult::Wake(sentinels);
         }
 
-        // Try to open new buckets.
-        let opened = self.update_buckets();
-        if opened != 0 {
-            trace!("Some buckets are opened.");
-            return opened;
+        // Try to open new buckets (or launch a stage's solo packet before opening it).
+        match self.update_buckets() {
+            BucketUpdateResult::SoloStage(factory) => {
+                trace!("Scheduling solo stage packet before opening bucket.");
+                MoreWorkResult::SoloStage(factory)
+            }
+            BucketUpdateResult::OpenedWithPackets(opened) => {
+                trace!("Some buckets are opened.");
+                MoreWorkResult::Wake(opened)
+            }
+            BucketUpdateResult::NoWork => MoreWorkResult::None,
         }
-
-        // If all of the above failed, it means GC has finished.
-        0
     }
 
     fn do_vm_release(&self, mmtk: &MMTK<VM>) {
@@ -634,7 +795,12 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     /// Called when GC has finished, i.e. when all work packets have been executed.
     ///
     /// Return `true` if any concurrent work packets have been scheduled.
-    fn on_gc_finished(&self, worker: &GCWorker<VM>) -> bool {
+    fn on_gc_finished(
+        &self,
+        tls: VMWorkerThread,
+        mmtk: &'static MMTK<VM>,
+        parked: WorkersParkedToken<'_>,
+    ) -> bool {
         // All GC workers must have parked by now.
         debug_assert!(!self.worker_group.has_designated_work());
         self.debug_assert_all_stw_buckets_empty();
@@ -643,27 +809,29 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         self.close_all_stw_buckets();
         self.debug_assert_all_stw_buckets_closed();
 
-        self.do_vm_release(worker.mmtk);
-
-        let mmtk = worker.mmtk;
+        self.do_vm_release(mmtk);
 
         // Tell GC trigger that GC ended - this happens before we resume mutators.
         mmtk.gc_trigger.policy.on_pause_end(mmtk);
 
-        // All other workers are parked, so it is safe to access the Plan instance mutably.
+        // All other workers are parked (`parked: WorkersParkedToken`), so we can acquire an
+        // instance-branded exclusive phase lease via `mmtk.phase_auth.with_exclusive`.
         probe!(mmtk, plan_end_of_gc_begin);
         let next_gc_full_heap = crate::plan::compute_next_gc_full_heap(mmtk.get_plan());
-        let gc_ended = {
-            // SAFETY: `on_gc_finished` runs on the coordinator/last-parked GC worker after all STW
-            // buckets have drained and been closed, while all other GC workers remain parked and
-            // before mutators are resumed below (`resume_mutators`). `next_gc_full_heap` was
-            // computed above before acquiring `plan_mut`, and `finish_plan_pause` performs only
-            // plan-local updates without invoking `gc_trigger.policy.on_gc_end` (which is called
-            // after `plan_mut` is dropped below), so no concurrent or re-entrant read/write access
-            // to `mmtk.plan` occurs while `plan_mut` is live.
+        let gc_ended = mmtk.phase_auth.with_exclusive(parked, |_lease| {
+            let _plan_lease = mmtk.enter_plan_mut_lease();
+            // SAFETY: `on_gc_finished` runs on the last-parked GC worker under `mmtk.phase_auth`
+            // (`parked` proves `WorkerMonitor::sync` is held and every `WorkerPerm` of `mmtk.id`
+            // is parked, and `with_exclusive` + `enter_plan_mut_lease` enforce non-reentrancy)
+            // after all STW buckets have drained and been closed and before mutators are resumed
+            // below (`resume_mutators`). `next_gc_full_heap` was computed above before acquiring
+            // `plan_mut`, and `finish_plan_pause` performs only plan-local updates without
+            // invoking `gc_trigger.policy.on_gc_end` (called after this closure drops `plan_mut`),
+            // so no concurrent or re-entrant read/write access to `mmtk.plan` occurs while
+            // `plan_mut` is live.
             let plan_mut: &mut dyn Plan<VM = VM> = unsafe { mmtk.get_plan_mut() };
-            crate::plan::finish_plan_pause(plan_mut, mmtk, worker.tls, next_gc_full_heap)
-        };
+            crate::plan::finish_plan_pause(plan_mut, mmtk, tls, next_gc_full_heap)
+        });
         if gc_ended {
             mmtk.gc_trigger.policy.on_gc_end(mmtk);
         }
@@ -745,7 +913,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         if mmtk.stats.get_gathering_stats() {
             mmtk.stats.end_gc();
         }
-        <VM as VMBinding>::VMCollection::resume_mutators(worker.tls);
+        <VM as VMBinding>::VMCollection::resume_mutators(tls);
 
         concurrent_work_scheduled
     }

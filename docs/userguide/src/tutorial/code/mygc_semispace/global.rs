@@ -92,7 +92,7 @@ impl<VM: VMBinding> Plan for MyGC<VM> {
     // ANCHOR_END: collection_required()
 
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
-        &*ALLOCATOR_MAPPING
+        &ALLOCATOR_MAPPING
     }
 
     // Modify
@@ -116,10 +116,10 @@ impl<VM: VMBinding> Plan for MyGC<VM> {
     // Add
     // ANCHOR: prepare_worker
     fn prepare_worker(&self, worker: &mut GCWorker<VM>) {
-        // SAFETY: `create_copy_config` maps `CopySemantics::DefaultCopy` to
-        // `CopySelector::CopySpace(0)`, so `GCWorkerCopyContext::new` initializes `copy[0]` with a
-        // valid `CopySpaceCopyContext<VM>`.
-        unsafe { worker.get_copy_context_mut().copy[0].assume_init_mut() }.rebind(self.tospace());
+        let plan = worker.mmtk.get_plan().downcast_ref::<Self>().unwrap();
+        worker
+            .get_copy_context_mut()
+            .rebind_copy_space(0, plan.tospace());
     }
     // ANCHOR_END: prepare_worker
 
