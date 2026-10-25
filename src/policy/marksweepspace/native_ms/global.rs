@@ -338,6 +338,10 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
     }
 
     pub fn new(args: crate::policy::space::PlanCreateSpaceArgs<VM>) -> MarkSweepSpace<VM> {
+        assert!(
+            VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side(),
+            "MarkSweepSpace requires LOCAL_MARK_BIT_SPEC to be on the side"
+        );
         let scheduler = args.scheduler.clone();
         let vm_map = args.vm_map;
         let is_discontiguous = args.vmrequest.is_discontiguous();

@@ -102,7 +102,7 @@ impl<VM: VMBinding> Allocator<VM> for BumpAllocator<VM> {
         let result = align_allocation_no_fill::<VM>(self.bump_pointer.cursor, align, offset);
         let new_cursor = result + size;
 
-        if new_cursor > self.bump_pointer.limit {
+        if new_cursor < result || new_cursor > self.bump_pointer.limit {
             trace!("Thread local buffer used up, go to alloc slow path");
             self.alloc_slow(size, align, offset)
         } else {
@@ -150,7 +150,9 @@ impl<VM: VMBinding> Allocator<VM> for BumpAllocator<VM> {
         // For stress test, limit is [0, block_size) to artificially make the
         // check in the fastpath (alloc()) fail. The real limit is recovered by
         // adding it to the current cursor.
-        if new_cursor > self.bump_pointer.cursor + self.bump_pointer.limit.as_usize() {
+        if new_cursor < result
+            || new_cursor > self.bump_pointer.cursor + self.bump_pointer.limit.as_usize()
+        {
             self.acquire_block(size, align, offset, true)
         } else {
             fill_alignment_gap::<VM>(self.bump_pointer.cursor, result);

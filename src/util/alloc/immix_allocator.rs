@@ -74,7 +74,7 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
         let result = align_allocation_no_fill::<VM>(self.bump_pointer.cursor, align, offset);
         let new_cursor = result + size;
 
-        if new_cursor > self.bump_pointer.limit {
+        if new_cursor < result || new_cursor > self.bump_pointer.limit {
             trace!(
                 "{:?}: Thread local buffer used up, go to alloc slow path",
                 self.tls
@@ -196,7 +196,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         trace!("{:?}: overflow_alloc", self.tls);
         let start = align_allocation_no_fill::<VM>(self.large_bump_pointer.cursor, align, offset);
         let end = start + size;
-        if end > self.large_bump_pointer.limit {
+        if end < start || end > self.large_bump_pointer.limit {
             self.request_for_large = true;
             let rtn = self.alloc_slow_inline(size, align, offset);
             self.request_for_large = false;
@@ -356,7 +356,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     fn require_new_block(&mut self, size: usize, align: usize, offset: usize) -> bool {
         let result = align_allocation_no_fill::<VM>(self.bump_pointer.cursor, align, offset);
         let new_cursor = result + size;
-        let insufficient_space = new_cursor > self.bump_pointer.limit;
+        let insufficient_space = new_cursor < result || new_cursor > self.bump_pointer.limit;
 
         // We want this function to behave as if `alloc()` has been called. Hence, we perform a
         // size check and then return the conditions where `alloc_slow_inline()` would be called
@@ -366,7 +366,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             let start =
                 align_allocation_no_fill::<VM>(self.large_bump_pointer.cursor, align, offset);
             let end = start + size;
-            end > self.large_bump_pointer.limit
+            end < start || end > self.large_bump_pointer.limit
         } else {
             // We try to acquire recyclable lines here just like `alloc_slow_hot()`
             insufficient_space && !self.acquire_recyclable_lines(size, align, offset)

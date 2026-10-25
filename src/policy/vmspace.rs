@@ -231,6 +231,14 @@ impl<VM: VMBinding> VMSpace<VM> {
         assert!(size > 0);
         assert!(!start.is_zero());
 
+        let end_raw = start
+            .as_usize()
+            .checked_add(size)
+            .expect("VMSpace region start + size overflowed Address");
+        assert!(
+            end_raw.checked_add(BYTES_IN_CHUNK - 1).is_some(),
+            "VMSpace region end chunk alignment overflowed Address"
+        );
         let end = start + size;
 
         let chunk_start = start.align_down(BYTES_IN_CHUNK);

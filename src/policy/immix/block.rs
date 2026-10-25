@@ -97,7 +97,7 @@ impl Region for Block {
     };
 
     fn from_aligned_address(address: Address) -> Self {
-        debug_assert!(address.is_aligned_to(Self::BYTES));
+        assert!(address.is_aligned_to(Self::BYTES));
         Self(address)
     }
 
@@ -137,12 +137,23 @@ impl Block {
     pub const NURSERY_PROMOTION_STATE_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::NURSERY_PROMOTION_STATE;
 
+    fn assert_rc_table_mapped(&self) {
+        assert!(
+            !self.is_zero()
+                && self.start().is_aligned_to(Self::BYTES)
+                && crate::util::rc::RC_TABLE.is_mapped(self.start()),
+            "Block {:?} is not a non-zero aligned Immix block with mapped RC_TABLE",
+            self
+        );
+    }
+
     pub fn calc_dead_lines(&self) -> usize {
-        assert!(crate::util::rc::RC_TABLE.is_mapped(self.start()));
+        self.assert_rc_table_mapped();
         let mut dead_lines = 0;
-        // SAFETY: `assert!` above verifies `RC_TABLE` is mapped for `self`, and `calc_dead_lines`
-        // is invoked during STW mature-evacuation candidate selection when no thread performs
-        // non-atomic writes to `RC_TABLE` for `self`.
+        // SAFETY: `assert_rc_table_mapped` verified `!self.is_zero()`, `self.start()` is aligned to
+        // `Self::BYTES`, and `RC_TABLE` is mapped for `[self.start(), self.end())`; all `RC_TABLE`
+        // accesses in `src/policy/` use `AtomicU8` (`clear_rc_table`, `RCArray`), and `calc_dead_lines`
+        // runs during STW candidate selection when no `rc.rs` non-atomic `RC_TABLE` writes occur.
         let rc_array = unsafe { RCArray::of(*self) };
         for i in 0..Self::LINES {
             if rc_array.is_dead(i) {
@@ -294,7 +305,13 @@ impl Block {
     }
 
     pub fn clear_rc_table(&self) {
-        crate::util::rc::RC_TABLE.bzero_metadata(self.start(), Block::BYTES);
+        self.assert_rc_table_mapped();
+        // SAFETY: `assert_rc_table_mapped` verified `!self.is_zero()`, `self.start()` is aligned to
+        // `Self::BYTES`, and `RC_TABLE` is mapped for `[self.start(), self.end())`; zeroing via
+        // `AtomicU8::store(0, Ordering::Relaxed)` avoids non-atomic `memset` writes on `RC_TABLE`
+        // while `clear_rc_table` is only called on freshly released/acquired blocks not subject to
+        // concurrent non-atomic `rc.rs` writes.
+        unsafe { RCArray::of(*self) }.clear();
     }
 
     pub fn clear_striddle_table(&self) {
@@ -365,8 +382,9 @@ impl Block {
     /// Return `true` if every line in `self` has all-zero reference counts in `RC_TABLE`.
     ///
     /// # Safety
-    /// `crate::util::rc::RC_TABLE` must be mapped for `self`, and no thread may perform
-    /// concurrent non-atomic writes to `RC_TABLE` for `self`.
+    /// `!self.is_zero()`, `self.start().is_aligned_to(Self::BYTES)`, `crate::util::rc::RC_TABLE`
+    /// must be mapped for `self`, and no thread may perform concurrent non-atomic writes to
+    /// `RC_TABLE` for `self`.
     unsafe fn rc_dead(&self) -> bool {
         // SAFETY: Caller upholds `RCArray::of` preconditions for `*self`.
         let rc_array = unsafe { RCArray::of(*self) };
@@ -484,7 +502,7 @@ impl Block {
     }
 
     pub fn rc_sweep_nursery<VM: VMBinding>(&self, space: &ImmixSpace<VM>) -> bool {
-        assert!(crate::util::rc::RC_TABLE.is_mapped(self.start()));
+        self.assert_rc_table_mapped();
         let is_in_place_promoted = self.is_in_place_promoted();
         self.clear_in_place_promoted();
         if is_in_place_promoted {
@@ -497,9 +515,10 @@ impl Block {
             // and their VO bits need to be cleared before the lines can be reused.
             #[cfg(feature = "vo_bit")]
             {
-                // SAFETY: `assert!` above verifies `RC_TABLE` is mapped for `self`, and
-                // `rc_sweep_nursery` runs during STW nursery sweeping with exclusive ownership of
-                // this nursery block (`no` concurrent non-atomic `RC_TABLE` writes).
+                // SAFETY: `assert_rc_table_mapped` verified `!self.is_zero()`, `Self::BYTES`
+                // alignment, and mapped `RC_TABLE` for `self`; `rc_sweep_nursery` runs during STW
+                // nursery sweeping with exclusive ownership of this nursery block (no concurrent
+                // non-atomic `RC_TABLE` writes).
                 let rc_array = unsafe { RCArray::of(*self) };
 
                 for (i, line) in self.lines().enumerate() {
@@ -513,8 +532,9 @@ impl Block {
             false
         } else {
             debug_assert!(
-                // SAFETY: `assert!` above verifies `RC_TABLE` is mapped for `self`, and STW nursery
-                // sweeping has exclusive ownership of this dead nursery block.
+                // SAFETY: `assert_rc_table_mapped` verified `!self.is_zero()`, `Self::BYTES`
+                // alignment, and mapped `RC_TABLE` for `self`, and STW nursery sweeping has
+                // exclusive ownership of this dead nursery block.
                 unsafe { self.rc_dead() },
                 "{:?} has non-zero rc value",
                 self
@@ -547,10 +567,12 @@ impl Block {
         if self.get_state() == BlockState::Unallocated || self.get_state() == BlockState::Nursery {
             return false;
         }
-        assert!(crate::util::rc::RC_TABLE.is_mapped(self.start()));
-        // SAFETY: `assert!` above verifies `RC_TABLE` is mapped for `self`, and during STW mature
-        // sweeping any concurrent `RC_TABLE` accesses on allocated mature blocks are atomic
-        // `AtomicU8` operations (no concurrent non-atomic `RC_TABLE` writes).
+        self.assert_rc_table_mapped();
+        // SAFETY: `assert_rc_table_mapped` verified `!self.is_zero()`, `Self::BYTES` alignment, and
+        // mapped `RC_TABLE` for `self`. `rc_sweep_mature` runs both during STW mature sweeping and
+        // concurrently in LXR's `SweepBlocksAfterDecs` (`WorkBucketStage::Unconstrained` after STW
+        // `ProcessDecs` has finished all non-atomic `rc.rs` RC mutations); all concurrent `RC_TABLE`
+        // accesses (including `clear_rc_table` and mutator/worker hole scans) use `AtomicU8`.
         if defrag || unsafe { self.rc_dead() } {
             if self.attempt_dealloc(true) {
                 // Bulk clear the VO bits of the entire block.
@@ -568,8 +590,9 @@ impl Block {
             // See the caller of this function.
             // At least one object is dead in the block.
             let add_as_reusable = {
-                // SAFETY: `assert!` above verifies `RC_TABLE` is mapped for `self`, with no
-                // concurrent non-atomic `RC_TABLE` writes on allocated mature blocks.
+                // SAFETY: `assert_rc_table_mapped` verified `!self.is_zero()`, `Self::BYTES`
+                // alignment, and mapped `RC_TABLE` for `self`, and all concurrent `RC_TABLE`
+                // accesses during STW or `Unconstrained` `SweepBlocksAfterDecs` use `AtomicU8`.
                 let has_holes = unsafe { self.has_holes() };
                 self.fetch_update_state(|s| {
                     if s == BlockState::Reusing
@@ -594,9 +617,9 @@ impl Block {
                 // and their VO bits need to be cleared before the block can be reused.
                 #[cfg(feature = "vo_bit")]
                 {
-                    // SAFETY: `assert!` above verifies `RC_TABLE` is mapped for `self`, and this
-                    // worker just won `fetch_update_state` to transition `self` to `Reusable`
-                    // before pushing it to `space.reusable_blocks` (no concurrent non-atomic writes).
+                    // SAFETY: `assert_rc_table_mapped` verified `!self.is_zero()`, `Self::BYTES`
+                    // alignment, and mapped `RC_TABLE` for `self`, and all concurrent `RC_TABLE`
+                    // accesses during STW or `Unconstrained` `SweepBlocksAfterDecs` use `AtomicU8`.
                     let rc_array = unsafe { RCArray::of(*self) };
 
                     for (i, line) in self.lines().enumerate() {
@@ -618,8 +641,9 @@ impl Block {
     /// Return `true` if `self` has at least one allocatable free-line hole according to `RC_TABLE`.
     ///
     /// # Safety
-    /// `crate::util::rc::RC_TABLE` must be mapped for `self`, and no thread may perform
-    /// concurrent non-atomic writes to `RC_TABLE` for `self`.
+    /// `!self.is_zero()`, `self.start().is_aligned_to(Self::BYTES)`, `crate::util::rc::RC_TABLE`
+    /// must be mapped for `self`, and no thread may perform concurrent non-atomic writes to
+    /// `RC_TABLE` for `self`.
     unsafe fn has_holes(&self) -> bool {
         // SAFETY: Caller upholds `RCArray::of` preconditions for `*self`.
         let rc_array = unsafe { RCArray::of(*self) };

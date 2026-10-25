@@ -11,7 +11,13 @@ use crate::util::Address;
 use crate::util::VMThread;
 use crate::vm::VMBinding;
 
-/// A MiMalloc free list allocator
+/// A MiMalloc free list allocator.
+///
+/// # Layout & Visibility Note
+/// `FreeListAllocator` is `#[repr(C)]` so VM bindings may embed [`crate::util::alloc::Allocators`]
+/// in mutator thread-local storage. Its internal [`BlockLists`] fields (`available_blocks`,
+/// `available_blocks_stress`, `unswept_blocks`, and `consumed_blocks`) are module-private to
+/// enforce free-list representation invariants while keeping the `#[repr(C)]` byte layout unchanged.
 #[repr(C)]
 pub struct FreeListAllocator<VM: VMBinding> {
     /// [`VMThread`] associated with this allocator instance
@@ -234,7 +240,7 @@ impl<VM: VMBinding> FreeListAllocator<VM> {
         debug_assert!(bin <= MAX_BIN);
 
         let available = &mut available_blocks[bin];
-        debug_assert!(available.size >= size);
+        debug_assert!(available.size() >= size);
 
         while let Some(block) = available.first() {
             // SAFETY: `block` is in `available`, which is exclusively owned here and contains
@@ -334,7 +340,7 @@ impl<VM: VMBinding> FreeListAllocator<VM> {
 
                 crate::policy::marksweepspace::native_ms::BlockAcquireResult::Fresh(block) => {
                     debug!("Acquire global block: Fresh {:?}", block);
-                    let cell_size = self.available_blocks[bin].size;
+                    let cell_size = self.available_blocks[bin].size();
                     // SAFETY: `block` was freshly acquired from `self.space` with mapped memory
                     // and local side metadata, exclusively owned by `self`; `cell_size` is a
                     // non-zero word-aligned MiMalloc bin size (`<= Block::BYTES`).

@@ -131,7 +131,7 @@ impl<VM: VMBinding> GCWorkerCopyContext<VM> {
             );
         }
         match self.config.copy_mapping[semantics] {
-            CopySelector::CopySpace(index) => self.copy[index as usize]
+            CopySelector::CopySpace(_) => self.copy.0[0]
                 .as_mut()
                 .alloc_copy(original, bytes, align, offset),
             CopySelector::Immix(_) => self
@@ -166,9 +166,7 @@ impl<VM: VMBinding> GCWorkerCopyContext<VM> {
         }
         // Policy specific post copy.
         match self.config.copy_mapping[semantics] {
-            CopySelector::CopySpace(index) => {
-                self.copy[index as usize].as_mut().post_copy(object, bytes)
-            }
+            CopySelector::CopySpace(_) => self.copy.0[0].as_mut().post_copy(object, bytes),
             CopySelector::Immix(_) => self
                 .immix
                 .as_mut()
@@ -188,7 +186,7 @@ impl<VM: VMBinding> GCWorkerCopyContext<VM> {
         // Delegate to prepare() for each policy copy context
         for (_, selector) in self.config.copy_mapping.iter() {
             match selector {
-                CopySelector::CopySpace(index) => self.copy[*index as usize].as_mut().prepare(),
+                CopySelector::CopySpace(_) => self.copy.0[0].as_mut().prepare(),
                 CopySelector::Immix(_) => self
                     .immix
                     .as_mut()
@@ -209,7 +207,7 @@ impl<VM: VMBinding> GCWorkerCopyContext<VM> {
         // Delegate to release() for each policy copy context
         for (_, selector) in self.config.copy_mapping.iter() {
             match selector {
-                CopySelector::CopySpace(index) => self.copy[*index as usize].as_mut().release(),
+                CopySelector::CopySpace(_) => self.copy.0[0].as_mut().release(),
                 CopySelector::Immix(_) => self
                     .immix
                     .as_mut()
@@ -232,6 +230,7 @@ impl<VM: VMBinding> GCWorkerCopyContext<VM> {
     /// * `plan`: A reference to the current plan.
     /// * `config`: The configuration for the copy context.
     pub fn new(worker_tls: VMWorkerThread, mmtk: &MMTK<VM>, config: CopyConfig<VM>) -> Self {
+        const _: () = assert!(MAX_COPYSPACE_COPY_ALLOCATORS == 1);
         const _: () = assert!(MAX_IMMIX_COPY_ALLOCATORS == 1);
         const _: () = assert!(MAX_IMMIX_HYBRID_COPY_ALLOCATORS == 1);
         let mut ret = GCWorkerCopyContext {
@@ -250,6 +249,7 @@ impl<VM: VMBinding> GCWorkerCopyContext<VM> {
             match selector {
                 CopySelector::CopySpace(index) => {
                     let idx = index as usize;
+                    assert_eq!(idx, 0, "CopySpaceCopyContext index out of bounds: {idx}");
                     assert!(!copy_init[idx], "Duplicate selector {selector:?}");
                     ret.copy.0[idx] = CopySpaceCopySlot(Some(CopySpaceCopyContext::new(
                         worker_tls,

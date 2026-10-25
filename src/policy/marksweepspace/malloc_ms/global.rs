@@ -352,6 +352,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
     /// Unset multiple pages, starting from the given address, for the given size, and decrease the active page count if we unset any page mark in the region
     ///
     /// # Safety
+    /// - `start` and `size` must both be aligned to `BYTES_IN_MALLOC_PAGE`.
     /// - `ACTIVE_PAGE_METADATA_SPEC` side metadata must be mapped for `[start, start + size)`.
     /// - Only the calling GC thread may access the `ACTIVE_PAGE_METADATA_SPEC` bytes for pages in
     ///   `[start, start + size)` (1 metadata byte per `BYTES_IN_MALLOC_PAGE`).
@@ -686,10 +687,10 @@ impl<VM: VMBinding> MallocSpace<VM> {
                 unsafe { crate::util::metadata::vo_bit::is_vo_bit_set_unsafe(cursor) };
             if let Some(object) = maybe_object {
                 // SAFETY: `object` has its VO bit set in `[start, end)`, so by caller invariant it
-                // is a live `MallocSpace` allocation with mapped side metadata; we query its size
-                // before `visit` potentially frees it.
-                let (_, _, bytes) = unsafe { Self::get_malloc_addr_size(object) };
-                let next_cursor = (cursor + bytes).align_up(ObjectReference::ALIGNMENT);
+                // is a live `MallocSpace` allocation with mapped side metadata; we query its start
+                // address and usable size before `visit` potentially frees it.
+                let (obj_start, _, bytes) = unsafe { Self::get_malloc_addr_size(object) };
+                let next_cursor = (obj_start + bytes).align_up(ObjectReference::ALIGNMENT);
                 visit(object);
                 cursor = next_cursor;
             } else {
@@ -867,7 +868,8 @@ impl<VM: VMBinding> MallocSpace<VM> {
                     // TODO we aren't actually accounting for the case where an object is alive and spans
                     // a page boundary as we don't know what the object sizes are/what is alive in the bulk region
                     if alloc_128 != 0 {
-                        empty_page_start = address + bulk_load_size;
+                        empty_page_start = empty_page_start
+                            .max((address + bulk_load_size).align_up(BYTES_IN_MALLOC_PAGE));
                     }
                 }
 

@@ -24,7 +24,7 @@ impl Region for Line {
     #[allow(clippy::assertions_on_constants)] // make sure line is not used when BLOCK_ONLY is turned on.
     fn from_aligned_address(address: Address) -> Self {
         debug_assert!(!super::BLOCK_ONLY);
-        debug_assert!(address.is_aligned_to(Self::BYTES));
+        assert!(address.is_aligned_to(Self::BYTES));
         Self(address)
     }
 
@@ -166,21 +166,34 @@ impl RCArray<'_> {
     /// Borrow the `RC_TABLE` metadata bytes for `block` as an array of `AtomicU8` per line.
     ///
     /// # Safety
+    /// - `!block.is_zero()` and `block.start().is_aligned_to(Block::BYTES)`, so `[block.start(), block.end())`
+    ///   lies entirely within a single `ImmixSpace` block / chunk without straddling page boundaries.
     /// - `crate::util::rc::RC_TABLE` side metadata must be mapped for `[block.start(), block.end())`.
     /// - No thread may perform non-atomic writes (`store`, `store_byte_relaxed`, `bzero_metadata`,
     ///   `bset_metadata`) to `RC_TABLE` for `block` for the lifetime `'a` of the returned `RCArray`
     ///   (concurrent atomic `RC_TABLE` updates via `AtomicU8` are sound).
     pub(super) unsafe fn of(block: Block) -> Self {
+        debug_assert!(!block.is_zero());
+        debug_assert!(block.start().is_aligned_to(Block::BYTES));
         debug_assert!(crate::util::rc::RC_TABLE.is_mapped(block.start()));
         let ptr = block
             .rc_table_start()
             .to_ptr::<[[AtomicU8; BYTES_PER_LINE]; Block::LINES]>();
         Self {
-            // SAFETY: `ptr` has alignment 1 (`align_of::<AtomicU8>() == 1`), `RC_TABLE` is global
-            // contiguous side metadata whose `[block.start(), block.end())` bytes are mapped and
-            // zero-initialized by `MMAPPER`, and caller guarantees no concurrent non-atomic writes
-            // for lifetime `'a`.
+            // SAFETY: `ptr` has alignment 1 (`align_of::<AtomicU8>() == 1`), `!block.is_zero()` and
+            // `block.start().is_aligned_to(Block::BYTES)` keep `[block.start(), block.end())` within
+            // one chunk, `RC_TABLE` is global contiguous side metadata whose bytes for `block` are
+            // mapped and zero-initialized by `MMAPPER`, and caller guarantees no concurrent
+            // non-atomic writes for lifetime `'a`.
             table: unsafe { &*ptr },
+        }
+    }
+
+    pub(super) fn clear(&self) {
+        for line in self.table {
+            for byte in line {
+                byte.store(0, Ordering::Relaxed);
+            }
         }
     }
 

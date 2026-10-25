@@ -38,7 +38,7 @@ impl Region for Block {
     const LOG_BYTES: usize = 16;
 
     fn from_aligned_address(address: Address) -> Self {
-        debug_assert!(address.is_aligned_to(Self::BYTES));
+        assert!(address.is_aligned_to(Self::BYTES));
         Self(
             NonZeroUsize::new(address.as_usize())
                 .expect("native_ms::Block address must be non-zero"),
@@ -397,29 +397,32 @@ impl Block {
     /// (`!VM::USE_ALLOCATION_OFFSET`, `VM::MAX_ALIGNMENT == VM::MIN_ALIGNMENT`, cell size aligned to
     /// `VM::MAX_ALIGNMENT`, and `VM::VMObjectModel::UNIFIED_OBJECT_REFERENCE_ADDRESS`).
     unsafe fn simple_sweep<VM: VMBinding>(&self) {
+        assert!(
+            VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side(),
+            "MarkSweepSpace requires side mark bits"
+        );
+        let mark_side = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec();
         let cell_size = self.load_block_cell_size();
         debug_assert_ne!(cell_size, 0);
         let mut cell = self.start();
         let mut last = Address::ZERO;
         while cell + cell_size <= self.start() + Block::BYTES {
-            // The invariants we checked earlier ensures that we can use cell and object reference interchangably
-            // We may not really have an object in this cell, but if we do, this object reference is correct.
-            // SAFETY: `self.start()` is non-zero (`Block(NonZeroUsize)`) and `cell >= self.start()`
-            // without wrapping (`cell + cell_size <= self.end()`), so `cell` is non-zero and lies
-            // within this allocated `MarkSweepSpace` block with mapped mark-bit metadata.
-            let potential_object = unsafe { ObjectReference::from_raw_address_unchecked(cell) };
-
-            if !VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
-                .is_marked::<VM>(potential_object, Ordering::SeqCst)
-            {
+            // The invariants checked in `sweep` ensure cell start addresses equal object reference
+            // addresses for `VM`. Querying side mark bits directly by `Address` avoids fabricating
+            // an `ObjectReference` for unallocated free-list cells.
+            if mark_side.load_atomic::<u8>(cell, Ordering::SeqCst) == 0 {
                 // clear VO bit if it is ever set. It is possible that the VO bit is never set for this cell (i.e. there was no object in this cell before this GC),
                 // we unset the bit anyway.
                 #[cfg(feature = "vo_bit")]
-                crate::util::metadata::vo_bit::unset_vo_bit_nocheck(potential_object);
-                // SAFETY: `cell` is word-aligned (`self.start()` is 64KB-aligned and `cell_size` is a
-                // multiple of `BYTES_IN_ADDRESS`), within mapped block memory `[self.start(), self.end())`,
-                // `cell_size >= BYTES_IN_ADDRESS`, and this unmarked cell is dead and exclusively
-                // owned by the sweeping thread.
+                crate::util::metadata::vo_bit::VO_BIT_SIDE_METADATA_SPEC.store_atomic::<u8>(
+                    cell,
+                    0,
+                    Ordering::SeqCst,
+                );
+                // SAFETY: `cell` is word-aligned (`self.start()` is 64KB-aligned as enforced by
+                // `Block::from_aligned_address`, and `cell_size` is a multiple of `BYTES_IN_ADDRESS`),
+                // within mapped block memory `[self.start(), self.end())`, `cell_size >= BYTES_IN_ADDRESS`,
+                // and this unmarked cell is dead and exclusively owned by the sweeping thread.
                 unsafe {
                     cell.store::<Address>(last);
                 }
@@ -441,74 +444,74 @@ impl Block {
     /// Same preconditions as [`Self::sweep`].
     unsafe fn naive_brute_force_sweep<VM: VMBinding>(&self) {
         use crate::util::constants::MIN_OBJECT_SIZE;
+        const _: () = assert!(MIN_OBJECT_SIZE == ObjectReference::ALIGNMENT);
+
+        assert!(
+            VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side(),
+            "MarkSweepSpace requires side mark bits"
+        );
+        let mark_side = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec();
 
         // Cell size for this block.
         let cell_size = self.load_block_cell_size();
+        debug_assert_ne!(cell_size, 0);
         // Current cell
         let mut cell = self.start();
         // Last free cell in the free list
         let mut last = Address::ZERO;
-        // Current cursor
-        let mut cursor = cell;
+        // Clamp lower-bound offset into `[0, cell_size]` so candidate addresses stay strictly
+        // within `[cell, cell + cell_size)` and never underflow/overflow into adjacent blocks or
+        // unmapped chunks.
+        let lower_offset =
+            (VM::VMObjectModel::OBJECT_REF_OFFSET_LOWER_BOUND.max(0) as usize).min(cell_size);
 
         debug!("Sweep block {:?}, cell size {}", self, cell_size);
 
         while cell + cell_size <= self.end() {
-            // possible object ref
-            // SAFETY: `cursor >= self.start() > 0` and adding `OBJECT_REF_OFFSET_LOWER_BOUND` stays
-            // non-zero within the allocated block/chunk whose mark-bit metadata is mapped.
-            let potential_object_ref = unsafe {
-                ObjectReference::from_raw_address_unchecked(
-                    cursor + VM::VMObjectModel::OBJECT_REF_OFFSET_LOWER_BOUND,
-                )
-            };
-            trace!(
-                "{:?}: cell = {}, last cell in free list = {}, cursor = {}, potential object = {}",
-                self,
-                cell,
-                last,
-                cursor,
-                potential_object_ref
-            );
+            let cell_end = cell + cell_size;
+            let mut candidate = (cell + lower_offset).align_up(ObjectReference::ALIGNMENT);
+            let mut is_live = false;
 
-            if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
-                .is_marked::<VM>(potential_object_ref, Ordering::SeqCst)
-            {
-                debug!("{:?} Live cell: {}", self, cell);
-                // If the mark bit is set, the cell is alive.
-                // We directly jump to the end of the cell.
-                cell += cell_size;
-                cursor = cell;
-            } else {
-                // If the mark bit is not set, we don't know if the cell is alive or not. We keep search for the mark bit.
-                cursor += MIN_OBJECT_SIZE;
-
-                if cursor >= cell + cell_size {
-                    // We now stepped to the next cell. This means we did not find mark bit in the current cell, and we can add this cell to free list.
-                    debug!(
-                        "{:?} Free cell: {}, last cell in freelist is {}",
-                        self, cell, last
-                    );
-
-                    // Clear VO bit: we don't know where the object reference actually is, so we bulk zero the cell.
-                    #[cfg(feature = "vo_bit")]
-                    crate::util::metadata::vo_bit::bzero_vo_bit(cell, cell_size);
-
-                    // store the previous cell to make the free list
-                    debug_assert!(last.is_zero() || (last >= self.start() && last < self.end()));
-                    // SAFETY: `cell` is word-aligned (`self.start()` is 64KB-aligned and `cell_size`
-                    // is a multiple of `BYTES_IN_ADDRESS`), within mapped block memory
-                    // `[self.start(), self.end())`, `cell_size >= BYTES_IN_ADDRESS`, and no mark bit
-                    // was set anywhere in `[cell, cell + cell_size)`, so the cell is dead and
-                    // exclusively owned by the sweeping thread.
-                    unsafe {
-                        cell.store::<Address>(last);
-                    }
-                    last = cell;
-                    cell += cell_size;
-                    debug_assert_eq!(cursor, cell);
+            while candidate < cell_end {
+                trace!(
+                    "{:?}: cell = {}, last cell in free list = {}, candidate = {}",
+                    self,
+                    cell,
+                    last,
+                    candidate,
+                );
+                if mark_side.load_atomic::<u8>(candidate, Ordering::SeqCst) != 0 {
+                    debug!("{:?} Live cell: {}", self, cell);
+                    is_live = true;
+                    break;
                 }
+                candidate += MIN_OBJECT_SIZE;
             }
+
+            if !is_live {
+                debug!(
+                    "{:?} Free cell: {}, last cell in freelist is {}",
+                    self, cell, last
+                );
+
+                // Clear VO bit: we don't know where the object reference actually is, so we bulk zero the cell.
+                #[cfg(feature = "vo_bit")]
+                crate::util::metadata::vo_bit::bzero_vo_bit(cell, cell_size);
+
+                // store the previous cell to make the free list
+                debug_assert!(last.is_zero() || (last >= self.start() && last < self.end()));
+                // SAFETY: `cell` is word-aligned (`self.start()` is 64KB-aligned as enforced by
+                // `Block::from_aligned_address`, and `cell_size` is a multiple of `BYTES_IN_ADDRESS`),
+                // within mapped block memory `[self.start(), self.end())`, `cell_size >= BYTES_IN_ADDRESS`,
+                // and no mark bit was set anywhere in `[cell, cell + cell_size)`, so the cell is dead and
+                // exclusively owned by the sweeping thread.
+                unsafe {
+                    cell.store::<Address>(last);
+                }
+                last = cell;
+            }
+
+            cell = cell_end;
         }
 
         // SAFETY: Caller guarantees exclusive access to `self`'s mapped `FREE_LIST_TABLE` entry.

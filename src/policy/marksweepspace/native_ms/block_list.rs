@@ -20,11 +20,15 @@ use std::sync::atomic::AtomicBool;
 ///    remains in `self`, its `PREV_BLOCK_TABLE` and `NEXT_BLOCK_TABLE` links are mutated only via
 ///    `&mut self` (with no concurrent writes to `FREE_LIST_TABLE` while `&self` or `&mut self`
 ///    methods inspect list blocks).
+/// 4. `self.size` is an immutable, non-zero, word-aligned MiMalloc bin size (`<= Block::BYTES`)
+///    established by [`new_empty_block_lists`]. All fields are module-private to enforce list and
+///    cell-size invariants while preserving the `#[repr(C)]` layout embedded in
+///    [`crate::util::alloc::FreeListAllocator`].
 #[repr(C)]
 pub struct BlockList {
     first: Option<Block>,
     last: Option<Block>,
-    pub size: usize,
+    size: usize,
     // Retained to preserve the `#[repr(C)]` layout of `BlockList`.
     _lock: AtomicBool,
 }
@@ -43,6 +47,11 @@ impl BlockList {
             size,
             _lock: AtomicBool::new(false),
         }
+    }
+
+    /// Return the cell size (in bytes) for blocks in this bin.
+    pub(crate) const fn size(&self) -> usize {
+        self.size
     }
 
     /// List has no blocks

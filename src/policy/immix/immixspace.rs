@@ -1242,8 +1242,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         debug_assert!(!super::BLOCK_ONLY);
         debug_assert!(self.rc_enabled);
         let block = search_start.block();
-        // SAFETY: Caller guarantees `RC_TABLE` is mapped for `block` with no concurrent
-        // non-atomic writes.
+        // SAFETY: Caller guarantees `search_start` lies in an allocated block of `self` (so
+        // `!block.is_zero()`, `block.start()` is aligned to `Block::BYTES` via `Line::block`, and
+        // `RC_TABLE` is mapped for `block`) with no concurrent non-atomic writes.
         let rc_array = unsafe { RCArray::of(block) };
         let limit = Block::LINES;
         // Find start

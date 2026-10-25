@@ -1,4 +1,6 @@
 use std::ops::Range;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::{RwLock, RwLockWriteGuard};
 
 use super::sft::SFT;
 use super::space::{CommonSpace, Space};
@@ -22,6 +24,55 @@ pub(crate) const TRACE_KIND_FORWARD: TraceKind = 1;
 pub struct Lisp2Space<VM: VMBinding> {
     common: CommonSpace<VM>,
     pr: MonotonePageResource<VM>,
+    /// Enforces mutual exclusion between single-threaded `calculate_forwarding_pointer` and
+    /// `compact` passes even if invoked through safe `&self` references.
+    pass_active: AtomicBool,
+    /// Set while `compact` is executing non-atomic `VMObjectModel::copy_to` slides so concurrent
+    /// forwarding-pointer readers fail fast via `assert!` instead of data-racing with `copy_to`.
+    in_compact: AtomicBool,
+    /// Synchronizes cold external SFT readers (`get_forwarded_object`, `debug_print_object_info`)
+    /// against `compact` so an in-flight reader cannot overlap `copy_to` across preemption.
+    compact_rwlock: RwLock<()>,
+}
+
+struct Lisp2PassGuard<'a, VM: VMBinding> {
+    space: &'a Lisp2Space<VM>,
+    _compact_write: Option<RwLockWriteGuard<'a, ()>>,
+}
+
+impl<'a, VM: VMBinding> Lisp2PassGuard<'a, VM> {
+    fn acquire(space: &'a Lisp2Space<VM>, is_compact: bool) -> Self {
+        assert!(
+            !space.pass_active.swap(true, Ordering::AcqRel),
+            "Concurrent Lisp2Space forwarding/compaction pass detected"
+        );
+        let compact_write = if is_compact {
+            let guard = match space.compact_rwlock.try_write() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    space.pass_active.store(false, Ordering::Release);
+                    panic!("Cannot run Lisp2Space::compact concurrently with forwarding-pointer inspection");
+                }
+            };
+            space.in_compact.store(true, Ordering::Release);
+            Some(guard)
+        } else {
+            None
+        };
+        Self {
+            space,
+            _compact_write: compact_write,
+        }
+    }
+}
+
+impl<VM: VMBinding> Drop for Lisp2PassGuard<'_, VM> {
+    fn drop(&mut self) {
+        if self._compact_write.is_some() {
+            self.space.in_compact.store(false, Ordering::Release);
+        }
+        self.space.pass_active.store(false, Ordering::Release);
+    }
 }
 
 const GC_MARK_BIT_MASK: u8 = 1;
@@ -31,6 +82,7 @@ const GC_MARK_BIT_MASK: u8 = 1;
 /// See [`Lisp2Space::HEADER_RESERVED_IN_BYTES`].
 pub const GC_EXTRA_HEADER_WORD: usize = 1;
 const GC_EXTRA_HEADER_BYTES: usize = GC_EXTRA_HEADER_WORD << LOG_BYTES_IN_WORD;
+const _: () = assert!(GC_EXTRA_HEADER_BYTES == std::mem::size_of::<AtomicUsize>());
 
 impl<VM: VMBinding> SFT for Lisp2Space<VM> {
     fn name(&self) -> &'static str {
@@ -38,11 +90,16 @@ impl<VM: VMBinding> SFT for Lisp2Space<VM> {
     }
 
     fn get_forwarded_object(&self, object: ObjectReference) -> Option<ObjectReference> {
+        let _compact_read = self
+            .compact_rwlock
+            .try_read()
+            .expect("Cannot inspect Lisp2Space forwarding pointer during compact");
         self.assert_valid_object_in_space(object);
         // SAFETY: `assert_valid_object_in_space` verified `object` is an allocated `Lisp2Space`
-        // object in `self` (via mapped `VO_BIT`) with a mapped, initialized, word-aligned
-        // `HEADER_RESERVED_IN_BYTES` prefix, and `get_forwarded_object` is only called outside the
-        // single-threaded `CalculateForwarding` / `Compact` mutation passes.
+        // object in `self` whose `obj_start - GC_EXTRA_HEADER_BYTES` word is mapped inside `self`
+        // and aligned for `AtomicUsize`, `_compact_read` prevents concurrent `compact` (`copy_to`)
+        // execution for the duration of this read, and all forwarding-word accesses use
+        // `AtomicUsize` (`Ordering::Relaxed`).
         unsafe { Self::get_header_forwarding_pointer(object) }
     }
 
@@ -107,13 +164,18 @@ impl<VM: VMBinding> SFT for Lisp2Space<VM> {
     }
 
     fn debug_print_object_info(&self, object: ObjectReference) {
+        let _compact_read = self
+            .compact_rwlock
+            .try_read()
+            .expect("Cannot inspect Lisp2Space forwarding pointer during compact");
         self.assert_valid_object_in_space(object);
         println!("marked = {}", Lisp2Space::<VM>::is_marked(object));
         println!(
             "head forwarding pointer = {:?}",
             // SAFETY: `assert_valid_object_in_space` verified `object` is an allocated `Lisp2Space`
-            // object in `self` with a mapped, initialized, word-aligned forwarding header word, and
-            // `debug_print_object_info` is invoked without concurrent forwarding-word mutation.
+            // object in `self` with a mapped, initialized, `AtomicUsize`-aligned forwarding header
+            // word, `_compact_read` prevents concurrent `compact` (`copy_to`) execution, and all
+            // forwarding-word accesses use `AtomicUsize`.
             unsafe { Lisp2Space::<VM>::get_header_forwarding_pointer(object) }
         );
         self.common.debug_print_object_global_info(object);
@@ -211,13 +273,21 @@ impl<VM: VMBinding> Lisp2Space<VM> {
     // From the cell address, `cell - GC_EXTRA_HEADER_WORD` is where we store the header forwarding pointer.
 
     fn assert_valid_object_in_space(&self, object: ObjectReference) {
+        assert!(
+            !self.in_compact.load(Ordering::Acquire),
+            "Cannot access Lisp2Space forwarding pointer during compaction"
+        );
         let raw = object.to_raw_address();
+        let obj_start = object.to_object_start::<VM>();
         assert!(
             self.in_space(object)
                 && raw.is_aligned_to(ObjectReference::ALIGNMENT)
-                && vo_bit::is_vo_bit_set_for_addr(raw).is_some()
-                && Self::header_forwarding_pointer_address(object)
-                    .is_aligned_to(std::mem::align_of::<Address>()),
+                && vo_bit::VO_BIT_SIDE_METADATA_SPEC.is_mapped(raw)
+                && vo_bit::VO_BIT_SIDE_METADATA_SPEC.load_atomic::<u8>(raw, Ordering::Relaxed) == 1
+                && obj_start.as_usize() >= GC_EXTRA_HEADER_BYTES
+                && self.address_in_space(obj_start - GC_EXTRA_HEADER_BYTES)
+                && (obj_start - GC_EXTRA_HEADER_BYTES)
+                    .is_aligned_to(std::mem::align_of::<AtomicUsize>()),
             "Object {object} is not a valid allocated object in Lisp2Space",
         );
     }
@@ -232,14 +302,19 @@ impl<VM: VMBinding> Lisp2Space<VM> {
     /// # Safety
     /// - `object` must reside in mapped `Lisp2Space` memory allocated with `HEADER_RESERVED_IN_BYTES`
     ///   before `object.to_object_start::<VM>()`, so `object.to_object_start::<VM>() - GC_EXTRA_HEADER_BYTES`
-    ///   is mapped, initialized, and aligned to `align_of::<Address>()`.
-    /// - No other thread may concurrently write to `object`'s header forwarding pointer word.
+    ///   is mapped, initialized, and aligned to `align_of::<AtomicUsize>()`.
+    /// - No thread may concurrently perform non-atomic writes (such as `compact`'s
+    ///   `VMObjectModel::copy_to`) to `object`'s header forwarding pointer word.
     unsafe fn get_header_forwarding_pointer(object: ObjectReference) -> Option<ObjectReference> {
         let fwd_addr = Self::header_forwarding_pointer_address(object);
-        debug_assert!(fwd_addr.is_aligned_to(std::mem::align_of::<Address>()));
-        // SAFETY: Caller guarantees `fwd_addr` is mapped, initialized, aligned for `Address`, and
-        // not concurrently mutated.
-        let addr = unsafe { fwd_addr.load::<Address>() };
+        debug_assert!(fwd_addr.is_aligned_to(std::mem::align_of::<AtomicUsize>()));
+        // SAFETY: Caller guarantees `fwd_addr` is mapped, initialized, aligned for `AtomicUsize`,
+        // and not subject to concurrent non-atomic accesses; all forwarding-word reads/writes use
+        // `AtomicUsize`.
+        let raw = unsafe { (&*fwd_addr.to_ptr::<AtomicUsize>()).load(Ordering::Relaxed) };
+        // SAFETY: `Address::from_usize` wraps the raw forwarding pointer word (`0` if unforwarded,
+        // or a valid `ObjectReference` raw address written by `store_header_forwarding_pointer`).
+        let addr = unsafe { Address::from_usize(raw) };
         ObjectReference::from_raw_address(addr)
     }
 
@@ -248,18 +323,22 @@ impl<VM: VMBinding> Lisp2Space<VM> {
     /// # Safety
     /// - `object` must reside in mapped `Lisp2Space` memory allocated with `HEADER_RESERVED_IN_BYTES`
     ///   before `object.to_object_start::<VM>()`, so `object.to_object_start::<VM>() - GC_EXTRA_HEADER_BYTES`
-    ///   is mapped and aligned to `align_of::<ObjectReference>()`.
-    /// - The calling thread must have exclusive access to `object`'s header forwarding pointer word.
+    ///   is mapped, initialized, and aligned to `align_of::<AtomicUsize>()`.
+    /// - No thread may concurrently perform non-atomic accesses to `object`'s header forwarding
+    ///   pointer word.
     unsafe fn store_header_forwarding_pointer(
         object: ObjectReference,
         forwarding_pointer: ObjectReference,
     ) {
         let fwd_addr = Self::header_forwarding_pointer_address(object);
-        debug_assert!(fwd_addr.is_aligned_to(std::mem::align_of::<ObjectReference>()));
-        // SAFETY: Caller guarantees `fwd_addr` is mapped, aligned for `ObjectReference`, and
-        // exclusively accessed by this thread.
+        debug_assert!(fwd_addr.is_aligned_to(std::mem::align_of::<AtomicUsize>()));
+        // SAFETY: Caller guarantees `fwd_addr` is mapped, initialized, aligned for `AtomicUsize`,
+        // and not subject to concurrent non-atomic accesses.
         unsafe {
-            fwd_addr.store::<ObjectReference>(forwarding_pointer);
+            (&*fwd_addr.to_ptr::<AtomicUsize>()).store(
+                forwarding_pointer.to_raw_address().as_usize(),
+                Ordering::Relaxed,
+            );
         }
     }
 
@@ -267,13 +346,18 @@ impl<VM: VMBinding> Lisp2Space<VM> {
     ///
     /// # Safety
     /// - `object` must reside in mapped `Lisp2Space` memory with `GC_EXTRA_HEADER_BYTES` reserved
-    ///   before `object.to_object_start::<VM>()`.
-    /// - The calling thread must have exclusive write access to `[object.to_object_start::<VM>() - GC_EXTRA_HEADER_BYTES, object.to_object_start::<VM>())`.
+    ///   before `object.to_object_start::<VM>()`, so `object.to_object_start::<VM>() - GC_EXTRA_HEADER_BYTES`
+    ///   is mapped, initialized (zero-mapped by `MMAPPER`), and aligned to `align_of::<AtomicUsize>()`.
+    /// - No thread may concurrently perform non-atomic accesses to `object`'s header forwarding
+    ///   pointer word.
     unsafe fn clear_header_forwarding_pointer(object: ObjectReference) {
-        crate::util::memory::zero(
-            Self::header_forwarding_pointer_address(object),
-            GC_EXTRA_HEADER_BYTES,
-        );
+        let fwd_addr = Self::header_forwarding_pointer_address(object);
+        debug_assert!(fwd_addr.is_aligned_to(std::mem::align_of::<AtomicUsize>()));
+        // SAFETY: Caller guarantees `fwd_addr` is mapped, initialized, aligned for `AtomicUsize`,
+        // and not subject to concurrent non-atomic accesses.
+        unsafe {
+            (&*fwd_addr.to_ptr::<AtomicUsize>()).store(0, Ordering::Relaxed);
+        }
     }
 
     pub fn new(args: crate::policy::space::PlanCreateSpaceArgs<VM>) -> Self {
@@ -288,6 +372,9 @@ impl<VM: VMBinding> Lisp2Space<VM> {
                 MonotonePageResource::new_contiguous(common.start, common.extent, vm_map)
             },
             common,
+            pass_active: AtomicBool::new(false),
+            in_compact: AtomicBool::new(false),
+            compact_rwlock: RwLock::new(()),
         }
     }
 
@@ -323,10 +410,10 @@ impl<VM: VMBinding> Lisp2Space<VM> {
             queue.enqueue(object);
         }
 
-        // SAFETY: `assert_valid_object_in_space` verified `object` is an allocated `Lisp2Space`
-        // object in `self` with a mapped, initialized, word-aligned forwarding header word, which
-        // was written during the preceding single-threaded `CalculateForwarding` stage (separated
-        // by a scheduler stage barrier) and is read-only throughout the `Forward` tracing stage.
+        // SAFETY: `assert_valid_object_in_space` verified `!self.in_compact` and that `object` is
+        // an allocated `Lisp2Space` object in `self` with a mapped, initialized, `AtomicUsize`-aligned
+        // forwarding header word written during `CalculateForwarding` (separated from `Forward` by a
+        // scheduler stage barrier; `Forward` runs inside private `mod policy` never overlapping `Compact`).
         unsafe { Self::get_header_forwarding_pointer(object) }
             .unwrap_or_else(|| panic!("Object {object} does not have a forwarding pointer"))
     }
@@ -411,6 +498,7 @@ impl<VM: VMBinding> Lisp2Space<VM> {
     }
 
     pub fn calculate_forwarding_pointer(&self) {
+        let _pass = Lisp2PassGuard::acquire(self, false);
         let mut to_iter = self.pr.iterate_allocated_regions();
         let Some((mut to_cursor, mut to_size)) = to_iter.next() else {
             return;
@@ -442,9 +530,9 @@ impl<VM: VMBinding> Lisp2Space<VM> {
                     to_cursor + Self::HEADER_RESERVED_IN_BYTES,
                 );
                 // SAFETY: `obj` was discovered in an allocated region of `self.pr` (so its
-                // `HEADER_RESERVED_IN_BYTES` prefix is mapped and word-aligned), and
-                // `calculate_forwarding_pointer` runs in a single `CalculateForwardingAddress`
-                // work packet during the STW `CalculateForwarding` stage.
+                // `HEADER_RESERVED_IN_BYTES` prefix is mapped, initialized, and `AtomicUsize`-aligned),
+                // `_pass` enforces mutual exclusion with `compact` (`copy_to`), and all concurrent
+                // forwarding-word reads use `AtomicUsize`.
                 unsafe { Self::store_header_forwarding_pointer(obj, new_obj) };
                 trace!(
                     "Calculate forward: {} (size when copied = {}) ~> {} (size = {})",
@@ -460,6 +548,7 @@ impl<VM: VMBinding> Lisp2Space<VM> {
     }
 
     pub fn compact(&self) {
+        let _pass = Lisp2PassGuard::acquire(self, true);
         let mut to = Address::ZERO;
         for (from_start, size) in self.pr.iterate_allocated_regions() {
             let from_end = from_start + size;
@@ -469,16 +558,16 @@ impl<VM: VMBinding> Lisp2Space<VM> {
                 vo_bit::unset_vo_bit(obj);
 
                 // SAFETY: `obj` is in an allocated region of `self.pr` with a mapped, initialized,
-                // word-aligned forwarding header word, and `compact` runs in a single STW `Compact`
-                // work packet.
+                // `AtomicUsize`-aligned forwarding header word, and `_pass` guarantees exclusive
+                // compaction access (`pass_active`, `in_compact`, and `compact_rwlock`).
                 let maybe_forwarding_pointer = unsafe { Self::get_header_forwarding_pointer(obj) };
                 if let Some(forwarding_pointer) = maybe_forwarding_pointer {
                     trace!("Compact {} to {}", obj, forwarding_pointer);
                     let new_object = forwarding_pointer;
                     // SAFETY: `new_object` was placed inside an allocated region of `self.pr` at
                     // `to_cursor + Self::HEADER_RESERVED_IN_BYTES <= obj.to_object_start::<VM>() + Self::HEADER_RESERVED_IN_BYTES`,
-                    // and `obj`'s forwarding pointer has already been read above, so this single
-                    // `Compact` worker has exclusive write access to `new_object`'s header prefix.
+                    // `obj`'s forwarding pointer has already been read above, and `_pass` guarantees
+                    // exclusive compaction access to `new_object`'s `AtomicUsize`-aligned header word.
                     unsafe { Self::clear_header_forwarding_pointer(new_object) };
 
                     // copy object

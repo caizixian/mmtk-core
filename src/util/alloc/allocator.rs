@@ -198,12 +198,18 @@ pub fn align_allocation_inner<VM: VMBinding>(
 /// Fill the specified region with the alignment value.
 pub fn fill_alignment_gap<VM: VMBinding>(start: Address, end: Address) {
     if VM::ALIGNMENT_VALUE != 0 && end > start {
+        assert!(
+            !start.is_zero(),
+            "fill_alignment_gap start must be non-zero"
+        );
         let start_ptr = start.to_mut_ptr::<u8>();
         // SAFETY: Public API signature preserved for VM binding fastpaths (`pub fn` cannot be
-        // changed to `pub unsafe fn` without breaking crate API). All MMTk allocators and VM
-        // fastpath callers pass `[start, end)` (`start <= end`, checked `end > start` above) as the
-        // freshly carved alignment gap within the calling mutator/worker's exclusively owned mapped
-        // allocation region (`u8` requires alignment 1 and has no drop/validity invariants).
+        // changed to `pub unsafe fn` without breaking crate API). `assert!(!start.is_zero())`
+        // guarantees `start_ptr` is non-null (`align_of::<u8>() == 1`), `end > start` ensures
+        // `end - start` does not underflow, and all MMTk allocators and VM fastpath callers pass
+        // `[start, end)` as the freshly carved alignment gap within the calling mutator/worker's
+        // exclusively owned mapped allocation region (with no conflicting Rust references or
+        // concurrent accesses to `[start, end)`).
         unsafe {
             std::ptr::write_bytes(start_ptr, VM::ALIGNMENT_VALUE, end - start);
         }

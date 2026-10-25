@@ -247,6 +247,9 @@ mod space_map {
             start: Address,
             bytes: usize,
         ) {
+            if bytes == 0 {
+                return;
+            }
             let index = Self::addr_to_index(start);
             if cfg!(debug_assertions) {
                 // Make sure we only update from empty to a valid space, or overwrite the space
@@ -540,7 +543,7 @@ mod sparse_chunk_map {
 
     impl SFTMap for SFTSparseChunkMap {
         fn has_sft_entry(&self, addr: Address) -> bool {
-            addr.chunk_index() < vm_layout().max_chunks()
+            addr.chunk_index() < self.sft.len()
         }
 
         fn get_side_metadata(&self) -> Option<&SideMetadataSpec> {
@@ -557,7 +560,7 @@ mod sparse_chunk_map {
 
         unsafe fn get_unchecked(&self, address: Address) -> &dyn SFT {
             // SAFETY: Caller guarantees `self.has_sft_entry(address)` holds, i.e.
-            // `address.chunk_index() < vm_layout().max_chunks() == self.sft.len()`.
+            // `address.chunk_index() < self.sft.len()`.
             let cell = unsafe { self.sft.get_unchecked(address.chunk_index()) };
             cell.load()
         }
