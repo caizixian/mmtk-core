@@ -172,13 +172,26 @@ pub trait ObjectModel<VM: VMBinding> {
     /// * `mask`: is an optional mask value for the metadata. This value is used in cases like the forwarding pointer metadata, where some of the bits are reused by other metadata such as the forwarding bits.
     ///
     /// # Safety
-    /// This is a non-atomic load, thus not thread-safe.
+    ///
+    /// * `object` must refer to a live allocated object, and the computed metadata address
+    ///   `object.to_header::<VM>() + (metadata_spec.bit_offset >> 3)` must be non-null, mapped,
+    ///   initialized, and aligned to `u8` (when `metadata_spec.num_of_bits < 8`, reading 1 byte)
+    ///   or `T` (when `metadata_spec.num_of_bits >= 8`, reading `size_of::<T>()` bytes).
+    /// * `metadata_spec` must be valid for `T`: either `0 < metadata_spec.num_of_bits < 8`
+    ///   (fitting within a single byte with `mask.is_none()`) or
+    ///   `metadata_spec.num_of_bits == size_of::<T>() * 8` (and bit-aligned to `T`).
+    /// * No live `&mut` reference may alias the accessed header byte/word for the duration of this
+    ///   call, and no concurrent writes may race with this non-atomic load.
     unsafe fn load_metadata<T: MetadataValue>(
         metadata_spec: &HeaderMetadataSpec,
         object: ObjectReference,
         mask: Option<T>,
     ) -> T {
-        metadata_spec.load::<T>(object.to_header::<VM>(), mask)
+        let header = object.to_header::<VM>();
+        // SAFETY: By caller contract, `header + (metadata_spec.bit_offset >> 3)` is non-null,
+        // mapped, initialized, and aligned for the `u8`/`T` access specified by the valid
+        // `metadata_spec`, with no aliasing `&mut` reference and no concurrent writes.
+        unsafe { metadata_spec.load::<T>(header, mask) }
     }
 
     /// A function to atomically load the specified per-object metadata's content.
@@ -211,14 +224,30 @@ pub trait ObjectModel<VM: VMBinding> {
     /// * `mask`: is an optional mask value for the metadata. This value is used in cases like the forwarding pointer metadata, where some of the bits are reused by other metadata such as the forwarding bits.
     ///
     /// # Safety
-    /// This is a non-atomic store, thus not thread-safe.
+    ///
+    /// * `object` must refer to a live allocated object, and the computed metadata address
+    ///   `object.to_header::<VM>() + (metadata_spec.bit_offset >> 3)` must be non-null, mapped,
+    ///   initialized, writable, and aligned to `u8` (when `metadata_spec.num_of_bits < 8`,
+    ///   accessing 1 byte) or `T` (when `metadata_spec.num_of_bits >= 8`, accessing
+    ///   `size_of::<T>()` bytes).
+    /// * `metadata_spec` must be valid for `T` (`0 < metadata_spec.num_of_bits < 8` within a
+    ///   single byte with `mask.is_none()`, or `metadata_spec.num_of_bits == size_of::<T>() * 8`
+    ///   bit-aligned to `T`), and `val` must fit within `metadata_spec.num_of_bits`.
+    /// * No live `&` or `&mut` reference may alias the accessed header byte/word for the duration
+    ///   of this call, and no concurrent reads or writes may race with this non-atomic store (or
+    ///   read-modify-write for sub-byte / masked specs).
     unsafe fn store_metadata<T: MetadataValue>(
         metadata_spec: &HeaderMetadataSpec,
         object: ObjectReference,
         val: T,
         mask: Option<T>,
     ) {
-        metadata_spec.store::<T>(object.to_header::<VM>(), val, mask)
+        let header = object.to_header::<VM>();
+        // SAFETY: By caller contract, `header + (metadata_spec.bit_offset >> 3)` is non-null,
+        // mapped, initialized, writable, and aligned for the `u8`/`T` access of valid
+        // `metadata_spec`, `val` fits in `metadata_spec.num_of_bits`, and no `&`/`&mut` alias or
+        // concurrent read/write races with this non-atomic access.
+        unsafe { metadata_spec.store::<T>(header, val, mask) }
     }
 
     /// A function to atomically store a value to the specified per-object metadata.

@@ -3,11 +3,10 @@
 
 use atomic_refcell::AtomicRefCell;
 use std::marker::PhantomData;
-use std::sync::Mutex;
-use std::sync::Once;
+use std::sync::{Mutex, OnceLock};
 
 use crate::memory_manager;
-use crate::util::test_util::mock_vm::{MockVM, MutatorHandle};
+use crate::util::test_util::mock_vm::{MockVM, MutatorHandle, MutatorHandleRef};
 use crate::util::{ObjectReference, VMMutatorThread, VMThread};
 use crate::vm::VMBinding;
 use crate::AllocationSemantics;
@@ -16,43 +15,35 @@ use crate::MMTK;
 
 use crate::util::test_util::mock_vm::mock_api;
 
-pub trait FixtureContent {
+pub trait FixtureContent: Send + Sync {
     fn create() -> Self;
 }
 
 pub struct Fixture<T: FixtureContent> {
-    content: AtomicRefCell<Option<Box<T>>>,
-    once: Once,
+    content: OnceLock<AtomicRefCell<Box<T>>>,
 }
 
-unsafe impl<T: FixtureContent> Sync for Fixture<T> {}
-
 impl<T: FixtureContent> Fixture<T> {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
-            content: AtomicRefCell::new(None),
-            once: Once::new(),
+            content: OnceLock::new(),
         }
     }
 
     pub fn with_fixture<F: Fn(&T)>(&self, func: F) {
-        self.once.call_once(|| {
-            let content = Box::new(T::create());
-            let mut borrow = self.content.borrow_mut();
-            *borrow = Some(content);
-        });
-        let borrow = self.content.borrow();
-        func(borrow.as_ref().unwrap())
+        let cell = self
+            .content
+            .get_or_init(|| AtomicRefCell::new(Box::new(T::create())));
+        let borrow = cell.borrow();
+        func(&borrow)
     }
 
     pub fn with_fixture_mut<F: Fn(&mut T)>(&self, func: F) {
-        self.once.call_once(|| {
-            let content = Box::new(T::create());
-            let mut borrow = self.content.borrow_mut();
-            *borrow = Some(content);
-        });
-        let mut borrow = self.content.borrow_mut();
-        func(borrow.as_mut().unwrap())
+        let cell = self
+            .content
+            .get_or_init(|| AtomicRefCell::new(Box::new(T::create())));
+        let mut borrow = cell.borrow_mut();
+        func(&mut borrow)
     }
 }
 
@@ -68,14 +59,17 @@ pub struct SerialFixture<T: FixtureContent> {
 }
 
 impl<T: FixtureContent> SerialFixture<T> {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             content: Mutex::new(None),
         }
     }
 
     pub fn with_fixture<F: Fn(&T)>(&self, func: F) {
-        let mut c = self.content.lock().unwrap();
+        let mut c = self
+            .content
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if c.is_none() {
             *c = Some(Box::new(T::create()));
         }
@@ -83,7 +77,10 @@ impl<T: FixtureContent> SerialFixture<T> {
     }
 
     pub fn with_fixture_mut<F: Fn(&mut T)>(&self, func: F) {
-        let mut c = self.content.lock().unwrap();
+        let mut c = self
+            .content
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if c.is_none() {
             *c = Some(Box::new(T::create()));
         }
@@ -98,12 +95,38 @@ impl<T: FixtureContent> SerialFixture<T> {
     ) {
         let res = {
             // The lock will be dropped at the end of the block. So panic won't poison the lock.
-            let mut c = self.content.lock().unwrap();
+            let mut c = self
+                .content
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if c.is_none() {
                 *c = Some(Box::new(T::create()));
             }
 
             std::panic::catch_unwind(|| func(c.as_ref().unwrap()))
+        };
+        // We do not hold the lock now. It is safe to resume now.
+        if let Err(e) = res {
+            std::panic::resume_unwind(e);
+        }
+    }
+
+    pub fn with_fixture_mut_expect_benign_panic<F: FnOnce(&mut T) + std::panic::UnwindSafe>(
+        &self,
+        func: F,
+    ) {
+        let res = {
+            // The lock will be dropped at the end of the block. So panic won't poison the lock.
+            let mut c = self
+                .content
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if c.is_none() {
+                *c = Some(Box::new(T::create()));
+            }
+            let target = c.as_mut().unwrap();
+
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| func(target)))
         };
         // We do not hold the lock now. It is safe to resume now.
         if let Err(e) = res {
@@ -187,6 +210,7 @@ pub type MutatorFixture = GenericMutatorFixture<MockVM>;
 pub struct GenericMutatorFixture<VM: VMBinding> {
     mmtk: GenericMMTKFixture<VM>,
     mutator: VMMutatorThread,
+    handle: MutatorHandleRef,
 }
 
 impl<VM: VMBinding> FixtureContent for GenericMutatorFixture<VM> {
@@ -198,7 +222,7 @@ impl<VM: VMBinding> FixtureContent for GenericMutatorFixture<VM> {
 
 impl<VM: VMBinding> GenericMutatorFixture<VM> {
     pub fn create_with_heapsize(size: usize) -> Self {
-        let mmtk = GenericMMTKFixture::create_with_builder(
+        Self::create_with_builder_and_options(
             |builder| {
                 builder
                     .options
@@ -206,34 +230,50 @@ impl<VM: VMBinding> GenericMutatorFixture<VM> {
                     .set(crate::util::options::GCTriggerSelector::FixedHeapSize(size));
             },
             true,
-        );
-        let mutator = MutatorHandle::bind::<VM>();
-        Self { mmtk, mutator }
+        )
     }
 
     pub fn create_with_builder<F>(with_builder: F) -> Self
     where
         F: FnOnce(&mut MMTKBuilder),
     {
-        let mmtk = GenericMMTKFixture::create_with_builder(with_builder, true);
-        let mutator = MutatorHandle::bind::<VM>();
-        Self { mmtk, mutator }
+        Self::create_with_builder_and_options(with_builder, true)
+    }
+
+    pub fn create_with_builder_and_options<F>(with_builder: F, initialize_collection: bool) -> Self
+    where
+        F: FnOnce(&mut MMTKBuilder),
+    {
+        let mmtk = GenericMMTKFixture::create_with_builder(with_builder, initialize_collection);
+        let (mutator, handle) = MutatorHandle::bind::<VM>();
+        Self {
+            mmtk,
+            mutator,
+            handle,
+        }
     }
 
     pub fn mmtk(&self) -> &'static MMTK<VM> {
         self.mmtk.get_mmtk()
     }
 
-    pub fn mutator(&self) -> &'static mut Mutator<VM> {
-        self.mutator.as_mock_mutator()
+    #[inline]
+    pub fn mutator(&mut self) -> &mut Mutator<VM> {
+        self.handle.verify_unparked_for_current_thread(self.mutator);
+        // SAFETY: `self.handle` was uniquely allocated and initialized by `MutatorHandle::bind`
+        // when constructing this `GenericMutatorFixture` (`GenericMutatorFixture` is neither
+        // `Clone` nor `Copy`). Holding `&mut self` guarantees no other fixture reference exists,
+        // and `verify_unparked_for_current_thread` verifies `self.handle` is bound to the current
+        // host thread (serializing cross-thread ownership transfers under `MUTATOR_PARK`'s lock)
+        // and is not parked at a GC safepoint, preventing both GC worker aliasing and cross-thread
+        // spoof-parking while this borrow is live.
+        unsafe { self.handle.as_mutator() }
     }
 
     pub fn mutator_tls(&self) -> VMMutatorThread {
         self.mutator
     }
 }
-
-unsafe impl<VM: VMBinding> Send for GenericMutatorFixture<VM> {}
 
 pub struct SingleObject {
     pub objref: ObjectReference,
@@ -242,7 +282,7 @@ pub struct SingleObject {
 
 impl FixtureContent for SingleObject {
     fn create() -> Self {
-        let mutator = MutatorFixture::create();
+        let mut mutator = MutatorFixture::create();
 
         // A relatively small object, typical for Ruby.
         let size = 40;
@@ -259,10 +299,6 @@ impl FixtureContent for SingleObject {
 }
 
 impl SingleObject {
-    pub fn mutator(&self) -> &Mutator<MockVM> {
-        self.mutator.mutator()
-    }
-
     pub fn mutator_mut(&mut self) -> &mut Mutator<MockVM> {
         self.mutator.mutator()
     }
@@ -276,7 +312,7 @@ pub struct TwoObjects {
 
 impl FixtureContent for TwoObjects {
     fn create() -> Self {
-        let mutator = MutatorFixture::create();
+        let mut mutator = MutatorFixture::create();
 
         let size = 128;
         let semantics = AllocationSemantics::Default;

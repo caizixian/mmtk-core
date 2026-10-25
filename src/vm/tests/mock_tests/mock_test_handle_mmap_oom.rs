@@ -15,6 +15,8 @@ pub fn test_handle_mmap_oom() {
         default_setup,
         || {
             let panic_res = std::panic::catch_unwind(move || {
+                // SAFETY: Hard-coded page-aligned test virtual address passed to `OS::dzmmap` with
+                // `MmapStrategy::TEST` (non-replacing) to provoke an out-of-memory mmap error.
                 let start = unsafe { Address::from_usize(0x100_0000) };
                 // mmap 1 terabyte memory - we expect this will fail due to out of memory.
                 // If that's not the case, increase the size we mmap.

@@ -120,6 +120,13 @@ pub fn embed_fastpath_struct() {
                             fixture.get_mmtk(),
                             AllocationSemantics::Default,
                         );
+                        assert!(matches!(
+                            selector,
+                            crate::util::alloc::allocators::AllocatorSelector::BumpPointer(_)
+                        ));
+                        // SAFETY: `selector` was returned by `get_allocator_mapping` for this
+                        // `MMTK` instance and verified above to be `AllocatorSelector::BumpPointer`,
+                        // matching the concrete allocator type `BumpAllocator<MockVM>`.
                         let default_allocator = unsafe {
                             storage
                                 .mutator

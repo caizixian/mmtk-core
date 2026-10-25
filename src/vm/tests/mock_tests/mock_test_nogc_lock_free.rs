@@ -11,7 +11,7 @@ pub fn nogc_lock_free_allocate() {
     with_mockvm(
         default_setup,
         || {
-            let fixture = MutatorFixture::create();
+            let mut fixture = MutatorFixture::create();
             let min = <MockVM as VMBinding>::MIN_ALIGNMENT;
             let max = <MockVM as VMBinding>::MAX_ALIGNMENT;
             info!("Allowed alignment between {} and {}", min, max);

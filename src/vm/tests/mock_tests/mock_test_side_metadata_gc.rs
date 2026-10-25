@@ -33,7 +33,7 @@ pub fn side_metadata_gc() {
 
             // 1MB heap
             const MB: usize = 1024 * 1024;
-            let fixture = GenericMutatorFixture::<SideMetadataVM>::create_with_heapsize(MB);
+            let mut fixture = GenericMutatorFixture::<SideMetadataVM>::create_with_heapsize(MB);
 
             // Normal alloc
             let addr =

@@ -15,6 +15,7 @@
 //   We have to run each test separately. It is recommanded to name the tests as `mock_test_file_small` and `mock_test_file_large`.
 
 // Common includes for mock tests.
+#[allow(unused_imports)]
 pub(crate) mod mock_test_prelude {
     pub use crate::memory_manager;
     pub use crate::util::test_util::fixtures::*;

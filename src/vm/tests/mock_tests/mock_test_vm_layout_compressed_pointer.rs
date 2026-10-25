@@ -23,10 +23,16 @@ fn test_vm_layout_compressed_pointer() {
                 end if end <= (32usize << 30) => 32usize << 30,
                 _ => start + (32usize << 30),
             };
+            // SAFETY: `start` is a hard-coded low 64-bit virtual address (or OS-reserved anonymous
+            // range on macOS) used solely to configure `VMLayout::heap_start`.
+            let start_addr = unsafe { Address::from_usize(start) };
+            // SAFETY: `end` (`> start`) is a hard-coded/computed upper bound within the 35-bit
+            // compressed address space used solely to configure `VMLayout::heap_end`.
+            let end_addr = unsafe { Address::from_usize(end) };
             let layout = VMLayout {
                 log_address_space: 35,
-                heap_start: chunk_align_down(unsafe { Address::from_usize(start) }),
-                heap_end: chunk_align_up(unsafe { Address::from_usize(end) }),
+                heap_start: chunk_align_down(start_addr),
+                heap_end: chunk_align_up(end_addr),
                 log_space_extent: 31,
                 force_use_contiguous_spaces: false,
             };
@@ -49,6 +55,9 @@ fn reserve_heap_start_on_macos() -> usize {
     // Every plan only maps the first chunk for this test. Reserve a lot more than that.
     const RESERVE_BYTES: usize = 64 << 20;
     // Reserve an extra chunk so we can align the start to a chunk.
+    // SAFETY: Passing a null hint pointer without `MAP_FIXED` and `MAP_ANON | MAP_PRIVATE` with
+    // `fd = -1, offset = 0` asks the OS kernel to pick an unmapped anonymous range without
+    // overwriting any existing process mappings.
     let res = unsafe {
         libc::mmap(
             std::ptr::null_mut(),

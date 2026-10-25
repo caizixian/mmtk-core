@@ -14,8 +14,12 @@ fn test_vm_layout_heap_start() {
 
             // Test with an start address that is different to the default heap start
             #[cfg(target_pointer_width = "32")]
+            // SAFETY: Hard-coded chunk-aligned 32-bit virtual address for `VMLayout::heap_start`;
+            // MMTk maps heap chunks using non-replacing mmap.
             let heap_start = unsafe { Address::from_usize(0x7000_0000) };
             #[cfg(target_pointer_width = "64")]
+            // SAFETY: Hard-coded space-aligned 64-bit virtual address for `VMLayout::heap_start`;
+            // MMTk maps heap chunks using non-replacing mmap.
             let heap_start = unsafe { Address::from_usize(0x0000_0400_0000_0000usize) };
             #[cfg(target_pointer_width = "64")]
             assert!(heap_start.is_aligned_to(default.max_space_extent()));

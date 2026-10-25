@@ -110,6 +110,8 @@ pub fn too_big() {
         || {
             SINGLE_OBJECT.with_fixture(|fixture| {
                 for offset in iter_aligned_offsets(SMALL_OFFSET) {
+                    // SAFETY: Constructs a synthetic near-`usize::MAX` aligned address without
+                    // dereferencing it, testing `is_mmtk_object` bounds filtering on high addresses.
                     let addr = unsafe { Address::from_usize(0usize.wrapping_sub(offset)) };
                     assert_invalid_objref(addr, fixture.objref.to_raw_address());
                 }
@@ -172,19 +174,15 @@ pub fn large_offsets_aligned() {
         default_setup,
         || {
             SINGLE_OBJECT.with_fixture(|fixture| {
+                let base = fixture.objref.to_raw_address();
                 for log_offset in 12usize..(usize::BITS as usize) {
                     let offset = 1usize << log_offset;
-                    let addr = match fixture
-                        .objref
-                        .to_raw_address()
-                        .as_usize()
-                        .checked_add(offset)
-                    {
-                        Some(n) => unsafe { Address::from_usize(n) },
-                        None => break,
-                    };
+                    if base.as_usize().checked_add(offset).is_none() {
+                        break;
+                    }
+                    let addr = base + offset;
                     assert_filter_pass(addr);
-                    assert_invalid_objref(addr, fixture.objref.to_raw_address());
+                    assert_invalid_objref(addr, base);
                 }
             });
         },
@@ -198,20 +196,15 @@ pub fn negative_offsets() {
         default_setup,
         || {
             SINGLE_OBJECT.with_fixture(|fixture| {
+                let base = fixture.objref.to_raw_address();
                 for log_offset in LOG_BITS_IN_WORD..(usize::BITS as usize) {
                     let offset = 1usize << log_offset;
-                    let addr = match fixture
-                        .objref
-                        .to_raw_address()
-                        .as_usize()
-                        .checked_sub(offset)
-                    {
-                        Some(0) => break,
-                        Some(n) => unsafe { Address::from_usize(n) },
-                        None => break,
-                    };
+                    if base.as_usize() <= offset {
+                        break;
+                    }
+                    let addr = base - offset;
                     assert_filter_pass(addr);
-                    assert_invalid_objref(addr, fixture.objref.to_raw_address());
+                    assert_invalid_objref(addr, base);
                 }
             });
         },

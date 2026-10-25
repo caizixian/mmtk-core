@@ -131,6 +131,8 @@ In `mutator.rs`:
          mutator: &mut Mutator<VM>,
          _tls: OpaquePointer
      ) {
+         // SAFETY: `allocator_mapping[AllocationType::Default]` selects `BumpPointer(0)`, which
+         // `create_triplespace_mutator` initialized in `mutator.allocators` as `BumpAllocator<VM>`.
          let bump_allocator = unsafe {
              mutator
                  .allocators
@@ -155,6 +157,8 @@ In `gc_work.rs`:
                     self,
                     object,
                     super::global::ALLOC_TripleSpace,
+                    // SAFETY: The current worker was initialized with a worker-local
+                    // `TripleSpaceCopyContext<VM>` and has exclusive access to it during tracing.
                     unsafe { self.worker().local::<TripleSpaceCopyContext<VM>>() },
                 )
             }
@@ -164,6 +168,8 @@ In `gc_work.rs`:
                     self,
                     object,
                     super::global::ALLOC_TripleSpace,
+                    // SAFETY: The current worker was initialized with a worker-local copy context
+                    // of the concrete plan type and has exclusive access to it during tracing.
                     unsafe { self.worker().local::<MyGCCopyContext<VM>>() },
                 )
             } else if self.plan().fromspace().in_space(object) {
@@ -171,6 +177,8 @@ In `gc_work.rs`:
                     self,
                     object,
                     super::global::ALLOC_TripleSpace,
+                    // SAFETY: The current worker was initialized with a worker-local
+                    // `TripleSpaceCopyContext<VM>` and has exclusive access to it during tracing.
                     unsafe { self.worker().local::<TripleSpaceCopyContext<VM>>() },
                 )
             } else {

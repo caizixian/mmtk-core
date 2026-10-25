@@ -28,9 +28,13 @@ fn test_malloc() {
             assert!(malloc_ms_util::get_malloc_usable_size(address3, bool3) >= 16);
             assert!(malloc_ms_util::get_malloc_usable_size(address4, bool4) >= 32);
 
+            // SAFETY: `address1` was returned directly from `malloc_ms_util::alloc` without an
+            // alignment offset (`!bool1`), is non-null, and has not yet been freed.
             unsafe {
                 malloc_ms_util::free(address1.to_mut_ptr());
             }
+            // SAFETY: `address2` was returned directly from `malloc_ms_util::alloc` without an
+            // alignment offset (`!bool2`), is non-null, and has not yet been freed.
             unsafe {
                 malloc_ms_util::free(address2.to_mut_ptr());
             }

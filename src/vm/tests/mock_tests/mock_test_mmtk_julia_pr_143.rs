@@ -18,7 +18,11 @@ fn test_set_vm_space() {
                 |_builder| {},
                 true,
                 |mmtk| {
+                    // SAFETY: Hard-coded 64-bit chunk-aligned virtual address outside MMTk's
+                    // default heap spaces, used only to register an external VM space range.
                     let start_addr = unsafe { Address::from_usize(0x78624DC00000) };
+                    // SAFETY: Hard-coded 64-bit chunk-aligned end address (`> start_addr`) for the
+                    // external VM space range; no memory is dereferenced.
                     let end_addr = unsafe { Address::from_usize(0x786258000000) };
                     let size = end_addr - start_addr;
 

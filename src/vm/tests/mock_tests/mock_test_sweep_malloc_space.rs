@@ -21,17 +21,17 @@ pub fn malloc_ms_sweep_dead_objects() {
         default_setup,
         || {
             const MB: usize = 1024 * 1024;
-            let fixture = MutatorFixture::create_with_heapsize(16 * MB);
-            let mutator = fixture.mutator();
+            let mut fixture = MutatorFixture::create_with_heapsize(16 * MB);
 
             let objects: Vec<ObjectReference> = (0..100)
                 .map(|_| {
                     let size = 64;
                     let semantics = AllocationSemantics::Default;
-                    let start = memory_manager::alloc(mutator, size, BYTES_IN_WORD, 0, semantics);
+                    let start =
+                        memory_manager::alloc(fixture.mutator(), size, BYTES_IN_WORD, 0, semantics);
                     assert!(!start.is_zero());
                     let object = <MockVM>::object_start_to_ref(start);
-                    memory_manager::post_alloc(mutator, object, size, semantics);
+                    memory_manager::post_alloc(fixture.mutator(), object, size, semantics);
                     object
                 })
                 .collect();

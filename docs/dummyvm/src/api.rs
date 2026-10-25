@@ -1,6 +1,3 @@
-// All functions here are extern function. There is no point for marking them as unsafe.
-#![allow(clippy::not_unsafe_ptr_arg_deref)]
-
 use crate::mmtk;
 use crate::DummyVM;
 use crate::SINGLETON;
@@ -22,20 +19,49 @@ pub extern "C" fn mmtk_create_builder() -> *mut MMTKBuilder {
     Box::into_raw(Box::new(mmtk::MMTKBuilder::new()))
 }
 
+/// Set an MMTk option by C string name and value on `builder`.
+///
+/// # Safety
+/// - `builder` must be a valid, non-null, properly aligned pointer to an initialized
+///   `MMTKBuilder` (such as one returned by [`mmtk_create_builder`] and not yet consumed by
+///   [`mmtk_init`]), with exclusive mutable access for the duration of this call (and not aliased
+///   by `name` or `value`).
+/// - `name` and `value` must each be a valid, non-null pointer to a NUL-terminated C string
+///   contained within a single allocated object (`<= isize::MAX` bytes) whose memory remains
+///   valid and unmodified for the duration of this call.
 #[no_mangle]
-pub extern "C" fn mmtk_set_option_from_string(
+pub unsafe extern "C" fn mmtk_set_option_from_string(
     builder: *mut MMTKBuilder,
     name: *const c_char,
     value: *const c_char,
 ) -> bool {
-    let builder = unsafe { &mut *builder };
+    // SAFETY: By caller contract, `name` is non-null, points to a valid NUL-terminated C string
+    // within a single allocated object, and is not mutated during this call.
     let name_str: &CStr = unsafe { CStr::from_ptr(name) };
+    // SAFETY: By caller contract, `value` is non-null, points to a valid NUL-terminated C string
+    // within a single allocated object, and is not mutated during this call.
     let value_str: &CStr = unsafe { CStr::from_ptr(value) };
-    builder.set_option(name_str.to_str().unwrap(), value_str.to_str().unwrap())
+    let name_utf8 = name_str.to_str().unwrap();
+    let value_utf8 = value_str.to_str().unwrap();
+    // SAFETY: By caller contract, `builder` is non-null, aligned, points to an initialized
+    // `MMTKBuilder` with exclusive mutable access, and does not alias `name` or `value`.
+    let builder = unsafe { &mut *builder };
+    builder.set_option(name_utf8, value_utf8)
 }
 
+/// Set a fixed heap size option on `builder`.
+///
+/// # Safety
+/// `builder` must be a valid, non-null, properly aligned pointer to an initialized `MMTKBuilder`
+/// (such as one returned by [`mmtk_create_builder`] and not yet consumed by [`mmtk_init`]), with
+/// exclusive mutable access for the duration of this call.
 #[no_mangle]
-pub extern "C" fn mmtk_set_fixed_heap_size(builder: *mut MMTKBuilder, heap_size: usize) -> bool {
+pub unsafe extern "C" fn mmtk_set_fixed_heap_size(
+    builder: *mut MMTKBuilder,
+    heap_size: usize,
+) -> bool {
+    // SAFETY: By caller contract, `builder` is non-null, aligned, and points to an initialized
+    // `MMTKBuilder` with exclusive mutable access for the duration of this call.
     let builder = unsafe { &mut *builder };
     builder
         .options
@@ -45,8 +71,18 @@ pub extern "C" fn mmtk_set_fixed_heap_size(builder: *mut MMTKBuilder, heap_size:
         ))
 }
 
+/// Initialize the global MMTk singleton by consuming `builder`.
+///
+/// # Safety
+/// `builder` must be a non-null, properly aligned pointer originally returned by
+/// [`mmtk_create_builder`] (`Box::into_raw`), must not have been freed or previously passed to
+/// `mmtk_init`, and must have no concurrent or subsequent aliases or uses once ownership is
+/// transferred to this function.
 #[no_mangle]
-pub fn mmtk_init(builder: *mut MMTKBuilder) {
+pub unsafe extern "C" fn mmtk_init(builder: *mut MMTKBuilder) {
+    // SAFETY: By caller contract, `builder` was allocated via `Box::into_raw` in
+    // `mmtk_create_builder`, has not been freed, and has no concurrent or subsequent aliases as
+    // exclusive ownership is transferred here.
     let builder = unsafe { Box::from_raw(builder) };
 
     // Create MMTK instance.
@@ -63,16 +99,33 @@ pub extern "C" fn mmtk_bind_mutator(tls: VMMutatorThread) -> *mut Mutator<DummyV
     Box::into_raw(memory_manager::bind_mutator(mmtk(), tls))
 }
 
+/// Destroy and reclaim a mutator previously created by [`mmtk_bind_mutator`].
+///
+/// # Safety
+/// `mutator` must be a non-null, properly aligned pointer originally returned by
+/// [`mmtk_bind_mutator`] (`Box::into_raw`), must not have been previously destroyed, must not be
+/// destroyed during a GC pause, and must have no concurrent or subsequent aliases or uses once
+/// ownership is transferred to this call.
 #[no_mangle]
-pub extern "C" fn mmtk_destroy_mutator(mutator: *mut Mutator<DummyVM>) {
-    // notify mmtk-core about destroyed mutator
-    memory_manager::destroy_mutator(unsafe { &mut *mutator });
-    // turn the ptr back to a box, and let Rust properly reclaim it
-    let _ = unsafe { Box::from_raw(mutator) };
+pub unsafe extern "C" fn mmtk_destroy_mutator(mutator: *mut Mutator<DummyVM>) {
+    // SAFETY: By caller contract, `mutator` was allocated via `Box::into_raw` in
+    // `mmtk_bind_mutator`, has not been previously destroyed, and has no concurrent or subsequent
+    // aliases as exclusive ownership is transferred here.
+    let mut mutator = unsafe { Box::from_raw(mutator) };
+    // notify mmtk-core about destroyed mutator, then let `mutator` drop to reclaim memory
+    memory_manager::destroy_mutator(&mut mutator);
 }
 
+/// Allocate `size` bytes from MMTk using `mutator`.
+///
+/// # Safety
+/// - `mutator` must be a valid, non-null, properly aligned pointer to an active `Mutator<DummyVM>`
+///   (returned by [`mmtk_bind_mutator`] and not yet destroyed), and the calling mutator thread
+///   must hold exclusive mutable access to `*mutator` for the duration of this call (including
+///   across any GC safe-point triggered by allocation).
+/// - [`mmtk_init`] must have completed prior to calling this function.
 #[no_mangle]
-pub extern "C" fn mmtk_alloc(
+pub unsafe extern "C" fn mmtk_alloc(
     mutator: *mut Mutator<DummyVM>,
     size: usize,
     align: usize,
@@ -90,11 +143,22 @@ pub extern "C" fn mmtk_alloc(
     {
         semantics = AllocationSemantics::Los;
     }
-    memory_manager::alloc::<DummyVM>(unsafe { &mut *mutator }, size, align, offset, semantics)
+    // SAFETY: By caller contract, `mutator` is non-null, aligned, and points to an active
+    // `Mutator<DummyVM>` exclusively owned by the calling mutator thread for this call.
+    let mutator = unsafe { &mut *mutator };
+    memory_manager::alloc::<DummyVM>(mutator, size, align, offset, semantics)
 }
 
+/// Run MMTk post-allocation hooks on a newly allocated object `refer`.
+///
+/// # Safety
+/// - `mutator` must be a valid, non-null, properly aligned pointer to an active `Mutator<DummyVM>`
+///   (returned by [`mmtk_bind_mutator`] and not yet destroyed), with exclusive mutable access on
+///   the calling mutator thread for the duration of this call.
+/// - `refer` must be a valid, non-null `ObjectReference` to an object freshly allocated by
+///   `mutator` of size `bytes`, and [`mmtk_init`] must have completed.
 #[no_mangle]
-pub extern "C" fn mmtk_post_alloc(
+pub unsafe extern "C" fn mmtk_post_alloc(
     mutator: *mut Mutator<DummyVM>,
     refer: ObjectReference,
     bytes: usize,
@@ -111,11 +175,24 @@ pub extern "C" fn mmtk_post_alloc(
     {
         semantics = AllocationSemantics::Los;
     }
-    memory_manager::post_alloc::<DummyVM>(unsafe { &mut *mutator }, refer, bytes, semantics)
+    // SAFETY: By caller contract, `mutator` is non-null, aligned, and points to an active
+    // `Mutator<DummyVM>` with exclusive mutable access for the duration of this call.
+    let mutator = unsafe { &mut *mutator };
+    memory_manager::post_alloc::<DummyVM>(mutator, refer, bytes, semantics)
 }
 
+/// Start the main execution loop for a GC worker thread.
+///
+/// # Safety
+/// `worker` must be a non-null, properly aligned pointer to a `GCWorker<DummyVM>` originally
+/// allocated via `Box::into_raw` by MMTk for worker thread `tls` after [`mmtk_init`], must not
+/// have been freed or previously passed to `mmtk_start_worker`, and must have no concurrent or
+/// subsequent aliases or uses once exclusive ownership is transferred to this call.
 #[no_mangle]
-pub extern "C" fn mmtk_start_worker(tls: VMWorkerThread, worker: *mut GCWorker<DummyVM>) {
+pub unsafe extern "C" fn mmtk_start_worker(tls: VMWorkerThread, worker: *mut GCWorker<DummyVM>) {
+    // SAFETY: By caller contract, `worker` was allocated via `Box::into_raw` for
+    // `GCWorker<DummyVM>`, has not been freed, and has no concurrent or subsequent aliases as
+    // exclusive ownership is transferred here.
     let worker = unsafe { Box::from_raw(worker) };
     memory_manager::start_worker::<DummyVM>(mmtk(), tls, worker)
 }
@@ -267,7 +344,9 @@ mod tests {
         let builder = mmtk_create_builder();
 
         // Set option by value using extern "C" wrapper.
-        let success = mmtk_set_fixed_heap_size(builder, 1048576);
+        // SAFETY: `builder` was freshly returned by `mmtk_create_builder` and is exclusively
+        // accessed here before `mmtk_init`.
+        let success = unsafe { mmtk_set_fixed_heap_size(builder, 1048576) };
         assert!(success);
 
         // Set option by value.  We set the the option direcly using `MMTKOption::set`. Useful if
@@ -275,30 +354,42 @@ mod tests {
         // command line arguments.
         let name = CString::new("plan").unwrap();
         let val = CString::new("NoGC").unwrap();
-        let success = mmtk_set_option_from_string(builder, name.as_ptr(), val.as_ptr());
+        // SAFETY: `builder` is valid and exclusively accessed here, and `name.as_ptr()` and
+        // `val.as_ptr()` point to valid NUL-terminated `CString` buffers that outlive this call.
+        let success = unsafe { mmtk_set_option_from_string(builder, name.as_ptr(), val.as_ptr()) };
         assert!(success);
 
         // Set layout if necessary
         // builder.set_vm_layout(layout);
 
         // Init MMTk
-        mmtk_init(builder);
+        // SAFETY: `builder` was created by `mmtk_create_builder`, has not yet been consumed, and
+        // has no concurrent or subsequent aliases or uses once ownership is transferred to
+        // `mmtk_init`.
+        unsafe { mmtk_init(builder) };
 
         // Create an MMTk mutator
         let tls = VMMutatorThread(VMThread(OpaquePointer::UNINITIALIZED)); // FIXME: Use the actual thread pointer or identifier
         let mutator = mmtk_bind_mutator(tls);
 
         // Do an allocation
-        let addr = mmtk_alloc(mutator, 16, 8, 0, mmtk::AllocationSemantics::Default);
+        // SAFETY: `mmtk_init` has completed and `mutator` is a valid, active mutator returned by
+        // `mmtk_bind_mutator` and exclusively accessed on this thread.
+        let addr = unsafe { mmtk_alloc(mutator, 16, 8, 0, mmtk::AllocationSemantics::Default) };
         assert!(!addr.is_zero());
 
         // Turn the allocation address into the object reference.
         let obj = DummyVM::object_start_to_ref(addr);
 
         // Post allocation
-        mmtk_post_alloc(mutator, obj, 16, mmtk::AllocationSemantics::Default);
+        // SAFETY: `mutator` is valid and exclusively accessed on this thread, and `obj` is the
+        // valid 16-byte `ObjectReference` just allocated by `mutator`.
+        unsafe { mmtk_post_alloc(mutator, obj, 16, mmtk::AllocationSemantics::Default) };
 
         // If the thread quits, destroy the mutator.
-        mmtk_destroy_mutator(mutator);
+        // SAFETY: `mutator` was returned by `mmtk_bind_mutator`, is not in a GC pause, and has no
+        // concurrent or subsequent aliases or uses once ownership is transferred to
+        // `mmtk_destroy_mutator`.
+        unsafe { mmtk_destroy_mutator(mutator) };
     }
 }

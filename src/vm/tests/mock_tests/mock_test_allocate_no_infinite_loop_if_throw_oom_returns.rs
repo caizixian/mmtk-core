@@ -16,7 +16,7 @@ pub fn allocate_no_infinite_loop_if_throw_oom_returns() {
         },
         || {
             const KB: usize = 1024;
-            let fixture = MutatorFixture::create_with_heapsize(KB);
+            let mut fixture = MutatorFixture::create_with_heapsize(KB);
 
             // Attempt to allocate an object that is larger than the heap size.
             let addr = memory_manager::alloc(

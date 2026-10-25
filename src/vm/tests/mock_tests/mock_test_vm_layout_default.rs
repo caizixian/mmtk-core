@@ -6,7 +6,7 @@ use crate::util::heap::vm_layout::VMLayout;
 pub fn test_with_vm_layout(layout: Option<VMLayout>) {
     use crate::plan::AllocationSemantics;
 
-    let fixture = MutatorFixture::create_with_builder(|builder| {
+    let mut fixture = MutatorFixture::create_with_builder(|builder| {
         // 1MB
         builder
             .options
