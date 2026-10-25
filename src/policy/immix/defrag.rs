@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use super::{
     block::{Block, BlockState},
     line::Line,
@@ -181,7 +183,8 @@ impl Defrag {
         spill_avail_histograms: &mut Histogram,
     ) -> usize {
         let mut total_available_lines = 0;
-        space.reusable_blocks.iterate_blocks(|block| {
+        space.iter_reusable_blocks(|mapped| {
+            let block = mapped.block();
             let bucket = block.get_holes();
             let unavailable_lines = match block.get_state() {
                 BlockState::Reusable { unavailable_lines } => unavailable_lines as usize,

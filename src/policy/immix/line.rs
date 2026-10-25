@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use std::ops::Range;
 use std::sync::atomic::AtomicU8;
 
@@ -7,11 +9,16 @@ use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::spec_defs::IX_LINE_REUSE_COUNT;
 use crate::util::metadata::side_metadata::*;
 use crate::util::rc;
+use crate::util::rust_util::fin::Fin;
 use crate::{
     util::{Address, ObjectReference},
     vm::*,
 };
 use atomic::Ordering;
+
+/// Number of Immix lines per block (`Block::LINES`), exposed as a plain `usize` constant for
+/// `Fin<LINES_IN_BLOCK>` and `[AtomicU8; LINES_IN_BLOCK]` projections on Rust 1.84.
+pub(crate) const LINES_IN_BLOCK: usize = Block::LINES;
 
 /// Data structure to reference a line within an immix block.
 #[repr(transparent)]
@@ -42,6 +49,10 @@ impl Line {
     pub const MARK_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_LINE_MARK;
 
+    const TYPED_MARK_TABLE: TypedSideSpec<Line, U8Bits, u8> = TypedSideSpec::new(Self::MARK_TABLE);
+    const TYPED_REUSE_COUNT_TABLE: TypedSideSpec<Line, U8Bits, u8> =
+        TypedSideSpec::new(IX_LINE_REUSE_COUNT);
+
     /// Get the block containing the line.
     pub fn block(&self) -> Block {
         debug_assert!(!super::BLOCK_ONLY);
@@ -54,16 +65,22 @@ impl Line {
         addr.get_extent(Block::align(addr)) >> Line::LOG_BYTES
     }
 
+    /// Bounded line index within its containing block (`0..Block::LINES`).
+    #[inline(always)]
+    pub(crate) fn index_within_block(&self) -> Fin<LINES_IN_BLOCK> {
+        Fin::<LINES_IN_BLOCK>::from_pow2_mask(self.get_index_within_block())
+    }
+
     /// Mark the line. This will update the side line mark table.
     pub fn mark(&self, state: u8) {
         debug_assert!(!super::BLOCK_ONLY);
-        Self::MARK_TABLE.store_atomic::<u8>(self.start(), state, Ordering::Relaxed);
+        Self::TYPED_MARK_TABLE.store_atomic(*self, state, Ordering::Relaxed);
     }
 
     /// Atomically load the current line mark state.
     pub fn get_mark_state(&self) -> u8 {
         debug_assert!(!super::BLOCK_ONLY);
-        Self::MARK_TABLE.load_atomic::<u8>(self.start(), Ordering::Relaxed)
+        Self::TYPED_MARK_TABLE.load_atomic(*self, Ordering::Relaxed)
     }
 
     /// Test line mark state.
@@ -109,10 +126,9 @@ impl Line {
     pub fn inc_reuse_counts(lines: Range<Line>) {
         let mut l = lines.start;
         while l < lines.end {
-            let addr = l.start();
-            let count = IX_LINE_REUSE_COUNT.load_atomic::<u8>(addr, Ordering::SeqCst);
+            let count = Self::TYPED_REUSE_COUNT_TABLE.load_atomic(l, Ordering::SeqCst);
             let new_count = if count == u8::MAX { 0 } else { count + 1 };
-            IX_LINE_REUSE_COUNT.store_atomic::<u8>(addr, new_count, Ordering::SeqCst);
+            Self::TYPED_REUSE_COUNT_TABLE.store_atomic(l, new_count, Ordering::SeqCst);
             l = l.next();
         }
     }
@@ -155,50 +171,59 @@ impl Line {
 
 const LOG_BITS_PER_LINE: usize = Line::LOG_BYTES - rc::LOG_MIN_OBJECT_SIZE + rc::LOG_REF_COUNT_BITS;
 const BITS_PER_LINE: usize = 1 << LOG_BITS_PER_LINE;
-const BYTES_PER_LINE: usize = BITS_PER_LINE >> LOG_BITS_IN_BYTE as usize;
+pub(super) const BYTES_PER_LINE: usize = BITS_PER_LINE >> LOG_BITS_IN_BYTE as usize;
 const _: () = assert!(BITS_PER_LINE >= 8 && BITS_PER_LINE % 8 == 0);
 
-pub(super) struct RCArray<'a> {
-    table: &'a [[AtomicU8; BYTES_PER_LINE]; Block::LINES],
+#[inline(always)]
+pub(super) fn iter_line_indices() -> impl Iterator<Item = Fin<LINES_IN_BLOCK>> {
+    (0..LINES_IN_BLOCK).map(Fin::<LINES_IN_BLOCK>::from_pow2_mask)
 }
 
-impl RCArray<'_> {
-    /// Borrow the `RC_TABLE` metadata bytes for `block` as an array of `AtomicU8` per line.
-    ///
-    /// # Safety
-    /// - `!block.is_zero()` and `block.start().is_aligned_to(Block::BYTES)`, so `[block.start(), block.end())`
-    ///   lies entirely within a single `ImmixSpace` block / chunk without straddling page boundaries.
-    /// - `crate::util::rc::RC_TABLE` side metadata must be mapped for `[block.start(), block.end())`.
-    /// - No thread may perform non-atomic writes (`store`, `store_byte_relaxed`, `bzero_metadata`,
-    ///   `bset_metadata`) to `RC_TABLE` for `block` for the lifetime `'a` of the returned `RCArray`
-    ///   (concurrent atomic `RC_TABLE` updates via `AtomicU8` are sound).
-    pub(super) unsafe fn of(block: Block) -> Self {
-        debug_assert!(!block.is_zero());
-        debug_assert!(block.start().is_aligned_to(Block::BYTES));
-        debug_assert!(crate::util::rc::RC_TABLE.is_mapped(block.start()));
-        let ptr = block
-            .rc_table_start()
-            .to_ptr::<[[AtomicU8; BYTES_PER_LINE]; Block::LINES]>();
-        Self {
-            // SAFETY: `ptr` has alignment 1 (`align_of::<AtomicU8>() == 1`), `!block.is_zero()` and
-            // `block.start().is_aligned_to(Block::BYTES)` keep `[block.start(), block.end())` within
-            // one chunk, `RC_TABLE` is global contiguous side metadata whose bytes for `block` are
-            // mapped and zero-initialized by `MMAPPER`, and caller guarantees no concurrent
-            // non-atomic writes for lifetime `'a`.
-            table: unsafe { &*ptr },
-        }
+#[inline(always)]
+pub(super) fn iter_line_indices_from(
+    start: Fin<LINES_IN_BLOCK>,
+) -> impl Iterator<Item = Fin<LINES_IN_BLOCK>> {
+    (start.get()..LINES_IN_BLOCK).map(Fin::<LINES_IN_BLOCK>::from_pow2_mask)
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct RCArray<'a> {
+    #[cfg_attr(not(feature = "extreme_assertions"), allow(dead_code))]
+    block: Block,
+    table: &'a [[AtomicU8; BYTES_PER_LINE]; LINES_IN_BLOCK],
+}
+
+impl<'a> RCArray<'a> {
+    #[inline(always)]
+    pub(super) fn from_table(
+        block: Block,
+        table: &'a [[AtomicU8; BYTES_PER_LINE]; LINES_IN_BLOCK],
+    ) -> Self {
+        Self { block, table }
     }
 
     pub(super) fn clear(&self) {
+        #[cfg(not(feature = "extreme_assertions"))]
         for line in self.table {
             for byte in line {
                 byte.store(0, Ordering::Relaxed);
             }
         }
+        #[cfg(feature = "extreme_assertions")]
+        {
+            let step = 1usize << rc::LOG_MIN_OBJECT_SIZE;
+            let mut cursor = self.block.start();
+            let end = self.block.end();
+            while cursor < end {
+                rc::RC_TABLE.store_atomic::<u8>(cursor, 0, Ordering::Relaxed);
+                cursor += step;
+            }
+        }
     }
 
-    pub(super) fn is_dead(&self, i: usize) -> bool {
-        self.table[i]
+    #[inline(always)]
+    pub(super) fn is_dead(&self, idx: Fin<LINES_IN_BLOCK>) -> bool {
+        self.table[idx]
             .iter()
             .fold(0u8, |acc, byte| acc | byte.load(Ordering::Relaxed))
             == 0

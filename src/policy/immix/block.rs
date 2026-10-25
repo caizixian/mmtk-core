@@ -1,5 +1,7 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use super::defrag::Histogram;
-use super::line::{Line, RCArray};
+use super::line::{iter_line_indices, Line, RCArray, BYTES_PER_LINE, LINES_IN_BLOCK};
 use super::ImmixSpace;
 use crate::util::constants::*;
 use crate::util::heap::blockpageresource::BlockPool;
@@ -11,13 +13,15 @@ use crate::util::metadata::vo_bit;
 #[cfg(feature = "object_pinning")]
 use crate::util::metadata::MetadataSpec;
 use crate::util::object_enum::BlockMayHaveObjects;
+use crate::util::rust_util::fin::Fin;
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
 use bytemuck::NoUninit;
-use std::sync::atomic::Ordering;
+use std::marker::PhantomData;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 /// The block allocation state.
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum BlockState {
     /// the block is not allocated.
     Unallocated,
@@ -73,6 +77,18 @@ impl From<BlockState> for u8 {
     }
 }
 
+impl MetadataCodec<u8> for BlockState {
+    #[inline(always)]
+    fn encode(self) -> u8 {
+        u8::from(self)
+    }
+
+    #[inline(always)]
+    fn decode(raw: u8) -> Self {
+        Self::from(raw)
+    }
+}
+
 impl BlockState {
     /// Test if the block is reuasable.
     pub const fn is_reusable(&self) -> bool {
@@ -82,7 +98,7 @@ impl BlockState {
 
 /// Data structure to reference an immix block.
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialOrd, PartialEq, NoUninit)]
+#[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Eq, NoUninit)]
 pub struct Block(Address);
 
 impl Region for Block {
@@ -137,30 +153,58 @@ impl Block {
     pub const NURSERY_PROMOTION_STATE_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::NURSERY_PROMOTION_STATE;
 
-    fn assert_rc_table_mapped(&self) {
+    const TYPED_DEFRAG_STATE_TABLE: TypedSideSpec<Block, U8Bits, u8> =
+        TypedSideSpec::new(Self::DEFRAG_STATE_TABLE);
+    const TYPED_MARK_TABLE: TypedSideSpec<Block, U8Bits, BlockState> =
+        TypedSideSpec::new(Self::MARK_TABLE);
+    const TYPED_LOG_TABLE: TypedSideSpec<Block, U1Bit, bool> = TypedSideSpec::new(Self::LOG_TABLE);
+    const TYPED_NURSERY_PROMOTION_TABLE: TypedSideSpec<Block, U8Bits, bool> =
+        TypedSideSpec::new(Self::NURSERY_PROMOTION_STATE_TABLE);
+
+    /// Checked projection of `RC_TABLE` for plan-level callers (`calc_dead_lines`, `clear_rc_table`)
+    /// that do not pass `&ImmixSpace<VM>`.
+    fn rc_array_checked(&self) -> RCArray<'_> {
+        const _: () = assert!(LINES_IN_BLOCK * BYTES_PER_LINE <= BYTES_IN_PAGE);
         assert!(
             !self.is_zero()
                 && self.start().is_aligned_to(Self::BYTES)
-                && crate::util::rc::RC_TABLE.is_mapped(self.start()),
-            "Block {:?} is not a non-zero aligned Immix block with mapped RC_TABLE",
+                && self.start().as_usize() <= usize::MAX - Self::BYTES
+                && address_to_meta_address(&crate::util::rc::RC_TABLE, self.start())
+                    >= crate::util::rc::RC_TABLE.get_starting_address()
+                && address_to_meta_address(&crate::util::rc::RC_TABLE, self.end() - 1usize)
+                    >= crate::util::rc::RC_TABLE.get_starting_address()
+                && address_to_meta_address(&crate::util::rc::RC_TABLE, self.end() - 1usize)
+                    < crate::util::rc::RC_TABLE.upper_bound_address_for_contiguous()
+                && crate::util::rc::RC_TABLE.is_mapped(self.start())
+                && crate::util::rc::RC_TABLE.is_mapped(self.end() - 1usize),
+            "Block {:?} is not a non-zero aligned Immix block with in-bounds mapped RC_TABLE",
             self
         );
+        // SAFETY:
+        // 1. The assertion above unconditionally verifies `!self.is_zero()`, `self.start()` is
+        //    aligned to `Self::BYTES` (`<= 32 KiB << BYTES_IN_CHUNK`) without overflow, and global
+        //    contiguous `RC_TABLE` for `[self.start(), self.end())` falls strictly within
+        //    `[RC_TABLE.get_starting_address(), RC_TABLE.upper_bound_address_for_contiguous())` and
+        //    spans at most two adjacent `MMAPPER` pages (`LINES_IN_BLOCK * BYTES_PER_LINE <=
+        //    BYTES_IN_PAGE`), both verified mapped via `self.start()` and `self.end() - 1usize`
+        //    (zero-initialized and never unmapped for the process lifetime).
+        // 2. Every safe `RC_TABLE` operation in the crate (`RefCountHelper`, `SideMetadataSpec`
+        //    atomic ops, `RCArray`) accesses `RC_TABLE` exclusively via `AtomicU8`; the only
+        //    non-atomic `RC_TABLE` accessors (`set_relaxed`, `set_line_relaxed`,
+        //    `object_or_line_is_dead`, `rc_table_range`) are `unsafe fn`s whose own `# Safety`
+        //    contracts require their callers to guarantee exclusivity.
+        let table = unsafe {
+            crate::util::rc::RC_TABLE
+                .mapped_atomic_byte_chunks_unchecked::<LINES_IN_BLOCK, BYTES_PER_LINE>(self.start())
+        };
+        RCArray::from_table(*self, table)
     }
 
     pub fn calc_dead_lines(&self) -> usize {
-        self.assert_rc_table_mapped();
-        let mut dead_lines = 0;
-        // SAFETY: `assert_rc_table_mapped` verified `!self.is_zero()`, `self.start()` is aligned to
-        // `Self::BYTES`, and `RC_TABLE` is mapped for `[self.start(), self.end())`; all `RC_TABLE`
-        // accesses in `src/policy/` use `AtomicU8` (`clear_rc_table`, `RCArray`), and `calc_dead_lines`
-        // runs during STW candidate selection when no `rc.rs` non-atomic `RC_TABLE` writes occur.
-        let rc_array = unsafe { RCArray::of(*self) };
-        for i in 0..Self::LINES {
-            if rc_array.is_dead(i) {
-                dead_lines += 1;
-            }
-        }
-        dead_lines
+        let rc_array = self.rc_array_checked();
+        iter_line_indices()
+            .filter(|&idx| rc_array.is_dead(idx))
+            .count()
     }
 
     pub const ZERO: Self = Self(Address::ZERO);
@@ -177,14 +221,12 @@ impl Block {
 
     /// Get block mark state.
     pub fn get_state(&self) -> BlockState {
-        let byte = Self::MARK_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst);
-        byte.into()
+        Self::TYPED_MARK_TABLE.load_atomic(*self, Ordering::SeqCst)
     }
 
     /// Set block mark state.
     pub fn set_state(&self, state: BlockState) {
-        let state = u8::from(state);
-        Self::MARK_TABLE.store_atomic::<u8>(self.start(), state, Ordering::SeqCst);
+        Self::TYPED_MARK_TABLE.store_atomic(*self, state, Ordering::SeqCst);
     }
 
     /// Set block mark state.
@@ -196,8 +238,8 @@ impl Block {
             .fetch_update_atomic::<u8, _>(self.start(), Ordering::SeqCst, Ordering::SeqCst, |s| {
                 f(s.into()).map(u8::from)
             })
-            .map(|x| x.into())
-            .map_err(|x| x.into())
+            .map(BlockState::from)
+            .map_err(BlockState::from)
     }
 
     pub fn attempt_dealloc(&self, ignore_reusing_blocks: bool) -> bool {
@@ -217,7 +259,7 @@ impl Block {
 
     /// Test if the block is marked for defragmentation.
     pub fn is_defrag_source(&self) -> bool {
-        let byte = Self::DEFRAG_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst);
+        let byte = Self::TYPED_DEFRAG_STATE_TABLE.load_atomic(*self, Ordering::SeqCst);
         // The byte should be 0 (not defrag source) or 255 (defrag source) if this is a major defrag GC, as we set the values in PrepareBlockState.
         // But it could be any value in a nursery GC.
         byte == Self::DEFRAG_SOURCE_STATE
@@ -234,17 +276,17 @@ impl Block {
     /// Mark the block for defragmentation.
     pub fn set_as_defrag_source(&self, defrag: bool) {
         let byte = if defrag { Self::DEFRAG_SOURCE_STATE } else { 0 };
-        Self::DEFRAG_STATE_TABLE.store_atomic::<u8>(self.start(), byte, Ordering::SeqCst);
+        Self::TYPED_DEFRAG_STATE_TABLE.store_atomic(*self, byte, Ordering::SeqCst);
     }
 
     /// Record the number of holes in the block.
     pub fn set_holes(&self, holes: usize) {
-        Self::DEFRAG_STATE_TABLE.store_atomic::<u8>(self.start(), holes as u8, Ordering::SeqCst);
+        Self::TYPED_DEFRAG_STATE_TABLE.store_atomic(*self, holes as u8, Ordering::SeqCst);
     }
 
     /// Get the number of holes.
     pub fn get_holes(&self) -> usize {
-        let byte = Self::DEFRAG_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst);
+        let byte = Self::TYPED_DEFRAG_STATE_TABLE.load_atomic(*self, Ordering::SeqCst);
         debug_assert_ne!(byte, Self::DEFRAG_SOURCE_STATE);
         byte as usize
     }
@@ -276,7 +318,7 @@ impl Block {
                 BlockState::Unmarked
             });
             if !reuse {
-                Self::DEFRAG_STATE_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
+                Self::TYPED_DEFRAG_STATE_TABLE.store_atomic(*self, 0, Ordering::SeqCst);
             }
         }
     }
@@ -297,6 +339,12 @@ impl Block {
         Line::from_aligned_address(self.end())
     }
 
+    /// Return the `idx`-th line (`0..Block::LINES`) within this block.
+    #[inline(always)]
+    pub(crate) fn line_at(&self, idx: Fin<LINES_IN_BLOCK>) -> Line {
+        self.start_line().next_nth(idx.get())
+    }
+
     /// Get the range of lines within the block.
     #[allow(clippy::assertions_on_constants)]
     pub fn lines(&self) -> RegionIterator<Line> {
@@ -305,13 +353,7 @@ impl Block {
     }
 
     pub fn clear_rc_table(&self) {
-        self.assert_rc_table_mapped();
-        // SAFETY: `assert_rc_table_mapped` verified `!self.is_zero()`, `self.start()` is aligned to
-        // `Self::BYTES`, and `RC_TABLE` is mapped for `[self.start(), self.end())`; zeroing via
-        // `AtomicU8::store(0, Ordering::Relaxed)` avoids non-atomic `memset` writes on `RC_TABLE`
-        // while `clear_rc_table` is only called on freshly released/acquired blocks not subject to
-        // concurrent non-atomic `rc.rs` writes.
-        unsafe { RCArray::of(*self) }.clear();
+        self.rc_array_checked().clear();
     }
 
     pub fn clear_striddle_table(&self) {
@@ -333,12 +375,11 @@ impl Block {
 
     pub fn log(&self) -> bool {
         loop {
-            let old_value: u8 = Self::LOG_TABLE.load_atomic(self.start(), Ordering::Relaxed);
-            if old_value == 1 {
+            if Self::TYPED_LOG_TABLE.load_atomic(*self, Ordering::Relaxed) {
                 return false;
             }
-            if Self::LOG_TABLE
-                .compare_exchange_atomic(self.start(), 0u8, 1u8, Ordering::SeqCst, Ordering::SeqCst)
+            if Self::TYPED_LOG_TABLE
+                .compare_exchange_atomic(*self, false, true, Ordering::SeqCst, Ordering::SeqCst)
                 .is_ok()
             {
                 return true;
@@ -350,19 +391,19 @@ impl Block {
         if self.is_in_place_promoted() {
             return;
         }
-        Self::NURSERY_PROMOTION_STATE_TABLE.store_atomic(self.start(), 1u8, Ordering::Relaxed);
+        Self::TYPED_NURSERY_PROMOTION_TABLE.store_atomic(*self, true, Ordering::Relaxed);
     }
 
     pub fn is_in_place_promoted(&self) -> bool {
-        Self::NURSERY_PROMOTION_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::Relaxed) != 0
+        Self::TYPED_NURSERY_PROMOTION_TABLE.load_atomic(*self, Ordering::Relaxed)
     }
 
     pub fn clear_in_place_promoted(&self) {
-        Self::NURSERY_PROMOTION_STATE_TABLE.store_atomic(self.start(), 0u8, Ordering::Relaxed);
+        Self::TYPED_NURSERY_PROMOTION_TABLE.store_atomic(*self, false, Ordering::Relaxed);
     }
 
     pub fn unlog(&self) {
-        Self::LOG_TABLE.store_atomic(self.start(), 0u8, Ordering::Relaxed);
+        Self::TYPED_LOG_TABLE.store_atomic(*self, false, Ordering::Relaxed);
     }
 
     pub fn clear_field_unlog_table<VM: VMBinding>(&self) {
@@ -376,180 +417,35 @@ impl Block {
         VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
             .as_spec()
             .extract_side_spec()
-            .bset_metadata(self.start(), Self::BYTES);
+            .bset_metadata(self.start(), Block::BYTES);
     }
 
-    /// Return `true` if every line in `self` has all-zero reference counts in `RC_TABLE`.
+    /// Sweep this block during a STW `Release` pause.
     ///
     /// # Safety
-    /// `!self.is_zero()`, `self.start().is_aligned_to(Self::BYTES)`, `crate::util::rc::RC_TABLE`
-    /// must be mapped for `self`, and no thread may perform concurrent non-atomic writes to
-    /// `RC_TABLE` for `self`.
-    unsafe fn rc_dead(&self) -> bool {
-        // SAFETY: Caller upholds `RCArray::of` preconditions for `*self`.
-        let rc_array = unsafe { RCArray::of(*self) };
-        (0..Self::LINES).all(|i| rc_array.is_dead(i))
-    }
-
-    /// Sweep this block.
-    pub fn sweep<VM: VMBinding>(
+    /// - `self` must be an allocated block in `space` (`get_state() != BlockState::Unallocated`).
+    /// - Must be called during a STW collection pause with exclusive sweep ownership of `self` so
+    ///   no mutator or other worker concurrently zeroes `Line::MARK_TABLE`
+    ///   (`ImmixAllocator::acquire_clean_block`), mutates side pinning/VO bits, or sweeps `self`.
+    pub unsafe fn sweep<VM: VMBinding>(
         &self,
         space: &ImmixSpace<VM>,
         mark_histogram: &mut Histogram,
         line_mark_state: Option<u8>,
     ) -> BlockSweepResult {
-        // This method is not called when using RC.
-        assert!(!space.rc_enabled);
-
-        self.set_as_defrag_source(false);
-        if super::BLOCK_ONLY {
-            match self.get_state() {
-                BlockState::Unallocated => unreachable!("Must not sweep unallocated block."),
-                BlockState::Unmarked => {
-                    #[cfg(feature = "vo_bit")]
-                    vo_bit::helper::on_region_swept::<VM, _>(self, false);
-
-                    // If the pin bit is not on the side, we cannot bulk zero.
-                    // We shouldn't need to clear it here in that case, since the pin bit
-                    // should be overwritten at each object allocation. The same applies below
-                    // when we are sweeping on a line granularity.
-                    #[cfg(feature = "object_pinning")]
-                    if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_PINNING_BIT_SPEC {
-                        side.bzero_metadata(self.start(), Block::BYTES);
-                    }
-
-                    // Release the block if it is allocated but not marked by the current GC.
-                    space.release_block(*self, false);
-                    BlockSweepResult::Swept
-                }
-                BlockState::Marked => {
-                    #[cfg(feature = "vo_bit")]
-                    vo_bit::helper::on_region_swept::<VM, _>(self, true);
-
-                    // The block is live.
-                    BlockSweepResult::NoReuse
-                }
-                _ => unreachable!(),
-            }
-        } else {
-            // Calculate number of marked lines and holes.
-            let mut marked_lines = 0;
-            let mut holes = 0;
-            let mut prev_line_is_marked = true;
-            let line_mark_state = line_mark_state.unwrap();
-
-            for line in self.lines() {
-                if line.is_marked(line_mark_state) {
-                    marked_lines += 1;
-                    prev_line_is_marked = true;
-                } else {
-                    if prev_line_is_marked {
-                        holes += 1;
-                    }
-                    // We need to clear the line mark state at least twice in every 128 GC
-                    // otherwise, the line mark state of the last GC will stick around
-                    if line_mark_state > Line::MAX_MARK_STATE - 2 {
-                        line.mark(0);
-                    }
-                    #[cfg(feature = "immix_zero_on_release")]
-                    crate::util::memory::zero(line.start(), Line::BYTES);
-
-                    // We need to clear the pin bit if it is on the side, as this line can be reused
-                    #[cfg(feature = "object_pinning")]
-                    if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_PINNING_BIT_SPEC {
-                        side.bzero_metadata(line.start(), Line::BYTES);
-                    }
-
-                    prev_line_is_marked = false;
-                }
-            }
-
-            if marked_lines == 0 {
-                #[cfg(feature = "vo_bit")]
-                vo_bit::helper::on_region_swept::<VM, _>(self, false);
-
-                // Release the block if non of its lines are marked.
-                space.release_block(*self, false);
-                BlockSweepResult::Swept
-            } else {
-                // There are some marked lines. Keep the block live.
-                let is_reusable = marked_lines != Block::LINES;
-                if is_reusable {
-                    // There are holes. Mark the block as reusable.
-                    self.set_state(BlockState::Reusable {
-                        unavailable_lines: usize::min(marked_lines, u8::MAX as usize) as _,
-                    });
-                    space.reusable_blocks.push(*self)
-                } else {
-                    // Clear mark state.
-                    self.set_state(BlockState::Unmarked);
-                }
-                // Update mark_histogram
-                mark_histogram[holes] += marked_lines;
-                // Record number of holes in block side metadata.
-                self.set_holes(holes);
-
-                #[cfg(feature = "vo_bit")]
-                vo_bit::helper::on_region_swept::<VM, _>(self, true);
-
-                if is_reusable {
-                    BlockSweepResult::Reused
-                } else {
-                    BlockSweepResult::NoReuse
-                }
-            }
-        }
+        let mapped = space
+            .mapped_block(*self)
+            .expect("Block::sweep requires an allocated block in space");
+        // SAFETY: Caller guarantees STW exclusivity over `self` and no concurrent non-atomic
+        // `Line::MARK_TABLE.bzero_metadata` or VO/pinning metadata writes on `self`.
+        unsafe { mapped.sweep(space, mark_histogram, line_mark_state) }
     }
 
     pub fn rc_sweep_nursery<VM: VMBinding>(&self, space: &ImmixSpace<VM>) -> bool {
-        self.assert_rc_table_mapped();
-        let is_in_place_promoted = self.is_in_place_promoted();
-        self.clear_in_place_promoted();
-        if is_in_place_promoted {
-            self.set_state(BlockState::Reusable {
-                unavailable_lines: 1 as _,
-            });
-
-            // Bulk clear the VO bits of reusable (unmarked) lines.
-            // Lines that are not marked may contain nursery objects that have never received any inc,
-            // and their VO bits need to be cleared before the lines can be reused.
-            #[cfg(feature = "vo_bit")]
-            {
-                // SAFETY: `assert_rc_table_mapped` verified `!self.is_zero()`, `Self::BYTES`
-                // alignment, and mapped `RC_TABLE` for `self`; `rc_sweep_nursery` runs during STW
-                // nursery sweeping with exclusive ownership of this nursery block (no concurrent
-                // non-atomic `RC_TABLE` writes).
-                let rc_array = unsafe { RCArray::of(*self) };
-
-                for (i, line) in self.lines().enumerate() {
-                    if rc_array.is_dead(i) {
-                        crate::util::metadata::vo_bit::bzero_vo_bit(line.start(), Line::BYTES);
-                    }
-                }
-            }
-
-            space.reusable_blocks.push(*self);
-            false
-        } else {
-            debug_assert!(
-                // SAFETY: `assert_rc_table_mapped` verified `!self.is_zero()`, `Self::BYTES`
-                // alignment, and mapped `RC_TABLE` for `self`, and STW nursery sweeping has
-                // exclusive ownership of this dead nursery block.
-                unsafe { self.rc_dead() },
-                "{:?} has non-zero rc value",
-                self
-            );
-            debug_assert_ne!(self.get_state(), super::block::BlockState::Unallocated);
-
-            // Bulk clear the VO bits of the entire block.
-            // This block may contain nursery objects that have never received any inc,
-            // and their VO bits need to be cleared before the block can be reused.
-            #[cfg(feature = "vo_bit")]
-            crate::util::metadata::vo_bit::bzero_vo_bit(self.start(), Self::BYTES);
-
-            space.release_block(*self, false);
-            true
-        }
+        space
+            .mapped_block(*self)
+            .expect("Block::rc_sweep_nursery requires an allocated block in space")
+            .rc_sweep_nursery(space)
     }
 
     pub fn attempt_mutator_reuse(&self) -> bool {
@@ -564,115 +460,28 @@ impl Block {
     }
 
     pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>, defrag: bool) -> bool {
-        if self.get_state() == BlockState::Unallocated || self.get_state() == BlockState::Nursery {
-            return false;
-        }
-        self.assert_rc_table_mapped();
-        // SAFETY: `assert_rc_table_mapped` verified `!self.is_zero()`, `Self::BYTES` alignment, and
-        // mapped `RC_TABLE` for `self`. `rc_sweep_mature` runs both during STW mature sweeping and
-        // concurrently in LXR's `SweepBlocksAfterDecs` (`WorkBucketStage::Unconstrained` after STW
-        // `ProcessDecs` has finished all non-atomic `rc.rs` RC mutations); all concurrent `RC_TABLE`
-        // accesses (including `clear_rc_table` and mutator/worker hole scans) use `AtomicU8`.
-        if defrag || unsafe { self.rc_dead() } {
-            if self.attempt_dealloc(true) {
-                // Bulk clear the VO bits of the entire block.
-                // Dec operations may reduce some object's RC to 0,
-                // at which time their VO bits are cleared, too.
-                // But some lines may also contain objects that have never received any inc,
-                // and their VO bits need to be cleared before the block can be reused.
-                #[cfg(feature = "vo_bit")]
-                crate::util::metadata::vo_bit::bzero_vo_bit(self.start(), Self::BYTES);
-
-                space.release_block(*self, true);
-                return true;
-            }
-        } else if !super::BLOCK_ONLY {
-            // See the caller of this function.
-            // At least one object is dead in the block.
-            let add_as_reusable = {
-                // SAFETY: `assert_rc_table_mapped` verified `!self.is_zero()`, `Self::BYTES`
-                // alignment, and mapped `RC_TABLE` for `self`, and all concurrent `RC_TABLE`
-                // accesses during STW or `Unconstrained` `SweepBlocksAfterDecs` use `AtomicU8`.
-                let has_holes = unsafe { self.has_holes() };
-                self.fetch_update_state(|s| {
-                    if s == BlockState::Reusing
-                        || s == BlockState::Unallocated
-                        || s.is_reusable()
-                        || !has_holes
-                    {
-                        None
-                    } else {
-                        Some(BlockState::Reusable {
-                            unavailable_lines: 1 as _,
-                        })
-                    }
-                })
-                .is_ok()
-            };
-            if add_as_reusable {
-                // Bulk clear the VO bits of reusable (unmarked) lines.
-                // Dec operations may reduce some object's RC to 0,
-                // at which time their VO bits are cleared, too.
-                // But some lines may also contain objects that have never received any inc,
-                // and their VO bits need to be cleared before the block can be reused.
-                #[cfg(feature = "vo_bit")]
-                {
-                    // SAFETY: `assert_rc_table_mapped` verified `!self.is_zero()`, `Self::BYTES`
-                    // alignment, and mapped `RC_TABLE` for `self`, and all concurrent `RC_TABLE`
-                    // accesses during STW or `Unconstrained` `SweepBlocksAfterDecs` use `AtomicU8`.
-                    let rc_array = unsafe { RCArray::of(*self) };
-
-                    for (i, line) in self.lines().enumerate() {
-                        if rc_array.is_dead(i) {
-                            crate::util::metadata::vo_bit::bzero_vo_bit(line.start(), Line::BYTES);
-                        }
-                    }
-                }
-                space.reusable_blocks.push(*self);
-            }
-        }
-        false
+        space
+            .mapped_block(*self)
+            .expect("Block::rc_sweep_mature requires an allocated block in space")
+            .rc_sweep_mature::<VM>(space, defrag)
     }
 
     pub fn rc_table_start(&self) -> Address {
         address_to_meta_address(&crate::util::rc::RC_TABLE, self.start())
     }
 
-    /// Return `true` if `self` has at least one allocatable free-line hole according to `RC_TABLE`.
-    ///
-    /// # Safety
-    /// `!self.is_zero()`, `self.start().is_aligned_to(Self::BYTES)`, `crate::util::rc::RC_TABLE`
-    /// must be mapped for `self`, and no thread may perform concurrent non-atomic writes to
-    /// `RC_TABLE` for `self`.
-    unsafe fn has_holes(&self) -> bool {
-        // SAFETY: Caller upholds `RCArray::of` preconditions for `*self`.
-        let rc_array = unsafe { RCArray::of(*self) };
-        let mut found_free_line = false;
-        let mut free_lines = 0;
-        for i in 0..Self::LINES {
-            if rc_array.is_dead(i) {
-                if i == 0 || found_free_line {
-                    free_lines += 1
-                } else if !found_free_line {
-                    found_free_line = true;
-                }
-                if free_lines > 0 {
-                    return true;
-                }
-            } else {
-                free_lines = 0;
-                found_free_line = false;
-            }
-        }
-        false
-    }
-
     /// Clear VO bits metadata for unmarked regions.
     /// This is useful for clearing VO bits during nursery GC for StickyImmix
     /// at which time young objects (allocated in unmarked regions) may die
     /// but we always consider old objects (in marked regions) as live.
+    ///
+    /// # Safety
+    /// - `self` must be an allocated block in an `ImmixSpace` with mapped `Block::MARK_TABLE`,
+    ///   `Line::MARK_TABLE` (when `line_mark_state.is_some()`), and `VO_BIT` side metadata.
+    /// - Must be called during a STW collection pause with exclusive ownership of `self`'s VO-bit
+    ///   range and with no concurrent non-atomic `Line::MARK_TABLE.bzero_metadata` on `self`.
     #[cfg(feature = "vo_bit")]
-    pub fn clear_vo_bits_for_unmarked_regions(&self, line_mark_state: Option<u8>) {
+    pub unsafe fn clear_vo_bits_for_unmarked_regions(&self, line_mark_state: Option<u8>) {
         match line_mark_state {
             None => {
                 match self.get_state() {
@@ -691,6 +500,424 @@ impl Block {
                 for line in self.lines() {
                     if !line.is_marked(state) {
                         // It may contain young objects.  Clear it.
+                        vo_bit::bzero_vo_bit(line.start(), Line::BYTES);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Space-sealed witness that `block` is a non-zero `Block`-aligned Immix block belonging to an
+/// allocated chunk of a live `ImmixSpace` whose `SideMetadataContext` maps the space's Immix
+/// block/line/RC side-metadata tables across `[block.start(), block.end())`:
+/// - `Block::MARK_TABLE` (`IX_BLOCK_MARK`) and `Block::DEFRAG_STATE_TABLE` (`IX_BLOCK_DEFRAG`);
+/// - `Line::MARK_TABLE` (`IX_LINE_MARK`) when `!rc_enabled && !super::BLOCK_ONLY`;
+/// - `crate::util::rc::RC_TABLE`, `Block::LOG_TABLE` (`IX_BLOCK_LOG`),
+///   `Block::NURSERY_PROMOTION_STATE_TABLE`, `RC_STRADDLE_LINES`, and `IX_LINE_REUSE_COUNT`
+///   when `rc_enabled`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MappedBlock<'space> {
+    block: Block,
+    rc_enabled: bool,
+    _space: PhantomData<&'space ()>,
+}
+
+impl<'space> MappedBlock<'space> {
+    /// Construct a `MappedBlock<'space>` after the owning `ImmixSpace` has verified space
+    /// membership (`address_in_space`), chunk allocation, and mapped side metadata.
+    ///
+    /// # Safety
+    /// * `!block.is_zero()` and `block.start().is_aligned_to(Block::BYTES)`.
+    /// * `block` must belong to an allocated chunk genuinely owned by an `ImmixSpace` that lives
+    ///   for `'space` (`space.address_in_space(block.start())` and `space.rc_enabled == rc_enabled`,
+    ///   disambiguating any 4-bit `ChunkState` `space_index` collision and observed via
+    ///   `ChunkMap::is_allocated_checked`'s `Acquire` load pairing with `ChunkMap::set_allocated`'s
+    ///   `Release` store), so all side-metadata tables in `ImmixSpace::side_metadata_specs(rc_enabled)`
+    ///   (plus global `RC_TABLE` when `rc_enabled`, verified in `ImmixSpace::new`) are in-bounds
+    ///   and mapped for allocated blocks in `block.chunk()` for `'space`.
+    #[inline(always)]
+    pub(super) unsafe fn new_unchecked(block: Block, rc_enabled: bool) -> Self {
+        debug_assert!(!block.is_zero() && block.start().is_aligned_to(Block::BYTES));
+        Self {
+            block,
+            rc_enabled,
+            _space: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn block(&self) -> Block {
+        self.block
+    }
+
+    /// Project the per-line `RC_TABLE` atomic bytes covering `[block.start(), block.end())`,
+    /// bounded to the lifetime of `&self` (never escaping as `'space` / `'static`).
+    ///
+    /// Panics if `!self.rc_enabled`.
+    #[inline(always)]
+    pub(crate) fn rc_table(&self) -> &[[AtomicU8; BYTES_PER_LINE]; LINES_IN_BLOCK] {
+        const _: () = assert!(LINES_IN_BLOCK * BYTES_PER_LINE <= BYTES_IN_PAGE);
+        assert!(
+            self.rc_enabled,
+            "MappedBlock::rc_table requires an RC-enabled ImmixSpace"
+        );
+        assert!(
+            crate::util::rc::RC_TABLE.is_mapped(self.block.start())
+                && crate::util::rc::RC_TABLE.is_mapped(self.block.end() - 1usize),
+            "MappedBlock::rc_table requires mapped RC_TABLE for {:?}",
+            self.block
+        );
+        // SAFETY:
+        // 1. `MappedBlock<'space>` together with `self.rc_enabled` and the `is_mapped` assertion
+        //    above guarantees `!self.block.is_zero()`, `self.block.start()` is aligned to
+        //    `Block::BYTES` and in `ImmixSpace` (`address_in_space`, hence strictly within
+        //    `RC_TABLE`'s contiguous bounds), and `RC_TABLE` for `[self.block.start(), self.block.end())`
+        //    (spanning at most two adjacent `MMAPPER` pages since `LINES_IN_BLOCK * BYTES_PER_LINE
+        //    <= BYTES_IN_PAGE`) is mapped and initialized for `'space` (outliving `&self`).
+        // 2. Every safe `RC_TABLE` operation in the crate uses `AtomicU8`; the only non-atomic
+        //    `RC_TABLE` helpers (`RefCountHelper::{set_relaxed, set_line_relaxed,
+        //    object_or_line_is_dead, rc_table_range}`) are `unsafe fn`s whose own `# Safety`
+        //    contracts require their callers to guarantee exclusivity, and tying the borrow to
+        //    `&self` prevents the slice from escaping across GC phases.
+        unsafe {
+            crate::util::rc::RC_TABLE
+                .mapped_atomic_byte_chunks_unchecked::<LINES_IN_BLOCK, BYTES_PER_LINE>(
+                    self.block.start(),
+                )
+        }
+    }
+
+    /// Project the per-line `IX_LINE_MARK` atomic bytes covering `[block.start(), block.end())`,
+    /// bounded to the lifetime of `&self`.
+    ///
+    /// Panics if `self.rc_enabled` or `super::BLOCK_ONLY`.
+    ///
+    /// # Safety
+    /// For the lifetime of the returned `&[AtomicU8; LINES_IN_BLOCK]` slice, no thread may perform
+    /// non-atomic writes (such as `ImmixAllocator::acquire_clean_block`'s
+    /// `Line::MARK_TABLE.bzero_metadata`) or mixed-width atomic accesses on `self.block`'s
+    /// `Line::MARK_TABLE` bytes, and no `&[u8]` / `&mut [u8]` slice may alias them. This holds
+    /// either during a STW collection pause (mutators parked) or when the caller holds exclusive
+    /// allocator ownership of `self.block` (e.g. a reusable block popped from `reusable_blocks`).
+    #[inline(always)]
+    pub(super) unsafe fn line_mark_table(&self) -> &[AtomicU8; LINES_IN_BLOCK] {
+        const _: () = assert!(LINES_IN_BLOCK <= BYTES_IN_PAGE);
+        assert!(
+            !self.rc_enabled && !super::BLOCK_ONLY,
+            "MappedBlock::line_mark_table requires a non-RC line-granularity ImmixSpace"
+        );
+        assert!(
+            Line::MARK_TABLE.is_mapped(self.block.start())
+                && Line::MARK_TABLE.is_mapped(self.block.end() - 1usize),
+            "MappedBlock::line_mark_table requires mapped Line::MARK_TABLE for {:?}",
+            self.block
+        );
+        // SAFETY: `MappedBlock<'space>` together with `!self.rc_enabled && !BLOCK_ONLY` and the
+        // `is_mapped` assertion above guarantees `!self.block.is_zero()`, `self.block.start()` is
+        // aligned to `Block::BYTES` and in `ImmixSpace` (`address_in_space`, hence strictly within
+        // `Line::MARK_TABLE` bounds), and `Line::MARK_TABLE` for `[self.block.start(), self.block.end())`
+        // (`LINES_IN_BLOCK <= BYTES_IN_PAGE`, at most two adjacent `MMAPPER` pages) is mapped and
+        // initialized for `'space` (outliving `&self`). Caller guarantees no concurrent non-atomic
+        // `bzero_metadata`, mixed-width atomic access, or `&[u8]`/`&mut [u8]` alias on
+        // `self.block`'s `Line::MARK_TABLE` bytes for the lifetime of `&self`.
+        unsafe {
+            Line::MARK_TABLE.mapped_atomic_bytes_unchecked::<LINES_IN_BLOCK>(self.block.start())
+        }
+    }
+
+    #[inline(always)]
+    pub(super) fn rc_array(&self) -> RCArray<'_> {
+        RCArray::from_table(self.block, self.rc_table())
+    }
+
+    fn rc_dead(&self) -> bool {
+        let rc_array = self.rc_array();
+        iter_line_indices().all(|idx| rc_array.is_dead(idx))
+    }
+
+    fn has_holes(&self) -> bool {
+        let rc_array = self.rc_array();
+        let mut found_free_line = false;
+        let mut free_lines = 0;
+        for idx in iter_line_indices() {
+            if rc_array.is_dead(idx) {
+                if idx.get() == 0 || found_free_line {
+                    free_lines += 1;
+                } else {
+                    found_free_line = true;
+                }
+                if free_lines > 0 {
+                    return true;
+                }
+            } else {
+                free_lines = 0;
+                found_free_line = false;
+            }
+        }
+        false
+    }
+
+    /// Sweep this allocated block during a STW `Release` pause.
+    ///
+    /// # Safety
+    /// - `self.block` must currently be allocated (`get_state() != BlockState::Unallocated`).
+    /// - Must be called during a STW collection pause with exclusive sweep ownership of
+    ///   `self.block`, so no mutator or other worker concurrently executes non-atomic
+    ///   `Line::MARK_TABLE.bzero_metadata`, mutates VO/pinning side metadata, or sweeps `self.block`.
+    pub(crate) unsafe fn sweep<VM: VMBinding>(
+        &self,
+        space: &ImmixSpace<VM>,
+        mark_histogram: &mut Histogram,
+        line_mark_state: Option<u8>,
+    ) -> BlockSweepResult {
+        // This method is not called when using RC.
+        assert!(!space.rc_enabled && !self.rc_enabled);
+        let block = self.block;
+
+        block.set_as_defrag_source(false);
+        if super::BLOCK_ONLY {
+            match block.get_state() {
+                BlockState::Unallocated => unreachable!("Must not sweep unallocated block."),
+                BlockState::Unmarked => {
+                    #[cfg(feature = "vo_bit")]
+                    vo_bit::helper::on_region_swept::<VM, _>(&block, false);
+
+                    // If the pin bit is not on the side, we cannot bulk zero.
+                    // We shouldn't need to clear it here in that case, since the pin bit
+                    // should be overwritten at each object allocation. The same applies below
+                    // when we are sweeping on a line granularity.
+                    #[cfg(feature = "object_pinning")]
+                    if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_PINNING_BIT_SPEC {
+                        side.bzero_metadata(block.start(), Block::BYTES);
+                    }
+
+                    // Release the block if it is allocated but not marked by the current GC.
+                    space.release_block(block, false);
+                    BlockSweepResult::Swept
+                }
+                BlockState::Marked => {
+                    #[cfg(feature = "vo_bit")]
+                    vo_bit::helper::on_region_swept::<VM, _>(&block, true);
+
+                    // The block is live.
+                    BlockSweepResult::NoReuse
+                }
+                _ => unreachable!(),
+            }
+        } else {
+            // Calculate number of marked lines and holes.
+            let mut marked_lines = 0;
+            let mut holes = 0;
+            let mut prev_line_is_marked = true;
+            let line_mark_state = line_mark_state.unwrap();
+
+            {
+                // SAFETY: Caller guarantees STW exclusivity over `self.block` with mutators parked,
+                // so no thread concurrently executes `Line::MARK_TABLE.bzero_metadata` on `self.block`.
+                let line_marks = unsafe { self.line_mark_table() };
+                for idx in iter_line_indices() {
+                    if line_marks[idx].load(Ordering::Relaxed) == line_mark_state {
+                        marked_lines += 1;
+                        prev_line_is_marked = true;
+                    } else {
+                        if prev_line_is_marked {
+                            holes += 1;
+                        }
+                        // We need to clear the line mark state at least twice in every 128 GC
+                        // otherwise, the line mark state of the last GC will stick around
+                        if line_mark_state > Line::MAX_MARK_STATE - 2 {
+                            #[cfg(not(feature = "extreme_assertions"))]
+                            line_marks[idx].store(0, Ordering::Relaxed);
+                            #[cfg(feature = "extreme_assertions")]
+                            block.line_at(idx).mark(0);
+                        }
+                        #[cfg(feature = "immix_zero_on_release")]
+                        crate::util::memory::zero(block.line_at(idx).start(), Line::BYTES);
+
+                        // We need to clear the pin bit if it is on the side, as this line can be reused
+                        #[cfg(feature = "object_pinning")]
+                        if let MetadataSpec::OnSide(side) =
+                            *VM::VMObjectModel::LOCAL_PINNING_BIT_SPEC
+                        {
+                            side.bzero_metadata(block.line_at(idx).start(), Line::BYTES);
+                        }
+
+                        prev_line_is_marked = false;
+                    }
+                }
+            }
+
+            if marked_lines == 0 {
+                #[cfg(feature = "vo_bit")]
+                vo_bit::helper::on_region_swept::<VM, _>(&block, false);
+
+                // Release the block if non of its lines are marked.
+                space.release_block(block, false);
+                BlockSweepResult::Swept
+            } else {
+                // There are some marked lines. Keep the block live.
+                let is_reusable = marked_lines != Block::LINES;
+                if is_reusable {
+                    // There are holes. Mark the block as reusable.
+                    block.set_state(BlockState::Reusable {
+                        unavailable_lines: usize::min(marked_lines, u8::MAX as usize) as _,
+                    });
+                    space.reusable_blocks.push(block)
+                } else {
+                    // Clear mark state.
+                    block.set_state(BlockState::Unmarked);
+                }
+                // Update mark_histogram
+                mark_histogram[holes] += marked_lines;
+                // Record number of holes in block side metadata.
+                block.set_holes(holes);
+
+                #[cfg(feature = "vo_bit")]
+                vo_bit::helper::on_region_swept::<VM, _>(&block, true);
+
+                if is_reusable {
+                    BlockSweepResult::Reused
+                } else {
+                    BlockSweepResult::NoReuse
+                }
+            }
+        }
+    }
+
+    pub(crate) fn rc_sweep_nursery<VM: VMBinding>(&self, space: &ImmixSpace<VM>) -> bool {
+        assert!(space.rc_enabled && self.rc_enabled);
+        let block = self.block;
+        let is_in_place_promoted = block.is_in_place_promoted();
+        block.clear_in_place_promoted();
+        if is_in_place_promoted {
+            block.set_state(BlockState::Reusable {
+                unavailable_lines: 1 as _,
+            });
+
+            // Bulk clear the VO bits of reusable (unmarked) lines.
+            // Lines that are not marked may contain nursery objects that have never received any inc,
+            // and their VO bits need to be cleared before the lines can be reused.
+            #[cfg(feature = "vo_bit")]
+            {
+                let rc_array = self.rc_array();
+                for idx in iter_line_indices() {
+                    if rc_array.is_dead(idx) {
+                        let line = block.line_at(idx);
+                        crate::util::metadata::vo_bit::bzero_vo_bit(line.start(), Line::BYTES);
+                    }
+                }
+            }
+
+            space.reusable_blocks.push(block);
+            false
+        } else {
+            debug_assert!(self.rc_dead(), "{:?} has non-zero rc value", block);
+            debug_assert_ne!(block.get_state(), BlockState::Unallocated);
+
+            // Bulk clear the VO bits of the entire block.
+            // This block may contain nursery objects that have never received any inc,
+            // and their VO bits need to be cleared before the block can be reused.
+            #[cfg(feature = "vo_bit")]
+            crate::util::metadata::vo_bit::bzero_vo_bit(block.start(), Block::BYTES);
+
+            space.release_block(block, false);
+            true
+        }
+    }
+
+    pub(crate) fn rc_sweep_mature<VM: VMBinding>(
+        &self,
+        space: &ImmixSpace<VM>,
+        defrag: bool,
+    ) -> bool {
+        assert!(space.rc_enabled && self.rc_enabled);
+        let block = self.block;
+        let state = block.get_state();
+        if state == BlockState::Unallocated || state == BlockState::Nursery {
+            return false;
+        }
+        if defrag || self.rc_dead() {
+            if block.attempt_dealloc(true) {
+                // Bulk clear the VO bits of the entire block.
+                // Dec operations may reduce some object's RC to 0,
+                // at which time their VO bits are cleared, too.
+                // But some lines may also contain objects that have never received any inc,
+                // and their VO bits need to be cleared before the block can be reused.
+                #[cfg(feature = "vo_bit")]
+                crate::util::metadata::vo_bit::bzero_vo_bit(block.start(), Block::BYTES);
+
+                space.release_block(block, true);
+                return true;
+            }
+        } else if !super::BLOCK_ONLY {
+            // See the caller of this function.
+            // At least one object is dead in the block.
+            let add_as_reusable = {
+                let has_holes = self.has_holes();
+                block
+                    .fetch_update_state(|s| {
+                        if s == BlockState::Reusing
+                            || s == BlockState::Unallocated
+                            || s.is_reusable()
+                            || !has_holes
+                        {
+                            None
+                        } else {
+                            Some(BlockState::Reusable {
+                                unavailable_lines: 1 as _,
+                            })
+                        }
+                    })
+                    .is_ok()
+            };
+            if add_as_reusable {
+                // Bulk clear the VO bits of reusable (unmarked) lines.
+                // Dec operations may reduce some object's RC to 0,
+                // at which time their VO bits are cleared, too.
+                // But some lines may also contain objects that have never received any inc,
+                // and their VO bits need to be cleared before the block can be reused.
+                #[cfg(feature = "vo_bit")]
+                {
+                    let rc_array = self.rc_array();
+                    for idx in iter_line_indices() {
+                        if rc_array.is_dead(idx) {
+                            let line = block.line_at(idx);
+                            crate::util::metadata::vo_bit::bzero_vo_bit(line.start(), Line::BYTES);
+                        }
+                    }
+                }
+                space.reusable_blocks.push(block);
+            }
+        }
+        false
+    }
+
+    /// Clear VO bits for unmarked regions of `self.block` during STW after `Prepare`.
+    ///
+    /// # Safety
+    /// - `self.block` must be an allocated block (`get_state() != BlockState::Unallocated`).
+    /// - Must be called during a STW collection pause with exclusive ownership of `self.block`'s
+    ///   `VO_BIT` range and with no concurrent non-atomic `Line::MARK_TABLE.bzero_metadata` on
+    ///   `self.block`.
+    #[cfg(feature = "vo_bit")]
+    pub(crate) unsafe fn clear_vo_bits_for_unmarked_regions(&self, line_mark_state: Option<u8>) {
+        let block = self.block;
+        match line_mark_state {
+            None => match block.get_state() {
+                BlockState::Unmarked => {
+                    vo_bit::bzero_vo_bit(block.start(), Block::BYTES);
+                }
+                BlockState::Marked => {}
+                _ => unreachable!(),
+            },
+            Some(state) => {
+                // SAFETY: Caller guarantees STW pause with mutators parked, so no thread
+                // concurrently executes non-atomic `Line::MARK_TABLE.bzero_metadata` on `self.block`.
+                let line_marks = unsafe { self.line_mark_table() };
+                for idx in iter_line_indices() {
+                    if line_marks[idx].load(Ordering::Relaxed) != state {
+                        let line = block.line_at(idx);
                         vo_bit::bzero_vo_bit(line.start(), Line::BYTES);
                     }
                 }

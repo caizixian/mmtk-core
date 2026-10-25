@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use std::sync::Arc;
 
 use crate::policy::marksweepspace::malloc_ms::MallocSpace;
