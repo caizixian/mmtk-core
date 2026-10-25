@@ -46,19 +46,16 @@ mod test {
 
 // Test with an address that works for 32bits. The address is chosen empirically.
 #[cfg(target_os = "linux")]
+const TEST_ADDRESS_RAW: usize = 0x7000_0000;
+// On macOS, avoid the dyld shared cache, which occupies roughly 0x1_8000_0000..0x3_0000_0000 on aarch64.
+#[cfg(target_os = "macos")]
+const TEST_ADDRESS_RAW: usize = 0x4_0000_0000;
+
 const TEST_ADDRESS: Address = crate::util::conversions::chunk_align_down(
     // SAFETY: Constructing a fixed virtual `Address` constant does not dereference memory;
     // `verify_test_address` asserts this region precedes `vm_layout().heap_start`, and tests map
-    // it explicitly with `dzmmap`/`ensure_mapped` before any access.
-    unsafe { Address::from_usize(0x7000_0000) },
-);
-// On macOS, avoid the dyld shared cache, which occupies roughly 0x1_8000_0000..0x3_0000_0000 on aarch64.
-#[cfg(target_os = "macos")]
-const TEST_ADDRESS: Address = crate::util::conversions::chunk_align_down(
-    // SAFETY: Constructing a fixed virtual `Address` constant does not dereference memory;
-    // `verify_test_address` asserts this region precedes `vm_layout().heap_start` and avoids the
-    // macOS dyld shared cache, and tests map it explicitly before any access.
-    unsafe { Address::from_usize(0x4_0000_0000) },
+    // it explicitly before any access.
+    unsafe { Address::from_usize(TEST_ADDRESS_RAW) },
 );
 
 // util::heap::layout::mmapper::csm

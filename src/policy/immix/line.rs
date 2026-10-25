@@ -165,7 +165,8 @@ impl Line {
 
 const LOG_BITS_PER_LINE: usize = Line::LOG_BYTES - rc::LOG_MIN_OBJECT_SIZE + rc::LOG_REF_COUNT_BITS;
 const BITS_PER_LINE: usize = 1 << LOG_BITS_PER_LINE;
-pub(super) const BYTES_PER_LINE: usize = BITS_PER_LINE >> LOG_BITS_IN_BYTE as usize;
+const BYTES_PER_LINE: usize = BITS_PER_LINE >> LOG_BITS_IN_BYTE as usize;
+pub(super) const RC_BYTES_IN_BLOCK: usize = LINES_IN_BLOCK * BYTES_PER_LINE;
 const _: () = assert!(BITS_PER_LINE >= 8 && BITS_PER_LINE % 8 == 0);
 
 #[inline(always)]
@@ -184,24 +185,19 @@ pub(super) fn iter_line_indices_from(
 pub(super) struct RCArray<'a> {
     #[cfg_attr(not(feature = "extreme_assertions"), allow(dead_code))]
     block: Block,
-    table: &'a [[AtomicU8; BYTES_PER_LINE]; LINES_IN_BLOCK],
+    table: &'a [AtomicU8; RC_BYTES_IN_BLOCK],
 }
 
 impl<'a> RCArray<'a> {
     #[inline(always)]
-    pub(super) fn from_table(
-        block: Block,
-        table: &'a [[AtomicU8; BYTES_PER_LINE]; LINES_IN_BLOCK],
-    ) -> Self {
+    pub(super) fn from_table(block: Block, table: &'a [AtomicU8; RC_BYTES_IN_BLOCK]) -> Self {
         Self { block, table }
     }
 
     pub(super) fn clear(&self) {
         #[cfg(not(feature = "extreme_assertions"))]
-        for line in self.table {
-            for byte in line {
-                byte.store(0, Ordering::Relaxed);
-            }
+        for byte in self.table {
+            byte.store(0, Ordering::Relaxed);
         }
         #[cfg(feature = "extreme_assertions")]
         {
@@ -217,7 +213,8 @@ impl<'a> RCArray<'a> {
 
     #[inline(always)]
     pub(super) fn is_dead(&self, idx: Fin<LINES_IN_BLOCK>) -> bool {
-        self.table[idx]
+        let base = idx.get() * BYTES_PER_LINE;
+        self.table[base..base + BYTES_PER_LINE]
             .iter()
             .fold(0u8, |acc, byte| acc | byte.load(Ordering::Relaxed))
             == 0

@@ -1,25 +1,10 @@
-use std::any::Any;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// `MockAny` hides any type information. It is useful when we want to create
-/// a mock method for methods with generic type parameters.
-/// When `MockAny` is used for a method, the user needs to make sure that the types in the
-/// actual [`MockMethod`] behind the MockAny match the arguments that will be passed to the method,
-/// otherwise, the downcast from `Any` will fail. We use `MockAny` for some methods in [`super::MockVM`].
-/// The user should check if their intended arguments match the default `MockMethod` type, and if not,
-/// they should create their own `MockMethod`s for those methods.
-pub trait MockAny: Send + Sync {
-    fn call_any(&self, args: Box<dyn Any>) -> Box<dyn Any>;
-}
+/// Type-erased marker trait retained for placeholder [`MockMethod`] fields on [`super::MockVM`]
+/// whose VM trait methods use `impl Trait` parameters not yet mocked.
+pub trait MockAny: Send + Sync {}
 
-impl<I: 'static, R: 'static> MockAny for MockMethod<I, R> {
-    fn call_any(&self, args: Box<dyn Any>) -> Box<dyn Any> {
-        let typed_args: Box<I> = args.downcast().unwrap();
-        let typed_args_inner: I = *typed_args;
-        let typed_ret = self.call(typed_args_inner);
-        Box::new(typed_ret)
-    }
-}
+impl<I: 'static, R: 'static> MockAny for MockMethod<I, R> {}
 
 /// Mocking a method parameterized directly by its trait-object closure type `F`.
 ///

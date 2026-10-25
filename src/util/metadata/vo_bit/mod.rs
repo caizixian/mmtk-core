@@ -136,120 +136,47 @@ fn check_vo_bit(addr: Address, load_vo_bit: impl FnOnce(Address) -> u8) -> Optio
 }
 
 /// Project a non-empty sub-range `[grain_start, grain_end)` within a single mapped `MMAPPER`
-/// grain of `VO_BIT_SIDE_METADATA_SPEC`'s contiguous global side-metadata window as `&[AtomicU8]`
-/// for the duration of `f` (dropping the slice before returning), or return `None` if side
-/// metadata is uninitialized or `grain_start` is unmapped.
+/// grain of `spec`'s reserved side-metadata window as `&[AtomicU8]` for the duration of `f`
+/// (dropping the slice before returning), or return `None` if side metadata is uninitialized or
+/// `grain_start` is unmapped.
+///
+/// Module-private to `vo_bit`: invoked only for `VO_BIT_SIDE_METADATA_SPEC` (accessed exclusively
+/// via `AtomicU8` crate-wide) and quiescent `LOCAL_MARK_BIT_SPEC` during region sweeping
+/// (`bcopy_vo_bit_from_side_spec`).
 #[inline]
-fn with_mapped_vo_meta_grain<R>(
+fn with_mapped_side_meta_grain<R>(
+    spec: &SideMetadataSpec,
+    chunk_anchor: Address,
     grain_start: Address,
     grain_end: Address,
     f: impl FnOnce(&[core::sync::atomic::AtomicU8]) -> R,
 ) -> Option<R> {
-    use crate::util::metadata::side_metadata::is_side_metadata_initialized;
+    use crate::util::metadata::side_metadata::{helpers, is_side_metadata_initialized};
     use core::sync::atomic::AtomicU8;
 
     if grain_start >= grain_end || grain_start.is_zero() || !is_side_metadata_initialized() {
         return None;
     }
-    let spec_start = VO_BIT_SIDE_METADATA_SPEC.get_starting_address();
-    let spec_end = VO_BIT_SIDE_METADATA_SPEC.upper_bound_address_for_contiguous();
-    assert!(
-        grain_start >= spec_start && grain_end <= spec_end,
-        "VO-bit metadata grain [{grain_start}, {grain_end}) out of spec bounds [{spec_start}, {spec_end})"
-    );
+    helpers::assert_meta_range_in_spec_bounds(spec, chunk_anchor, grain_start, grain_end);
     let grain = crate::MMAPPER.granularity();
     assert_eq!(
         grain_start.align_down(grain),
         (grain_end - 1usize).align_down(grain),
-        "VO-bit metadata range [{grain_start}, {grain_end}) crosses MMAPPER grain boundary"
+        "Side-metadata range [{grain_start}, {grain_end}) crosses MMAPPER grain boundary"
     );
     if !grain_start.is_mapped() {
         return None;
     }
     let len = grain_end - grain_start;
     assert!(len <= isize::MAX as usize);
-    // SAFETY:
-    // 1. `grain_start` is non-zero, `is_side_metadata_initialized()` holds, and the assertions
-    //    above verified `[grain_start, grain_end)` lies strictly inside
-    //    `VO_BIT_SIDE_METADATA_SPEC`'s reserved contiguous global side-metadata window and within
-    //    a single `MMAPPER.granularity()` grain with `len <= isize::MAX`.
-    // 2. `grain_start.is_mapped()` verified that the entire enclosing `MMAPPER` grain is mapped and
-    //    OS-zero-initialized (`AtomicU8` has alignment 1), and `slice` does not escape `f`
-    //    (preventing any re-entrant callback or test-cleanup unmap hazard after return).
-    // 3. All `VO_BIT_SIDE_METADATA_SPEC` readers and writers across `mmtk` (`set_vo_bit`,
-    //    `unset_vo_bit*`, `is_vo_bit_set*`, `bzero_vo_bit`, `bcopy_vo_bit_from_mark_bit`,
-    //    `scan_vo_bits_atomic`, `find_object_from_internal_pointer`, `MallocSpace::vo_bit_bytes`,
-    //    and `native_ms::Block::sweep_cells`) access mapped VO-bit bytes exclusively via `AtomicU8`
-    //    without creating `&[u8]` or `&mut [u8]` aliases or non-atomic writes.
+    // SAFETY: `assert_meta_range_in_spec_bounds` verified `is_side_metadata_initialized()` and that
+    // `[grain_start, grain_end)` lies strictly within MMTk's reserved side-metadata window and
+    // `spec`'s bounds; `grain_start` sits in a single mapped, OS-zero-initialized `MMAPPER` grain
+    // (`AtomicU8` align 1, `len <= isize::MAX`), `slice` does not escape `f`, and all module
+    // callers pass either globally `AtomicU8`-only `VO_BIT_SIDE_METADATA_SPEC` or quiescent
+    // `LOCAL_MARK_BIT_SPEC` during region sweeping without non-atomic write races or `&mut` aliases.
     let slice = unsafe { core::slice::from_raw_parts(grain_start.to_ptr::<AtomicU8>(), len) };
     Some(f(slice))
-}
-
-/// Convert a half-open data address range `[start, start + size)` (`size > 0`) into the contiguous
-/// VO-bit metadata byte span `(byte_start, byte_end, first_mask, last_mask)`.
-#[inline]
-fn half_open_vo_meta_byte_range(start: Address, size: usize) -> Option<(Address, Address, u8, u8)> {
-    use crate::util::metadata::side_metadata::helpers;
-
-    if size == 0 {
-        return None;
-    }
-    let meta_start = helpers::address_to_contiguous_meta_address(&VO_BIT_SIDE_METADATA_SPEC, start);
-    let meta_start_bit = helpers::meta_byte_lshift(&VO_BIT_SIDE_METADATA_SPEC, start);
-    let (meta_end, meta_end_bit) = match start.as_usize().checked_add(size) {
-        Some(_) => {
-            let end_addr = start + size;
-            (
-                helpers::address_to_contiguous_meta_address(&VO_BIT_SIDE_METADATA_SPEC, end_addr),
-                helpers::meta_byte_lshift(&VO_BIT_SIDE_METADATA_SPEC, end_addr),
-            )
-        }
-        None => {
-            assert_eq!(
-                start.as_usize().checked_add(size - 1),
-                Some(usize::MAX),
-                "VO-bit range overflowed Address: start={start}, size={size:#x}"
-            );
-            (
-                VO_BIT_SIDE_METADATA_SPEC.upper_bound_address_for_contiguous(),
-                0,
-            )
-        }
-    };
-    helpers::active_bit_range_bytes(meta_start, meta_start_bit, meta_end, meta_end_bit)
-}
-
-/// Convert an inclusive `REGION_BYTES`-aligned data range `first_data..=last_data`
-/// (`first_data <= last_data`) into the contiguous VO-bit metadata byte span
-/// `(byte_start, byte_end, first_mask, last_mask)`.
-#[inline]
-fn inclusive_vo_meta_byte_range(
-    first_data: Address,
-    last_data: Address,
-) -> Option<(Address, Address, u8, u8)> {
-    use crate::util::metadata::side_metadata::helpers;
-
-    let start_meta =
-        helpers::address_to_contiguous_meta_address(&VO_BIT_SIDE_METADATA_SPEC, first_data);
-    let start_bit = helpers::meta_byte_lshift(&VO_BIT_SIDE_METADATA_SPEC, first_data);
-    let last_meta =
-        helpers::address_to_contiguous_meta_address(&VO_BIT_SIDE_METADATA_SPEC, last_data);
-    let last_bit = helpers::meta_byte_lshift(&VO_BIT_SIDE_METADATA_SPEC, last_data);
-    let (end_meta, end_bit) = if last_bit == 7 {
-        (last_meta + 1usize, 0)
-    } else {
-        (last_meta, last_bit + 1)
-    };
-    helpers::active_bit_range_bytes(start_meta, start_bit, end_meta, end_bit)
-}
-
-#[inline]
-fn grain_rem(addr: Address, grain: usize) -> usize {
-    addr.align_down(grain)
-        .as_usize()
-        .checked_add(grain)
-        .map_or(usize::MAX, |next| next)
-        - addr.as_usize()
 }
 
 #[inline]
@@ -292,6 +219,9 @@ fn apply_masked_vo_slice(
 /// `is_mmtk_object`, `find_object_from_internal_pointer`, `MallocSpace::vo_bit_bytes`) never
 /// encounter a non-atomic `memset` data race or `&mut [u8]` alias.
 pub(crate) fn bzero_vo_bit(start: Address, size: usize) {
+    use crate::util::metadata::side_metadata::helpers;
+    use core::ops::ControlFlow;
+
     #[cfg(feature = "extreme_assertions")]
     let _lock = crate::util::metadata::side_metadata::sanity::SANITY_LOCK
         .lock()
@@ -304,30 +234,37 @@ pub(crate) fn bzero_vo_bit(start: Address, size: usize) {
     );
 
     let Some((byte_start, byte_end, first_mask, last_mask)) =
-        half_open_vo_meta_byte_range(start, size)
+        helpers::half_open_contiguous_meta_range(&VO_BIT_SIDE_METADATA_SPEC, start, size)
     else {
         return;
     };
-    let grain = crate::MMAPPER.granularity();
-    let mut cur = byte_start;
-    while cur < byte_end {
-        let g_end = cur + (byte_end - cur).min(grain_rem(cur, grain));
-        let g_first = if cur == byte_start { first_mask } else { 0xff };
-        let g_last = if g_end == byte_end { last_mask } else { 0xff };
-        with_mapped_vo_meta_grain(cur, g_end, |slice| {
-            apply_masked_vo_slice(
-                slice,
-                g_first,
-                g_last,
-                |_, atom, mask| {
-                    atom.fetch_and(!mask, Ordering::SeqCst);
+    helpers::try_for_each_meta_grain_forward(
+        byte_start,
+        byte_end,
+        first_mask,
+        last_mask,
+        |g_start, g_end, g_first, g_last| {
+            with_mapped_side_meta_grain(
+                &VO_BIT_SIDE_METADATA_SPEC,
+                start,
+                g_start,
+                g_end,
+                |slice| {
+                    apply_masked_vo_slice(
+                        slice,
+                        g_first,
+                        g_last,
+                        |_, atom, mask| {
+                            atom.fetch_and(!mask, Ordering::SeqCst);
+                        },
+                        |_, atom| atom.store(0, Ordering::Relaxed),
+                    );
                 },
-                |_, atom| atom.store(0, Ordering::Relaxed),
-            );
-        })
-        .expect("bzero_vo_bit called on unmapped VO-bit side metadata");
-        cur = g_end;
-    }
+            )
+            .expect("bzero_vo_bit called on unmapped VO-bit side metadata");
+            ControlFlow::<()>::Continue(())
+        },
+    );
 }
 
 /// Bulk copy VO bits from side mark bits atomically (`AtomicU8` loads/stores on interior bytes,
@@ -345,8 +282,7 @@ fn bcopy_vo_bit_from_mark_bit<VM: VMBinding>(start: Address, size: usize) {
 
 #[cfg(any(feature = "vo_bit", test))]
 fn bcopy_vo_bit_from_side_spec(start: Address, size: usize, side_mark_bit_spec: &SideMetadataSpec) {
-    use crate::util::metadata::side_metadata::{helpers, is_side_metadata_initialized};
-    use core::sync::atomic::AtomicU8;
+    use crate::util::metadata::side_metadata::helpers;
 
     #[cfg(feature = "extreme_assertions")]
     let _lock = crate::util::metadata::side_metadata::sanity::SANITY_LOCK
@@ -367,113 +303,77 @@ fn bcopy_vo_bit_from_side_spec(start: Address, size: usize, side_mark_bit_spec: 
             && side_mark_bit_spec.log_num_of_bits == VO_BIT_SIDE_METADATA_SPEC.log_num_of_bits,
         "bcopy_vo_bit_from_mark_bit expects matching local side mark-bit spec: {side_mark_bit_spec:?}"
     );
-    if size == 0 {
-        return;
-    }
 
-    let copy_single_span = |sub_start: Address, sub_size: usize| {
+    helpers::for_each_spec_data_span(side_mark_bit_spec, start, size, |sub_start, sub_size| {
         let Some((dst_byte_start, dst_byte_end, first_mask, last_mask)) =
-            half_open_vo_meta_byte_range(sub_start, sub_size)
+            helpers::half_open_contiguous_meta_range(
+                &VO_BIT_SIDE_METADATA_SPEC,
+                sub_start,
+                sub_size,
+            )
         else {
             return;
         };
-        assert!(is_side_metadata_initialized());
         let src_byte_start = helpers::address_to_meta_address(side_mark_bit_spec, sub_start);
         debug_assert_eq!(
             helpers::meta_byte_lshift(&VO_BIT_SIDE_METADATA_SPEC, sub_start),
             helpers::meta_byte_lshift(side_mark_bit_spec, sub_start)
         );
         let total_bytes = dst_byte_end - dst_byte_start;
-        let src_byte_end = src_byte_start + total_bytes;
-        if side_mark_bit_spec.uses_contiguous_side_metadata() {
-            assert!(
-                src_byte_start >= side_mark_bit_spec.get_starting_address()
-                    && src_byte_end <= side_mark_bit_spec.upper_bound_address_for_contiguous()
-            );
-        }
-        #[cfg(target_pointer_width = "32")]
-        if side_mark_bit_spec.uses_chunked_side_metadata() {
-            assert!(
-                src_byte_start <= src_byte_end
-                    && src_byte_end
-                        <= side_mark_bit_spec.upper_bound_address_for_chunked(sub_start)
-            );
-        }
-
         let grain = crate::MMAPPER.granularity();
         let mut offset = 0usize;
         while offset < total_bytes {
             let dst_cur = dst_byte_start + offset;
             let src_cur = src_byte_start + offset;
             let step = (total_bytes - offset)
-                .min(grain_rem(dst_cur, grain))
-                .min(grain_rem(src_cur, grain));
-            assert!(
-                step > 0
-                    && step <= isize::MAX as usize
-                    && !src_cur.is_zero()
-                    && src_cur.is_mapped()
-                    && src_cur.align_down(grain) == (src_cur + (step - 1)).align_down(grain)
-            );
-            // SAFETY: `is_side_metadata_initialized()` holds, `[src_cur, src_cur + step)` lies
-            // strictly inside `side_mark_bit_spec`'s valid bounds and within a single mapped
-            // `MMAPPER` grain (`!src_cur.is_zero() && src_cur.is_mapped()`, `step <= isize::MAX`,
-            // `AtomicU8` has alignment 1), and `src_slice` does not escape this iteration. During
-            // region sweeping (`vo_bit::helper::on_region_swept`), mark-bit bytes for
-            // `[sub_start, sub_start + sub_size)` have no concurrent non-atomic writes or `&mut`
-            // aliases (adjacent shared boundary bytes are accessed atomically).
-            let src_slice =
-                unsafe { core::slice::from_raw_parts(src_cur.to_ptr::<AtomicU8>(), step) };
+                .min(helpers::grain_rem(dst_cur, grain))
+                .min(helpers::grain_rem(src_cur, grain));
             let g_first = if offset == 0 { first_mask } else { 0xff };
             let g_last = if offset + step == total_bytes {
                 last_mask
             } else {
                 0xff
             };
-            with_mapped_vo_meta_grain(dst_cur, dst_cur + step, |dst_slice| {
-                apply_masked_vo_slice(
-                    dst_slice,
-                    g_first,
-                    g_last,
-                    |i, dst_atom, mask| {
-                        let src_val = src_slice[i].load(Ordering::Relaxed);
-                        let _ =
-                            dst_atom.fetch_update(Ordering::Release, Ordering::Relaxed, |old| {
-                                Some((src_val & mask) | (old & !mask))
-                            });
-                    },
-                    |i, dst_atom| {
-                        dst_atom.store(src_slice[i].load(Ordering::Relaxed), Ordering::Release);
-                    },
-                );
-            })
-            .expect("bcopy_vo_bit_from_mark_bit called on unmapped VO-bit metadata");
+            with_mapped_side_meta_grain(
+                side_mark_bit_spec,
+                sub_start,
+                src_cur,
+                src_cur + step,
+                |src_slice| {
+                    with_mapped_side_meta_grain(
+                        &VO_BIT_SIDE_METADATA_SPEC,
+                        sub_start,
+                        dst_cur,
+                        dst_cur + step,
+                        |dst_slice| {
+                            apply_masked_vo_slice(
+                                dst_slice,
+                                g_first,
+                                g_last,
+                                |i, dst_atom, mask| {
+                                    let src_val = src_slice[i].load(Ordering::Relaxed);
+                                    let _ = dst_atom.fetch_update(
+                                        Ordering::Release,
+                                        Ordering::Relaxed,
+                                        |old| Some((src_val & mask) | (old & !mask)),
+                                    );
+                                },
+                                |i, dst_atom| {
+                                    dst_atom.store(
+                                        src_slice[i].load(Ordering::Relaxed),
+                                        Ordering::Release,
+                                    );
+                                },
+                            );
+                        },
+                    )
+                    .expect("bcopy_vo_bit_from_mark_bit called on unmapped VO-bit metadata");
+                },
+            )
+            .expect("bcopy_vo_bit_from_mark_bit called on unmapped mark-bit metadata");
             offset += step;
         }
-    };
-
-    if side_mark_bit_spec.uses_contiguous_side_metadata() {
-        copy_single_span(start, size);
-    }
-    #[cfg(target_pointer_width = "32")]
-    if side_mark_bit_spec.uses_chunked_side_metadata() {
-        use crate::util::heap::layout::vm_layout::BYTES_IN_CHUNK;
-        let last_byte = start + (size - 1);
-        let first_chunk = start.align_down(BYTES_IN_CHUNK);
-        let last_chunk = last_byte.align_down(BYTES_IN_CHUNK);
-        if first_chunk == last_chunk {
-            copy_single_span(start, size);
-        } else {
-            let second_chunk = first_chunk + BYTES_IN_CHUNK;
-            copy_single_span(start, second_chunk - start);
-            let mut chunk = second_chunk;
-            while chunk < last_chunk {
-                copy_single_span(chunk, BYTES_IN_CHUNK);
-                chunk += BYTES_IN_CHUNK;
-            }
-            copy_single_span(last_chunk, (last_byte - last_chunk) + 1);
-        }
-    }
+    });
 }
 
 use crate::util::constants::{LOG_BITS_IN_BYTE, LOG_BYTES_IN_ADDRESS};
@@ -489,155 +389,128 @@ pub(crate) const VO_BIT_WORD_TO_REGION: usize = 1
 /// `callback` in ascending address order for each valid `ObjectReference`.
 ///
 /// Unmapped side-metadata grains within `[start, end)` are skipped cleanly, and mapped grains are
-/// read via `AtomicU8` (`Ordering::Relaxed` zero-word fast skip + `Ordering::Acquire` non-zero byte
-/// loads) so heap enumeration (`MMTK::enumerate_objects`) never causes a Rust data race if mutator
-/// or GC threads concurrently update VO bits elsewhere.
+/// read in a single pass per grain via `AtomicU8` (`Ordering::Relaxed` 8-byte zero skip +
+/// `Ordering::Acquire` per-byte loads) so heap enumeration (`MMTK::enumerate_objects`) never causes
+/// a Rust data race if mutator or GC threads concurrently update VO bits elsewhere.
 pub(crate) fn scan_vo_bits_atomic(
     start: Address,
     end: Address,
     mut callback: impl FnMut(ObjectReference),
 ) {
-    use crate::util::heap::layout::vm_layout::VMLayout;
     use crate::util::metadata::side_metadata::{helpers, is_side_metadata_initialized};
-
-    let clamped_end = {
-        #[cfg(target_pointer_width = "64")]
-        {
-            const ARCH_END: usize = 1usize << VMLayout::LOG_ARCH_ADDRESS_SPACE;
-            end - end.as_usize().saturating_sub(ARCH_END)
-        }
-        #[cfg(target_pointer_width = "32")]
-        {
-            let _ = VMLayout::LOG_ARCH_ADDRESS_SPACE;
-            end
-        }
-    };
-    if start >= clamped_end || !is_side_metadata_initialized() {
-        return;
-    }
+    use core::ops::ControlFlow;
 
     const REGION_BYTES: usize = 1 << VO_BIT_SIDE_METADATA_SPEC.log_bytes_in_region;
-    const MAX_ALIGNED: usize = usize::MAX & !(REGION_BYTES - 1);
-    if start.as_usize() > MAX_ALIGNED {
+    const MAX_ALIGNED: usize = helpers::CONTIGUOUS_DATA_MAX & !(REGION_BYTES - 1);
+
+    if start >= end || start.as_usize() > MAX_ALIGNED || !is_side_metadata_initialized() {
         return;
     }
-
+    let last_raw = (end - 1usize).as_usize().min(helpers::CONTIGUOUS_DATA_MAX);
     let first_data = start.align_up(REGION_BYTES);
-    let last_data = (clamped_end - 1usize).align_down(REGION_BYTES);
-    if first_data > last_data {
-        return;
-    }
-
+    let last_data = (start + (last_raw - start.as_usize())).align_down(REGION_BYTES);
     let Some((byte_start, byte_end, first_mask, last_mask)) =
-        inclusive_vo_meta_byte_range(first_data, last_data)
+        helpers::inclusive_contiguous_meta_range(&VO_BIT_SIDE_METADATA_SPEC, first_data, last_data)
     else {
         return;
     };
 
-    let grain = crate::MMAPPER.granularity();
-    let mut cur = byte_start;
-    while cur < byte_end {
-        let g_end = cur + (byte_end - cur).min(grain_rem(cur, grain));
-        let g_first_mask = if cur == byte_start { first_mask } else { 0xff };
-        let g_last_mask = if g_end == byte_end { last_mask } else { 0xff };
-        let Some(Some((byte_offset, mut bits))) = with_mapped_vo_meta_grain(cur, g_end, |slice| {
-            helpers::find_first_non_zero_atomic_byte(slice, g_first_mask, g_last_mask)
-        }) else {
-            cur = g_end;
-            continue;
-        };
-        let byte_addr = cur + byte_offset;
-        while bits != 0 {
-            let bit = bits.trailing_zeros() as u8;
-            let vo_addr = helpers::contiguous_meta_address_to_address(
+    helpers::try_for_each_meta_grain_forward(
+        byte_start,
+        byte_end,
+        first_mask,
+        last_mask,
+        |g_start, g_end, g_first, g_last| {
+            let _ = with_mapped_side_meta_grain(
                 &VO_BIT_SIDE_METADATA_SPEC,
-                byte_addr,
-                bit,
+                first_data,
+                g_start,
+                g_end,
+                |slice| {
+                    helpers::scan_non_zero_atomic_bits_in_slice(
+                        slice,
+                        g_first,
+                        g_last,
+                        |byte_off, bit| {
+                            let vo_addr = helpers::contiguous_meta_address_to_address(
+                                &VO_BIT_SIDE_METADATA_SPEC,
+                                g_start + byte_off,
+                                bit,
+                            );
+                            debug_assert!(vo_addr >= first_data && vo_addr <= last_data);
+                            if let Some(obj) = ObjectReference::from_raw_address(vo_addr) {
+                                callback(obj);
+                            }
+                        },
+                    );
+                },
             );
-            debug_assert!(vo_addr >= first_data && vo_addr <= last_data);
-            if let Some(obj) = ObjectReference::from_raw_address(vo_addr) {
-                callback(obj);
-            }
-            bits &= bits - 1;
-        }
-        cur = byte_addr + 1usize;
-    }
+            ControlFlow::<()>::Continue(())
+        },
+    );
 }
 
 /// Atomically search backwards from `start` over at most `search_limit_bytes` bytes (`[start -
 /// search_limit_bytes + 1, start]`) for the highest region-aligned address whose VO bit is set,
 /// stopping at the first unmapped metadata grain going backwards.
 fn find_prev_vo_bit_atomic(start: Address, search_limit_bytes: usize) -> Option<Address> {
-    use crate::util::heap::layout::vm_layout::VMLayout;
     use crate::util::metadata::side_metadata::{helpers, is_side_metadata_initialized};
-
-    if search_limit_bytes == 0 || !is_side_metadata_initialized() {
-        return None;
-    }
-    #[cfg(target_pointer_width = "64")]
-    {
-        const ARCH_END: usize = 1usize << VMLayout::LOG_ARCH_ADDRESS_SPACE;
-        if start.as_usize() >= ARCH_END {
-            return None;
-        }
-    }
-    #[cfg(target_pointer_width = "32")]
-    let _ = VMLayout::LOG_ARCH_ADDRESS_SPACE;
-
-    if !VO_BIT_SIDE_METADATA_SPEC.is_mapped(start) {
-        return None;
-    }
+    use core::ops::ControlFlow;
 
     const REGION_BYTES: usize = 1 << VO_BIT_SIDE_METADATA_SPEC.log_bytes_in_region;
-    const MAX_ALIGNED: usize = usize::MAX & !(REGION_BYTES - 1);
-    let lower_bound = start.saturating_sub(search_limit_bytes) + 1usize;
+    const MAX_ALIGNED: usize = helpers::CONTIGUOUS_DATA_MAX & !(REGION_BYTES - 1);
+
+    if search_limit_bytes == 0
+        || start.as_usize() > helpers::CONTIGUOUS_DATA_MAX
+        || !is_side_metadata_initialized()
+        || !VO_BIT_SIDE_METADATA_SPEC.is_mapped(start)
+    {
+        return None;
+    }
+
+    let lower_bound = start.saturating_sub(search_limit_bytes - 1);
     if lower_bound.as_usize() > MAX_ALIGNED {
         return None;
     }
 
     let first_data = lower_bound.align_up(REGION_BYTES);
     let last_data = start.align_down(REGION_BYTES);
-    if first_data > last_data {
-        return None;
-    }
+    let (byte_start, byte_end, first_mask, last_mask) = helpers::inclusive_contiguous_meta_range(
+        &VO_BIT_SIDE_METADATA_SPEC,
+        first_data,
+        last_data,
+    )?;
 
-    let (byte_start, byte_end, first_mask, last_mask) =
-        inclusive_vo_meta_byte_range(first_data, last_data)?;
-
-    let grain = crate::MMAPPER.granularity();
-    let mut g_end = byte_end;
-    while g_end > byte_start {
-        let grain_base = (g_end - 1usize).align_down(grain);
-        let g_start = if grain_base > byte_start {
-            grain_base
-        } else {
-            byte_start
-        };
-        let g_first_mask = if g_start == byte_start {
-            first_mask
-        } else {
-            0xff
-        };
-        let g_last_mask = if g_end == byte_end { last_mask } else { 0xff };
-        let Some(found) = with_mapped_vo_meta_grain(g_start, g_end, |slice| {
-            helpers::find_last_non_zero_atomic_byte(slice, g_first_mask, g_last_mask)
-        }) else {
-            break;
-        };
-        if let Some((byte_offset, bits)) = found {
-            debug_assert_ne!(bits, 0);
-            let highest_bit = 7 - bits.leading_zeros() as u8;
-            let vo_addr = helpers::contiguous_meta_address_to_address(
+    helpers::try_for_each_meta_grain_backward(
+        byte_start,
+        byte_end,
+        first_mask,
+        last_mask,
+        |g_start, g_end, g_first, g_last| {
+            let Some(found) = with_mapped_side_meta_grain(
                 &VO_BIT_SIDE_METADATA_SPEC,
-                g_start + byte_offset,
-                highest_bit,
-            );
-            debug_assert!(vo_addr >= first_data && vo_addr <= last_data);
-            return Some(vo_addr);
-        }
-        g_end = g_start;
-    }
-    None
+                first_data,
+                g_start,
+                g_end,
+                |slice| helpers::find_last_non_zero_atomic_byte(slice, g_first, g_last),
+            ) else {
+                return ControlFlow::Break(None);
+            };
+            if let Some((byte_offset, bits)) = found {
+                debug_assert_ne!(bits, 0);
+                let highest_bit = 7 - bits.leading_zeros() as u8;
+                let vo_addr = helpers::contiguous_meta_address_to_address(
+                    &VO_BIT_SIDE_METADATA_SPEC,
+                    g_start + byte_offset,
+                    highest_bit,
+                );
+                debug_assert!(vo_addr >= first_data && vo_addr <= last_data);
+                return ControlFlow::Break(Some(vo_addr));
+            }
+            ControlFlow::Continue(())
+        },
+    )
+    .flatten()
 }
 
 /// Find the base reference to the object from a potential internal pointer.

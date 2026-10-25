@@ -23,12 +23,10 @@ fn test_vm_layout_compressed_pointer() {
                 end if end <= (32usize << 30) => 32usize << 30,
                 _ => start + (32usize << 30),
             };
-            // SAFETY: `start` is a hard-coded low 64-bit virtual address (or OS-reserved anonymous
-            // range on macOS) used solely to configure `VMLayout::heap_start`.
-            let start_addr = unsafe { Address::from_usize(start) };
-            // SAFETY: `end` (`> start`) is a hard-coded/computed upper bound within the 35-bit
-            // compressed address space used solely to configure `VMLayout::heap_end`.
-            let end_addr = unsafe { Address::from_usize(end) };
+            // SAFETY: `start` and `end` (`> start`) are virtual address bounds within the 35-bit
+            // compressed address space used solely to configure `VMLayout` without dereferencing.
+            let (start_addr, end_addr) =
+                unsafe { (Address::from_usize(start), Address::from_usize(end)) };
             let layout = VMLayout {
                 log_address_space: 35,
                 heap_start: chunk_align_down(start_addr),

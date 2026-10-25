@@ -8,19 +8,6 @@ use crate::util::metadata::metadata_val_traits::*;
 use crate::util::Address;
 use num_traits::FromPrimitive;
 
-#[allow(dead_code)]
-const LOG_BITS_IN_U16: usize = 4;
-#[allow(dead_code)]
-const BITS_IN_U16: usize = 1 << LOG_BITS_IN_U16;
-#[allow(dead_code)]
-const LOG_BITS_IN_U32: usize = 5;
-#[allow(dead_code)]
-const BITS_IN_U32: usize = 1 << LOG_BITS_IN_U32;
-#[allow(dead_code)]
-const LOG_BITS_IN_U64: usize = 6;
-#[allow(dead_code)]
-const BITS_IN_U64: usize = 1 << LOG_BITS_IN_U64;
-
 /// This struct stores the specification of a header metadata bit-set.
 /// It supports either bits metadata of 1-7 bits in the same byte, or u8/u16/u32/u64 at an offset of their natural alignment.
 ///
@@ -203,10 +190,8 @@ impl HeaderMetadataSpec {
         ordering: Ordering,
     ) -> T {
         self.assert_mask::<T>(optional_mask);
-        // SAFETY: By MMTk's `ObjectModel` header-metadata contract (preserved as a `pub` API for
-        // VM bindings), `header` is a live object's header base address whose metadata cell at
-        // `self.meta_addr(header)` is mapped, initialized, and accessed atomically without
-        // conflicting non-atomic writes or `&mut` aliases.
+        // SAFETY: `ObjectModel` contract guarantees `self.meta_addr(header)` is a mapped,
+        // initialized header cell accessed atomically without aliasing non-atomic references.
         unsafe { self.resolve_atomic::<T>(header) }.load(optional_mask, ordering)
     }
 
@@ -233,8 +218,7 @@ impl HeaderMetadataSpec {
 
         let addr = self.meta_addr(header);
         // SAFETY: `assert_spec` verified bit-width and `T` alignment; `MetadataValue::{load,store}`
-        // unconditionally check non-null and `T::ALIGN`; caller guarantees `addr` points to mapped,
-        // writable (and initialized for sub-byte/masked RMW) header memory with exclusive access.
+        // check non-null and `T::ALIGN`; caller guarantees mapped, exclusively writable memory.
         unsafe {
             if self.num_of_bits < 8 {
                 let old_byte = <u8 as MetadataValue>::load(addr);
@@ -260,9 +244,8 @@ impl HeaderMetadataSpec {
         ordering: Ordering,
     ) {
         self.assert_mask::<T>(optional_mask);
-        // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `self.meta_addr(header)` is a
-        // mapped, initialized, writable header metadata cell accessed atomically without
-        // conflicting non-atomic accesses or live non-atomic Rust references.
+        // SAFETY: `ObjectModel` contract guarantees `self.meta_addr(header)` is a mapped,
+        // initialized, writable header cell accessed solely via atomics.
         unsafe { self.resolve_atomic::<T>(header) }.store(val, optional_mask, ordering);
     }
 
@@ -279,9 +262,8 @@ impl HeaderMetadataSpec {
         failure_order: Ordering,
     ) -> Result<T, T> {
         self.assert_mask::<T>(optional_mask);
-        // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `self.meta_addr(header)` is a
-        // mapped, initialized, writable header metadata cell accessed atomically without
-        // conflicting non-atomic accesses or live non-atomic Rust references.
+        // SAFETY: `ObjectModel` contract guarantees `self.meta_addr(header)` is a mapped,
+        // initialized, writable header cell accessed solely via atomics.
         unsafe { self.resolve_atomic::<T>(header) }.compare_exchange(
             old_metadata,
             new_metadata,
@@ -293,29 +275,29 @@ impl HeaderMetadataSpec {
 
     /// This function provides a default implementation for the `fetch_add` method from the `ObjectModel` trait.
     pub fn fetch_add<T: MetadataValue>(&self, header: Address, val: T, order: Ordering) -> T {
-        // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `self.meta_addr(header)` is a
-        // mapped, initialized, writable header metadata cell accessed solely via atomics.
+        // SAFETY: `ObjectModel` contract guarantees `self.meta_addr(header)` is a mapped,
+        // initialized, writable header cell accessed solely via atomics.
         unsafe { self.resolve_atomic::<T>(header) }.fetch_add(val, order)
     }
 
     /// This function provides a default implementation for the `fetch_sub` method from the `ObjectModel` trait.
     pub fn fetch_sub<T: MetadataValue>(&self, header: Address, val: T, order: Ordering) -> T {
-        // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `self.meta_addr(header)` is a
-        // mapped, initialized, writable header metadata cell accessed solely via atomics.
+        // SAFETY: `ObjectModel` contract guarantees `self.meta_addr(header)` is a mapped,
+        // initialized, writable header cell accessed solely via atomics.
         unsafe { self.resolve_atomic::<T>(header) }.fetch_sub(val, order)
     }
 
     /// This function provides a default implementation for the `fetch_and` method from the `ObjectModel` trait.
     pub fn fetch_and<T: MetadataValue>(&self, header: Address, val: T, order: Ordering) -> T {
-        // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `self.meta_addr(header)` is a
-        // mapped, initialized, writable header metadata cell accessed solely via atomics.
+        // SAFETY: `ObjectModel` contract guarantees `self.meta_addr(header)` is a mapped,
+        // initialized, writable header cell accessed solely via atomics.
         unsafe { self.resolve_atomic::<T>(header) }.fetch_and(val, order)
     }
 
     /// This function provides a default implementation for the `fetch_or` method from the `ObjectModel` trait.
     pub fn fetch_or<T: MetadataValue>(&self, header: Address, val: T, order: Ordering) -> T {
-        // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `self.meta_addr(header)` is a
-        // mapped, initialized, writable header metadata cell accessed solely via atomics.
+        // SAFETY: `ObjectModel` contract guarantees `self.meta_addr(header)` is a mapped,
+        // initialized, writable header cell accessed solely via atomics.
         unsafe { self.resolve_atomic::<T>(header) }.fetch_or(val, order)
     }
 
@@ -328,9 +310,8 @@ impl HeaderMetadataSpec {
         fetch_order: Ordering,
         f: F,
     ) -> std::result::Result<T, T> {
-        // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `self.meta_addr(header)` is a
-        // mapped, initialized, writable header metadata cell accessed solely via atomics across
-        // the `fetch_update` loop.
+        // SAFETY: `ObjectModel` contract guarantees `self.meta_addr(header)` is a mapped,
+        // initialized, writable header cell accessed solely via atomics across `fetch_update`.
         unsafe { self.resolve_atomic::<T>(header) }.fetch_update(set_order, fetch_order, f)
     }
 }
@@ -1095,6 +1076,54 @@ mod tests {
             assert_eq!(
                 word_spec.load_atomic::<u16>(obj, None, Ordering::Acquire),
                 0x7893
+            );
+        });
+    }
+
+    #[test]
+    fn test_masked_compare_exchange_ignores_and_preserves_unmasked_bits() {
+        let mut buf = TestHeaderObject::<u16>::new();
+        // Low 2 bits (`0b10`) belong to an adjacent unmasked field; upper 14 bits are masked.
+        buf.cells[1] = 0x1232;
+        let spec = HeaderMetadataSpec {
+            bit_offset: 0,
+            num_of_bits: 16,
+        };
+        let mask: u16 = !0b11u16;
+        buf.with_mid_addr(|obj| {
+            // `old_val` (`0x1231`) and `new_val` (`0x4563`) both carry non-zero bits outside `mask`:
+            // CAS must still match on masked `0x1230` and must preserve adjacent `0b10` untouched.
+            assert_eq!(
+                spec.compare_exchange::<u16>(
+                    obj,
+                    0x1231,
+                    0x4563,
+                    Some(mask),
+                    Ordering::AcqRel,
+                    Ordering::Acquire
+                ),
+                Ok(0x1232)
+            );
+            assert_eq!(
+                spec.load_atomic::<u16>(obj, None, Ordering::Acquire),
+                0x4562
+            );
+
+            // Genuine mismatch in masked bits must fail even if unmasked bits happen to match.
+            assert_eq!(
+                spec.compare_exchange::<u16>(
+                    obj,
+                    0x9992,
+                    0x7893,
+                    Some(mask),
+                    Ordering::AcqRel,
+                    Ordering::Acquire
+                ),
+                Err(0x4562)
+            );
+            assert_eq!(
+                spec.load_atomic::<u16>(obj, None, Ordering::Acquire),
+                0x4562
             );
         });
     }

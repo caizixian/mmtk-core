@@ -46,14 +46,21 @@ impl AddAssign<ByteSize> for Address {
 impl Add<ByteOffset> for Address {
     type Output = Address;
     fn add(self, offset: ByteOffset) -> Address {
-        Address((self.0 as isize + offset) as usize)
+        Address(
+            self.0
+                .checked_add_signed(offset)
+                .expect("Address + ByteOffset overflow"),
+        )
     }
 }
 
 /// Address += ByteOffset (positive or negative)
 impl AddAssign<ByteOffset> for Address {
     fn add_assign(&mut self, offset: ByteOffset) {
-        self.0 = (self.0 as isize + offset) as usize
+        self.0 = self
+            .0
+            .checked_add_signed(offset)
+            .expect("Address += ByteOffset overflow");
     }
 }
 
@@ -198,7 +205,7 @@ impl Address {
 
     /// Get the offset from `other` to `self`. The result is negative is `self` is lower than `other`.
     pub const fn get_offset(self, other: Address) -> ByteOffset {
-        self.0 as isize - other.0 as isize
+        self.0.wrapping_sub(other.0) as isize
     }
 
     // We implemented the Add trait but we still keep this add function.
@@ -540,6 +547,32 @@ mod tests {
             Address(0b1111_1111_1100usize) | 0b1000_0000_1010usize,
             0b1111_1111_1110usize
         );
+    }
+
+    #[test]
+    fn signed_offset_across_midpoint() {
+        // `isize::MIN as usize` (`0x8000_0000` on 32-bit, `0x8000_0000_0000_0000` on 64-bit) is
+        // the midpoint of the unsigned address space; negative/positive offsets across it must not
+        // suffer signed-integer overflow.
+        let mid_raw = isize::MIN as usize;
+        let mid = Address(mid_raw);
+        let below = mid + (-8isize);
+        assert_eq!(below, Address(mid_raw - 8));
+        assert_eq!(below + 16isize, Address(mid_raw + 8));
+
+        let mut cur = mid;
+        cur += -4isize;
+        assert_eq!(cur, Address(mid_raw - 4));
+        cur += 12isize;
+        assert_eq!(cur, Address(mid_raw + 8));
+
+        assert_eq!(below.get_offset(mid), -8);
+        assert_eq!(cur.get_offset(below), 16);
+        assert_eq!(below.get_offset(cur), -16);
+
+        let addr_32_mid = Address(0x8000_0000usize);
+        assert_eq!(addr_32_mid + (-4isize), Address(0x7fff_fffcusize));
+        assert_eq!((addr_32_mid + (-4isize)).get_offset(addr_32_mid), -4);
     }
 }
 

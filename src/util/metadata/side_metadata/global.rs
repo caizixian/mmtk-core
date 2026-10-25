@@ -209,92 +209,11 @@ impl SideMetadataSpec {
         }
     }
 
-    /// Validate that `[data_addr, data_addr + data_bytes)` maps to a contiguous, byte-aligned
-    /// side-metadata range of `meta_bytes` bytes (within a single chunk if chunked), returning
-    /// `(meta_addr, meta_bytes)`.
+    /// Validate `self`'s `<= 8`-bit geometry, byte-boundary alignment of `data_addr`, single-chunk
+    /// containment (when chunked), startup reservation + spec-window bounds, and `MMAPPER` mapping
+    /// of `[meta_addr, meta_addr + meta_bytes)`, returning `meta_addr`.
     #[inline]
-    fn checked_mapped_byte_range(&self, data_addr: Address, data_bytes: usize) -> (Address, usize) {
-        assert!(
-            self.log_num_of_bits <= 6 && self.log_bytes_in_region < usize::BITS as usize,
-            "Invalid SideMetadataSpec geometry: {:?}",
-            self
-        );
-        let _end = data_addr
-            .as_usize()
-            .checked_add(data_bytes)
-            .expect("SideMetadataSpec slice data range overflow");
-        let region_bytes = 1usize << self.log_bytes_in_region;
-        assert!(
-            data_addr.is_aligned_to(region_bytes) && (data_bytes & (region_bytes - 1)) == 0,
-            "data_addr ({}) and data_bytes (0x{:x}) must be aligned to region_bytes (0x{:x})",
-            data_addr,
-            data_bytes,
-            region_bytes
-        );
-        assert_eq!(
-            meta_byte_lshift(self, data_addr),
-            0,
-            "data_addr ({}) does not start on a side-metadata byte boundary for {:?}",
-            data_addr,
-            self
-        );
-
-        let regions = data_bytes >> self.log_bytes_in_region;
-        let meta_bytes = if self.log_num_of_bits >= LOG_BITS_IN_BYTE as usize {
-            let bytes_per_region_shift = self.log_num_of_bits - LOG_BITS_IN_BYTE as usize;
-            regions
-                .checked_mul(1usize << bytes_per_region_shift)
-                .expect("SideMetadataSpec slice byte length overflow")
-        } else {
-            let regions_per_byte_shift = LOG_BITS_IN_BYTE as usize - self.log_num_of_bits;
-            let regions_per_byte = 1usize << regions_per_byte_shift;
-            assert_eq!(
-                regions & (regions_per_byte - 1),
-                0,
-                "data_bytes (0x{:x}) does not cover an integral number of metadata bytes for {:?}",
-                data_bytes,
-                self
-            );
-            regions >> regions_per_byte_shift
-        };
-
-        if data_bytes > 0 && self.uses_chunked_side_metadata() {
-            let last_byte = data_addr + (data_bytes - 1);
-            assert_eq!(
-                data_addr.align_down(BYTES_IN_CHUNK),
-                last_byte.align_down(BYTES_IN_CHUNK),
-                "Chunked side-metadata slice for {:?} cannot span multiple chunks",
-                self
-            );
-        }
-
-        let meta_addr = address_to_meta_address(self, data_addr);
-        assert!(
-            !meta_addr.is_zero(),
-            "SideMetadataSpec slice resolved to null metadata address"
-        );
-        assert!(
-            meta_bytes <= isize::MAX as usize,
-            "SideMetadataSpec slice byte length (0x{:x}) exceeds isize::MAX",
-            meta_bytes
-        );
-        assert!(
-            meta_addr.as_usize().checked_add(meta_bytes).is_some(),
-            "SideMetadataSpec slice metadata address range overflow ({} + 0x{:x})",
-            meta_addr,
-            meta_bytes
-        );
-        #[cfg(all(debug_assertions, feature = "extreme_assertions"))]
-        if meta_bytes > 0 {
-            self.assert_metadata_mapped(data_addr);
-        }
-        (meta_addr, meta_bytes)
-    }
-
-    /// Validate `self`'s `<= 8`-bit geometry and compute the exact data byte count covered by
-    /// `meta_bytes` contiguous side-metadata bytes without shift or multiply wraparound.
-    #[inline(always)]
-    fn checked_meta_to_data_bytes(&self, meta_bytes: usize) -> usize {
+    fn validate_mapped_atomic_bytes(&self, data_addr: Address, meta_bytes: usize) -> Address {
         assert!(
             self.log_num_of_bits <= LOG_BITS_IN_BYTE as usize
                 && self.log_bytes_in_region < usize::BITS as usize,
@@ -308,69 +227,114 @@ impl SideMetadataSpec {
             shift,
             self
         );
-        meta_bytes
-            .checked_mul(1usize << shift)
-            .expect("SideMetadataSpec slice data_bytes overflow")
+        let region_bytes = 1usize << self.log_bytes_in_region;
+        assert!(
+            !data_addr.is_zero() && data_addr.is_aligned_to(region_bytes),
+            "data_addr ({}) must be non-zero and aligned to region_bytes (0x{:x}) for {:?}",
+            data_addr,
+            region_bytes,
+            self
+        );
+        assert_eq!(
+            meta_byte_lshift(self, data_addr),
+            0,
+            "data_addr ({}) does not start on a side-metadata byte boundary for {:?}",
+            data_addr,
+            self
+        );
+        assert!(
+            meta_bytes <= isize::MAX as usize,
+            "SideMetadataSpec slice byte length (0x{:x}) exceeds isize::MAX",
+            meta_bytes
+        );
+        if meta_bytes > 0 {
+            let bytes_per_meta_byte = 1usize << shift;
+            let last_data_offset = (meta_bytes - 1)
+                .checked_mul(bytes_per_meta_byte)
+                .and_then(|off| off.checked_add(bytes_per_meta_byte - 1))
+                .expect("SideMetadataSpec slice data range overflow");
+            let last_raw = data_addr
+                .as_usize()
+                .checked_add(last_data_offset)
+                .expect("SideMetadataSpec slice data range overflow");
+            if self.uses_chunked_side_metadata() {
+                let last_data_byte = data_addr + last_data_offset;
+                assert_eq!(
+                    data_addr.align_down(BYTES_IN_CHUNK),
+                    last_data_byte.align_down(BYTES_IN_CHUNK),
+                    "Chunked side-metadata slice for {:?} cannot span multiple chunks",
+                    self
+                );
+            } else {
+                assert!(
+                    last_raw <= helpers::CONTIGUOUS_DATA_MAX,
+                    "Contiguous side-metadata slice data range overflowed architectural address space: start={}, last={:#x}, spec={:?}",
+                    data_addr,
+                    last_raw,
+                    self
+                );
+            }
+        }
+        let meta_addr = address_to_meta_address(self, data_addr);
+        assert!(
+            meta_addr.as_usize().checked_add(meta_bytes).is_some(),
+            "SideMetadataSpec slice metadata address range overflow ({} + 0x{:x})",
+            meta_addr,
+            meta_bytes
+        );
+        let meta_end = meta_addr + meta_bytes;
+        helpers::assert_meta_range_in_spec_bounds(self, data_addr, meta_addr, meta_end);
+        if meta_bytes > 0 {
+            let grain = MMAPPER.granularity();
+            let first_grain = meta_addr.align_down(grain);
+            let last_grain = (meta_end - 1usize).align_down(grain);
+            let mut cur_grain = first_grain;
+            loop {
+                assert!(
+                    MMAPPER.is_mapped_address(cur_grain),
+                    "Unmapped side-metadata grain {} in [{}, {}) for {:?} (data_addr={})",
+                    cur_grain,
+                    meta_addr,
+                    meta_end,
+                    self,
+                    data_addr
+                );
+                if cur_grain == last_grain {
+                    break;
+                }
+                cur_grain += grain;
+            }
+        }
+        meta_addr
     }
 
     /// Project the contiguous `N`-byte side-metadata range starting at `data_addr` as
     /// `&'a [AtomicU8; N]`.
     ///
+    /// Runtime assertions unconditionally verify `self`'s `<= 8`-bit geometry, `N <= isize::MAX`,
+    /// byte-boundary alignment, single-chunk containment (when chunked), side-metadata reservation
+    /// and spec-window bounds, and `MMAPPER` mapping across `[meta_addr, meta_addr + N)`.
+    ///
     /// # Safety
-    /// * `self.log_num_of_bits <= 3`, `N <= isize::MAX as usize`, `data_addr` must fall on a byte
-    ///   boundary in `self`'s side metadata without data or metadata range overflow, and if
-    ///   `N > 0 && self.uses_chunked_side_metadata()`, the covered data range must lie within a
-    ///   single `BYTES_IN_CHUNK` chunk.
-    /// * The `N` side-metadata bytes starting at `address_to_meta_address(self, data_addr)` must be
-    ///   mapped, initialized, and remain mapped for `'a`.
-    /// * For the entire lifetime `'a`, no thread may perform non-atomic reads/writes or mixed-width
-    ///   atomic accesses (wider than `AtomicU8`), and no live non-atomic Rust reference (`&[u8]` or
-    ///   `&mut [u8]`) may alias `[meta_addr, meta_addr + N)`.
+    /// * The mapped side-metadata bytes `[meta_addr, meta_addr + N)` must be initialized and
+    ///   remain mapped for the entire lifetime `'a`.
+    /// * For `'a`, all accesses to `[meta_addr, meta_addr + N)` across all threads must use
+    ///   `AtomicU8` exclusively (no non-atomic accesses, mixed-width atomics, or `&[u8]` /
+    ///   `&mut [u8]` aliases).
     #[inline(always)]
     pub(crate) unsafe fn mapped_atomic_bytes_unchecked<'a, const N: usize>(
         &self,
         data_addr: Address,
     ) -> &'a [AtomicU8; N] {
-        let data_bytes = self.checked_meta_to_data_bytes(N);
-        let (meta_addr, meta_bytes) = self.checked_mapped_byte_range(data_addr, data_bytes);
-        assert_eq!(meta_bytes, N);
-        // SAFETY: `checked_meta_to_data_bytes` and `checked_mapped_byte_range` verified byte
-        // alignment, single-chunk containment, `!meta_addr.is_zero()`, `N <= isize::MAX as usize`,
-        // and non-wrapping `meta_addr + N` (`AtomicU8` has alignment 1); the caller guarantees
-        // `[meta_addr, meta_addr + N)` is mapped, initialized, valid for `'a`, and accessed solely
-        // via `AtomicU8`.
+        const {
+            assert!(N <= isize::MAX as usize);
+        }
+        let meta_addr = self.validate_mapped_atomic_bytes(data_addr, N);
+        // SAFETY: `validate_mapped_atomic_bytes` verified non-null `meta_addr`, `N <= isize::MAX`,
+        // spec-window bounds, and `MMAPPER` mapping across `[meta_addr, meta_addr + N)` (`AtomicU8`
+        // has alignment 1); caller guarantees initialization, lifetime `'a` mapping stability, and
+        // `AtomicU8`-only access without non-atomic aliases.
         unsafe { &*meta_addr.to_ptr::<[AtomicU8; N]>() }
-    }
-
-    /// Project the contiguous `ROWS * COLS`-byte side-metadata range starting at `data_addr` as a
-    /// 2D array `&'a [[AtomicU8; COLS]; ROWS]` (e.g. Immix `MappedBlock::rc_table`
-    /// `&[[AtomicU8; BYTES_PER_LINE]; Block::LINES]` on Rust 1.84 without `<[T]>::as_chunks`).
-    ///
-    /// # Safety
-    /// Same preconditions as [`Self::mapped_atomic_bytes_unchecked`] for `N = ROWS * COLS`
-    /// contiguous side-metadata bytes.
-    #[inline(always)]
-    pub(crate) unsafe fn mapped_atomic_byte_chunks_unchecked<
-        'a,
-        const ROWS: usize,
-        const COLS: usize,
-    >(
-        &self,
-        data_addr: Address,
-    ) -> &'a [[AtomicU8; COLS]; ROWS] {
-        let total_meta_bytes = ROWS
-            .checked_mul(COLS)
-            .expect("mapped_atomic_byte_chunks_unchecked ROWS * COLS overflow");
-        let data_bytes = self.checked_meta_to_data_bytes(total_meta_bytes);
-        let (meta_addr, meta_bytes) = self.checked_mapped_byte_range(data_addr, data_bytes);
-        assert_eq!(meta_bytes, total_meta_bytes);
-        // SAFETY: `checked_meta_to_data_bytes` and `checked_mapped_byte_range` verified byte
-        // alignment, single-chunk containment, `!meta_addr.is_zero()`,
-        // `total_meta_bytes <= isize::MAX as usize`, and non-wrapping
-        // `meta_addr + total_meta_bytes` (`[[AtomicU8; COLS]; ROWS]` has alignment 1 and size
-        // `ROWS * COLS`); the caller guarantees the range is mapped, initialized, valid for `'a`,
-        // and accessed solely via `AtomicU8`.
-        unsafe { &*meta_addr.to_ptr::<[[AtomicU8; COLS]; ROWS]>() }
     }
 
     /// Check with the mmapper to see if side metadata is mapped for the spec for the data address.
@@ -467,91 +431,44 @@ impl SideMetadataSpec {
     }
 
     /// This method does bulk update for the given data range. It calculates the metadata bits for the given data range,
-    /// and invoke the given method to update the metadata bits.
+    /// and invokes the given method to update the metadata bits.
     pub(super) fn bulk_update_metadata(
         &self,
         start: Address,
         size: usize,
         update_meta_bits: &impl Fn(Address, u8, Address, u8),
     ) {
-        // Update bits for a contiguous side metadata spec. We can simply calculate the data end address, and
-        // calculate the metadata address for the data end.
-        let update_contiguous = |data_start: Address, data_bytes: usize| {
-            if data_bytes == 0 {
-                return;
+        if self.uses_contiguous_side_metadata() {
+            if let Some((ms, msb, me, meb)) =
+                helpers::half_open_contiguous_meta_bit_range(self, start, size)
+            {
+                update_meta_bits(ms, msb, me, meb);
             }
-            let meta_start = address_to_meta_address(self, data_start);
-            let meta_start_shift = meta_byte_lshift(self, data_start);
-            let meta_end = address_to_meta_address(self, data_start + data_bytes);
-            let meta_end_shift = meta_byte_lshift(self, data_start + data_bytes);
-            update_meta_bits(meta_start, meta_start_shift, meta_end, meta_end_shift);
-        };
-
-        // Update bits for a discontiguous side metadata spec (chunked metadata). The side metadata for different
-        // chunks are stored in discontiguous memory. For example, Chunk #2 follows Chunk #1, but the side metadata
-        // for Chunk #2 does not immediately follow the side metadata for Chunk #1. So when we bulk update metadata for Chunk #1,
-        // we cannot update up to the metadata address for the Chunk #2 start. Otherwise it may modify unrelated metadata
-        // between the two chunks' metadata.
-        // Instead, we compute how many bytes/bits we need to update.
-        // The data for which the metadata will be updates has to be in the same chunk.
-        #[cfg(target_pointer_width = "32")]
-        let update_discontiguous = |data_start: Address, data_bytes: usize| {
-            use crate::util::constants::BITS_IN_BYTE;
-            if data_bytes == 0 {
-                return;
-            }
-            debug_assert_eq!(
-                data_start.align_down(BYTES_IN_CHUNK),
-                (data_start + data_bytes - 1).align_down(BYTES_IN_CHUNK),
-                "The data to be zeroed in discontiguous specs needs to be in the same chunk"
-            );
-            let meta_start = address_to_meta_address(self, data_start);
-            let meta_start_shift = meta_byte_lshift(self, data_start);
-            // How many bits we need to zero for data_bytes
-            let meta_total_bits = (data_bytes >> self.log_bytes_in_region) << self.log_num_of_bits;
-            let meta_delta_bytes = meta_total_bits >> LOG_BITS_IN_BYTE;
-            let meta_delta_bits: u8 = (meta_total_bits % BITS_IN_BYTE) as u8;
-            // Calculate the end byte/addr and end bit
-            let (meta_end, meta_end_shift) = {
-                let mut end_addr = meta_start + meta_delta_bytes;
-                let mut end_bit = meta_start_shift + meta_delta_bits;
-                if end_bit >= BITS_IN_BYTE as u8 {
-                    end_bit -= BITS_IN_BYTE as u8;
-                    end_addr += 1usize;
+        } else {
+            // On 32-bit targets, local policy-specific side metadata is chunked: adjacent data chunks
+            // do not have contiguous metadata, so split across `BYTES_IN_CHUNK` boundaries and compute
+            // each sub-chunk's end bit offset directly from `data_bytes`.
+            #[cfg(target_pointer_width = "32")]
+            helpers::for_each_spec_data_span(self, start, size, |data_start, data_bytes| {
+                use crate::util::constants::BITS_IN_BYTE;
+                debug_assert_eq!(
+                    data_start.align_down(BYTES_IN_CHUNK),
+                    (data_start + (data_bytes - 1)).align_down(BYTES_IN_CHUNK),
+                    "The data to be updated in discontiguous specs needs to be in the same chunk"
+                );
+                let meta_start = address_to_meta_address(self, data_start);
+                let meta_start_shift = meta_byte_lshift(self, data_start);
+                let meta_total_bits =
+                    (data_bytes >> self.log_bytes_in_region) << self.log_num_of_bits;
+                let mut meta_end = meta_start + (meta_total_bits >> LOG_BITS_IN_BYTE);
+                let mut meta_end_shift =
+                    meta_start_shift + ((meta_total_bits % BITS_IN_BYTE) as u8);
+                if meta_end_shift >= BITS_IN_BYTE as u8 {
+                    meta_end_shift -= BITS_IN_BYTE as u8;
+                    meta_end += 1usize;
                 }
-                (end_addr, end_bit)
-            };
-
-            update_meta_bits(meta_start, meta_start_shift, meta_end, meta_end_shift);
-        };
-
-        if cfg!(target_pointer_width = "64") || self.is_global {
-            update_contiguous(start, size);
-        }
-        #[cfg(target_pointer_width = "32")]
-        if !self.is_global {
-            // per chunk policy-specific metadata for 32-bits targets
-            let chunk_num = ((start + size).align_down(BYTES_IN_CHUNK)
-                - start.align_down(BYTES_IN_CHUNK))
-                / BYTES_IN_CHUNK;
-            if chunk_num == 0 {
-                update_discontiguous(start, size);
-            } else {
-                let second_data_chunk = start.align_up(BYTES_IN_CHUNK);
-                // bzero the first sub-chunk
-                update_discontiguous(start, second_data_chunk - start);
-
-                let last_data_chunk = (start + size).align_down(BYTES_IN_CHUNK);
-                // bzero the last sub-chunk
-                update_discontiguous(last_data_chunk, start + size - last_data_chunk);
-                let mut next_data_chunk = second_data_chunk;
-
-                // bzero all chunks in the middle
-                while next_data_chunk != last_data_chunk {
-                    update_discontiguous(next_data_chunk, BYTES_IN_CHUNK);
-                    next_data_chunk += BYTES_IN_CHUNK;
-                }
-            }
+                update_meta_bits(meta_start, meta_start_shift, meta_end, meta_end_shift);
+            });
         }
     }
 
@@ -620,55 +537,42 @@ impl SideMetadataSpec {
         assert_eq!(other.log_bytes_in_region, self.log_bytes_in_region);
         assert_eq!(other.log_num_of_bits, self.log_num_of_bits);
 
-        let dst_meta_start_addr = address_to_meta_address(self, start);
-        let dst_meta_start_bit = meta_byte_lshift(self, start);
-        let dst_meta_end_addr = address_to_meta_address(self, start + size);
-        let dst_meta_end_bit = meta_byte_lshift(self, start + size);
+        let Some((dst_meta_start_addr, dst_meta_start_bit, dst_meta_end_addr, dst_meta_end_bit)) =
+            helpers::half_open_contiguous_meta_bit_range(self, start, size)
+        else {
+            return;
+        };
 
         let src_meta_start_addr = address_to_meta_address(other, start);
-        let src_meta_start_bit = meta_byte_lshift(other, start);
-
-        debug_assert_eq!(dst_meta_start_bit, src_meta_start_bit);
+        debug_assert_eq!(dst_meta_start_bit, meta_byte_lshift(other, start));
 
         let mut visitor = |range| {
-            match range {
-                BitByteRange::Bytes {
-                    start: dst_start,
-                    end: dst_end,
-                } => {
-                    let byte_offset = dst_start - dst_meta_start_addr;
-                    let src_start = src_meta_start_addr + byte_offset;
-                    let copy_bytes = dst_end - dst_start;
-                    // SAFETY: Both `self` and `other` are verified contiguous specs with matching
-                    // `log_bytes_in_region` and `log_num_of_bits`, and `bcopy_metadata_contiguous`
-                    // requires both ranges for `[start, start + size)` to be non-null, mapped,
-                    // initialized, non-overlapping (or identical `self == other`), and quiescent
-                    // across full interior bytes during the bulk copy (`u8` has alignment 1).
-                    unsafe {
+            // SAFETY: Both `self` and `other` are verified contiguous specs with matching region
+            // and bit widths, covering mapped, initialized, non-null ranges that are disjoint (or
+            // identical when `self == other`). Full interior bytes (`BitByteRange::Bytes`) are
+            // quiescent (`u8` alignment 1), while shared boundary bytes (`BitsInByte`) use
+            // `AtomicU8` (`load_atomic` + `fetch_update`) to preserve `!mask` bits atomically.
+            unsafe {
+                match range {
+                    BitByteRange::Bytes {
+                        start: dst_start,
+                        end: dst_end,
+                    } => {
+                        let src_start = src_meta_start_addr + (dst_start - dst_meta_start_addr);
                         std::ptr::copy::<u8>(
                             src_start.to_ptr(),
                             dst_start.to_mut_ptr(),
-                            copy_bytes,
+                            dst_end - dst_start,
                         );
                     }
-                    false
-                }
-                BitByteRange::BitsInByte {
-                    addr: dst,
-                    bit_start,
-                    bit_end,
-                } => {
-                    let byte_offset = dst - dst_meta_start_addr;
-                    let src = src_meta_start_addr + byte_offset;
-                    // Get a mask where the bits to copy are 1 and the remaining bits are 0.
-                    let mask: u8 = !(u8::MAX.checked_shl(bit_end as u32).unwrap_or(0))
-                        & (u8::MAX << bit_start);
-                    // SAFETY: `src` and `dst` are non-null, mapped, initialized boundary bytes in
-                    // `other` and `self` (`AtomicU8` has alignment 1), non-overlapping (or
-                    // identical when `self == other`), with no concurrent non-atomic writes or
-                    // `&mut` aliases. `fetch_update` atomically preserves `!mask` bits if another
-                    // thread concurrently copies an adjacent range sharing `dst`.
-                    unsafe {
+                    BitByteRange::BitsInByte {
+                        addr: dst,
+                        bit_start,
+                        bit_end,
+                    } => {
+                        let src = src_meta_start_addr + (dst - dst_meta_start_addr);
+                        let mask: u8 = !(u8::MAX.checked_shl(bit_end as u32).unwrap_or(0))
+                            & (u8::MAX << bit_start);
                         let old_src = <u8 as MetadataValue>::load_atomic(src, Ordering::Relaxed);
                         let _ = <u8 as MetadataValue>::fetch_update(
                             dst,
@@ -677,9 +581,9 @@ impl SideMetadataSpec {
                             |old_dst| Some((old_src & mask) | (old_dst & !mask)),
                         );
                     }
-                    false
                 }
             }
+            false
         };
 
         ranges::break_bit_range(
@@ -758,10 +662,10 @@ impl SideMetadataSpec {
                     if self.log_num_of_bits < 3 {
                         let lshift = meta_byte_lshift(self, data_addr);
                         let mask = meta_byte_mask(self) << lshift;
-                        let byte_val = meta_addr.load::<u8>();
+                        let byte_val = <u8 as MetadataValue>::load(meta_addr);
                         FromPrimitive::from_u8((byte_val & mask) >> lshift).unwrap()
                     } else {
-                        meta_addr.load::<T>()
+                        <T as MetadataValue>::load(meta_addr)
                     }
                 }
             },
@@ -795,11 +699,11 @@ impl SideMetadataSpec {
                     if self.log_num_of_bits < 3 {
                         let lshift = meta_byte_lshift(self, data_addr);
                         let mask = meta_byte_mask(self) << lshift;
-                        let old_val = meta_addr.load::<u8>();
+                        let old_val = <u8 as MetadataValue>::load(meta_addr);
                         let new_val = (old_val & !mask) | (metadata.to_u8().unwrap() << lshift);
-                        meta_addr.store::<u8>(new_val);
+                        <u8 as MetadataValue>::store(meta_addr, new_val);
                     } else {
-                        meta_addr.store::<T>(metadata);
+                        <T as MetadataValue>::store(meta_addr, metadata);
                     }
                 }
             },
@@ -822,9 +726,9 @@ impl SideMetadataSpec {
     ///   duration of this call, and no live `&mut` reference may alias it.
     pub unsafe fn load_byte(&self, data_addr: Address) -> u8 {
         let meta_addr = address_to_meta_address(self, data_addr);
-        // SAFETY: Caller guarantees `meta_addr` is non-null, mapped, initialized (`u8` has
-        // alignment 1), and free of concurrent writes, atomic modifications, or live `&mut` aliases.
-        unsafe { meta_addr.load::<u8>() }
+        // SAFETY: Caller guarantees `meta_addr` is non-null, mapped, initialized (`u8` alignment 1),
+        // and free of concurrent writes, atomic modifications, or live `&mut` aliases.
+        unsafe { <u8 as MetadataValue>::load(meta_addr) }
     }
 
     /// Non-atomically store a raw byte to the side metadata byte that is mapped to the data address.
@@ -837,10 +741,10 @@ impl SideMetadataSpec {
     ///   `self.log_num_of_bits < 3`), and no live Rust reference may alias it.
     pub unsafe fn store_byte_relaxed(&self, data_addr: Address, byte: u8) {
         let meta_addr = address_to_meta_address(self, data_addr);
-        // SAFETY: Caller guarantees `meta_addr` is non-null, mapped, writable (`u8` has
-        // alignment 1), and exclusively accessed without concurrent accesses or aliasing references.
+        // SAFETY: Caller guarantees `meta_addr` is non-null, mapped, writable (`u8` alignment 1),
+        // and exclusively accessed without concurrent accesses or aliasing references.
         unsafe {
-            meta_addr.store::<u8>(byte);
+            <u8 as MetadataValue>::store(meta_addr, byte);
         }
     }
 
@@ -851,10 +755,8 @@ impl SideMetadataSpec {
             data_addr,
             None,
             || {
-                // SAFETY: By `SideMetadataSpec`'s mapped-region contract (checked under
-                // `extreme_assertions`) and unconditional `assert_spec`, `data_addr`'s metadata
-                // cell is mapped, initialized, aligned, and accessed atomically without non-atomic
-                // write races or `&mut` aliases.
+                // SAFETY: `assert_value_type` verified `T` and alignment; `SideMetadataSpec`'s
+                // mapped-region contract guarantees an initialized, atomic-only metadata cell.
                 unsafe { self.resolve_atomic::<T>(data_addr) }.load(None, order)
             },
             |_v| {
@@ -871,9 +773,8 @@ impl SideMetadataSpec {
             data_addr,
             Some(metadata),
             || {
-                // SAFETY: By `SideMetadataSpec`'s mapped-region contract and unconditional
-                // `assert_spec`, `data_addr`'s metadata cell is mapped, initialized, writable, and
-                // accessed atomically without non-atomic races or live non-atomic references.
+                // SAFETY: `assert_value_type` verified `T` and alignment; `SideMetadataSpec`'s
+                // mapped-region contract guarantees an initialized, atomic-only metadata cell.
                 unsafe { self.resolve_atomic::<T>(data_addr) }.store(metadata, None, order);
             },
             |_| {
@@ -1023,9 +924,8 @@ impl SideMetadataSpec {
             data_addr,
             Some(new_metadata),
             || {
-                // SAFETY: By `SideMetadataSpec`'s mapped-region contract and unconditional
-                // `assert_spec`, `data_addr`'s metadata cell is mapped, initialized, writable, and
-                // accessed atomically without non-atomic races or live non-atomic references.
+                // SAFETY: `assert_value_type` verified `T` and alignment; `SideMetadataSpec`'s
+                // mapped-region contract guarantees an initialized, atomic-only metadata cell.
                 unsafe { self.resolve_atomic::<T>(data_addr) }.compare_exchange(
                     old_metadata,
                     new_metadata,
@@ -1056,9 +956,8 @@ impl SideMetadataSpec {
             data_addr,
             Some(val),
             || {
-                // SAFETY: By `SideMetadataSpec`'s mapped-region contract and unconditional
-                // `assert_spec`, `data_addr`'s metadata cell is mapped, initialized, writable, and
-                // accessed solely via atomics.
+                // SAFETY: `assert_value_type` verified `T` and alignment; `SideMetadataSpec`'s
+                // mapped-region contract guarantees an initialized, atomic-only metadata cell.
                 unsafe { self.resolve_atomic::<T>(data_addr) }.fetch_add(val, order)
             },
             |_old_val| {
@@ -1081,9 +980,8 @@ impl SideMetadataSpec {
             data_addr,
             Some(val),
             || {
-                // SAFETY: By `SideMetadataSpec`'s mapped-region contract and unconditional
-                // `assert_spec`, `data_addr`'s metadata cell is mapped, initialized, writable, and
-                // accessed solely via atomics.
+                // SAFETY: `assert_value_type` verified `T` and alignment; `SideMetadataSpec`'s
+                // mapped-region contract guarantees an initialized, atomic-only metadata cell.
                 unsafe { self.resolve_atomic::<T>(data_addr) }.fetch_sub(val, order)
             },
             |_old_val| {
@@ -1106,9 +1004,8 @@ impl SideMetadataSpec {
             data_addr,
             Some(val),
             || {
-                // SAFETY: By `SideMetadataSpec`'s mapped-region contract and unconditional
-                // `assert_spec`, `data_addr`'s metadata cell is mapped, initialized, writable, and
-                // accessed solely via atomics.
+                // SAFETY: `assert_value_type` verified `T` and alignment; `SideMetadataSpec`'s
+                // mapped-region contract guarantees an initialized, atomic-only metadata cell.
                 unsafe { self.resolve_atomic::<T>(data_addr) }.fetch_and(val, order)
             },
             |_old_val| {
@@ -1131,9 +1028,8 @@ impl SideMetadataSpec {
             data_addr,
             Some(val),
             || {
-                // SAFETY: By `SideMetadataSpec`'s mapped-region contract and unconditional
-                // `assert_spec`, `data_addr`'s metadata cell is mapped, initialized, writable, and
-                // accessed solely via atomics.
+                // SAFETY: `assert_value_type` verified `T` and alignment; `SideMetadataSpec`'s
+                // mapped-region contract guarantees an initialized, atomic-only metadata cell.
                 unsafe { self.resolve_atomic::<T>(data_addr) }.fetch_or(val, order)
             },
             |_old_val| {
@@ -1161,9 +1057,8 @@ impl SideMetadataSpec {
             data_addr,
             None,
             move || -> std::result::Result<T, T> {
-                // SAFETY: By `SideMetadataSpec`'s mapped-region contract and unconditional
-                // `assert_spec`, `data_addr`'s metadata cell is mapped, initialized, writable, and
-                // accessed solely via atomics across the `fetch_update` loop.
+                // SAFETY: `assert_value_type` verified `T` and alignment; `SideMetadataSpec`'s
+                // mapped-region contract guarantees an initialized, atomic-only metadata cell.
                 unsafe { self.resolve_atomic::<T>(data_addr) }.fetch_update(
                     set_order,
                     fetch_order,
@@ -1212,28 +1107,40 @@ impl SideMetadataSpec {
         data_addr: Address,
         search_limit_bytes: usize,
     ) -> Option<Address> {
-        debug_assert!(search_limit_bytes > 0);
+        self.assert_value_type::<T>(None);
+        if search_limit_bytes == 0 {
+            return None;
+        }
         let region_bytes = 1usize << self.log_bytes_in_region;
+        let cur_region = data_addr.align_down(region_bytes);
+        let lower_bound = data_addr.saturating_sub(search_limit_bytes - 1);
+        let first_region =
+            if cur_region.as_usize() >= region_bytes && lower_bound <= cur_region - region_bytes {
+                lower_bound.align_up(region_bytes)
+            } else {
+                cur_region
+            };
 
         let search_simple = || {
-            let start_addr = data_addr.align_down(region_bytes);
-            let end_addr = data_addr.saturating_sub(search_limit_bytes) + 1usize;
             let mmap_granularity = MMAPPER.granularity();
-            let mut mapped_grain = Address::MAX;
-            let mut cursor = start_addr;
-            while cursor >= end_addr {
-                if cursor < mapped_grain {
-                    if self.is_mapped(cursor) {
-                        mapped_grain = cursor.align_down(mmap_granularity);
+            let mut mapped_meta_grain: Option<Address> = None;
+            let mut cursor = cur_region;
+            loop {
+                let meta_grain = address_to_meta_address(self, cursor).align_down(mmap_granularity);
+                if mapped_meta_grain != Some(meta_grain) {
+                    if MMAPPER.is_mapped_address(meta_grain) {
+                        mapped_meta_grain = Some(meta_grain);
                     } else {
                         return None;
                     }
                 }
-                // SAFETY: `self.is_mapped(cursor)` verified the chunk's side metadata is mapped,
-                // and caller guarantees mapped entries are initialized, aligned for `T`, and
-                // free of concurrent mutations or `&mut` aliases.
+                // SAFETY: `meta_grain` was verified mapped above; caller guarantees mapped grains
+                // in the searched window are initialized, `T`-aligned, and free of concurrent writes.
                 if !unsafe { self.load::<T>(cursor) }.is_zero() {
                     return Some(cursor);
+                }
+                if cursor <= first_region {
+                    break;
                 }
                 cursor -= region_bytes;
             }
@@ -1245,69 +1152,42 @@ impl SideMetadataSpec {
             return search_simple();
         }
 
-        let result = if !self.is_mapped(data_addr) {
-            None
-        } else {
-            let start_addr = data_addr.saturating_sub(search_limit_bytes) + 1usize;
-            let end_addr = data_addr;
-            // SAFETY: `self.is_mapped(data_addr)` succeeded above, `self` uses contiguous side
-            // metadata, each `[g_start, g_end)` sub-range lies within a single `MMAPPER` grain,
-            // and caller guarantees mapped grains in the searched window are initialized, aligned
-            // for `T`, and free of concurrent mutations or `&mut` aliases.
-            unsafe {
-                if !self.load::<T>(data_addr).is_zero() {
-                    Some(data_addr.align_down(region_bytes))
-                } else if let Some((byte_start, byte_end, first_mask, last_mask)) =
-                    helpers::active_bit_range_bytes(
-                        address_to_contiguous_meta_address(self, start_addr),
-                        meta_byte_lshift(self, start_addr),
-                        address_to_contiguous_meta_address(self, end_addr),
-                        meta_byte_lshift(self, end_addr),
-                    )
-                {
-                    let gran = MMAPPER.granularity();
-                    let mut g_end = byte_end;
-                    let mut hit = None;
-                    while g_end > byte_start {
-                        let grain_base = (g_end - 1usize).align_down(gran);
-                        let g_start = if grain_base > byte_start {
-                            grain_base
-                        } else {
-                            byte_start
-                        };
-                        let g_first = if g_start == byte_start {
-                            first_mask
-                        } else {
-                            0xff
-                        };
-                        let g_last = if g_end == byte_end { last_mask } else { 0xff };
-                        let align_rem = g_start.as_usize() & (core::mem::size_of::<usize>() - 1);
-                        let Some(found) =
-                            helpers::with_mapped_meta_slice(g_start, g_end, |slice| {
-                                helpers::find_last_non_zero_bit_in_slice(
-                                    slice, align_rem, g_first, g_last,
-                                )
-                            })
-                        else {
-                            break;
-                        };
-                        if let Some((byte_off, bit)) = found {
-                            let (addr, bit) = align_metadata_address(self, g_start + byte_off, bit);
-                            hit = Some(
-                                contiguous_meta_address_to_address(self, addr, bit)
-                                    .align_down(region_bytes),
-                            )
-                            .filter(|&a| a >= start_addr && a < end_addr);
-                            break;
+        if data_addr.as_usize() > helpers::CONTIGUOUS_DATA_MAX {
+            return None;
+        }
+
+        let result = helpers::inclusive_contiguous_meta_range(self, first_region, cur_region)
+            .and_then(|(byte_start, byte_end, first_mask, last_mask)| {
+                helpers::try_for_each_meta_grain_backward(
+                    byte_start,
+                    byte_end,
+                    first_mask,
+                    last_mask,
+                    |g_start, g_end, g_first, g_last| {
+                        if !g_start.is_mapped() {
+                            return core::ops::ControlFlow::Break(None);
                         }
-                        g_end = g_start;
-                    }
-                    hit
-                } else {
-                    None
-                }
-            }
-        };
+                        let len = g_end - g_start;
+                        debug_assert!(!g_start.is_zero() && len <= isize::MAX as usize);
+                        // SAFETY: `g_start.is_mapped()` verified this single `MMAPPER` grain is
+                        // mapped (`u8` alignment 1), and caller guarantees mapped side metadata in
+                        // the searched window is initialized and free of concurrent mutations.
+                        let slice =
+                            unsafe { core::slice::from_raw_parts(g_start.to_ptr::<u8>(), len) };
+                        let align_rem = g_start.as_usize() & (core::mem::size_of::<usize>() - 1);
+                        if let Some((byte_off, bit)) = helpers::find_last_non_zero_bit_in_slice(
+                            slice, align_rem, g_first, g_last,
+                        ) {
+                            let (addr, bit) = align_metadata_address(self, g_start + byte_off, bit);
+                            let found = contiguous_meta_address_to_address(self, addr, bit)
+                                .align_down(region_bytes);
+                            return core::ops::ControlFlow::Break(Some(found));
+                        }
+                        core::ops::ControlFlow::Continue(())
+                    },
+                )
+                .flatten()
+            });
 
         #[cfg(debug_assertions)]
         assert_eq!(
@@ -1342,28 +1222,47 @@ impl SideMetadataSpec {
         data_addr: Address,
         search_limit_bytes: usize,
     ) -> Option<Address> {
-        debug_assert!(search_limit_bytes > 0);
+        self.assert_value_type::<T>(None);
+        if search_limit_bytes == 0 {
+            return None;
+        }
+        let max_addr = if self.uses_contiguous_side_metadata() {
+            helpers::CONTIGUOUS_DATA_MAX
+        } else {
+            usize::MAX
+        };
+        if data_addr.as_usize() > max_addr {
+            return None;
+        }
         let region_bytes = 1usize << self.log_bytes_in_region;
+        let first_region = data_addr.align_down(region_bytes);
+        let last_raw = data_addr
+            .as_usize()
+            .saturating_add(search_limit_bytes - 1)
+            .min(max_addr);
+        let last_byte = data_addr + (last_raw - data_addr.as_usize());
+        let last_region = last_byte.align_down(region_bytes);
 
         let search_simple = || {
-            let start_addr = data_addr.align_down(region_bytes);
-            let end_addr = data_addr + search_limit_bytes;
             let mmap_granularity = MMAPPER.granularity();
-            let mut mapped_grain = Address::ZERO;
-            let mut cursor = start_addr;
-            while cursor < end_addr {
-                if cursor > mapped_grain {
-                    if self.is_mapped(cursor) {
-                        mapped_grain = cursor.align_up(mmap_granularity) - 0x1;
+            let mut mapped_meta_grain: Option<Address> = None;
+            let mut cursor = first_region;
+            loop {
+                let meta_grain = address_to_meta_address(self, cursor).align_down(mmap_granularity);
+                if mapped_meta_grain != Some(meta_grain) {
+                    if MMAPPER.is_mapped_address(meta_grain) {
+                        mapped_meta_grain = Some(meta_grain);
                     } else {
                         return None;
                     }
                 }
-                // SAFETY: `self.is_mapped(cursor)` verified the chunk's side metadata is mapped,
-                // and caller guarantees mapped entries are initialized, aligned for `T`, and
-                // free of concurrent mutations or `&mut` aliases.
+                // SAFETY: `meta_grain` was verified mapped above; caller guarantees mapped grains
+                // in the searched window are initialized, `T`-aligned, and free of concurrent writes.
                 if !unsafe { self.load::<T>(cursor) }.is_zero() {
                     return Some(cursor);
+                }
+                if cursor >= last_region {
+                    break;
                 }
                 cursor += region_bytes;
             }
@@ -1375,68 +1274,38 @@ impl SideMetadataSpec {
             return search_simple();
         }
 
-        let result = if !self.is_mapped(data_addr) {
-            None
-        } else {
-            let start_addr = data_addr.align_down(region_bytes);
-            let end_addr = (data_addr + search_limit_bytes).align_up(region_bytes);
-            // SAFETY: `self.is_mapped(data_addr)` succeeded above, `self` uses contiguous side
-            // metadata, each `[g_start, g_end)` sub-range lies within a single `MMAPPER` grain,
-            // and caller guarantees mapped grains in the searched window are initialized, aligned
-            // for `T`, and free of concurrent mutations or `&mut` aliases.
-            unsafe {
-                if !self.load::<T>(data_addr).is_zero() {
-                    Some(start_addr)
-                } else if let Some((byte_start, byte_end, first_mask, last_mask)) =
-                    helpers::active_bit_range_bytes(
-                        address_to_contiguous_meta_address(self, start_addr),
-                        meta_byte_lshift(self, start_addr),
-                        address_to_contiguous_meta_address(self, end_addr),
-                        meta_byte_lshift(self, end_addr),
-                    )
-                {
-                    let gran = MMAPPER.granularity();
-                    let mut g_start = byte_start;
-                    let mut hit = None;
-                    while g_start < byte_end {
-                        let grain_base = g_start.align_down(gran);
-                        let g_end = match grain_base.as_usize().checked_add(gran) {
-                            Some(next) if next < byte_end.as_usize() => grain_base + gran,
-                            _ => byte_end,
-                        };
-                        let g_first = if g_start == byte_start {
-                            first_mask
-                        } else {
-                            0xff
-                        };
-                        let g_last = if g_end == byte_end { last_mask } else { 0xff };
-                        let align_rem = g_start.as_usize() & (core::mem::size_of::<usize>() - 1);
-                        let Some(found) =
-                            helpers::with_mapped_meta_slice(g_start, g_end, |slice| {
-                                helpers::find_first_non_zero_bit_in_slice(
-                                    slice, align_rem, g_first, g_last,
-                                )
-                            })
-                        else {
-                            break;
-                        };
-                        if let Some((byte_off, bit)) = found {
-                            let (addr, bit) = align_metadata_address(self, g_start + byte_off, bit);
-                            hit = Some(
-                                contiguous_meta_address_to_address(self, addr, bit)
-                                    .align_down(region_bytes),
-                            )
-                            .filter(|&a| a >= start_addr && a < end_addr);
-                            break;
+        let result = helpers::inclusive_contiguous_meta_range(self, first_region, last_region)
+            .and_then(|(byte_start, byte_end, first_mask, last_mask)| {
+                helpers::try_for_each_meta_grain_forward(
+                    byte_start,
+                    byte_end,
+                    first_mask,
+                    last_mask,
+                    |g_start, g_end, g_first, g_last| {
+                        if !g_start.is_mapped() {
+                            return core::ops::ControlFlow::Break(None);
                         }
-                        g_start = g_end;
-                    }
-                    hit
-                } else {
-                    None
-                }
-            }
-        };
+                        let len = g_end - g_start;
+                        debug_assert!(!g_start.is_zero() && len <= isize::MAX as usize);
+                        // SAFETY: `g_start.is_mapped()` verified this single `MMAPPER` grain is
+                        // mapped (`u8` alignment 1), and caller guarantees mapped side metadata in
+                        // the searched window is initialized and free of concurrent mutations.
+                        let slice =
+                            unsafe { core::slice::from_raw_parts(g_start.to_ptr::<u8>(), len) };
+                        let align_rem = g_start.as_usize() & (core::mem::size_of::<usize>() - 1);
+                        if let Some((byte_off, bit)) = helpers::find_first_non_zero_bit_in_slice(
+                            slice, align_rem, g_first, g_last,
+                        ) {
+                            let (addr, bit) = align_metadata_address(self, g_start + byte_off, bit);
+                            let found = contiguous_meta_address_to_address(self, addr, bit)
+                                .align_down(region_bytes);
+                            return core::ops::ControlFlow::Break(Some(found));
+                        }
+                        core::ops::ControlFlow::Continue(())
+                    },
+                )
+                .flatten()
+            });
 
         #[cfg(debug_assertions)]
         assert_eq!(
@@ -2620,20 +2489,15 @@ mod tests {
             {
                 // SAFETY: `spec` is mapped for `[data_addr, data_addr + four_pages)`, and only
                 // `AtomicU8` references touch the 4 mapped, initialized metadata bytes here.
-                let (atomics, grid) = unsafe {
-                    (
-                        spec.mapped_atomic_bytes_unchecked::<4>(data_addr),
-                        spec.mapped_atomic_byte_chunks_unchecked::<2, 2>(data_addr),
-                    )
-                };
+                let atomics = unsafe { spec.mapped_atomic_bytes_unchecked::<4>(data_addr) };
                 for (slot, val) in atomics.iter().zip([0x11, 0x22, 0x33, 0x44]) {
                     slot.store(val, Ordering::Relaxed);
                 }
                 assert_eq!(atomics[0].load(Ordering::Relaxed), 0x11);
                 assert_eq!(atomics[1].load(Ordering::Relaxed), 0x22);
                 atomics[2].store(0x99, Ordering::Relaxed);
-                assert_eq!(grid[1][0].load(Ordering::Relaxed), 0x99);
-                assert_eq!(grid[1][1].load(Ordering::Relaxed), 0x44);
+                assert_eq!(atomics[2].load(Ordering::Relaxed), 0x99);
+                assert_eq!(atomics[3].load(Ordering::Relaxed), 0x44);
             }
         });
     }
@@ -2651,7 +2515,7 @@ mod tests {
                 log_bytes_in_region: 3,
             };
             let unaligned_data = vm_layout::vm_layout().heap_start + 8usize;
-            let _ = spec.checked_mapped_byte_range(unaligned_data, 64);
+            let _ = spec.validate_mapped_atomic_bytes(unaligned_data, 1);
         });
     }
 
@@ -2665,6 +2529,80 @@ mod tests {
             log_num_of_bits: 0,
             log_bytes_in_region: (usize::BITS as usize) - 2,
         };
-        let _ = spec.checked_meta_to_data_bytes(1);
+        let _ = spec.validate_mapped_atomic_bytes(Address::ZERO + 4096usize, 1);
+    }
+
+    #[test]
+    fn test_zero_size_and_unbounded_boundary_regressions() {
+        test_side_metadata(0, |arena| {
+            let spec = &arena.spec;
+            let data_addr = arena.data_addr;
+            let region = 1usize << TEST_LOG_BYTES_IN_REGION;
+
+            // Zero-size bulk updates / copies must be no-ops without touching neighboring bits.
+            spec.store_atomic::<u8>(data_addr, 1, Ordering::SeqCst);
+            spec.bzero_metadata(data_addr, 0);
+            assert_eq!(spec.load_atomic::<u8>(data_addr, Ordering::SeqCst), 1);
+            spec.bcopy_metadata_contiguous(data_addr, 0, spec);
+            assert_eq!(spec.load_atomic::<u8>(data_addr, Ordering::SeqCst), 1);
+
+            // Zero-limit and `usize::MAX`-limit searches must not underflow/overflow `Address`.
+            assert_eq!(arena.find_prev::<u8>(data_addr, 0), None);
+            assert_eq!(arena.find_next::<u8>(data_addr, 0), None);
+            assert_eq!(
+                arena.find_prev::<u8>(data_addr, usize::MAX),
+                Some(data_addr)
+            );
+            assert_eq!(
+                arena.find_next::<u8>(data_addr, usize::MAX),
+                Some(data_addr)
+            );
+
+            spec.store_atomic::<u8>(data_addr, 0, Ordering::SeqCst);
+            spec.store_atomic::<u8>(data_addr + region, 1, Ordering::SeqCst);
+            assert_eq!(
+                arena.find_next::<u8>(data_addr, usize::MAX),
+                Some(data_addr + region)
+            );
+            spec.store_atomic::<u8>(data_addr + region, 0, Ordering::SeqCst);
+            spec.store_atomic::<u8>(data_addr, 1, Ordering::SeqCst);
+            assert_eq!(
+                arena.find_prev::<u8>(data_addr + region, usize::MAX),
+                Some(data_addr)
+            );
+            spec.store_atomic::<u8>(data_addr, 0, Ordering::SeqCst);
+
+            let grain_end_meta =
+                arena.meta_addr.align_down(MMAPPER.granularity()) + MMAPPER.granularity();
+            let last_in_grain =
+                contiguous_meta_address_to_address(spec, grain_end_meta - 1usize, 7);
+            assert_eq!(arena.find_next::<u8>(last_in_grain, usize::MAX), None);
+            assert_eq!(
+                arena.find_next::<u8>(Address::MAX - (region - 1), usize::MAX),
+                None
+            );
+
+            // Top-of-address-space `[CONTIGUOUS_DATA_MAX - 63, CONTIGUOUS_DATA_MAX + 1)` range
+            // translation and sanity verification must not overflow.
+            let word_spec = SideMetadataSpec {
+                name: "top_of_memory_bit_spec",
+                is_global: true,
+                offset: 0,
+                log_num_of_bits: 0,
+                log_bytes_in_region: 3,
+            };
+            let top_64 = (Address::ZERO + helpers::CONTIGUOUS_DATA_MAX) - 63usize;
+            let (ms, msb, me, meb) =
+                helpers::half_open_contiguous_meta_bit_range(&word_spec, top_64, 64).unwrap();
+            assert_eq!((msb, meb), (0, 0));
+            assert_eq!(me - ms, 1);
+            #[cfg(feature = "extreme_assertions")]
+            {
+                let max_top = Address::MAX - (region - 1);
+                sanity::verify_bset(spec, max_top, region);
+                sanity::verify_bcopy(spec, max_top, region, spec);
+                sanity::verify_bzero(spec, max_top, region);
+            }
+        });
     }
 }
