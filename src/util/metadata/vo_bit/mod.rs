@@ -102,6 +102,7 @@ pub(crate) fn unset_vo_bit_nocheck(object: ObjectReference) {
 /// * Because `VO_BIT_SIDE_METADATA_SPEC` packs 8 word-aligned addresses into a single metadata byte,
 ///   no other thread may concurrently read, write, or atomically modify the VO-bit metadata byte
 ///   covering `object` (and its 7 neighboring word-aligned addresses in the same 8-word region).
+#[allow(dead_code)]
 pub(crate) unsafe fn unset_vo_bit_unsafe(object: ObjectReference) {
     debug_assert!(is_vo_bit_set(object), "{:x}: VO bit not set", object);
     // SAFETY: Caller guarantees the VO-bit side-metadata byte for `object` is mapped and
@@ -136,6 +137,7 @@ pub(crate) fn is_vo_bit_set_for_addr(address: Address) -> Option<ObjectReference
 ///
 /// No other thread may concurrently write to or atomically modify the VO-bit side-metadata byte
 /// covering `address` (if mapped) for the duration of this call.
+#[allow(dead_code)]
 pub(crate) unsafe fn is_vo_bit_set_unsafe(address: Address) -> Option<ObjectReference> {
     check_vo_bit(address, |addr| {
         // SAFETY: `check_vo_bit` verified that VO-bit side metadata for `addr` is mapped before
@@ -200,11 +202,127 @@ pub(crate) const VO_BIT_WORD_TO_REGION: usize = 1
 ///   must be non-null, mapped, and initialized across all `BYTES_IN_ADDRESS` bytes.
 /// * No other thread may concurrently write to or atomically modify any byte in that VO-bit
 ///   side-metadata word for the duration of this call, and no live `&mut` reference may alias it.
+#[allow(dead_code)]
 pub(crate) unsafe fn get_raw_vo_bit_word(addr: Address) -> usize {
     // SAFETY: Caller guarantees the `BYTES_IN_ADDRESS`-aligned VO-bit metadata word covering
     // `addr` is non-null, mapped, initialized, and free of concurrent writes, atomic
     // modifications, or live `&mut` aliases.
     unsafe { VO_BIT_SIDE_METADATA_SPEC.load_raw_word(addr) }
+}
+
+/// Atomically scan all set VO bits in the half-open data address range `[start, end)`, invoking
+/// `callback` in ascending address order for each valid `ObjectReference`.
+///
+/// Unmapped side-metadata grains within `[start, end)` are skipped cleanly, and mapped grains are
+/// read via `AtomicU8` (`Ordering::Relaxed` zero-word fast skip + `Ordering::Acquire` non-zero byte
+/// loads) so heap enumeration (`MMTK::enumerate_objects`) never causes a Rust data race if mutator
+/// or GC threads concurrently update VO bits elsewhere.
+#[allow(dead_code)]
+pub(crate) fn scan_vo_bits_atomic(
+    start: Address,
+    end: Address,
+    mut callback: impl FnMut(ObjectReference),
+) {
+    use crate::util::heap::layout::vm_layout::VMLayout;
+    use crate::util::metadata::side_metadata::{helpers, is_side_metadata_initialized};
+    use core::sync::atomic::AtomicU8;
+
+    let clamped_end = {
+        #[cfg(target_pointer_width = "64")]
+        {
+            const ARCH_END: usize = 1usize << VMLayout::LOG_ARCH_ADDRESS_SPACE;
+            end - end.as_usize().saturating_sub(ARCH_END)
+        }
+        #[cfg(target_pointer_width = "32")]
+        {
+            let _ = VMLayout::LOG_ARCH_ADDRESS_SPACE;
+            end
+        }
+    };
+    if start >= clamped_end || !is_side_metadata_initialized() {
+        return;
+    }
+
+    const REGION_BYTES: usize = 1 << VO_BIT_SIDE_METADATA_SPEC.log_bytes_in_region;
+    const MAX_ALIGNED: usize = usize::MAX & !(REGION_BYTES - 1);
+    if start.as_usize() > MAX_ALIGNED {
+        return;
+    }
+
+    let first_data = start.align_up(REGION_BYTES);
+    let last_data = (clamped_end - 1usize).align_down(REGION_BYTES);
+    if first_data > last_data {
+        return;
+    }
+
+    let start_meta =
+        helpers::address_to_contiguous_meta_address(&VO_BIT_SIDE_METADATA_SPEC, first_data);
+    let start_bit = helpers::meta_byte_lshift(&VO_BIT_SIDE_METADATA_SPEC, first_data);
+    let last_meta =
+        helpers::address_to_contiguous_meta_address(&VO_BIT_SIDE_METADATA_SPEC, last_data);
+    let last_bit = helpers::meta_byte_lshift(&VO_BIT_SIDE_METADATA_SPEC, last_data);
+    let (end_meta, end_bit) = if last_bit == 7 {
+        (last_meta + 1usize, 0)
+    } else {
+        (last_meta, last_bit + 1)
+    };
+
+    let Some((byte_start, byte_end, first_mask, last_mask)) =
+        helpers::active_bit_range_bytes(start_meta, start_bit, end_meta, end_bit)
+    else {
+        return;
+    };
+
+    let grain = crate::MMAPPER.granularity();
+    let mut cur = byte_start;
+    while cur < byte_end {
+        let grain_base = cur.align_down(grain);
+        let g_end = match grain_base.as_usize().checked_add(grain) {
+            Some(next) if next < byte_end.as_usize() => grain_base + grain,
+            _ => byte_end,
+        };
+        if cur.is_zero() || !cur.is_mapped() {
+            cur = g_end;
+            continue;
+        }
+        let g_first_mask = if cur == byte_start { first_mask } else { 0xff };
+        let g_last_mask = if g_end == byte_end { last_mask } else { 0xff };
+        let len = g_end - cur;
+        assert!(len <= isize::MAX as usize);
+        let hit = {
+            // SAFETY: `is_side_metadata_initialized()` is true and `first_data..=last_data` is
+            // clamped below `1 << VMLayout::LOG_ARCH_ADDRESS_SPACE`, so `[cur, g_end)` lies
+            // strictly inside `VO_BIT_SIDE_METADATA_SPEC`'s reserved contiguous global
+            // side-metadata virtual address window and within a single `MMAPPER.granularity()`
+            // grain. `cur.is_mapped()` verified that the enclosing grain is OS-zero-initialized,
+            // `AtomicU8` has alignment 1, and `slice` is dropped immediately at the end of this
+            // block before `callback` can execute (preventing any `&[AtomicU8]` aliasing or
+            // test-only unmap hazard across `callback`). Concurrent mutator/GC VO-bit updates at
+            // enumeration safe points use `AtomicU8` operations (`MMTK::enumerate_objects` forbids
+            // concurrent GC bulk `bzero_vo_bit` / `bcopy_vo_bit_from_mark_bit`).
+            let slice = unsafe { core::slice::from_raw_parts(cur.to_ptr::<AtomicU8>(), len) };
+            helpers::find_first_non_zero_atomic_byte(slice, g_first_mask, g_last_mask)
+        };
+        let Some((byte_offset, mut bits)) = hit else {
+            cur = g_end;
+            continue;
+        };
+        let byte_addr = cur + byte_offset;
+        while bits != 0 {
+            let bit = bits.trailing_zeros() as u8;
+            let vo_addr = helpers::contiguous_meta_address_to_address(
+                &VO_BIT_SIDE_METADATA_SPEC,
+                byte_addr,
+                bit,
+            );
+            debug_assert!(vo_addr >= first_data && vo_addr <= last_data);
+            if let Some(obj) = ObjectReference::from_raw_address(vo_addr) {
+                callback(obj);
+            }
+            bits &= bits - 1;
+        }
+        cur = byte_addr + 1usize;
+    }
 }
 
 /// Find the base reference to the object from a potential internal pointer.
@@ -267,8 +385,98 @@ pub(crate) fn is_internal_ptr_from_vo_bit<VM: VMBinding>(
 /// * The VO-bit side metadata for `addr` must be mapped and readable.
 /// * No other thread may concurrently write to or atomically modify the VO-bit side-metadata byte
 ///   covering `addr` for the duration of this call.
+#[allow(dead_code)]
 pub(crate) unsafe fn is_vo_addr(addr: Address) -> bool {
     // SAFETY: Caller guarantees VO-bit side metadata for `addr` is mapped and not concurrently
     // written or atomically modified by another thread.
     unsafe { VO_BIT_SIDE_METADATA_SPEC.load::<u8>(addr) != 0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::util::constants::BYTES_IN_PAGE;
+    use crate::util::heap::layout::vm_layout;
+    use crate::util::metadata::side_metadata::{
+        core_test_initialize_side_metadata, sanity, SideMetadataContext, SideMetadataSanity,
+    };
+    use crate::util::test_util::{serial_test, with_cleanup};
+
+    #[test]
+    fn test_scan_vo_bits_atomic_boundaries_and_unmapped_gap() {
+        serial_test(|| {
+            core_test_initialize_side_metadata();
+            let base = vm_layout::vm_layout().heap_start;
+            let region = 1usize << VO_BIT_SIDE_METADATA_SPEC.log_bytes_in_region;
+            // Data span covering 2 full metadata pages so we can leave an unmapped metadata grain
+            // before/between mapped grains.
+            let data_per_meta_grain = crate::MMAPPER.granularity() * 8 * region;
+            let second_grain_base = base + data_per_meta_grain * 2;
+
+            let context = SideMetadataContext {
+                global: vec![VO_BIT_SIDE_METADATA_SPEC],
+                local: vec![],
+            };
+            let mut meta_sanity = SideMetadataSanity::new();
+            meta_sanity.verify_metadata_context("VoScanTest", &context);
+
+            with_cleanup(
+                || {
+                    context
+                        .try_map_metadata_space(base, BYTES_IN_PAGE * 4, "vo_scan_1")
+                        .unwrap();
+                    context
+                        .try_map_metadata_space(second_grain_base, BYTES_IN_PAGE * 4, "vo_scan_2")
+                        .unwrap();
+                    bzero_vo_bit(base, BYTES_IN_PAGE * 4);
+                    bzero_vo_bit(second_grain_base, BYTES_IN_PAGE * 4);
+
+                    let o0 = ObjectReference::from_raw_address(base).unwrap();
+                    let o1 = ObjectReference::from_raw_address(base + region * 3).unwrap();
+                    let o2 = ObjectReference::from_raw_address(base + region * 9).unwrap();
+                    let o3 =
+                        ObjectReference::from_raw_address(second_grain_base + region * 5).unwrap();
+                    for obj in [o0, o1, o2, o3] {
+                        set_vo_bit(obj);
+                    }
+
+                    // Empty / inverted / sub-region / out-of-arch-space ranges produce nothing.
+                    let mut empty = Vec::new();
+                    scan_vo_bits_atomic(base, base, |o| empty.push(o));
+                    scan_vo_bits_atomic(base + 1usize, base + region - 1, |o| empty.push(o));
+                    scan_vo_bits_atomic(Address::MAX - 64usize, Address::MAX, |o| empty.push(o));
+                    assert!(empty.is_empty());
+
+                    // Unaligned sub-byte window `(base + 1)..(base + region * 9)` excludes `o0`
+                    // (before `first_data = base + region`) and excludes `o2` (`end` is exclusive).
+                    let mut sub = Vec::new();
+                    scan_vo_bits_atomic(base + 1usize, base + region * 9, |o| sub.push(o));
+                    assert_eq!(sub, vec![o1]);
+
+                    // Full scan across `[base, second_grain_base + BYTES_IN_PAGE)` skips the
+                    // unmapped middle metadata grain cleanly and yields all 4 objects in order.
+                    let mut all = Vec::new();
+                    scan_vo_bits_atomic(base, second_grain_base + BYTES_IN_PAGE, |o| all.push(o));
+                    assert_eq!(all, vec![o0, o1, o2, o3]);
+
+                    // Re-entrant mutation inside `callback` (`bzero_vo_bit`) is alias-free because
+                    // `&[AtomicU8]` is dropped before each `callback` invocation.
+                    let mut cleared = Vec::new();
+                    scan_vo_bits_atomic(base, second_grain_base + BYTES_IN_PAGE, |o| {
+                        cleared.push(o);
+                        if o == o0 {
+                            bzero_vo_bit(base, BYTES_IN_PAGE * 4);
+                        }
+                    });
+                    assert_eq!(cleared, vec![o0, o1, o3]);
+                    unset_vo_bit(o3);
+                },
+                || {
+                    bzero_vo_bit(base, BYTES_IN_PAGE * 4);
+                    bzero_vo_bit(second_grain_base, BYTES_IN_PAGE * 4);
+                    sanity::reset();
+                },
+            );
+        });
+    }
 }

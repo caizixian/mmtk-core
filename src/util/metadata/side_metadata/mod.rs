@@ -8,7 +8,7 @@ mod layout;
 
 mod global;
 pub(crate) mod ranges;
-mod sanity;
+pub(crate) mod sanity;
 mod side_metadata_tests;
 pub(crate) mod spec_defs;
 pub(crate) mod typed;

@@ -20,6 +20,17 @@ struct AlignedLineMeta([u8; LINE_META_BYTES]);
 #[repr(C, align(1024))]
 struct AlignedBlockMeta([u8; BLOCK_META_BYTES]);
 
+fn run_libc_memset_pair(buf: &mut [u8]) {
+    let ptr = buf.as_mut_ptr().cast::<c_void>();
+    let len = buf.len();
+    // SAFETY: `ptr` and `len` come directly from exclusive slice `buf: &mut [u8]`, which is valid,
+    // aligned, and writable across all `len` bytes for both `memset` calls.
+    unsafe {
+        libc::memset(ptr, 0xff, len);
+        libc::memset(ptr, 0x00, len);
+    }
+}
+
 pub fn bench(c: &mut Criterion) {
     c.bench_function("bzero_bset_line", |b| {
         let mut buf = Box::new(AlignedLineMeta([0u8; LINE_META_BYTES]));
@@ -34,20 +45,7 @@ pub fn bench(c: &mut Criterion) {
 
     c.bench_function("bzero_bset_line_memset", |b| {
         let mut buf = Box::new(AlignedLineMeta([0u8; LINE_META_BYTES]));
-        let start = Address::from_mut_ptr(buf.0.as_mut_ptr());
-        let end = start + LINE_META_BYTES;
-
-        b.iter(|| {
-            let ptr = start.to_mut_ptr::<c_void>();
-            let len = end - start;
-            // SAFETY: `ptr` was derived via `buf.0.as_mut_ptr()` with mutable provenance over the
-            // entire live, initialized `[u8; LINE_META_BYTES]` allocation owned by `buf` (`len ==
-            // LINE_META_BYTES`), and `buf` is neither moved nor accessed directly during `b.iter`.
-            unsafe {
-                libc::memset(ptr, 0xff, len);
-                libc::memset(ptr, 0x00, len);
-            }
-        })
+        b.iter(|| run_libc_memset_pair(&mut buf.0))
     });
 
     c.bench_function("bzero_bset_block", |b| {
@@ -63,19 +61,6 @@ pub fn bench(c: &mut Criterion) {
 
     c.bench_function("bzero_bset_block_memset", |b| {
         let mut buf = Box::new(AlignedBlockMeta([0u8; BLOCK_META_BYTES]));
-        let start = Address::from_mut_ptr(buf.0.as_mut_ptr());
-        let end = start + BLOCK_META_BYTES;
-
-        b.iter(|| {
-            let ptr = start.to_mut_ptr::<c_void>();
-            let len = end - start;
-            // SAFETY: `ptr` was derived via `buf.0.as_mut_ptr()` with mutable provenance over the
-            // entire live, initialized `[u8; BLOCK_META_BYTES]` allocation owned by `buf` (`len ==
-            // BLOCK_META_BYTES`), and `buf` is neither moved nor accessed directly during `b.iter`.
-            unsafe {
-                libc::memset(ptr, 0xff, len);
-                libc::memset(ptr, 0x00, len);
-            }
-        })
+        b.iter(|| run_libc_memset_pair(&mut buf.0))
     });
 }

@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use crate::util::constants::*;
 use crate::util::heap::layout::vm_layout::*;
 use crate::util::Address;
@@ -103,12 +105,9 @@ mod tests {
     #[test]
     fn test_page_align() {
         use crate::util::constants::BYTES_IN_PAGE;
-        // SAFETY: Test-only synthetic `Address` value used strictly for pure alignment arithmetic
-        // and never dereferenced.
-        let addr = unsafe { Address::from_usize(0x2345_6789) };
-        // SAFETY: Test-only synthetic `Address` value used strictly for equality comparison and
-        // never dereferenced.
-        let expected = unsafe { Address::from_usize(0x2345_6789 & !(BYTES_IN_PAGE - 1)) };
+        // SAFETY: Synthetic raw addresses used strictly for pure alignment arithmetic; never dereferenced.
+        let [addr, expected] = [0x2345_6789, 0x2345_6789 & !(BYTES_IN_PAGE - 1)]
+            .map(|raw| unsafe { Address::from_usize(raw) });
         assert_eq!(page_align_down(addr), expected);
         assert!(!is_page_aligned(addr));
         assert!(is_page_aligned(page_align_down(addr)));
@@ -116,15 +115,9 @@ mod tests {
 
     #[test]
     fn test_chunk_align() {
-        // SAFETY: Test-only synthetic `Address` value used strictly for pure alignment arithmetic
-        // and never dereferenced.
-        let addr = unsafe { Address::from_usize(0x2345_6789) };
-        // SAFETY: Test-only synthetic `Address` value used strictly for equality comparison and
-        // never dereferenced.
-        let expected_down = unsafe { Address::from_usize(0x2340_0000) };
-        // SAFETY: Test-only synthetic `Address` value used strictly for equality comparison and
-        // never dereferenced.
-        let expected_up = unsafe { Address::from_usize(0x2380_0000) };
+        // SAFETY: Synthetic raw addresses used strictly for pure alignment arithmetic; never dereferenced.
+        let [addr, expected_down, expected_up] =
+            [0x2345_6789, 0x2340_0000, 0x2380_0000].map(|raw| unsafe { Address::from_usize(raw) });
         assert_eq!(chunk_align_down(addr), expected_down);
         assert_eq!(chunk_align_up(addr), expected_up);
     }

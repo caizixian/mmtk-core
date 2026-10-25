@@ -60,18 +60,15 @@ impl MetadataSpec {
         object: ObjectReference,
         mask: Option<T>,
     ) -> T {
-        match self {
-            MetadataSpec::OnSide(metadata_spec) => {
-                // SAFETY: Guaranteed by the caller: `object`'s side metadata for `metadata_spec` is
-                // mapped, `T` matches `metadata_spec`, and no concurrent write or atomic operation
-                // races on the underlying side-metadata byte/word.
-                unsafe { metadata_spec.load(object.to_raw_address()) }
-            }
-            MetadataSpec::InHeader(metadata_spec) => {
-                // SAFETY: Guaranteed by the caller: `object` has valid initialized header metadata
-                // for `metadata_spec`, `T` and `mask` satisfy `metadata_spec`, and no concurrent
-                // write or atomic modification races on the header metadata field.
-                unsafe { VM::VMObjectModel::load_metadata::<T>(metadata_spec, object, mask) }
+        // SAFETY: Guaranteed by the caller: `object`'s metadata storage for `self` is mapped and
+        // initialized, `T` and `mask` match `self`, and no concurrent write or atomic modification
+        // races on the underlying metadata cell.
+        unsafe {
+            match self {
+                MetadataSpec::OnSide(metadata_spec) => metadata_spec.load(object.to_raw_address()),
+                MetadataSpec::InHeader(metadata_spec) => {
+                    VM::VMObjectModel::load_metadata::<T>(metadata_spec, object, mask)
+                }
             }
         }
     }
@@ -124,20 +121,15 @@ impl MetadataSpec {
         val: T,
         mask: Option<T>,
     ) {
-        match self {
-            MetadataSpec::OnSide(metadata_spec) => {
-                // SAFETY: Guaranteed by the caller: `object`'s side metadata for `metadata_spec` is
-                // mapped and writable, `T` and `val` match `metadata_spec`, and no other thread
-                // concurrently accesses or atomically modifies the underlying side-metadata unit.
-                unsafe {
+        // SAFETY: Guaranteed by the caller: `object`'s metadata storage for `self` is mapped and
+        // writable, `T`/`val`/`mask` satisfy `self`, and the caller holds exclusive access with no
+        // concurrent reads, writes, or atomic operations on the underlying metadata unit.
+        unsafe {
+            match self {
+                MetadataSpec::OnSide(metadata_spec) => {
                     metadata_spec.store(object.to_raw_address(), val);
                 }
-            }
-            MetadataSpec::InHeader(metadata_spec) => {
-                // SAFETY: Guaranteed by the caller: `object` has valid writable header metadata for
-                // `metadata_spec`, `T`/`val`/`mask` satisfy `metadata_spec`, and no other thread
-                // concurrently accesses or atomically modifies the header metadata unit.
-                unsafe {
+                MetadataSpec::InHeader(metadata_spec) => {
                     VM::VMObjectModel::store_metadata::<T>(metadata_spec, object, val, mask);
                 }
             }

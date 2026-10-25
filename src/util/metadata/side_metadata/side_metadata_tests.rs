@@ -53,18 +53,10 @@ mod tests {
                 local_side_metadata_base_address()
             );
 
-            // SAFETY: Hardcoded synthetic data address for pure `address_to_meta_address` arithmetic; never dereferenced.
-            let addr_7 = unsafe { Address::from_usize(7) };
-            // SAFETY: Hardcoded synthetic data address for address-translation test; never dereferenced.
-            let addr_27 = unsafe { Address::from_usize(27) };
-            // SAFETY: Hardcoded synthetic data address for address-translation test; never dereferenced.
-            let addr_32 = unsafe { Address::from_usize(32) };
-            // SAFETY: Hardcoded synthetic data address for address-translation test; never dereferenced.
-            let addr_129 = unsafe { Address::from_usize(129) };
-            // SAFETY: Hardcoded synthetic data address for address-translation test; never dereferenced.
-            let addr_316 = unsafe { Address::from_usize(316) };
-            // SAFETY: Hardcoded synthetic data address for address-translation test; never dereferenced.
-            let addr_318 = unsafe { Address::from_usize(318) };
+            // SAFETY: Synthetic raw addresses used strictly for `address_to_meta_address` integer
+            // translation arithmetic; none of these addresses are ever dereferenced.
+            let [addr_7, addr_27, addr_32, addr_129, addr_316, addr_318] =
+                [7, 27, 32, 129, 316, 318].map(|raw| unsafe { Address::from_usize(raw) });
 
             assert_eq!(address_to_meta_address(&gspec, addr_7), global_base);
             assert_eq!(
@@ -192,12 +184,10 @@ mod tests {
                 log_bytes_in_region: 0,
             };
 
-            // SAFETY: Hardcoded synthetic data address for bit-shift arithmetic test; never dereferenced.
-            let addr_5 = unsafe { Address::from_usize(5) };
-            // SAFETY: Hardcoded synthetic data address for bit-shift arithmetic test; never dereferenced.
-            let addr_15 = unsafe { Address::from_usize(15) };
-            // SAFETY: Hardcoded synthetic data address for bit-shift arithmetic test; never dereferenced.
-            let addr_10010 = unsafe { Address::from_usize(0x10010) };
+            // SAFETY: Synthetic raw addresses used strictly for `meta_byte_lshift` bit-shift
+            // arithmetic; never dereferenced.
+            let [addr_5, addr_15, addr_10010] =
+                [5, 15, 0x10010].map(|raw| unsafe { Address::from_usize(raw) });
 
             assert_eq!(meta_byte_lshift(&spec, Address::ZERO), 0);
             assert_eq!(meta_byte_lshift(&spec, addr_5), 5);
@@ -625,26 +615,21 @@ mod tests {
                         .map(|i| data_addr + (region_size * i))
                         .collect::<Vec<Address>>();
                     // Set metadata for the regions
-                    regions.iter().for_each(|addr| {
-                        // SAFETY: `spec` metadata for `[data_addr, data_addr + BYTES_IN_PAGE)` is
-                        // mapped and exclusively accessed inside single-threaded `serial_test`.
-                        unsafe { spec.store::<u8>(*addr, 1) }
-                    });
-                    regions.iter().for_each(|addr| {
-                        // SAFETY: Mapped, initialized, and exclusively read inside `serial_test`.
-                        assert_eq!(unsafe { spec.load::<u8>(*addr) }, 1)
-                    });
+                    for &addr in &regions {
+                        spec.store_atomic::<u8>(addr, 1, Ordering::SeqCst);
+                    }
+                    for &addr in &regions {
+                        assert_eq!(spec.load_atomic::<u8>(addr, Ordering::SeqCst), 1);
+                    }
 
                     // bulk zero the 8 regions (1 bit for each, in total 1 byte)
                     spec.bzero_metadata(regions[0], region_size * 8);
                     // Check if the first 8 regions are set to 0
-                    regions[0..8].iter().for_each(|addr| {
-                        // SAFETY: Mapped, initialized, and exclusively read inside `serial_test`.
-                        assert_eq!(unsafe { spec.load::<u8>(*addr) }, 0)
-                    });
+                    for &addr in &regions[0..8] {
+                        assert_eq!(spec.load_atomic::<u8>(addr, Ordering::SeqCst), 0);
+                    }
                     // Check if the 9th region is still 1
-                    // SAFETY: Mapped, initialized, and exclusively read inside `serial_test`.
-                    assert_eq!(unsafe { spec.load::<u8>(regions[8]) }, 1);
+                    assert_eq!(spec.load_atomic::<u8>(regions[8], Ordering::SeqCst), 1);
                 },
                 || {
                     sanity::reset();
@@ -688,28 +673,23 @@ mod tests {
                         .map(|i| data_addr + (region_size * i))
                         .collect::<Vec<Address>>();
                     // Set metadata for the regions
-                    regions.iter().for_each(|addr| {
-                        // SAFETY: `spec` metadata for `[data_addr, data_addr + BYTES_IN_PAGE)` is
-                        // mapped and exclusively accessed inside single-threaded `serial_test`.
-                        unsafe { spec.store::<u8>(*addr, 1) }
-                    });
-                    regions.iter().for_each(|addr| {
-                        // SAFETY: Mapped, initialized, and exclusively read inside `serial_test`.
-                        assert_eq!(unsafe { spec.load::<u8>(*addr) }, 1)
-                    });
+                    for &addr in &regions {
+                        spec.store_atomic::<u8>(addr, 1, Ordering::SeqCst);
+                    }
+                    for &addr in &regions {
+                        assert_eq!(spec.load_atomic::<u8>(addr, Ordering::SeqCst), 1);
+                    }
 
                     // bulk zero the first 4 regions (1 bit for each, in total 4 bits)
                     spec.bzero_metadata(regions[0], region_size * 4);
                     // Check if the first 4 regions are set to 0
-                    regions[0..4].iter().for_each(|addr| {
-                        // SAFETY: Mapped, initialized, and exclusively read inside `serial_test`.
-                        assert_eq!(unsafe { spec.load::<u8>(*addr) }, 0)
-                    });
+                    for &addr in &regions[0..4] {
+                        assert_eq!(spec.load_atomic::<u8>(addr, Ordering::SeqCst), 0);
+                    }
                     // Check if the rest regions is still 1
-                    regions[4..9].iter().for_each(|addr| {
-                        // SAFETY: Mapped, initialized, and exclusively read inside `serial_test`.
-                        assert_eq!(unsafe { spec.load::<u8>(*addr) }, 1)
-                    });
+                    for &addr in &regions[4..9] {
+                        assert_eq!(spec.load_atomic::<u8>(addr, Ordering::SeqCst), 1);
+                    }
                 },
                 || {
                     sanity::reset();

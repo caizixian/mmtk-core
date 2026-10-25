@@ -13,7 +13,7 @@ use crate::util::Address;
 use crate::MMAPPER;
 
 /// Performs address translation in contiguous metadata spaces (e.g. global and policy-specific in 64-bits, and global in 32-bits)
-pub(super) fn address_to_contiguous_meta_address(
+pub(crate) fn address_to_contiguous_meta_address(
     metadata_spec: &SideMetadataSpec,
     data_addr: Address,
 ) -> Address {
@@ -36,7 +36,7 @@ pub(super) fn address_to_contiguous_meta_address(
 /// * `metadata_spec`: The side metadata spec. It should be contiguous side metadata.
 /// * `metadata_addr`; The metadata address. Returned by [`address_to_contiguous_meta_address`].
 /// * `bit`: The bit shift for the metadata. Returned by [`meta_byte_lshift`].
-pub(super) fn contiguous_meta_address_to_address(
+pub(crate) fn contiguous_meta_address_to_address(
     metadata_spec: &SideMetadataSpec,
     metadata_addr: Address,
     bit: u8,
@@ -234,7 +234,7 @@ pub(super) const fn metadata_address_range_size(metadata_spec: &SideMetadataSpec
     1usize << (VMLayout::LOG_ARCH_ADDRESS_SPACE - log_data_meta_ratio(metadata_spec))
 }
 
-pub(super) fn meta_byte_lshift(metadata_spec: &SideMetadataSpec, data_addr: Address) -> u8 {
+pub(crate) fn meta_byte_lshift(metadata_spec: &SideMetadataSpec, data_addr: Address) -> u8 {
     let bits_num_log = metadata_spec.log_num_of_bits as i32;
     if bits_num_log >= 3 {
         return 0;
@@ -249,262 +249,355 @@ pub(super) fn meta_byte_mask(metadata_spec: &SideMetadataSpec) -> u8 {
     ((1usize << (1usize << bits_num_log)) - 1) as u8
 }
 
-/// The result type for find meta bits functions.
-pub enum FindMetaBitResult {
-    Found { addr: Address, bit: u8 },
-    NotFound,
-    UnmappedMetadata,
-}
-
-/// Check `[meta_start, meta_end)` backwards and find the last non-zero bit.
-/// Loads aligned `usize` words where possible and falls back to individual bytes at unaligned ends.
-///
-/// # Safety
-/// * Every address in `[meta_start, meta_end)` for which `Address::is_mapped` returns `true`
-///   (and the remainder of its `MMAPPER.granularity()` region within `[meta_start, meta_end)`)
-///   must be mapped, readable, and initialized side-metadata memory.
-/// * No other thread may concurrently write to or atomically modify the mapped bytes in
-///   `[meta_start, meta_end)` for the duration of this call, and no live `&mut` reference may
-///   alias them.
-pub(super) unsafe fn find_last_non_zero_bit_in_metadata_bytes(
-    meta_start: Address,
-    meta_end: Address,
-) -> FindMetaBitResult {
-    use crate::util::constants::BYTES_IN_ADDRESS;
-
-    let mmap_granularity = MMAPPER.granularity();
-
-    let mut cur = meta_end;
-    // We need to check if metadata address is mapped or not.  But we make use of the granularity of
-    // the `Mmapper` to reduce the number of checks.  This records the start of a grain that is
-    // tested to be mapped.
-    let mut mapped_grain = Address::MAX;
-    while cur > meta_start {
-        // If we can check the whole word, set step to word size. Otherwise, the step is 1 (byte) and we check byte.
-        let step = if cur.is_aligned_to(BYTES_IN_ADDRESS) && cur - BYTES_IN_ADDRESS >= meta_start {
-            BYTES_IN_ADDRESS
-        } else {
-            1
-        };
-        // Move to the address so we can load from it
-        cur -= step;
-        // The value we check has to be in the range.
-        debug_assert!(
-            cur >= meta_start && cur < meta_end,
-            "Check metadata value at meta address {}, which is not in the range of [{}, {})",
-            cur,
-            meta_start,
-            meta_end
-        );
-
-        // If we are looking at an address that is not in a mapped chunk, we need to check if the chunk is mapped.
-        if cur < mapped_grain {
-            if cur.is_mapped() {
-                // This is mapped. No need to check for this chunk.
-                mapped_grain = cur.align_down(mmap_granularity);
-            } else {
-                return FindMetaBitResult::UnmappedMetadata;
-            }
-        }
-
-        if step == BYTES_IN_ADDRESS {
-            // Load and check a usize word.
-            // SAFETY: `cur` was aligned to `BYTES_IN_ADDRESS` before subtracting `BYTES_IN_ADDRESS`,
-            // so `cur` is `usize`-aligned and non-null (mapped grain verified above; `mmap_granularity`
-            // is a multiple of page/word size so `[cur, cur + BYTES_IN_ADDRESS)` lies within the same
-            // mapped grain). Caller guarantees the mapped metadata bytes are initialized with no
-            // concurrent writes, atomic modifications, or `&mut` aliases.
-            let value = unsafe { cur.load::<usize>() };
-            if value != 0 {
-                let bit = find_last_non_zero_bit::<usize>(value, 0, usize::BITS as u8).unwrap();
-                let byte_offset = bit >> LOG_BITS_IN_BYTE;
-                let bit_offset = bit - ((byte_offset) << LOG_BITS_IN_BYTE);
-                return FindMetaBitResult::Found {
-                    addr: cur + byte_offset as usize,
-                    bit: bit_offset,
-                };
-            }
-        } else {
-            // Load and check a byte.
-            // SAFETY: `cur` lies in a grain verified to be mapped via `cur.is_mapped()` (`u8` has
-            // alignment 1), and caller guarantees initialized side-metadata memory with no racing
-            // writes, atomic modifications, or `&mut` aliases.
-            let value = unsafe { cur.load::<u8>() };
-            if let Some(bit) = find_last_non_zero_bit::<u8>(value, 0, 8) {
-                return FindMetaBitResult::Found { addr: cur, bit };
-            }
-        }
-    }
-    FindMetaBitResult::NotFound
-}
-
-/// Check `[start_bit, end_bit)` within the byte at `addr` and find the last non-zero bit.
-///
-/// # Safety
-/// * If `addr.is_mapped()` returns `true`, `addr` must point to a readable, initialized
-///   side-metadata byte with no concurrent writes, atomic modifications, or live `&mut` aliases.
-pub(super) unsafe fn find_last_non_zero_bit_in_metadata_bits(
-    addr: Address,
+/// Convert a half-open metadata bit range `[start_addr:start_bit, end_addr:end_bit)` (`start_bit < 8`,
+/// `end_bit < 8`) into the non-empty byte span `[byte_start, byte_end)` and boundary byte masks
+/// `(first_mask, last_mask)`. Returns `None` if the bit range is empty.
+#[inline]
+pub(crate) fn active_bit_range_bytes(
+    start_addr: Address,
     start_bit: u8,
+    end_addr: Address,
     end_bit: u8,
-) -> FindMetaBitResult {
-    if !addr.is_mapped() {
-        return FindMetaBitResult::UnmappedMetadata;
+) -> Option<(Address, Address, u8, u8)> {
+    debug_assert!(start_bit < 8 && end_bit < 8);
+    if start_addr > end_addr || (start_addr == end_addr && start_bit >= end_bit) {
+        return None;
     }
-    // SAFETY: `addr.is_mapped()` succeeded above (`u8` has alignment 1), and caller guarantees the
-    // mapped metadata byte is initialized and free of concurrent writes or `&mut` aliases.
-    let byte = unsafe { addr.load::<u8>() };
-    if let Some(bit) = find_last_non_zero_bit::<u8>(byte, start_bit, end_bit) {
-        return FindMetaBitResult::Found { addr, bit };
-    }
-    FindMetaBitResult::NotFound
-}
-
-use num_traits::{CheckedShl, PrimInt};
-fn find_last_non_zero_bit<T>(value: T, start: u8, end: u8) -> Option<u8>
-where
-    T: PrimInt + CheckedShl,
-{
-    let mask = match T::one().checked_shl((end - start) as u32) {
-        Some(shl) => (shl - T::one()) << (start as u32),
-        None => T::max_value() << (start as u32),
-    };
-    let masked = value & mask;
-    if masked.is_zero() {
-        None
+    let byte_start = start_addr;
+    let byte_end = if end_bit == 0 {
+        end_addr
     } else {
-        let leading_zeroes = masked.leading_zeros();
-        let total_bits = std::mem::size_of::<T>() * u8::BITS as usize;
-        Some(total_bits as u8 - leading_zeroes as u8 - 1)
-    }
+        end_addr + 1usize
+    };
+    let first_mask = 0xffu8 << start_bit;
+    let last_mask = if end_bit == 0 {
+        0xffu8
+    } else {
+        (1u8 << end_bit) - 1
+    };
+    Some((byte_start, byte_end, first_mask, last_mask))
 }
 
-/// Check `[meta_start, meta_end)` forwards and find the first non-zero bit.
+/// If `grain_start.is_mapped()` holds for a non-empty sub-range `[grain_start, grain_end)` within a
+/// single `MMAPPER.granularity()` grain, project `[grain_start, grain_end)` as `&[u8]` for `f`.
 ///
 /// # Safety
-/// * Every address in `[meta_start, meta_end)` for which `Address::is_mapped` returns `true`
-///   (and the remainder of its `MMAPPER.granularity()` region within `[meta_start, meta_end)`)
-///   must be mapped, readable, and initialized side-metadata memory.
-/// * No other thread may concurrently write to or atomically modify the mapped bytes in
-///   `[meta_start, meta_end)` for the duration of this call, and no live `&mut` reference may
-///   alias them.
-pub(super) unsafe fn find_first_non_zero_bit_in_metadata_bytes(
-    meta_start: Address,
-    meta_end: Address,
-) -> FindMetaBitResult {
-    use crate::util::constants::BYTES_IN_ADDRESS;
-
-    let mmap_granularity = MMAPPER.granularity();
-
-    let mut cursor = meta_start;
-    // We need to check if metadata address is mapped or not.  But we make use of the granularity of
-    // the `Mmapper` to reduce the number of checks.  This records the end of a grain that is
-    // tested to be mapped.
-    let mut mapped_grain = Address::ZERO;
-    while cursor < meta_end {
-        // If we can check the whole word, set step to word size. Otherwise, the step is 1 (byte) and we check byte.
-        let step =
-            if cursor.is_aligned_to(BYTES_IN_ADDRESS) && cursor + BYTES_IN_ADDRESS <= meta_end {
-                BYTES_IN_ADDRESS
-            } else {
-                1
-            };
-        // The value we check has to be in the range.
-        debug_assert!(
-            cursor >= meta_start && cursor < meta_end,
-            "Check metadata value at meta address {}, which is not in the range of [{}, {})",
-            cursor,
-            meta_start,
-            meta_end
-        );
-
-        // If we are looking at an address that is not in a mapped chunk, we need to check if the chunk is mapped.
-        if cursor > mapped_grain {
-            if cursor.is_mapped() {
-                // This is mapped. No need to check for this chunk.
-                mapped_grain = cursor.align_up(mmap_granularity) - 0x1;
-            } else {
-                return FindMetaBitResult::UnmappedMetadata;
-            }
-        }
-
-        if step == BYTES_IN_ADDRESS {
-            // Load and check a usize word.
-            // SAFETY: `cursor` is aligned to `BYTES_IN_ADDRESS`, non-null, and `[cursor, cursor + BYTES_IN_ADDRESS)`
-            // lies within a single `mmap_granularity` grain verified mapped above (`mmap_granularity` is a
-            // multiple of `BYTES_IN_ADDRESS`, so an aligned word never straddles a grain boundary).
-            // Caller guarantees initialized metadata memory with no racing writes or `&mut` aliases.
-            let value = unsafe { cursor.load::<usize>() };
-            if value != 0 {
-                let bit = find_first_non_zero_bit::<usize>(value, 0, usize::BITS as u8).unwrap();
-                let byte_offset = bit >> LOG_BITS_IN_BYTE;
-                let bit_offset = bit - ((byte_offset) << LOG_BITS_IN_BYTE);
-                return FindMetaBitResult::Found {
-                    addr: cursor + byte_offset as usize,
-                    bit: bit_offset,
-                };
-            }
-        } else {
-            // Load and check a byte.
-            // SAFETY: `cursor` lies in a grain verified mapped via `cursor.is_mapped()` (`u8` has
-            // alignment 1), and caller guarantees initialized metadata memory without racing writes
-            // or `&mut` aliases.
-            let value = unsafe { cursor.load::<u8>() };
-            if let Some(bit) = find_first_non_zero_bit::<u8>(value, 0, 8) {
-                return FindMetaBitResult::Found { addr: cursor, bit };
-            }
-        }
-        // Move to the address so we can load from it
-        cursor += step;
+/// * `[grain_start, grain_end)` must be non-empty and lie within a single `MMAPPER.granularity()`
+///   grain (`grain_start.align_down(MMAPPER.granularity()) == (grain_end - 1usize).align_down(MMAPPER.granularity())`).
+/// * Whenever `grain_start.is_mapped()` returns `true`, all bytes in `[grain_start, grain_end)`
+///   must be initialized side-metadata memory with no concurrent writes, atomic modifications, or
+///   live `&mut` aliases for the duration of `f`.
+#[inline]
+pub(super) unsafe fn with_mapped_meta_slice<R>(
+    grain_start: Address,
+    grain_end: Address,
+    f: impl FnOnce(&[u8]) -> R,
+) -> Option<R> {
+    debug_assert!(grain_start < grain_end);
+    debug_assert_eq!(
+        grain_start.align_down(MMAPPER.granularity()),
+        (grain_end - 1usize).align_down(MMAPPER.granularity())
+    );
+    if grain_start.is_zero() || !grain_start.is_mapped() {
+        return None;
     }
-    FindMetaBitResult::NotFound
+    let len = grain_end - grain_start;
+    assert!(len <= isize::MAX as usize);
+    // SAFETY: `grain_start` is non-zero, `grain_start.is_mapped()` verified the entire enclosing
+    // `MMAPPER.granularity()` grain is mapped (`u8` has alignment 1 and `len <= isize::MAX`), and
+    // caller guarantees initialized side-metadata bytes without concurrent mutations or `&mut`
+    // aliases for the duration of `f`.
+    let slice = unsafe { core::slice::from_raw_parts(grain_start.to_ptr::<u8>(), len) };
+    Some(f(slice))
 }
 
-/// Check `[start_bit, end_bit)` within the byte at `addr` and find the first non-zero bit.
-///
-/// # Safety
-/// * If `addr.is_mapped()` returns `true`, `addr` must point to a readable, initialized
-///   side-metadata byte with no concurrent writes, atomic modifications, or live `&mut` aliases.
-pub(super) unsafe fn find_first_non_zero_bit_in_metadata_bits(
-    addr: Address,
-    start_bit: u8,
-    end_bit: u8,
-) -> FindMetaBitResult {
-    if !addr.is_mapped() {
-        return FindMetaBitResult::UnmappedMetadata;
+/// Pure-safe forward bit search over `slice`, returning `(byte_offset, bit_in_byte)` of the lowest
+/// set bit after masking `slice[0]` with `first_mask` and `slice[len - 1]` with `last_mask`.
+#[inline]
+pub(crate) fn find_first_non_zero_bit_in_slice(
+    slice: &[u8],
+    base_align_rem: usize,
+    first_mask: u8,
+    last_mask: u8,
+) -> Option<(usize, u8)> {
+    const W: usize = core::mem::size_of::<usize>();
+    let len = slice.len();
+    if len == 0 {
+        return None;
     }
-    // SAFETY: `addr.is_mapped()` succeeded above (`u8` has alignment 1), and caller guarantees the
-    // mapped metadata byte is initialized and free of concurrent writes or `&mut` aliases.
-    let byte = unsafe { addr.load::<u8>() };
-    if let Some(bit) = find_first_non_zero_bit::<u8>(byte, start_bit, end_bit) {
-        return FindMetaBitResult::Found { addr, bit };
+    if len == 1 {
+        let b = slice[0] & first_mask & last_mask;
+        return (b != 0).then(|| (0, b.trailing_zeros() as u8));
     }
-    FindMetaBitResult::NotFound
-}
 
-fn find_first_non_zero_bit<T>(value: T, start: u8, end: u8) -> Option<u8>
-where
-    T: PrimInt + CheckedShl,
-{
-    let mask = match T::one().checked_shl((end - start) as u32) {
-        Some(shl) => (shl - T::one()) << (start as u32),
-        None => T::max_value() << (start as u32),
-    };
-    let masked = value & mask;
-    if masked.is_zero() {
-        None
+    let start = if first_mask != 0xff {
+        let b0 = slice[0] & first_mask;
+        if b0 != 0 {
+            return Some((0, b0.trailing_zeros() as u8));
+        }
+        1
     } else {
-        let trailing_zeroes = masked.trailing_zeros();
-        Some(trailing_zeroes as u8)
+        0
+    };
+    let end = if last_mask != 0xff { len - 1 } else { len };
+
+    let rem_align = (base_align_rem + start) & (W - 1);
+    let prefix_len = ((W - rem_align) & (W - 1)).min(end - start);
+    let mid_start = start + prefix_len;
+
+    for (i, &b) in slice[start..mid_start].iter().enumerate() {
+        if b != 0 {
+            return Some((start + i, b.trailing_zeros() as u8));
+        }
     }
+
+    let mid = &slice[mid_start..end];
+    let chunks = mid.chunks_exact(W);
+    let rem = chunks.remainder();
+    let rem_start = mid_start + mid.len() - rem.len();
+    for (chunk_idx, chunk) in chunks.enumerate() {
+        let word = usize::from_le_bytes(chunk.try_into().unwrap());
+        if word != 0 {
+            let bit = word.trailing_zeros() as usize;
+            return Some((mid_start + chunk_idx * W + (bit >> 3), (bit & 7) as u8));
+        }
+    }
+    for (i, &b) in rem.iter().enumerate() {
+        if b != 0 {
+            return Some((rem_start + i, b.trailing_zeros() as u8));
+        }
+    }
+
+    if last_mask != 0xff {
+        let blast = slice[len - 1] & last_mask;
+        if blast != 0 {
+            return Some((len - 1, blast.trailing_zeros() as u8));
+        }
+    }
+    None
+}
+
+/// Pure-safe backward bit search over `slice`, returning `(byte_offset, bit_in_byte)` of the
+/// highest set bit after masking `slice[0]` with `first_mask` and `slice[len - 1]` with `last_mask`.
+#[inline]
+pub(crate) fn find_last_non_zero_bit_in_slice(
+    slice: &[u8],
+    base_align_rem: usize,
+    first_mask: u8,
+    last_mask: u8,
+) -> Option<(usize, u8)> {
+    const W: usize = core::mem::size_of::<usize>();
+    let len = slice.len();
+    if len == 0 {
+        return None;
+    }
+    if len == 1 {
+        let b = slice[0] & first_mask & last_mask;
+        return (b != 0).then(|| (0, 7 - b.leading_zeros() as u8));
+    }
+
+    let end = if last_mask != 0xff {
+        let blast = slice[len - 1] & last_mask;
+        if blast != 0 {
+            return Some((len - 1, 7 - blast.leading_zeros() as u8));
+        }
+        len - 1
+    } else {
+        len
+    };
+    let start = if first_mask != 0xff { 1 } else { 0 };
+
+    let end_align_rem = (base_align_rem + end) & (W - 1);
+    let suffix_len = end_align_rem.min(end - start);
+    let mid_end = end - suffix_len;
+
+    for (i, &b) in slice[mid_end..end].iter().enumerate().rev() {
+        if b != 0 {
+            return Some((mid_end + i, 7 - b.leading_zeros() as u8));
+        }
+    }
+
+    let mid = &slice[start..mid_end];
+    let rchunks = mid.rchunks_exact(W);
+    let rem = rchunks.remainder();
+    for (rev_idx, chunk) in rchunks.enumerate() {
+        let word = usize::from_le_bytes(chunk.try_into().unwrap());
+        if word != 0 {
+            let bit = (usize::BITS - 1 - word.leading_zeros()) as usize;
+            let chunk_start = mid_end - (rev_idx + 1) * W;
+            return Some((chunk_start + (bit >> 3), (bit & 7) as u8));
+        }
+    }
+    for (i, &b) in rem.iter().enumerate().rev() {
+        if b != 0 {
+            return Some((start + i, 7 - b.leading_zeros() as u8));
+        }
+    }
+
+    if first_mask != 0xff {
+        let b0 = slice[0] & first_mask;
+        if b0 != 0 {
+            return Some((0, 7 - b0.leading_zeros() as u8));
+        }
+    }
+    None
+}
+
+#[inline(always)]
+fn visit_masked_byte(byte_idx: usize, mut b: u8, visit: &mut impl FnMut(usize, u8)) {
+    while b != 0 {
+        let bit = b.trailing_zeros() as u8;
+        visit(byte_idx, bit);
+        b &= b - 1;
+    }
+}
+
+/// Pure-safe forward bit scan over `slice`, invoking `visit(byte_offset, bit_in_byte)` for every
+/// non-zero bit after masking `slice[0]` with `first_mask` and `slice[len - 1]` with `last_mask`.
+#[inline]
+pub(super) fn scan_non_zero_bits_in_slice(
+    slice: &[u8],
+    base_align_rem: usize,
+    first_mask: u8,
+    last_mask: u8,
+    mut visit: impl FnMut(usize, u8),
+) {
+    const W: usize = core::mem::size_of::<usize>();
+    let len = slice.len();
+    if len == 0 {
+        return;
+    }
+    if len == 1 {
+        visit_masked_byte(0, slice[0] & first_mask & last_mask, &mut visit);
+        return;
+    }
+
+    let start = if first_mask != 0xff {
+        visit_masked_byte(0, slice[0] & first_mask, &mut visit);
+        1
+    } else {
+        0
+    };
+    let end = if last_mask != 0xff { len - 1 } else { len };
+
+    let rem_align = (base_align_rem + start) & (W - 1);
+    let prefix_len = ((W - rem_align) & (W - 1)).min(end - start);
+    let mid_start = start + prefix_len;
+
+    for (i, &b) in slice[start..mid_start].iter().enumerate() {
+        visit_masked_byte(start + i, b, &mut visit);
+    }
+
+    let mid = &slice[mid_start..end];
+    let chunks = mid.chunks_exact(W);
+    let rem = chunks.remainder();
+    let rem_start = mid_start + mid.len() - rem.len();
+    for (chunk_idx, chunk) in chunks.enumerate() {
+        let mut word = usize::from_le_bytes(chunk.try_into().unwrap());
+        let chunk_base = mid_start + chunk_idx * W;
+        while word != 0 {
+            let bit = word.trailing_zeros() as usize;
+            visit(chunk_base + (bit >> 3), (bit & 7) as u8);
+            word &= word - 1;
+        }
+    }
+    for (i, &b) in rem.iter().enumerate() {
+        visit_masked_byte(rem_start + i, b, &mut visit);
+    }
+
+    if last_mask != 0xff {
+        visit_masked_byte(len - 1, slice[len - 1] & last_mask, &mut visit);
+    }
+}
+
+/// Pure-safe forward atomic search over `&[AtomicU8]`, fast-skipping 8-byte zero runs with
+/// `Ordering::Relaxed` `AtomicU8` loads (never mixing atomic widths) and returning
+/// `(byte_offset, masked_acquire_byte)` for the first non-zero byte so the caller can drop `slice`
+/// before invoking user callbacks.
+#[inline]
+pub(crate) fn find_first_non_zero_atomic_byte(
+    slice: &[core::sync::atomic::AtomicU8],
+    first_mask: u8,
+    last_mask: u8,
+) -> Option<(usize, u8)> {
+    use core::sync::atomic::Ordering;
+    let len = slice.len();
+    if len == 0 {
+        return None;
+    }
+    if len == 1 {
+        let mask = first_mask & last_mask;
+        if slice[0].load(Ordering::Relaxed) & mask != 0 {
+            let b = slice[0].load(Ordering::Acquire) & mask;
+            if b != 0 {
+                return Some((0, b));
+            }
+        }
+        return None;
+    }
+
+    let start = if first_mask != 0xff {
+        if slice[0].load(Ordering::Relaxed) & first_mask != 0 {
+            let b = slice[0].load(Ordering::Acquire) & first_mask;
+            if b != 0 {
+                return Some((0, b));
+            }
+        }
+        1
+    } else {
+        0
+    };
+    let end = if last_mask != 0xff { len - 1 } else { len };
+
+    let mid = &slice[start..end];
+    let chunks = mid.chunks_exact(8);
+    let rem = chunks.remainder();
+    let rem_start = start + mid.len() - rem.len();
+    for (chunk_idx, chunk) in chunks.enumerate() {
+        let any = chunk[0].load(Ordering::Relaxed)
+            | chunk[1].load(Ordering::Relaxed)
+            | chunk[2].load(Ordering::Relaxed)
+            | chunk[3].load(Ordering::Relaxed)
+            | chunk[4].load(Ordering::Relaxed)
+            | chunk[5].load(Ordering::Relaxed)
+            | chunk[6].load(Ordering::Relaxed)
+            | chunk[7].load(Ordering::Relaxed);
+        if any != 0 {
+            let base = start + chunk_idx * 8;
+            for (i, atom) in chunk.iter().enumerate() {
+                if atom.load(Ordering::Relaxed) != 0 {
+                    let b = atom.load(Ordering::Acquire);
+                    if b != 0 {
+                        return Some((base + i, b));
+                    }
+                }
+            }
+        }
+    }
+    for (i, atom) in rem.iter().enumerate() {
+        if atom.load(Ordering::Relaxed) != 0 {
+            let b = atom.load(Ordering::Acquire);
+            if b != 0 {
+                return Some((rem_start + i, b));
+            }
+        }
+    }
+
+    if last_mask != 0xff && slice[len - 1].load(Ordering::Relaxed) & last_mask != 0 {
+        let b = slice[len - 1].load(Ordering::Acquire) & last_mask;
+        if b != 0 {
+            return Some((len - 1, b));
+        }
+    }
+    None
 }
 
 /// Scan `[meta_start, meta_end)` and invoke `visit_bit(byte_or_word_addr, bit_offset)` for every
-/// non-zero bit in the side-metadata range.
+/// non-zero bit in the side-metadata range (retained for `test_private` / `bscan` benchmarks).
 ///
 /// # Safety
 /// * `[meta_start, meta_end)` must be non-null (whenever `meta_start < meta_end`), mapped,
-///   readable, and initialized side-metadata memory.
+///   readable, and initialized side-metadata memory (`meta_end - meta_start <= isize::MAX`).
 /// * Neither another thread nor `visit_bit` may concurrently write to or atomically modify any
 ///   byte in `[meta_start, meta_end)` for the duration of this scan, and no live `&mut` reference
 ///   may alias `[meta_start, meta_end)`.
@@ -513,34 +606,37 @@ pub unsafe fn scan_non_zero_bits_in_metadata_bytes(
     meta_end: Address,
     visit_bit: &mut impl FnMut(Address, BitOffset),
 ) {
-    use crate::util::constants::BYTES_IN_ADDRESS;
+    const W: usize = core::mem::size_of::<usize>();
+    if meta_start >= meta_end {
+        return;
+    }
+    let len = meta_end - meta_start;
+    assert!(!meta_start.is_zero() && len <= isize::MAX as usize);
+    // SAFETY: Non-null `meta_start` and `len <= isize::MAX` were verified above (`u8` has alignment
+    // 1), and caller guarantees `[meta_start, meta_end)` is mapped, initialized, and quiescent
+    // (including across `visit_bit`) without live `&mut` aliases.
+    let slice = unsafe { core::slice::from_raw_parts(meta_start.to_ptr::<u8>(), len) };
 
-    let mut cursor = meta_start;
-    while cursor < meta_end && !cursor.is_aligned_to(BYTES_IN_ADDRESS) {
-        // SAFETY: Caller guarantees `[meta_start, meta_end)` is non-null, mapped, initialized,
-        // and not concurrently mutated (including by `visit_bit`). `cursor < meta_end` is
-        // in-bounds and `u8` has alignment 1.
-        let byte = unsafe { cursor.load::<u8>() };
-        scan_non_zero_bits_in_metadata_word(cursor, byte as usize, visit_bit);
-        cursor += 1usize;
+    let rem_align = meta_start.as_usize() & (W - 1);
+    let prefix_len = ((W - rem_align) & (W - 1)).min(len);
+    for (i, &b) in slice[..prefix_len].iter().enumerate() {
+        scan_non_zero_bits_in_metadata_word(meta_start + i, b as usize, visit_bit);
     }
 
-    while cursor < meta_end && meta_end - cursor >= BYTES_IN_ADDRESS {
-        // SAFETY: Prefix loop established `cursor.is_aligned_to(BYTES_IN_ADDRESS)` (maintained by
-        // stepping `BYTES_IN_ADDRESS` each iteration), and `meta_end - cursor >= BYTES_IN_ADDRESS`
-        // keeps `[cursor, cursor + BYTES_IN_ADDRESS)` in-bounds of the mapped, initialized,
-        // quiescent metadata range `[meta_start, meta_end)` without address overflow.
-        let word = unsafe { cursor.load::<usize>() };
-        scan_non_zero_bits_in_metadata_word(cursor, word, visit_bit);
-        cursor += BYTES_IN_ADDRESS;
+    let mid = &slice[prefix_len..];
+    let chunks = mid.chunks_exact(W);
+    let rem = chunks.remainder();
+    let rem_start = prefix_len + mid.len() - rem.len();
+    for (chunk_idx, chunk) in chunks.enumerate() {
+        let word = usize::from_ne_bytes(chunk.try_into().unwrap());
+        scan_non_zero_bits_in_metadata_word(
+            meta_start + prefix_len + chunk_idx * W,
+            word,
+            visit_bit,
+        );
     }
-
-    while cursor < meta_end {
-        // SAFETY: `cursor < meta_end` is in-bounds of the mapped, initialized, quiescent metadata
-        // range `[meta_start, meta_end)`, and `u8` has alignment 1.
-        let byte = unsafe { cursor.load::<u8>() };
-        scan_non_zero_bits_in_metadata_word(cursor, byte as usize, visit_bit);
-        cursor += 1usize;
+    for (i, &b) in rem.iter().enumerate() {
+        scan_non_zero_bits_in_metadata_word(meta_start + rem_start + i, b as usize, visit_bit);
     }
 }
 
@@ -552,30 +648,7 @@ fn scan_non_zero_bits_in_metadata_word(
     while word != 0 {
         let bit = word.trailing_zeros();
         visit_bit(meta_addr, bit as u8);
-        word = word & (word - 1);
-    }
-}
-
-/// Scan `[bit_start, bit_end)` within the metadata byte at `meta_addr` and invoke `visit_bit` for
-/// each non-zero bit.
-///
-/// # Safety
-/// * `meta_addr` must be non-null and point to a mapped, readable, initialized side-metadata byte.
-/// * No other thread may concurrently write to or atomically modify `meta_addr` during the load,
-///   and no live `&mut` reference may alias `meta_addr` at the point of the load.
-pub(super) unsafe fn scan_non_zero_bits_in_metadata_bits(
-    meta_addr: Address,
-    bit_start: BitOffset,
-    bit_end: BitOffset,
-    visit_bit: &mut impl FnMut(Address, BitOffset),
-) {
-    // SAFETY: Caller guarantees `meta_addr` is non-null, mapped, initialized (`u8` has alignment 1),
-    // and free of concurrent writes, atomic modifications, or live `&mut` aliases.
-    let byte = unsafe { meta_addr.load::<u8>() };
-    for bit in bit_start..bit_end {
-        if byte & (1 << bit) != 0 {
-            visit_bit(meta_addr, bit);
-        }
+        word &= word - 1;
     }
 }
 
@@ -589,7 +662,7 @@ mod tests {
         log_data_meta_ratio(spec) < LOG_GLOBAL_SIDE_METADATA_WORST_CASE_RATIO
     }
 
-    fn test_round_trip_conversion(spec: &SideMetadataSpec, test_data: &[Address]) {
+    fn test_round_trip_conversion(spec: &SideMetadataSpec, raw_addrs: &[usize]) {
         if should_skip_spec_on_this_target(spec) {
             eprintln!(
                 "Skipping {} on this target: spec ratio is outside global side metadata worst-case bound",
@@ -600,50 +673,40 @@ mod tests {
 
         core_test_initialize_side_metadata();
 
-        for ref_addr in test_data {
-            let addr = *ref_addr;
+        for &raw in raw_addrs {
+            // SAFETY: Synthetic aligned test addresses used solely for pure address-translation
+            // arithmetic and never dereferenced.
+            let addr = unsafe { Address::from_usize(raw) };
 
             // This is an aligned address. When we do roundtrip conversion, we will get back the original address.
-            {
-                assert!(addr.is_aligned_to(1 << spec.log_bytes_in_region));
-                let meta_addr = address_to_contiguous_meta_address(spec, addr);
-                let shift = meta_byte_lshift(spec, addr);
-                assert_eq!(
-                    contiguous_meta_address_to_address(spec, meta_addr, shift),
-                    addr
-                );
-            }
+            assert!(addr.is_aligned_to(1 << spec.log_bytes_in_region));
+            let meta_addr = address_to_contiguous_meta_address(spec, addr);
+            let shift = meta_byte_lshift(spec, addr);
+            assert_eq!(
+                contiguous_meta_address_to_address(spec, meta_addr, shift),
+                addr
+            );
 
             // This is an unaligned address. When we do roundtrip conversion, we will get the aligned address.
-            {
-                let next_addr = addr + 1usize;
-                let meta_addr = address_to_contiguous_meta_address(spec, next_addr);
-                let shift = meta_byte_lshift(spec, next_addr);
-                assert_eq!(
-                    contiguous_meta_address_to_address(spec, meta_addr, shift),
-                    addr
-                ); // we get back addr (which is the aligned address)
-            }
+            let next_addr = addr + 1usize;
+            let meta_addr = address_to_contiguous_meta_address(spec, next_addr);
+            let shift = meta_byte_lshift(spec, next_addr);
+            assert_eq!(
+                contiguous_meta_address_to_address(spec, meta_addr, shift),
+                addr
+            );
         }
     }
 
-    const TEST_ADDRESS_8B_REGION: [Address; 8] = [
-        // SAFETY: Hardcoded synthetic 8-byte-aligned test address; used only for pure address-translation arithmetic and never dereferenced.
-        unsafe { Address::from_usize(0x8000_0000) },
-        // SAFETY: Hardcoded synthetic 8-byte-aligned test address; never dereferenced.
-        unsafe { Address::from_usize(0x8000_0008) },
-        // SAFETY: Hardcoded synthetic 8-byte-aligned test address; never dereferenced.
-        unsafe { Address::from_usize(0x8000_0010) },
-        // SAFETY: Hardcoded synthetic 8-byte-aligned test address; never dereferenced.
-        unsafe { Address::from_usize(0x8000_0018) },
-        // SAFETY: Hardcoded synthetic 8-byte-aligned test address; never dereferenced.
-        unsafe { Address::from_usize(0x8000_0020) },
-        // SAFETY: Hardcoded synthetic 8-byte-aligned test address; never dereferenced.
-        unsafe { Address::from_usize(0x8001_0000) },
-        // SAFETY: Hardcoded synthetic 8-byte-aligned test address; never dereferenced.
-        unsafe { Address::from_usize(0x8001_0008) },
-        // SAFETY: Hardcoded synthetic 8-byte-aligned test address; never dereferenced.
-        unsafe { Address::from_usize(0xd000_0000) },
+    const TEST_ADDRESS_8B_REGION: [usize; 8] = [
+        0x8000_0000,
+        0x8000_0008,
+        0x8000_0010,
+        0x8000_0018,
+        0x8000_0020,
+        0x8001_0000,
+        0x8001_0008,
+        0xd000_0000,
     ];
 
     #[test]
@@ -698,23 +761,15 @@ mod tests {
         test_round_trip_conversion(&spec, &TEST_ADDRESS_8B_REGION);
     }
 
-    const TEST_ADDRESS_4KB_REGION: [Address; 8] = [
-        // SAFETY: Hardcoded synthetic 4KB-aligned test address; used only for pure address-translation arithmetic and never dereferenced.
-        unsafe { Address::from_usize(0x8000_0000) },
-        // SAFETY: Hardcoded synthetic 4KB-aligned test address; never dereferenced.
-        unsafe { Address::from_usize(0x8000_1000) },
-        // SAFETY: Hardcoded synthetic 4KB-aligned test address; never dereferenced.
-        unsafe { Address::from_usize(0x8000_2000) },
-        // SAFETY: Hardcoded synthetic 4KB-aligned test address; never dereferenced.
-        unsafe { Address::from_usize(0x8000_3000) },
-        // SAFETY: Hardcoded synthetic 4KB-aligned test address; never dereferenced.
-        unsafe { Address::from_usize(0x8000_4000) },
-        // SAFETY: Hardcoded synthetic 4KB-aligned test address; never dereferenced.
-        unsafe { Address::from_usize(0x8001_0000) },
-        // SAFETY: Hardcoded synthetic 4KB-aligned test address; never dereferenced.
-        unsafe { Address::from_usize(0x8001_1000) },
-        // SAFETY: Hardcoded synthetic 4KB-aligned test address; never dereferenced.
-        unsafe { Address::from_usize(0xd000_0000) },
+    const TEST_ADDRESS_4KB_REGION: [usize; 8] = [
+        0x8000_0000,
+        0x8000_1000,
+        0x8000_2000,
+        0x8000_3000,
+        0x8000_4000,
+        0x8001_0000,
+        0x8001_1000,
+        0xd000_0000,
     ];
 
     #[test]
@@ -731,23 +786,57 @@ mod tests {
     }
 
     #[test]
-    fn test_find_last_non_zero_bit_in_u8() {
-        use super::find_last_non_zero_bit;
-        let bit = find_last_non_zero_bit::<u8>(0b100101, 0, 1);
-        assert_eq!(bit, Some(0));
+    fn test_safe_slice_bit_kernels() {
+        let mut buf = [0u8; 32];
+        buf[0] = 0b0010_0101;
+        buf[11] = 0b0000_1000;
+        buf[29] = 0b0100_0000;
 
-        let bit = find_last_non_zero_bit::<u8>(0b100101, 0, 3);
-        assert_eq!(bit, Some(2));
+        for align_rem in 0..core::mem::size_of::<usize>() {
+            assert_eq!(
+                find_first_non_zero_bit_in_slice(&buf[..1], align_rem, 0xff, 0b0000_0001),
+                Some((0, 0))
+            );
+            assert_eq!(
+                find_last_non_zero_bit_in_slice(&buf[..1], align_rem, 0xff, 0b0000_0111),
+                Some((0, 2))
+            );
+            assert_eq!(
+                find_last_non_zero_bit_in_slice(&buf[..1], align_rem, 0xff, 0xff),
+                Some((0, 5))
+            );
+            assert_eq!(
+                find_first_non_zero_bit_in_slice(&[0u8], align_rem, 0xff, 0b0000_0001),
+                None
+            );
 
-        let bit = find_last_non_zero_bit::<u8>(0b100101, 0, 8);
-        assert_eq!(bit, Some(5));
+            // Mask out bits 0..=2 of byte 0 and bit 6 of byte 29:
+            assert_eq!(
+                find_first_non_zero_bit_in_slice(&buf[..30], align_rem, 0b1111_1000, 0b0011_1111),
+                Some((0, 5))
+            );
+            assert_eq!(
+                find_last_non_zero_bit_in_slice(&buf[..30], align_rem, 0b1111_1000, 0b0011_1111),
+                Some((11, 3))
+            );
 
-        let bit = find_last_non_zero_bit::<u8>(0b0, 0, 1);
-        assert_eq!(bit, None);
+            let mut visited = Vec::new();
+            scan_non_zero_bits_in_slice(&buf, align_rem, 0b1111_1100, 0xff, |b, bit| {
+                visited.push((b, bit));
+            });
+            assert_eq!(visited, vec![(0, 2), (0, 5), (11, 3), (29, 6)]);
+        }
     }
 
     #[test]
     fn test_align_metadata_address() {
+        #[repr(align(4096))]
+        struct Aligned4K([u8; 2]);
+
+        let backing = Aligned4K([0; 2]);
+        let addr_1000 = Address::from_ptr(&backing.0[0]);
+        let addr_1001 = addr_1000 + 1usize;
+
         let create_spec = |log_num_of_bits: usize| SideMetadataSpec {
             name: "AlignMetadataBitTestSpec",
             is_global: true,
@@ -756,176 +845,38 @@ mod tests {
             log_bytes_in_region: 3,
         };
 
-        // SAFETY: Hardcoded synthetic metadata address used purely for alignment arithmetic tests; never dereferenced.
-        const ADDR_1000: Address = unsafe { Address::from_usize(0x1000) };
-        const ADDR_1001: Address = ADDR_1000.add(1);
-
         let metadata_2bits = create_spec(1);
-        assert_eq!(
-            align_metadata_address(&metadata_2bits, ADDR_1000, 0),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_2bits, ADDR_1000, 1),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_2bits, ADDR_1000, 2),
-            (ADDR_1000, 2)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_2bits, ADDR_1000, 3),
-            (ADDR_1000, 2)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_2bits, ADDR_1000, 4),
-            (ADDR_1000, 4)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_2bits, ADDR_1000, 5),
-            (ADDR_1000, 4)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_2bits, ADDR_1000, 6),
-            (ADDR_1000, 6)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_2bits, ADDR_1000, 7),
-            (ADDR_1000, 6)
-        );
+        for bit in 0..8u8 {
+            assert_eq!(
+                align_metadata_address(&metadata_2bits, addr_1000, bit),
+                (addr_1000, bit & !0b1)
+            );
+        }
 
         let metadata_4bits = create_spec(2);
-        assert_eq!(
-            align_metadata_address(&metadata_4bits, ADDR_1000, 0),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_4bits, ADDR_1000, 1),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_4bits, ADDR_1000, 2),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_4bits, ADDR_1000, 3),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_4bits, ADDR_1000, 4),
-            (ADDR_1000, 4)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_4bits, ADDR_1000, 5),
-            (ADDR_1000, 4)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_4bits, ADDR_1000, 6),
-            (ADDR_1000, 4)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_4bits, ADDR_1000, 7),
-            (ADDR_1000, 4)
-        );
+        for bit in 0..8u8 {
+            assert_eq!(
+                align_metadata_address(&metadata_4bits, addr_1000, bit),
+                (addr_1000, bit & !0b11)
+            );
+        }
 
         let metadata_8bits = create_spec(3);
-        assert_eq!(
-            align_metadata_address(&metadata_8bits, ADDR_1000, 0),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_8bits, ADDR_1000, 1),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_8bits, ADDR_1000, 2),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_8bits, ADDR_1000, 3),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_8bits, ADDR_1000, 4),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_8bits, ADDR_1000, 5),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_8bits, ADDR_1000, 6),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_8bits, ADDR_1000, 7),
-            (ADDR_1000, 0)
-        );
+        for bit in 0..8u8 {
+            assert_eq!(
+                align_metadata_address(&metadata_8bits, addr_1000, bit),
+                (addr_1000, 0)
+            );
+        }
 
         let metadata_16bits = create_spec(4);
-        assert_eq!(
-            align_metadata_address(&metadata_16bits, ADDR_1000, 0),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_16bits, ADDR_1000, 1),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_16bits, ADDR_1000, 2),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_16bits, ADDR_1000, 3),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_16bits, ADDR_1000, 4),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_16bits, ADDR_1000, 5),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_16bits, ADDR_1000, 6),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_16bits, ADDR_1000, 7),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_16bits, ADDR_1001, 0),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_16bits, ADDR_1001, 1),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_16bits, ADDR_1001, 2),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_16bits, ADDR_1001, 3),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_16bits, ADDR_1001, 4),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_16bits, ADDR_1001, 5),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_16bits, ADDR_1001, 6),
-            (ADDR_1000, 0)
-        );
-        assert_eq!(
-            align_metadata_address(&metadata_16bits, ADDR_1001, 7),
-            (ADDR_1000, 0)
-        );
+        for addr in [addr_1000, addr_1001] {
+            for bit in 0..8u8 {
+                assert_eq!(
+                    align_metadata_address(&metadata_16bits, addr, bit),
+                    (addr_1000, 0)
+                );
+            }
+        }
     }
 }

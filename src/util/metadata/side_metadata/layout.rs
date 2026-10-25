@@ -122,9 +122,8 @@ pub(super) fn initialize_side_metadata_base(
     SIDE_METADATA_BASE_ADDRESS.set(base).unwrap();
 }
 
-/// Tests need to check if side metadata is initialized so they can avoid attempting to initialize it again.
-#[cfg(test)]
-pub(super) fn is_side_metadata_initialized() -> bool {
+/// Check whether side metadata layout and base address have been initialized.
+pub(crate) fn is_side_metadata_initialized() -> bool {
     VM_SIDE_METADATA_UPPER_BOUND_OFFSET.get().is_some()
         && SIDE_METADATA_BASE_ADDRESS.get().is_some()
 }

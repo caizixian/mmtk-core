@@ -80,7 +80,9 @@ pub fn too_small() {
         || {
             SINGLE_OBJECT.with_fixture(|fixture| {
                 for offset in iter_aligned_offsets(SMALL_OFFSET) {
-                    let addr = Address::ZERO + offset;
+                    // SAFETY: Constructs a synthetic low aligned address below `HEAP_START` without
+                    // dereferencing it, testing `is_mmtk_object` bounds filtering on low addresses.
+                    let addr = unsafe { Address::from_usize(offset) };
                     assert_invalid_objref(addr, fixture.objref.to_raw_address());
                 }
             });

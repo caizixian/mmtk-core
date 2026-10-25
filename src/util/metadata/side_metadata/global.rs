@@ -16,17 +16,6 @@ use ranges::BitByteRange;
 use std::fmt;
 use std::sync::atomic::{AtomicU8, Ordering};
 
-enum ResolvedSideAtomic<'a, T: MetadataValue> {
-    SubByte {
-        atomic: &'a AtomicU8,
-        lshift: u8,
-        mask: u8,
-    },
-    FullWord {
-        atomic: &'a T::Atomic,
-    },
-}
-
 /// This struct stores the specification of a side metadata bit-set.
 /// It is used as an input to the (inline) functions provided by the side metadata module.
 ///
@@ -197,28 +186,28 @@ impl SideMetadataSpec {
     unsafe fn resolve_atomic<'a, T: MetadataValue>(
         &self,
         data_addr: Address,
-    ) -> ResolvedSideAtomic<'a, T> {
+    ) -> AtomicMetaRef<'a, T> {
         self.assert_spec::<T>();
         let meta_addr = address_to_meta_address(self, data_addr);
-        if self.log_num_of_bits < 3 {
-            let lshift = meta_byte_lshift(self, data_addr);
-            let mask = meta_byte_mask(self) << lshift;
-            // SAFETY: Caller guarantees `meta_addr` is mapped, initialized, and accessed solely via
-            // `AtomicU8` for `'a` (`u8::atomic_ref` unconditionally checks `!meta_addr.is_zero()`).
-            let atomic = unsafe { <u8 as MetadataValue>::atomic_ref(meta_addr) };
-            ResolvedSideAtomic::SubByte {
-                atomic,
-                lshift,
-                mask,
+        // SAFETY: `assert_spec::<T>()` verified width (`T::LOG2 == 3` for sub-byte, or
+        // `T::LOG2 == self.log_num_of_bits` with `self.offset % max_metadata_align::<T>() == 0`),
+        // `assert_atomic_align` unconditionally checks non-null and `ATOMIC_ALIGN`, and caller
+        // guarantees `meta_addr` is mapped, initialized, and accessed solely via the corresponding
+        // atomic width for `'a`.
+        unsafe {
+            if self.log_num_of_bits < 3 {
+                assert_atomic_align::<u8>(meta_addr);
+                let shift = meta_byte_lshift(self, data_addr);
+                let mask = meta_byte_mask(self) << shift;
+                AtomicMetaRef::SubByte {
+                    byte: meta_addr.as_ref::<AtomicU8>(),
+                    shift,
+                    mask,
+                }
+            } else {
+                assert_atomic_align::<T>(meta_addr);
+                AtomicMetaRef::Full(meta_addr.as_ref::<T::Atomic>())
             }
-        } else {
-            // SAFETY: `assert_spec::<T>()` verified `T::LOG2 == self.log_num_of_bits`,
-            // `self.log_bytes_in_region < usize::BITS`, and `self.offset % max_metadata_align::<T>() == 0`;
-            // `T::atomic_ref` unconditionally checks `!meta_addr.is_zero()` and
-            // `meta_addr.is_aligned_to(T::ATOMIC_ALIGN)`; caller guarantees mapped, initialized
-            // side-metadata memory accessed solely via `T::Atomic` for `'a`.
-            let atomic = unsafe { T::atomic_ref(meta_addr) };
-            ResolvedSideAtomic::FullWord { atomic }
         }
     }
 
@@ -385,33 +374,6 @@ impl SideMetadataSpec {
         // `ROWS * COLS`); the caller guarantees the range is mapped, initialized, valid for `'a`,
         // and accessed solely via `AtomicU8`.
         unsafe { &*meta_addr.to_ptr::<[[AtomicU8; COLS]; ROWS]>() }
-    }
-
-    /// Project the contiguous side-metadata bytes covering `[data_addr, data_addr + data_bytes)` as
-    /// a shared byte slice `&'a [u8]`.
-    ///
-    /// # Safety
-    /// * `data_addr` and `data_addr + data_bytes` must both fall on exact byte boundaries in
-    ///   `self`'s side metadata without data or metadata range overflow (`meta_bytes <= isize::MAX as usize`),
-    ///   and if `data_bytes > 0 && self.uses_chunked_side_metadata()`, `[data_addr, data_addr + data_bytes)`
-    ///   must lie within a single `BYTES_IN_CHUNK` chunk.
-    /// * The `meta_bytes` bytes starting at `address_to_meta_address(self, data_addr)` must be
-    ///   mapped, initialized, and remain mapped for `'a`.
-    /// * For the entire lifetime `'a`, no thread may mutate (atomically or non-atomically) any byte
-    ///   in `[meta_addr, meta_addr + meta_bytes)`, and no `&mut` reference may alias that range.
-    #[allow(dead_code)] // Consumed by Wave 2B (`malloc_ms` `MallocExclusiveChunk`).
-    #[inline]
-    pub(crate) unsafe fn mapped_bytes_unchecked<'a>(
-        &self,
-        data_addr: Address,
-        data_bytes: usize,
-    ) -> &'a [u8] {
-        let (meta_addr, meta_bytes) = self.checked_mapped_byte_range(data_addr, data_bytes);
-        // SAFETY: `checked_mapped_byte_range` verified non-null `meta_addr` (`u8` has alignment 1),
-        // `meta_bytes <= isize::MAX as usize`, non-wrapping `meta_addr + meta_bytes`, and
-        // single-chunk containment; the caller guarantees `[meta_addr, meta_addr + meta_bytes)` is
-        // mapped, initialized, and immutable without `&mut` or atomic-write aliases for `'a`.
-        unsafe { std::slice::from_raw_parts(meta_addr.to_ptr::<u8>(), meta_bytes) }
     }
 
     /// Project the contiguous side-metadata bytes covering `[data_addr, data_addr + data_bytes)` as
@@ -734,24 +696,20 @@ impl SideMetadataSpec {
                     // Get a mask where the bits to copy are 1 and the remaining bits are 0.
                     let mask: u8 = !(u8::MAX.checked_shl(bit_end as u32).unwrap_or(0))
                         & (u8::MAX << bit_start);
-                    // SAFETY: `src` is a non-null, mapped, initialized boundary byte in `other`'s
-                    // contiguous side metadata for `[start, start + size)` (`AtomicU8` has alignment
-                    // 1), non-overlapping with `dst` (or identical when `self == other`), with no
-                    // concurrent non-atomic writes or `&mut` aliases.
-                    let old_src =
-                        unsafe { <u8 as MetadataValue>::load_atomic(src, Ordering::Relaxed) };
-                    // SAFETY: `dst` is a non-null, mapped, initialized boundary byte in `self`'s
-                    // contiguous side metadata for `[start, start + size)` (`AtomicU8` has alignment
-                    // 1). Using `fetch_update` atomically preserves `!mask` bits if another thread
-                    // concurrently copies an adjacent range sharing this boundary byte.
-                    let _ = unsafe {
-                        <u8 as MetadataValue>::fetch_update(
+                    // SAFETY: `src` and `dst` are non-null, mapped, initialized boundary bytes in
+                    // `other` and `self` (`AtomicU8` has alignment 1), non-overlapping (or
+                    // identical when `self == other`), with no concurrent non-atomic writes or
+                    // `&mut` aliases. `fetch_update` atomically preserves `!mask` bits if another
+                    // thread concurrently copies an adjacent range sharing `dst`.
+                    unsafe {
+                        let old_src = <u8 as MetadataValue>::load_atomic(src, Ordering::Relaxed);
+                        let _ = <u8 as MetadataValue>::fetch_update(
                             dst,
                             Ordering::Relaxed,
                             Ordering::Relaxed,
                             |old_dst| Some((old_src & mask) | (old_dst & !mask)),
-                        )
-                    };
+                        );
+                    }
                     false
                 }
             }
@@ -826,23 +784,18 @@ impl SideMetadataSpec {
             None,
             || {
                 let meta_addr = address_to_meta_address(self, data_addr);
-                let bits_num_log = self.log_num_of_bits;
-                if bits_num_log < 3 {
-                    let lshift = meta_byte_lshift(self, data_addr);
-                    let mask = meta_byte_mask(self) << lshift;
-                    // SAFETY: Caller guarantees `meta_addr` is non-null, mapped, initialized
-                    // (`u8` has alignment 1), and free of concurrent writes, atomic modifications,
-                    // or live `&mut` aliases.
-                    let byte_val = unsafe { meta_addr.load::<u8>() };
-
-                    FromPrimitive::from_u8((byte_val & mask) >> lshift).unwrap()
-                } else {
-                    // SAFETY: Caller guarantees `meta_addr` is non-null, mapped, initialized,
-                    // aligned to `T` (`base + self.offset` is word/chunk-aligned and the region
-                    // byte index `(data_addr >> log_bytes_in_region) << (bits_num_log - 3)` is a
-                    // multiple of `size_of::<T>()`), and free of concurrent writes, atomic
-                    // modifications, or live `&mut` aliases.
-                    unsafe { meta_addr.load::<T>() }
+                // SAFETY: `assert_value_type` verified `T` width and offset alignment; caller
+                // guarantees `meta_addr` is non-null, mapped, initialized, aligned for `T`, and
+                // free of concurrent writes, atomic modifications, or live `&mut` aliases.
+                unsafe {
+                    if self.log_num_of_bits < 3 {
+                        let lshift = meta_byte_lshift(self, data_addr);
+                        let mask = meta_byte_mask(self) << lshift;
+                        let byte_val = meta_addr.load::<u8>();
+                        FromPrimitive::from_u8((byte_val & mask) >> lshift).unwrap()
+                    } else {
+                        meta_addr.load::<T>()
+                    }
                 }
             },
             |_v| {
@@ -868,25 +821,17 @@ impl SideMetadataSpec {
             Some(metadata),
             || {
                 let meta_addr = address_to_meta_address(self, data_addr);
-                let bits_num_log = self.log_num_of_bits;
-                if bits_num_log < 3 {
-                    let lshift = meta_byte_lshift(self, data_addr);
-                    let mask = meta_byte_mask(self) << lshift;
-                    // SAFETY: Caller guarantees `meta_addr` is non-null, mapped, initialized
-                    // (`u8` has alignment 1), and exclusively accessed without concurrent accesses
-                    // or aliasing Rust references.
-                    let old_val = unsafe { meta_addr.load::<u8>() };
-                    let new_val = (old_val & !mask) | (metadata.to_u8().unwrap() << lshift);
-
-                    // SAFETY: Same exclusive, non-null, mapped 1-byte metadata location as above.
-                    unsafe {
+                // SAFETY: `assert_value_type` verified `T` width and offset alignment; caller
+                // guarantees `meta_addr` is non-null, mapped, initialized, writable, aligned for
+                // `T`, and exclusively accessed without concurrent accesses or aliasing references.
+                unsafe {
+                    if self.log_num_of_bits < 3 {
+                        let lshift = meta_byte_lshift(self, data_addr);
+                        let mask = meta_byte_mask(self) << lshift;
+                        let old_val = meta_addr.load::<u8>();
+                        let new_val = (old_val & !mask) | (metadata.to_u8().unwrap() << lshift);
                         meta_addr.store::<u8>(new_val);
-                    }
-                } else {
-                    // SAFETY: Caller guarantees `meta_addr` is non-null, mapped, writable, aligned
-                    // to `T`, and exclusively accessed without concurrent accesses or aliasing
-                    // Rust references.
-                    unsafe {
+                    } else {
                         meta_addr.store::<T>(metadata);
                     }
                 }
@@ -943,14 +888,7 @@ impl SideMetadataSpec {
                 // `extreme_assertions`) and unconditional `assert_spec`, `data_addr`'s metadata
                 // cell is mapped, initialized, aligned, and accessed atomically without non-atomic
                 // write races or `&mut` aliases.
-                match unsafe { self.resolve_atomic::<T>(data_addr) } {
-                    ResolvedSideAtomic::SubByte {
-                        atomic,
-                        lshift,
-                        mask,
-                    } => FromPrimitive::from_u8((atomic.load(order) & mask) >> lshift).unwrap(),
-                    ResolvedSideAtomic::FullWord { atomic } => atomic.load_val(order),
-                }
+                unsafe { self.resolve_atomic::<T>(data_addr) }.load(None, order)
             },
             |_v| {
                 #[cfg(feature = "extreme_assertions")]
@@ -969,20 +907,7 @@ impl SideMetadataSpec {
                 // SAFETY: By `SideMetadataSpec`'s mapped-region contract and unconditional
                 // `assert_spec`, `data_addr`'s metadata cell is mapped, initialized, writable, and
                 // accessed atomically without non-atomic races or live non-atomic references.
-                match unsafe { self.resolve_atomic::<T>(data_addr) } {
-                    ResolvedSideAtomic::SubByte {
-                        atomic,
-                        lshift,
-                        mask,
-                    } => {
-                        let metadata_u8 = metadata.to_u8().unwrap();
-                        let fetch_order = load_order_for_rmw(order);
-                        let _ = atomic.fetch_update_val(order, fetch_order, |v: u8| {
-                            Some((v & !mask) | (metadata_u8 << lshift))
-                        });
-                    }
-                    ResolvedSideAtomic::FullWord { atomic } => atomic.store_val(metadata, order),
-                }
+                unsafe { self.resolve_atomic::<T>(data_addr) }.store(metadata, None, order);
             },
             |_| {
                 #[cfg(feature = "extreme_assertions")]
@@ -1002,28 +927,16 @@ impl SideMetadataSpec {
     ///   metadata byte/word, and no live Rust reference may alias it.
     pub unsafe fn set_zero(&self, data_addr: Address) {
         use num_traits::Zero;
-        match self.log_num_of_bits {
-            0..=3 => {
-                // SAFETY: Caller upholds `SideMetadataSpec::store` exclusive-access and mapped
-                // invariants for `data_addr`, and `log_num_of_bits <= 3` uses `u8`.
-                unsafe { self.store(data_addr, u8::zero()) }
+        // SAFETY: Caller upholds `SideMetadataSpec::store` exclusive-access and mapped invariants
+        // for `data_addr`, and each arm dispatches to the matching `T` for `self.log_num_of_bits`.
+        unsafe {
+            match self.log_num_of_bits {
+                0..=3 => self.store(data_addr, u8::zero()),
+                4 => self.store(data_addr, u16::zero()),
+                5 => self.store(data_addr, u32::zero()),
+                6 => self.store(data_addr, u64::zero()),
+                _ => unreachable!(),
             }
-            4 => {
-                // SAFETY: Caller upholds `SideMetadataSpec::store` invariants for `data_addr`,
-                // and `log_num_of_bits == 4` uses `u16`.
-                unsafe { self.store(data_addr, u16::zero()) }
-            }
-            5 => {
-                // SAFETY: Caller upholds `SideMetadataSpec::store` invariants for `data_addr`,
-                // and `log_num_of_bits == 5` uses `u32`.
-                unsafe { self.store(data_addr, u32::zero()) }
-            }
-            6 => {
-                // SAFETY: Caller upholds `SideMetadataSpec::store` invariants for `data_addr`,
-                // and `log_num_of_bits == 6` uses `u64`.
-                unsafe { self.store(data_addr, u64::zero()) }
-            }
-            _ => unreachable!(),
         }
     }
 
@@ -1146,36 +1059,13 @@ impl SideMetadataSpec {
                 // SAFETY: By `SideMetadataSpec`'s mapped-region contract and unconditional
                 // `assert_spec`, `data_addr`'s metadata cell is mapped, initialized, writable, and
                 // accessed atomically without non-atomic races or live non-atomic references.
-                match unsafe { self.resolve_atomic::<T>(data_addr) } {
-                    ResolvedSideAtomic::SubByte {
-                        atomic,
-                        lshift,
-                        mask,
-                    } => {
-                        let load_order = load_order_for_rmw(success_order);
-                        let real_old_byte = atomic.load(load_order);
-                        let expected_old_byte =
-                            (real_old_byte & !mask) | ((old_metadata.to_u8().unwrap()) << lshift);
-                        let expected_new_byte = (expected_old_byte & !mask)
-                            | ((new_metadata.to_u8().unwrap()) << lshift);
-
-                        atomic
-                            .compare_exchange(
-                                expected_old_byte,
-                                expected_new_byte,
-                                success_order,
-                                failure_order,
-                            )
-                            .map(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
-                            .map_err(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
-                    }
-                    ResolvedSideAtomic::FullWord { atomic } => atomic.compare_exchange_val(
-                        old_metadata,
-                        new_metadata,
-                        success_order,
-                        failure_order,
-                    ),
-                }
+                unsafe { self.resolve_atomic::<T>(data_addr) }.compare_exchange(
+                    old_metadata,
+                    new_metadata,
+                    None,
+                    success_order,
+                    failure_order,
+                )
             },
             |_res| {
                 #[cfg(feature = "extreme_assertions")]
@@ -1184,26 +1074,6 @@ impl SideMetadataSpec {
                 }
             },
         )
-    }
-
-    /// Safe helper for `fetch_add_atomic`/`fetch_sub_atomic` on sub-byte (`< 8` bits) side metadata.
-    fn fetch_ops_on_bits<F: Fn(u8) -> u8>(
-        atomic: &AtomicU8,
-        lshift: u8,
-        mask: u8,
-        set_order: Ordering,
-        fetch_order: Ordering,
-        update: F,
-    ) -> u8 {
-        let old_raw_byte = atomic
-            .fetch_update_val(set_order, fetch_order, |raw_byte: u8| {
-                let old_val = (raw_byte & mask) >> lshift;
-                let new_val = update(old_val);
-                let new_raw_byte = (raw_byte & !mask) | ((new_val << lshift) & mask);
-                Some(new_raw_byte)
-            })
-            .unwrap();
-        (old_raw_byte & mask) >> lshift
     }
 
     /// Adds the value to the current value for this side metadata for the given address.
@@ -1222,25 +1092,7 @@ impl SideMetadataSpec {
                 // SAFETY: By `SideMetadataSpec`'s mapped-region contract and unconditional
                 // `assert_spec`, `data_addr`'s metadata cell is mapped, initialized, writable, and
                 // accessed solely via atomics.
-                match unsafe { self.resolve_atomic::<T>(data_addr) } {
-                    ResolvedSideAtomic::SubByte {
-                        atomic,
-                        lshift,
-                        mask,
-                    } => {
-                        let fetch_order = load_order_for_rmw(order);
-                        let prev = Self::fetch_ops_on_bits(
-                            atomic,
-                            lshift,
-                            mask,
-                            order,
-                            fetch_order,
-                            |x| x.wrapping_add(val.to_u8().unwrap()),
-                        );
-                        FromPrimitive::from_u8(prev).unwrap()
-                    }
-                    ResolvedSideAtomic::FullWord { atomic } => atomic.fetch_add_val(val, order),
-                }
+                unsafe { self.resolve_atomic::<T>(data_addr) }.fetch_add(val, order)
             },
             |_old_val| {
                 #[cfg(feature = "extreme_assertions")]
@@ -1265,25 +1117,7 @@ impl SideMetadataSpec {
                 // SAFETY: By `SideMetadataSpec`'s mapped-region contract and unconditional
                 // `assert_spec`, `data_addr`'s metadata cell is mapped, initialized, writable, and
                 // accessed solely via atomics.
-                match unsafe { self.resolve_atomic::<T>(data_addr) } {
-                    ResolvedSideAtomic::SubByte {
-                        atomic,
-                        lshift,
-                        mask,
-                    } => {
-                        let fetch_order = load_order_for_rmw(order);
-                        let prev = Self::fetch_ops_on_bits(
-                            atomic,
-                            lshift,
-                            mask,
-                            order,
-                            fetch_order,
-                            |x| x.wrapping_sub(val.to_u8().unwrap()),
-                        );
-                        FromPrimitive::from_u8(prev).unwrap()
-                    }
-                    ResolvedSideAtomic::FullWord { atomic } => atomic.fetch_sub_val(val, order),
-                }
+                unsafe { self.resolve_atomic::<T>(data_addr) }.fetch_sub(val, order)
             },
             |_old_val| {
                 #[cfg(feature = "extreme_assertions")]
@@ -1308,18 +1142,7 @@ impl SideMetadataSpec {
                 // SAFETY: By `SideMetadataSpec`'s mapped-region contract and unconditional
                 // `assert_spec`, `data_addr`'s metadata cell is mapped, initialized, writable, and
                 // accessed solely via atomics.
-                match unsafe { self.resolve_atomic::<T>(data_addr) } {
-                    ResolvedSideAtomic::SubByte {
-                        atomic,
-                        lshift,
-                        mask,
-                    } => {
-                        let rhs = (val.to_u8().unwrap() << lshift) | !mask;
-                        let old_raw_byte = atomic.fetch_and(rhs, order);
-                        FromPrimitive::from_u8((old_raw_byte & mask) >> lshift).unwrap()
-                    }
-                    ResolvedSideAtomic::FullWord { atomic } => atomic.fetch_and_val(val, order),
-                }
+                unsafe { self.resolve_atomic::<T>(data_addr) }.fetch_and(val, order)
             },
             |_old_val| {
                 #[cfg(feature = "extreme_assertions")]
@@ -1344,18 +1167,7 @@ impl SideMetadataSpec {
                 // SAFETY: By `SideMetadataSpec`'s mapped-region contract and unconditional
                 // `assert_spec`, `data_addr`'s metadata cell is mapped, initialized, writable, and
                 // accessed solely via atomics.
-                match unsafe { self.resolve_atomic::<T>(data_addr) } {
-                    ResolvedSideAtomic::SubByte {
-                        atomic,
-                        lshift,
-                        mask,
-                    } => {
-                        let rhs = (val.to_u8().unwrap() << lshift) & mask;
-                        let old_raw_byte = atomic.fetch_or(rhs, order);
-                        FromPrimitive::from_u8((old_raw_byte & mask) >> lshift).unwrap()
-                    }
-                    ResolvedSideAtomic::FullWord { atomic } => atomic.fetch_or_val(val, order),
-                }
+                unsafe { self.resolve_atomic::<T>(data_addr) }.fetch_or(val, order)
             },
             |_old_val| {
                 #[cfg(feature = "extreme_assertions")]
@@ -1374,10 +1186,6 @@ impl SideMetadataSpec {
         fetch_order: Ordering,
         mut f: F,
     ) -> std::result::Result<T, T> {
-        // `f` may have side effects (e.g. it may capture and mutate local state), so under
-        // `extreme_assertions` we must not call it a second time just to recompute the new
-        // value for the sanity check. Instead, stash the new value computed during the actual
-        // update here, and have the verify closure read it back.
         #[cfg(feature = "extreme_assertions")]
         let last_new_val: std::cell::Cell<Option<T>> = std::cell::Cell::new(None);
         #[cfg(feature = "extreme_assertions")]
@@ -1389,32 +1197,16 @@ impl SideMetadataSpec {
                 // SAFETY: By `SideMetadataSpec`'s mapped-region contract and unconditional
                 // `assert_spec`, `data_addr`'s metadata cell is mapped, initialized, writable, and
                 // accessed solely via atomics across the `fetch_update` loop.
-                match unsafe { self.resolve_atomic::<T>(data_addr) } {
-                    ResolvedSideAtomic::SubByte {
-                        atomic,
-                        lshift,
-                        mask,
-                    } => atomic
-                        .fetch_update_val(set_order, fetch_order, |raw_byte: u8| {
-                            let old_val = (raw_byte & mask) >> lshift;
-                            let new_val = f(FromPrimitive::from_u8(old_val).unwrap());
-                            #[cfg(feature = "extreme_assertions")]
-                            last_new_val_ref.set(new_val);
-                            new_val.map(|new_val| {
-                                (raw_byte & !mask) | ((new_val.to_u8().unwrap() << lshift) & mask)
-                            })
-                        })
-                        .map(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
-                        .map_err(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap()),
-                    ResolvedSideAtomic::FullWord { atomic } => {
-                        atomic.fetch_update_val(set_order, fetch_order, |old_val| {
-                            let new_val = f(old_val);
-                            #[cfg(feature = "extreme_assertions")]
-                            last_new_val_ref.set(new_val);
-                            new_val
-                        })
-                    }
-                }
+                unsafe { self.resolve_atomic::<T>(data_addr) }.fetch_update(
+                    set_order,
+                    fetch_order,
+                    |old_val| {
+                        let new_val = f(old_val);
+                        #[cfg(feature = "extreme_assertions")]
+                        last_new_val_ref.set(new_val);
+                        new_val
+                    },
+                )
             },
             |_result| {
                 #[cfg(feature = "extreme_assertions")]
@@ -1448,178 +1240,116 @@ impl SideMetadataSpec {
     ///   aligned for `T` (`u8` when `self.log_num_of_bits < 3`, or `T::LOG2 == self.log_num_of_bits`).
     /// * No other thread may concurrently write to or atomically modify the searched side metadata
     ///   for the duration of this call, and no live `&mut` reference may alias it.
-    #[allow(clippy::let_and_return)]
     pub unsafe fn find_prev_non_zero_value<T: MetadataValue>(
         &self,
         data_addr: Address,
         search_limit_bytes: usize,
     ) -> Option<Address> {
         debug_assert!(search_limit_bytes > 0);
+        let region_bytes = 1usize << self.log_bytes_in_region;
 
-        if self.uses_contiguous_side_metadata() {
-            // Contiguous side metadata
-            // SAFETY: `self.uses_contiguous_side_metadata()` holds, and caller upholds mapped
-            // initialization, alignment, and quiescent non-atomic read preconditions across the
-            // searched window.
-            let result =
-                unsafe { self.find_prev_non_zero_value_fast::<T>(data_addr, search_limit_bytes) };
-            #[cfg(debug_assertions)]
-            {
-                // Double check if the implementation is correct
-                // SAFETY: Same preconditions as `find_prev_non_zero_value_fast` above.
-                let result2 = unsafe {
-                    self.find_prev_non_zero_value_simple::<T>(data_addr, search_limit_bytes)
-                };
-                assert_eq!(result, result2, "find_prev_non_zero_value_fast returned a diffrent result from the naive implementation.");
+        let search_simple = || {
+            let start_addr = data_addr.align_down(region_bytes);
+            let end_addr = data_addr.saturating_sub(search_limit_bytes) + 1usize;
+            let mmap_granularity = MMAPPER.granularity();
+            let mut mapped_grain = Address::MAX;
+            let mut cursor = start_addr;
+            while cursor >= end_addr {
+                if cursor < mapped_grain {
+                    if self.is_mapped(cursor) {
+                        mapped_grain = cursor.align_down(mmap_granularity);
+                    } else {
+                        return None;
+                    }
+                }
+                // SAFETY: `self.is_mapped(cursor)` verified the chunk's side metadata is mapped,
+                // and caller guarantees mapped entries are initialized, aligned for `T`, and
+                // free of concurrent mutations or `&mut` aliases.
+                if !unsafe { self.load::<T>(cursor) }.is_zero() {
+                    return Some(cursor);
+                }
+                cursor -= region_bytes;
             }
-            result
-        } else {
-            // TODO: We should be able to optimize further for this case. However, we need to be careful that the side metadata
-            // is not contiguous, and we need to skip to the next chunk's side metadata when we search to a different chunk.
-            // This won't be used for VO bit, as VO bit is global and is always contiguous. So for now, I am not bothered to do it.
+            None
+        };
+
+        if !self.uses_contiguous_side_metadata() {
             warn!("We are trying to search non zero bits in an discontiguous side metadata. The performance is slow, as MMTk does not optimize for this case.");
-            // SAFETY: Caller upholds mapped initialization, alignment, and quiescent non-atomic
-            // read preconditions across the searched window.
-            unsafe { self.find_prev_non_zero_value_simple::<T>(data_addr, search_limit_bytes) }
+            return search_simple();
         }
-    }
 
-    /// # Safety
-    /// Same preconditions as [`Self::find_prev_non_zero_value`].
-    unsafe fn find_prev_non_zero_value_simple<T: MetadataValue>(
-        &self,
-        data_addr: Address,
-        search_limit_bytes: usize,
-    ) -> Option<Address> {
-        let region_bytes = 1 << self.log_bytes_in_region;
-        // Figure out the range that we need to search.
-        let start_addr = data_addr.align_down(region_bytes);
-        let end_addr = data_addr.saturating_sub(search_limit_bytes) + 1usize;
-
-        let mmap_granularity = MMAPPER.granularity();
-        let mut mapped_grain = Address::MAX;
-
-        let mut cursor = start_addr;
-        while cursor >= end_addr {
-            // We can cache the "is the side metadata for the cursor mapped?" check because MMTk
-            // maps metadata at chunk-level
-            if cursor < mapped_grain {
-                if self.is_mapped(cursor) {
-                    mapped_grain = cursor.align_down(mmap_granularity);
+        let result = if !self.is_mapped(data_addr) {
+            None
+        } else {
+            let start_addr = data_addr.saturating_sub(search_limit_bytes) + 1usize;
+            let end_addr = data_addr;
+            // SAFETY: `self.is_mapped(data_addr)` succeeded above, `self` uses contiguous side
+            // metadata, each `[g_start, g_end)` sub-range lies within a single `MMAPPER` grain,
+            // and caller guarantees mapped grains in the searched window are initialized, aligned
+            // for `T`, and free of concurrent mutations or `&mut` aliases.
+            unsafe {
+                if !self.load::<T>(data_addr).is_zero() {
+                    Some(data_addr.align_down(region_bytes))
+                } else if let Some((byte_start, byte_end, first_mask, last_mask)) =
+                    helpers::active_bit_range_bytes(
+                        address_to_contiguous_meta_address(self, start_addr),
+                        meta_byte_lshift(self, start_addr),
+                        address_to_contiguous_meta_address(self, end_addr),
+                        meta_byte_lshift(self, end_addr),
+                    )
+                {
+                    let gran = MMAPPER.granularity();
+                    let mut g_end = byte_end;
+                    let mut hit = None;
+                    while g_end > byte_start {
+                        let grain_base = (g_end - 1usize).align_down(gran);
+                        let g_start = if grain_base > byte_start {
+                            grain_base
+                        } else {
+                            byte_start
+                        };
+                        let g_first = if g_start == byte_start {
+                            first_mask
+                        } else {
+                            0xff
+                        };
+                        let g_last = if g_end == byte_end { last_mask } else { 0xff };
+                        let align_rem = g_start.as_usize() & (core::mem::size_of::<usize>() - 1);
+                        let Some(found) =
+                            helpers::with_mapped_meta_slice(g_start, g_end, |slice| {
+                                helpers::find_last_non_zero_bit_in_slice(
+                                    slice, align_rem, g_first, g_last,
+                                )
+                            })
+                        else {
+                            break;
+                        };
+                        if let Some((byte_off, bit)) = found {
+                            let (addr, bit) = align_metadata_address(self, g_start + byte_off, bit);
+                            hit = Some(
+                                contiguous_meta_address_to_address(self, addr, bit)
+                                    .align_down(region_bytes),
+                            )
+                            .filter(|&a| a >= start_addr && a < end_addr);
+                            break;
+                        }
+                        g_end = g_start;
+                    }
+                    hit
                 } else {
-                    // We encounter an unmapped side metadata. Just return None.
-                    return None;
-                }
-            }
-            // If we find non-zero value, just return it.
-            // SAFETY: `self.is_mapped(cursor)` verified the chunk's side metadata is mapped, and
-            // caller guarantees mapped entries are initialized, aligned for `T`, and not
-            // concurrently mutated.
-            if !unsafe { self.load::<T>(cursor) }.is_zero() {
-                return Some(cursor);
-            }
-            cursor -= region_bytes;
-        }
-        None
-    }
-
-    /// # Safety
-    /// `self.uses_contiguous_side_metadata()` must hold, plus all preconditions of
-    /// [`Self::find_prev_non_zero_value`].
-    #[allow(clippy::let_and_return)]
-    unsafe fn find_prev_non_zero_value_fast<T: MetadataValue>(
-        &self,
-        data_addr: Address,
-        search_limit_bytes: usize,
-    ) -> Option<Address> {
-        debug_assert!(self.uses_contiguous_side_metadata());
-
-        // Quick check if the side metadata for the data address is mapped at all.
-        if !self.is_mapped(data_addr) {
-            return None;
-        }
-        // Quick check if the current data_addr has a non zero value.
-        // SAFETY: `self.is_mapped(data_addr)` succeeded above, and caller guarantees mapped
-        // metadata is initialized, aligned for `T`, and free of concurrent writes or `&mut` aliases.
-        if !unsafe { self.load::<T>(data_addr) }.is_zero() {
-            return Some(data_addr.align_down(1 << self.log_bytes_in_region));
-        }
-
-        // Figure out the start and end data address.
-        let start_addr = data_addr.saturating_sub(search_limit_bytes) + 1usize;
-        let end_addr = data_addr;
-
-        // Then figure out the start and end metadata address and bits.
-        // The start bit may not be accurate, as we map any address in the region to the same bit.
-        // We will filter the result at the end to make sure the found address is in the search range.
-        let start_meta_addr = address_to_contiguous_meta_address(self, start_addr);
-        let start_meta_shift = meta_byte_lshift(self, start_addr);
-        let end_meta_addr = address_to_contiguous_meta_address(self, end_addr);
-        let end_meta_shift = meta_byte_lshift(self, end_addr);
-
-        let mut res = None;
-
-        let mut visitor = |range: BitByteRange| {
-            match range {
-                BitByteRange::Bytes { start, end } => {
-                    // SAFETY: Caller guarantees any mapped metadata bytes in `[start, end)` are
-                    // initialized and free of concurrent writes, atomic modifications, or `&mut` aliases.
-                    let found =
-                        unsafe { helpers::find_last_non_zero_bit_in_metadata_bytes(start, end) };
-                    match found {
-                        helpers::FindMetaBitResult::Found { addr, bit } => {
-                            let (addr, bit) = align_metadata_address(self, addr, bit);
-                            res = Some(contiguous_meta_address_to_address(self, addr, bit));
-                            // Return true to abort the search. We found the bit.
-                            true
-                        }
-                        // If we see unmapped metadata, we don't need to search any more.
-                        helpers::FindMetaBitResult::UnmappedMetadata => true,
-                        // Return false to continue searching.
-                        helpers::FindMetaBitResult::NotFound => false,
-                    }
-                }
-                BitByteRange::BitsInByte {
-                    addr,
-                    bit_start,
-                    bit_end,
-                } => {
-                    // SAFETY: Caller guarantees that if `addr` is mapped, it is initialized and
-                    // free of concurrent writes, atomic modifications, or `&mut` aliases.
-                    let found = unsafe {
-                        helpers::find_last_non_zero_bit_in_metadata_bits(addr, bit_start, bit_end)
-                    };
-                    match found {
-                        helpers::FindMetaBitResult::Found { addr, bit } => {
-                            let (addr, bit) = align_metadata_address(self, addr, bit);
-                            res = Some(contiguous_meta_address_to_address(self, addr, bit));
-                            // Return true to abort the search. We found the bit.
-                            true
-                        }
-                        // If we see unmapped metadata, we don't need to search any more.
-                        helpers::FindMetaBitResult::UnmappedMetadata => true,
-                        // Return false to continue searching.
-                        helpers::FindMetaBitResult::NotFound => false,
-                    }
+                    None
                 }
             }
         };
 
-        ranges::break_bit_range(
-            start_meta_addr,
-            start_meta_shift,
-            end_meta_addr,
-            end_meta_shift,
-            false,
-            &mut visitor,
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            result,
+            search_simple(),
+            "find_prev_non_zero_value fast path diverged from simple scan"
         );
 
-        // We have to filter the result. We search between [start_addr, end_addr). But we actually
-        // search with metadata bits. It is possible the metadata bit for start_addr is the same bit
-        // as an address that is before start_addr. E.g. 0x2010f026360 and 0x2010f026361 are mapped
-        // to the same bit, 0x2010f026361 is the start address and 0x2010f026360 is outside the search range.
-        res.map(|addr| addr.align_down(1 << self.log_bytes_in_region))
-            .filter(|addr| *addr >= start_addr && *addr < end_addr)
+        result
     }
 
     /// Search forwards for a data address that has a non zero value in the side metadata. The search starts from the given data
@@ -1640,186 +1370,117 @@ impl SideMetadataSpec {
     ///   readable, initialized, and aligned for `T`.
     /// * No other thread may concurrently write to or atomically modify the searched side metadata
     ///   for the duration of this call, and no live `&mut` reference may alias it.
-    #[allow(clippy::let_and_return)]
     pub unsafe fn find_next_non_zero_value<T: MetadataValue>(
         &self,
         data_addr: Address,
         search_limit_bytes: usize,
     ) -> Option<Address> {
         debug_assert!(search_limit_bytes > 0);
+        let region_bytes = 1usize << self.log_bytes_in_region;
 
-        if self.uses_contiguous_side_metadata() {
-            // Contiguous side metadata
-            // SAFETY: `self.uses_contiguous_side_metadata()` holds, and caller upholds mapped
-            // initialization, alignment, and quiescent non-atomic read preconditions across the
-            // searched window.
-            let result =
-                unsafe { self.find_next_non_zero_value_fast::<T>(data_addr, search_limit_bytes) };
-            #[cfg(debug_assertions)]
-            {
-                // Double check if the implementation is correct
-                // SAFETY: Same preconditions as `find_next_non_zero_value_fast` above.
-                let result2 = unsafe {
-                    self.find_next_non_zero_value_simple::<T>(data_addr, search_limit_bytes)
-                };
-                assert_eq!(
-                    result,
-                    result2,
-                    "find_next_non_zero_value_fast returned a different result from the naive implementation. data_addr {}, search_limit_bytes {}",
-                    data_addr, search_limit_bytes,
-                );
+        let search_simple = || {
+            let start_addr = data_addr.align_down(region_bytes);
+            let end_addr = data_addr + search_limit_bytes;
+            let mmap_granularity = MMAPPER.granularity();
+            let mut mapped_grain = Address::ZERO;
+            let mut cursor = start_addr;
+            while cursor < end_addr {
+                if cursor > mapped_grain {
+                    if self.is_mapped(cursor) {
+                        mapped_grain = cursor.align_up(mmap_granularity) - 0x1;
+                    } else {
+                        return None;
+                    }
+                }
+                // SAFETY: `self.is_mapped(cursor)` verified the chunk's side metadata is mapped,
+                // and caller guarantees mapped entries are initialized, aligned for `T`, and
+                // free of concurrent mutations or `&mut` aliases.
+                if !unsafe { self.load::<T>(cursor) }.is_zero() {
+                    return Some(cursor);
+                }
+                cursor += region_bytes;
             }
-            result
-        } else {
-            // TODO: We should be able to optimize further for this case. However, we need to be careful that the side metadata
-            // is not contiguous, and we need to skip to the next chunk's side metadata when we search to a different chunk.
-            // This won't be used for VO bit, as VO bit is global and is always contiguous. So for now, I am not bothered to do it.
+            None
+        };
+
+        if !self.uses_contiguous_side_metadata() {
             warn!("We are trying to search non zero bits in an discontiguous side metadata. The performance is slow, as MMTk does not optimize for this case.");
-            // SAFETY: Caller upholds mapped initialization, alignment, and quiescent non-atomic
-            // read preconditions across the searched window.
-            unsafe { self.find_next_non_zero_value_simple::<T>(data_addr, search_limit_bytes) }
+            return search_simple();
         }
-    }
 
-    /// # Safety
-    /// Same preconditions as [`Self::find_next_non_zero_value`].
-    unsafe fn find_next_non_zero_value_simple<T: MetadataValue>(
-        &self,
-        data_addr: Address,
-        search_limit_bytes: usize,
-    ) -> Option<Address> {
-        let region_bytes = 1 << self.log_bytes_in_region;
-        // Figure out the range that we need to search.
-        let start_addr = data_addr.align_down(region_bytes);
-        let end_addr = data_addr + search_limit_bytes;
-
-        let mmap_granularity = MMAPPER.granularity();
-        let mut mapped_grain = Address::ZERO;
-
-        let mut cursor = start_addr;
-        while cursor < end_addr {
-            // We can cache the "is the side metadata for the cursor mapped?" check because MMTk
-            // maps metadata at chunk-level
-            if cursor > mapped_grain {
-                if self.is_mapped(cursor) {
-                    mapped_grain = cursor.align_up(mmap_granularity) - 0x1;
+        let result = if !self.is_mapped(data_addr) {
+            None
+        } else {
+            let start_addr = data_addr.align_down(region_bytes);
+            let end_addr = (data_addr + search_limit_bytes).align_up(region_bytes);
+            // SAFETY: `self.is_mapped(data_addr)` succeeded above, `self` uses contiguous side
+            // metadata, each `[g_start, g_end)` sub-range lies within a single `MMAPPER` grain,
+            // and caller guarantees mapped grains in the searched window are initialized, aligned
+            // for `T`, and free of concurrent mutations or `&mut` aliases.
+            unsafe {
+                if !self.load::<T>(data_addr).is_zero() {
+                    Some(start_addr)
+                } else if let Some((byte_start, byte_end, first_mask, last_mask)) =
+                    helpers::active_bit_range_bytes(
+                        address_to_contiguous_meta_address(self, start_addr),
+                        meta_byte_lshift(self, start_addr),
+                        address_to_contiguous_meta_address(self, end_addr),
+                        meta_byte_lshift(self, end_addr),
+                    )
+                {
+                    let gran = MMAPPER.granularity();
+                    let mut g_start = byte_start;
+                    let mut hit = None;
+                    while g_start < byte_end {
+                        let grain_base = g_start.align_down(gran);
+                        let g_end = match grain_base.as_usize().checked_add(gran) {
+                            Some(next) if next < byte_end.as_usize() => grain_base + gran,
+                            _ => byte_end,
+                        };
+                        let g_first = if g_start == byte_start {
+                            first_mask
+                        } else {
+                            0xff
+                        };
+                        let g_last = if g_end == byte_end { last_mask } else { 0xff };
+                        let align_rem = g_start.as_usize() & (core::mem::size_of::<usize>() - 1);
+                        let Some(found) =
+                            helpers::with_mapped_meta_slice(g_start, g_end, |slice| {
+                                helpers::find_first_non_zero_bit_in_slice(
+                                    slice, align_rem, g_first, g_last,
+                                )
+                            })
+                        else {
+                            break;
+                        };
+                        if let Some((byte_off, bit)) = found {
+                            let (addr, bit) = align_metadata_address(self, g_start + byte_off, bit);
+                            hit = Some(
+                                contiguous_meta_address_to_address(self, addr, bit)
+                                    .align_down(region_bytes),
+                            )
+                            .filter(|&a| a >= start_addr && a < end_addr);
+                            break;
+                        }
+                        g_start = g_end;
+                    }
+                    hit
                 } else {
-                    // We encounter an unmapped side metadata. Just return None.
-                    return None;
-                }
-            }
-            // If we find non-zero value, just return it.
-            // SAFETY: `self.is_mapped(cursor)` verified the chunk's side metadata is mapped, and
-            // caller guarantees mapped entries are initialized, aligned for `T`, and not
-            // concurrently mutated.
-            if !unsafe { self.load::<T>(cursor) }.is_zero() {
-                return Some(cursor);
-            }
-            cursor += region_bytes;
-        }
-        None
-    }
-
-    /// # Safety
-    /// `self.uses_contiguous_side_metadata()` must hold, plus all preconditions of
-    /// [`Self::find_next_non_zero_value`].
-    unsafe fn find_next_non_zero_value_fast<T: MetadataValue>(
-        &self,
-        data_addr: Address,
-        search_limit_bytes: usize,
-    ) -> Option<Address> {
-        debug_assert!(self.uses_contiguous_side_metadata());
-
-        // Quick check if the side metadata for the data address is mapped at all.
-        if !self.is_mapped(data_addr) {
-            return None;
-        }
-        // Quick check if the current data_addr has a non zero value.
-        // SAFETY: `self.is_mapped(data_addr)` succeeded above, and caller guarantees mapped
-        // metadata is initialized, aligned for `T`, and free of concurrent writes or `&mut` aliases.
-        if !unsafe { self.load::<T>(data_addr) }.is_zero() {
-            return Some(data_addr.align_down(1 << self.log_bytes_in_region));
-        }
-
-        // Figure out the start and end data address.
-        let start_addr = data_addr.align_down(1 << self.log_bytes_in_region);
-        // We need to align the end_address up because the metadata might be stored right at
-        // the end address otherwise. Our loop in `find_first_non_zero_bit_in_metadata_byte`
-        // will not load from this end address, resulting in us potentially not finding the
-        // correct address for the next set bit.
-        let end_addr = (data_addr + search_limit_bytes).align_up(1 << self.log_bytes_in_region);
-
-        // Then figure out the start and end metadata address and bits.
-        // The start bit may not be accurate, as we map any address in the region to the same bit.
-        // We will filter the result at the end to make sure the found address is in the search range.
-        let start_meta_addr = address_to_contiguous_meta_address(self, start_addr);
-        let start_meta_shift = meta_byte_lshift(self, start_addr);
-        let end_meta_addr = address_to_contiguous_meta_address(self, end_addr);
-        let end_meta_shift = meta_byte_lshift(self, end_addr);
-
-        let mut res = None;
-
-        let mut visitor = |range: BitByteRange| {
-            match range {
-                BitByteRange::Bytes { start, end } => {
-                    // SAFETY: Caller guarantees any mapped metadata bytes in `[start, end)` are
-                    // initialized and free of concurrent writes, atomic modifications, or `&mut` aliases.
-                    let found =
-                        unsafe { helpers::find_first_non_zero_bit_in_metadata_bytes(start, end) };
-                    match found {
-                        helpers::FindMetaBitResult::Found { addr, bit } => {
-                            let (addr, bit) = align_metadata_address(self, addr, bit);
-                            res = Some(contiguous_meta_address_to_address(self, addr, bit));
-                            // Return true to abort the search. We found the bit.
-                            true
-                        }
-                        // If we see unmapped metadata, we don't need to search any more.
-                        helpers::FindMetaBitResult::UnmappedMetadata => true,
-                        // Return false to continue searching.
-                        helpers::FindMetaBitResult::NotFound => false,
-                    }
-                }
-                BitByteRange::BitsInByte {
-                    addr,
-                    bit_start,
-                    bit_end,
-                } => {
-                    // SAFETY: Caller guarantees that if `addr` is mapped, it is initialized and
-                    // free of concurrent writes, atomic modifications, or `&mut` aliases.
-                    let found = unsafe {
-                        helpers::find_first_non_zero_bit_in_metadata_bits(addr, bit_start, bit_end)
-                    };
-                    match found {
-                        helpers::FindMetaBitResult::Found { addr, bit } => {
-                            let (addr, bit) = align_metadata_address(self, addr, bit);
-                            res = Some(contiguous_meta_address_to_address(self, addr, bit));
-                            // Return true to abort the search. We found the bit.
-                            true
-                        }
-                        // If we see unmapped metadata, we don't need to search any more.
-                        helpers::FindMetaBitResult::UnmappedMetadata => true,
-                        // Return false to continue searching.
-                        helpers::FindMetaBitResult::NotFound => false,
-                    }
+                    None
                 }
             }
         };
 
-        ranges::break_bit_range(
-            start_meta_addr,
-            start_meta_shift,
-            end_meta_addr,
-            end_meta_shift,
-            true,
-            &mut visitor,
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            result,
+            search_simple(),
+            "find_next_non_zero_value fast path diverged from simple scan. data_addr {}, search_limit_bytes {}",
+            data_addr,
+            search_limit_bytes,
         );
 
-        // We have to filter the result. We search between [start_addr, end_addr). But we actually
-        // search with metadata bits. It is possible the metadata bit for start_addr is the same bit
-        // as an address that is before start_addr. E.g. 0x2010f026360 and 0x2010f026361 are mapped
-        // to the same bit, 0x2010f026361 is the start address and 0x2010f026360 is outside the search range.
-        res.map(|addr| addr.align_down(1 << self.log_bytes_in_region))
-            .filter(|addr| *addr >= start_addr && *addr < end_addr)
+        result
     }
 
     /// Search for data addresses that have non zero values in the side metadata.  This method is
@@ -1847,133 +1508,60 @@ impl SideMetadataSpec {
         visit_data: &mut impl FnMut(Address),
     ) {
         if self.uses_contiguous_side_metadata() && self.log_num_of_bits == 0 {
-            // Contiguous one-bit-per-region side metadata
-            // TODO: VO bits is one-bit-per-word.  But if we want to scan other metadata (such as
-            // the forwarding bits which has two bits per word), we will need to refactor the
-            // algorithm of `scan_non_zero_values_fast`.
-            // SAFETY: `self.uses_contiguous_side_metadata() && self.log_num_of_bits == 0` holds,
-            // and caller guarantees `[data_start_addr, data_end_addr)` has fully mapped,
-            // initialized, quiescent side metadata without live `&mut` aliases.
-            unsafe {
-                self.scan_non_zero_values_fast(data_start_addr, data_end_addr, visit_data);
-            }
+            let start_meta_addr = address_to_contiguous_meta_address(self, data_start_addr);
+            let start_meta_shift = meta_byte_lshift(self, data_start_addr);
+            let end_meta_addr = address_to_contiguous_meta_address(self, data_end_addr);
+            let end_meta_shift = meta_byte_lshift(self, data_end_addr);
+            let Some((byte_start, byte_end, first_mask, last_mask)) =
+                helpers::active_bit_range_bytes(
+                    start_meta_addr,
+                    start_meta_shift,
+                    end_meta_addr,
+                    end_meta_shift,
+                )
+            else {
+                return;
+            };
+            let len = byte_end - byte_start;
+            assert!(!byte_start.is_zero() && len <= isize::MAX as usize);
+            let align_rem = byte_start.as_usize() & (core::mem::size_of::<usize>() - 1);
+            // SAFETY: Non-null `byte_start` and `len <= isize::MAX` were verified above (`u8` has
+            // alignment 1), and caller guarantees `[data_start_addr, data_end_addr)` has fully
+            // mapped, initialized, quiescent side metadata without concurrent mutations (including
+            // inside `visit_data`) or live `&mut` aliases.
+            let slice = unsafe { core::slice::from_raw_parts(byte_start.to_ptr::<u8>(), len) };
+            helpers::scan_non_zero_bits_in_slice(
+                slice,
+                align_rem,
+                first_mask,
+                last_mask,
+                |byte_off, bit| {
+                    visit_data(helpers::contiguous_meta_address_to_address(
+                        self,
+                        byte_start + byte_off,
+                        bit,
+                    ));
+                },
+            );
         } else {
-            // TODO: VO bits are always contiguous.  But if we want to scan other metadata, such as
-            // side mark bits, we need to refactor `bulk_update_metadata` to support `FnMut`, too,
-            // and use it to apply `scan_non_zero_values_fast` on each contiguous side metadata
-            // range.
             warn!(
                 "We are trying to search for non zero bits in a discontiguous side metadata \
             or the metadata has more than one bit per region. \
                 The performance is slow, as MMTk does not optimize for this case."
             );
-            // SAFETY: Caller guarantees `[data_start_addr, data_end_addr)` has fully mapped,
-            // initialized, `T`-aligned, quiescent side metadata without live `&mut` aliases.
-            unsafe {
-                self.scan_non_zero_values_simple::<T>(data_start_addr, data_end_addr, visit_data);
+            let region_bytes = 1usize << self.log_bytes_in_region;
+            let mut cursor = data_start_addr;
+            while cursor < data_end_addr {
+                debug_assert!(self.is_mapped(cursor));
+                // SAFETY: Caller guarantees `cursor` in `[data_start_addr, data_end_addr)` has
+                // mapped, initialized, `T`-aligned side metadata with no concurrent writes or
+                // `&mut` aliases.
+                if !unsafe { self.load::<T>(cursor) }.is_zero() {
+                    visit_data(cursor);
+                }
+                cursor += region_bytes;
             }
         }
-    }
-
-    /// # Safety
-    /// * Every region in `[data_start_addr, data_end_addr)` must have mapped, initialized, non-null
-    ///   side metadata aligned for `T`.
-    /// * Neither another thread nor `visit_data` may mutate the scanned side metadata while this
-    ///   scan is running, and no live `&mut` reference may alias it.
-    unsafe fn scan_non_zero_values_simple<T: MetadataValue>(
-        &self,
-        data_start_addr: Address,
-        data_end_addr: Address,
-        visit_data: &mut impl FnMut(Address),
-    ) {
-        let region_bytes = 1usize << self.log_bytes_in_region;
-
-        let mut cursor = data_start_addr;
-        while cursor < data_end_addr {
-            debug_assert!(self.is_mapped(cursor));
-
-            // If we find non-zero value, just call back.
-            // SAFETY: Caller guarantees `cursor` in `[data_start_addr, data_end_addr)` has mapped,
-            // initialized, `T`-aligned side metadata with no concurrent writes or `&mut` aliases.
-            if !unsafe { self.load::<T>(cursor) }.is_zero() {
-                visit_data(cursor);
-            }
-            cursor += region_bytes;
-        }
-    }
-
-    /// # Safety
-    /// * `self.uses_contiguous_side_metadata()` and `self.log_num_of_bits == 0` must hold.
-    /// * The contiguous side-metadata range covering `[data_start_addr, data_end_addr)` must be
-    ///   non-null, mapped, and initialized.
-    /// * Neither another thread nor `visit_data` may mutate the scanned side metadata while this
-    ///   scan is running, and no live `&mut` reference may alias it.
-    unsafe fn scan_non_zero_values_fast(
-        &self,
-        data_start_addr: Address,
-        data_end_addr: Address,
-        visit_data: &mut impl FnMut(Address),
-    ) {
-        debug_assert!(self.uses_contiguous_side_metadata());
-        debug_assert_eq!(self.log_num_of_bits, 0);
-
-        // Then figure out the start and end metadata address and bits.
-        let start_meta_addr = address_to_contiguous_meta_address(self, data_start_addr);
-        let start_meta_shift = meta_byte_lshift(self, data_start_addr);
-        let end_meta_addr = address_to_contiguous_meta_address(self, data_end_addr);
-        let end_meta_shift = meta_byte_lshift(self, data_end_addr);
-
-        let mut visitor = |range| {
-            match range {
-                BitByteRange::Bytes { start, end } => {
-                    // SAFETY: Caller guarantees `[start, end)` lies within the mapped, initialized,
-                    // quiescent contiguous side-metadata range for `[data_start_addr, data_end_addr)`
-                    // without concurrent mutations (including inside `visit_data`) or `&mut` aliases.
-                    unsafe {
-                        helpers::scan_non_zero_bits_in_metadata_bytes(
-                            start,
-                            end,
-                            &mut |addr, bit| {
-                                visit_data(helpers::contiguous_meta_address_to_address(
-                                    self, addr, bit,
-                                ));
-                            },
-                        );
-                    }
-                }
-                BitByteRange::BitsInByte {
-                    addr,
-                    bit_start,
-                    bit_end,
-                } => {
-                    // SAFETY: Caller guarantees `addr` lies in the mapped, initialized, quiescent
-                    // side-metadata range for `[data_start_addr, data_end_addr)` without concurrent
-                    // mutations or live `&mut` aliases.
-                    unsafe {
-                        helpers::scan_non_zero_bits_in_metadata_bits(
-                            addr,
-                            bit_start,
-                            bit_end,
-                            &mut |addr, bit| {
-                                visit_data(helpers::contiguous_meta_address_to_address(
-                                    self, addr, bit,
-                                ));
-                            },
-                        )
-                    }
-                }
-            }
-            false
-        };
-
-        ranges::break_bit_range(
-            start_meta_addr,
-            start_meta_shift,
-            end_meta_addr,
-            end_meta_shift,
-            true,
-            &mut visitor,
-        );
     }
 }
 
@@ -2373,9 +1961,98 @@ mod tests {
 
     const TEST_LOG_BYTES_IN_REGION: usize = 12;
 
+    /// Single-threaded (`!Send + !Sync`) bounds-checked side-metadata test arena backed by a
+    /// mapped metadata page inside `serial_test`.
+    struct TestSideMetaArena {
+        spec: SideMetadataSpec,
+        data_addr: Address,
+        meta_addr: Address,
+        meta_page_start: Address,
+        meta_page_end: Address,
+        _not_send_sync: core::marker::PhantomData<*mut ()>,
+    }
+
+    impl TestSideMetaArena {
+        fn assert_entry_in_bounds<T: MetadataValue>(&self, addr: Address) {
+            self.spec.assert_value_type::<T>(None);
+            let entry = address_to_meta_address(&self.spec, addr);
+            let bytes = core::mem::size_of::<T>();
+            assert!(entry.is_aligned_to(core::mem::align_of::<T>()));
+            assert!(
+                entry >= self.meta_page_start && entry + bytes <= self.meta_page_end,
+                "metadata entry {entry}..{} outside mapped test page {}..{}",
+                entry + bytes,
+                self.meta_page_start,
+                self.meta_page_end
+            );
+        }
+
+        fn load_raw<T: MetadataValue>(&self) -> T {
+            self.assert_entry_in_bounds::<T>(self.data_addr);
+            // SAFETY: `assert_entry_in_bounds` verified `self.meta_addr` is `T`-aligned and within
+            // the mapped, zero-initialized test metadata page; `!Send + !Sync` inside `serial_test`
+            // and `&self` guarantee no concurrent writes or live `&mut` aliases.
+            unsafe { self.meta_addr.load::<T>() }
+        }
+
+        fn store_raw<T: MetadataValue>(&mut self, val: T) {
+            self.assert_entry_in_bounds::<T>(self.data_addr);
+            // SAFETY: `assert_entry_in_bounds` verified `self.meta_addr` is `T`-aligned and within
+            // the mapped writable test metadata page; `&mut self` inside single-threaded
+            // `serial_test` guarantees exclusive access.
+            unsafe { self.meta_addr.store::<T>(val) }
+        }
+
+        fn load<T: MetadataValue>(&self, addr: Address) -> T {
+            self.assert_entry_in_bounds::<T>(addr);
+            // SAFETY: `assert_entry_in_bounds` verified `addr`'s metadata cell is mapped,
+            // initialized, and `T`-aligned; `&self` inside `serial_test` guarantees no concurrent
+            // writes or `&mut` aliases.
+            unsafe { self.spec.load::<T>(addr) }
+        }
+
+        fn store<T: MetadataValue>(&mut self, addr: Address, val: T) {
+            self.assert_entry_in_bounds::<T>(addr);
+            // SAFETY: `assert_entry_in_bounds` verified `addr`'s metadata cell is mapped,
+            // initialized, writable, and `T`-aligned; `&mut self` inside `serial_test` guarantees
+            // exclusive access.
+            unsafe { self.spec.store::<T>(addr, val) }
+        }
+
+        fn find_prev<T: MetadataValue>(
+            &self,
+            start_addr: Address,
+            search_limit_bytes: usize,
+        ) -> Option<Address> {
+            self.spec.assert_value_type::<T>(None);
+            // SAFETY: `assert_value_type` verified `T` matches `self.spec` (`T`-aligned entries),
+            // all mapped grains in this single-threaded `serial_test` are initialized and unaliased
+            // under `&self`, and `find_prev_non_zero_value` stops at unmapped `MMAPPER` grains.
+            unsafe {
+                self.spec
+                    .find_prev_non_zero_value::<T>(start_addr, search_limit_bytes)
+            }
+        }
+
+        fn find_next<T: MetadataValue>(
+            &self,
+            start_addr: Address,
+            search_limit_bytes: usize,
+        ) -> Option<Address> {
+            self.spec.assert_value_type::<T>(None);
+            // SAFETY: `assert_value_type` verified `T` matches `self.spec` (`T`-aligned entries),
+            // all mapped grains in this single-threaded `serial_test` are initialized and unaliased
+            // under `&self`, and `find_next_non_zero_value` stops at unmapped `MMAPPER` grains.
+            unsafe {
+                self.spec
+                    .find_next_non_zero_value::<T>(start_addr, search_limit_bytes)
+            }
+        }
+    }
+
     fn test_side_metadata(
         log_bits: usize,
-        f: impl Fn(&SideMetadataSpec, Address, Address) + std::panic::RefUnwindSafe,
+        f: impl Fn(&mut TestSideMetaArena) + std::panic::RefUnwindSafe,
     ) {
         serial_test(|| {
             core_test_initialize_side_metadata();
@@ -2411,17 +2088,24 @@ mod tests {
                     let mmap_result =
                         context.try_map_metadata_space(data_addr, BYTES_IN_PAGE, "test_space");
                     assert!(mmap_result.is_ok(), "{:?}", mmap_result);
+                    let meta_page_start = meta_addr.align_down(BYTES_IN_PAGE);
+                    assert!(meta_page_start.is_mapped());
+                    let mut arena = TestSideMetaArena {
+                        spec,
+                        data_addr,
+                        meta_addr,
+                        meta_page_start,
+                        meta_page_end: meta_page_start + BYTES_IN_PAGE,
+                        _not_send_sync: core::marker::PhantomData,
+                    };
 
-                    f(&spec, data_addr, meta_addr);
+                    f(&mut arena);
                 },
                 || {
-                    // Clear the metadata -- use u64 (max length we support)
                     assert!(log_bits <= 6);
-                    // SAFETY: `try_map_metadata_space` mapped at least one 4096-byte page starting
-                    // at page-aligned `meta_addr` (`>= align_of::<u64>()`), and `serial_test`
-                    // guarantees exclusive single-threaded access with no aliasing references.
-                    unsafe {
-                        meta_addr.store::<u64>(0);
+                    let meta_page_start = meta_addr.align_down(BYTES_IN_PAGE);
+                    if meta_page_start.is_mapped() {
+                        crate::util::memory::zero(meta_page_start, BYTES_IN_PAGE);
                     }
 
                     sanity::reset();
@@ -2447,560 +2131,382 @@ mod tests {
             paste!{
                 #[test]
                 fn [<$tname _load>]() {
-                    test_side_metadata($log_bits, |spec, data_addr, meta_addr| {
-                        // Initial value should be 0
-                        // SAFETY: `test_side_metadata` mapped and zero-initialized `spec`'s page
-                        // at `meta_addr` for `data_addr` inside single-threaded `serial_test`.
-                        assert_eq!(unsafe { spec.load::<$type>(data_addr) }, 0);
-                        assert_eq!(spec.load_atomic::<$type>(data_addr, Ordering::SeqCst), 0);
+                    test_side_metadata($log_bits, |arena| {
+                        let data_addr = arena.data_addr;
+                        assert_eq!(arena.load::<$type>(data_addr), 0);
+                        assert_eq!(arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst), 0);
 
-                        // Set to max
                         let max_value: $type = max_value($log_bits) as _;
-                        // SAFETY: Single-threaded `serial_test` holds exclusive access to mapped,
-                        // `$type`-aligned metadata for `data_addr`.
-                        unsafe {
-                            spec.store::<$type>(data_addr, max_value);
-                        }
-                        // SAFETY: Exclusive single-threaded access to mapped, initialized metadata.
-                        assert_eq!(unsafe { spec.load::<$type>(data_addr) }, max_value);
-                        assert_eq!(spec.load_atomic::<$type>(data_addr, Ordering::SeqCst), max_value);
-                        // SAFETY: `meta_addr` is page-aligned (`>= align_of::<$type>()`), mapped,
-                        // initialized, and read sequentially inside `serial_test`.
-                        assert_eq!(unsafe { meta_addr.load::<$type>() }, max_value);
+                        arena.store::<$type>(data_addr, max_value);
+                        assert_eq!(arena.load::<$type>(data_addr), max_value);
+                        assert_eq!(arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst), max_value);
+                        assert_eq!(arena.load_raw::<$type>(), max_value);
                     });
                 }
 
                 #[test]
                 fn [<$tname _store>]() {
-                    test_side_metadata($log_bits, |spec, data_addr, meta_addr| {
+                    test_side_metadata($log_bits, |arena| {
+                        let data_addr = arena.data_addr;
                         let max_value: $type = max_value($log_bits) as _;
 
-                        // Set the metadata byte(s) to all 1s
-                        // SAFETY: `meta_addr` is page-aligned (`>= align_of::<$type>()`), mapped
-                        // read-write, and exclusively accessed inside `serial_test`.
-                        unsafe {
-                            meta_addr.store::<$type>(<$type>::MAX);
-                        }
-                        // Store 0 to the side metadata
-                        // SAFETY: Exclusive single-threaded access to mapped, initialized metadata.
-                        unsafe {
-                            spec.store::<$type>(data_addr, 0);
-                        }
-                        // SAFETY: Exclusive single-threaded access to mapped, initialized metadata.
-                        assert_eq!(unsafe { spec.load::<$type>(data_addr) }, 0);
+                        arena.store_raw::<$type>(<$type>::MAX);
+                        arena.store::<$type>(data_addr, 0);
+                        assert_eq!(arena.load::<$type>(data_addr), 0);
                         // Only the affected bits are set to 0
-                        // SAFETY: `meta_addr` is page-aligned, mapped, initialized, and exclusively accessed.
-                        assert_eq!(unsafe { meta_addr.load::<$type>() }, <$type>::MAX & (!max_value));
+                        assert_eq!(arena.load_raw::<$type>(), <$type>::MAX & (!max_value));
                     });
                 }
 
                 #[test]
                 fn [<$tname _atomic_store>]() {
-                    test_side_metadata($log_bits, |spec, data_addr, meta_addr| {
+                    test_side_metadata($log_bits, |arena| {
+                        let data_addr = arena.data_addr;
                         let max_value: $type = max_value($log_bits) as _;
 
-                        // Set the metadata byte(s) to all 1s
-                        // SAFETY: `meta_addr` is page-aligned (`>= align_of::<$type>()`), mapped
-                        // read-write, and written sequentially before `store_atomic` in `serial_test`.
-                        unsafe {
-                            meta_addr.store::<$type>(<$type>::MAX);
-                        }
-                        // Store 0 to the side metadata
-                        spec.store_atomic::<$type>(data_addr, 0, Ordering::SeqCst);
-                        // SAFETY: `store_atomic` completed sequentially in single-threaded
-                        // `serial_test`; `data_addr`'s metadata is mapped, initialized, and
-                        // unaliased for cross-checking via non-atomic `spec.load`.
-                        assert_eq!(unsafe { spec.load::<$type>(data_addr) }, 0);
+                        arena.store_raw::<$type>(<$type>::MAX);
+                        arena.spec.store_atomic::<$type>(data_addr, 0, Ordering::SeqCst);
+                        assert_eq!(arena.load::<$type>(data_addr), 0);
                         // Only the affected bits are set to 0
-                        // SAFETY: `meta_addr` is page-aligned, mapped, initialized, and read
-                        // sequentially after `store_atomic` inside single-threaded `serial_test`.
-                        assert_eq!(unsafe { meta_addr.load::<$type>() }, <$type>::MAX & (!max_value));
+                        assert_eq!(arena.load_raw::<$type>(), <$type>::MAX & (!max_value));
                     });
                 }
 
                 #[test]
                 fn [<$tname _compare_exchange_success>]() {
-                    test_side_metadata($log_bits, |spec, data_addr, meta_addr| {
+                    test_side_metadata($log_bits, |arena| {
+                        let data_addr = arena.data_addr;
                         let max_value: $type = max_value($log_bits) as _;
-                        // Set the metadata byte(s) to all 1s
-                        // SAFETY: `meta_addr` is page-aligned, mapped read-write, and written
-                        // sequentially inside single-threaded `serial_test`.
-                        unsafe {
-                            meta_addr.store::<$type>(<$type>::MAX);
-                        }
-                        // Store 1 to the side metadata
-                        spec.store_atomic::<$type>(data_addr, 1, Ordering::SeqCst);
+                        arena.store_raw::<$type>(<$type>::MAX);
+                        arena.spec.store_atomic::<$type>(data_addr, 1, Ordering::SeqCst);
 
-                        let old_val = spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
+                        let old_val = arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
                         assert_eq!(old_val, 1);
 
                         let new_val = 0;
-                        let res = spec.compare_exchange_atomic::<$type>(data_addr, old_val, new_val, Ordering::SeqCst, Ordering::SeqCst);
+                        let res = arena.spec.compare_exchange_atomic::<$type>(data_addr, old_val, new_val, Ordering::SeqCst, Ordering::SeqCst);
                         assert!(res.is_ok());
                         assert_eq!(res.unwrap(), old_val, "old vals do not match");
 
-                        let after_update = spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
+                        let after_update = arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
                         assert_eq!(after_update, new_val);
-                        // Only the affected bits are set to 0
-                        // SAFETY: `meta_addr` is page-aligned, mapped, initialized, and read
-                        // sequentially inside single-threaded `serial_test`.
-                        assert_eq!(unsafe { meta_addr.load::<$type>() }, <$type>::MAX & (!max_value));
+                        assert_eq!(arena.load_raw::<$type>(), <$type>::MAX & (!max_value));
                     });
                 }
 
                 #[test]
                 fn [<$tname _compare_exchange_fail>]() {
-                    test_side_metadata($log_bits, |spec, data_addr, meta_addr| {
-                        // Set the metadata byte(s) to all 1s
-                        // SAFETY: `meta_addr` is page-aligned, mapped read-write, and written
-                        // sequentially inside single-threaded `serial_test`.
-                        unsafe {
-                            meta_addr.store::<$type>(<$type>::MAX);
-                        }
-                        // Store 1 to the side metadata
-                        spec.store_atomic::<$type>(data_addr, 1, Ordering::SeqCst);
+                    test_side_metadata($log_bits, |arena| {
+                        let data_addr = arena.data_addr;
+                        arena.store_raw::<$type>(<$type>::MAX);
+                        arena.spec.store_atomic::<$type>(data_addr, 1, Ordering::SeqCst);
 
-                        let old_val = spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
+                        let old_val = arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
                         assert_eq!(old_val, 1);
 
                         // make old_val outdated
-                        spec.store_atomic::<$type>(data_addr, 0, Ordering::SeqCst);
-                        // SAFETY: `meta_addr` is page-aligned, mapped, initialized, and read
-                        // sequentially inside single-threaded `serial_test`.
-                        let bits_before_cas = unsafe { meta_addr.load::<$type>() };
+                        arena.spec.store_atomic::<$type>(data_addr, 0, Ordering::SeqCst);
+                        let bits_before_cas = arena.load_raw::<$type>();
 
                         let new_val = 0;
-                        let res = spec.compare_exchange_atomic::<$type>(data_addr, old_val, new_val, Ordering::SeqCst, Ordering::SeqCst);
+                        let res = arena.spec.compare_exchange_atomic::<$type>(data_addr, old_val, new_val, Ordering::SeqCst, Ordering::SeqCst);
                         assert!(res.is_err());
                         assert_eq!(res.err().unwrap(), 0);
-                        // SAFETY: `meta_addr` is page-aligned, mapped, initialized, and read
-                        // sequentially inside single-threaded `serial_test`.
-                        let bits_after_cas = unsafe { meta_addr.load::<$type>() };
+                        let bits_after_cas = arena.load_raw::<$type>();
                         assert_eq!(bits_before_cas, bits_after_cas);
                     });
                 }
 
                 #[test]
                 fn [<$tname _fetch_add_1>]() {
-                    test_side_metadata($log_bits, |spec, data_addr, meta_addr| {
-                        // Set the metadata byte(s) to all 1s
-                        // SAFETY: `meta_addr` is page-aligned, mapped read-write, and written
-                        // sequentially inside single-threaded `serial_test`.
-                        unsafe {
-                            meta_addr.store::<$type>(<$type>::MAX);
-                        }
-                        // Store 0 to the side metadata
-                        spec.store_atomic::<$type>(data_addr, 0, Ordering::SeqCst);
+                    test_side_metadata($log_bits, |arena| {
+                        let data_addr = arena.data_addr;
+                        arena.store_raw::<$type>(<$type>::MAX);
+                        arena.spec.store_atomic::<$type>(data_addr, 0, Ordering::SeqCst);
 
-                        let old_val = spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
-
-                        let old_val_from_fetch = spec.fetch_add_atomic::<$type>(data_addr, 1, Ordering::SeqCst);
+                        let old_val = arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
+                        let old_val_from_fetch = arena.spec.fetch_add_atomic::<$type>(data_addr, 1, Ordering::SeqCst);
                         assert_eq!(old_val_from_fetch, old_val);
 
-                        let new_val = spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
+                        let new_val = arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
                         assert_eq!(new_val, 1);
                     });
                 }
 
                 #[test]
                 fn [<$tname _fetch_add_max>]() {
-                    test_side_metadata($log_bits, |spec, data_addr, meta_addr| {
+                    test_side_metadata($log_bits, |arena| {
+                        let data_addr = arena.data_addr;
                         let max_value: $type = max_value($log_bits) as _;
-                        // Set the metadata byte(s) to all 1s
-                        // SAFETY: `meta_addr` is page-aligned, mapped read-write, and written
-                        // sequentially inside single-threaded `serial_test`.
-                        unsafe {
-                            meta_addr.store::<$type>(<$type>::MAX);
-                        }
-                        // Store 0 to the side metadata
-                        spec.store_atomic::<$type>(data_addr, 0, Ordering::SeqCst);
+                        arena.store_raw::<$type>(<$type>::MAX);
+                        arena.spec.store_atomic::<$type>(data_addr, 0, Ordering::SeqCst);
 
-                        let old_val = spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
-
-                        let old_val_from_fetch = spec.fetch_add_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
+                        let old_val = arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
+                        let old_val_from_fetch = arena.spec.fetch_add_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
                         assert_eq!(old_val_from_fetch, old_val);
 
-                        let new_val = spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
+                        let new_val = arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
                         assert_eq!(new_val, max_value);
                     });
                 }
 
                 #[test]
                 fn [<$tname _fetch_add_overflow>]() {
-                    test_side_metadata($log_bits, |spec, data_addr, meta_addr| {
+                    test_side_metadata($log_bits, |arena| {
+                        let data_addr = arena.data_addr;
                         let max_value: $type = max_value($log_bits) as _;
-                        // Set the metadata byte(s) to all 1s
-                        // SAFETY: `meta_addr` is page-aligned, mapped read-write, and written
-                        // sequentially inside single-threaded `serial_test`.
-                        unsafe {
-                            meta_addr.store::<$type>(<$type>::MAX);
-                        }
-                        // Store max to the side metadata
-                        spec.store_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
+                        arena.store_raw::<$type>(<$type>::MAX);
+                        arena.spec.store_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
 
-                        let old_val = spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
-
-                        // add 1 to max value will cause overflow and wrap around to 0
-                        let old_val_from_fetch = spec.fetch_add_atomic::<$type>(data_addr, 1, Ordering::SeqCst);
+                        let old_val = arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
+                        let old_val_from_fetch = arena.spec.fetch_add_atomic::<$type>(data_addr, 1, Ordering::SeqCst);
                         assert_eq!(old_val_from_fetch, old_val);
 
-                        let new_val = spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
+                        let new_val = arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
                         assert_eq!(new_val, 0);
                     });
                 }
 
                 #[test]
                 fn [<$tname _fetch_sub_1>]() {
-                    test_side_metadata($log_bits, |spec, data_addr, meta_addr| {
-                        // Set the metadata byte(s) to all 1s
-                        // SAFETY: `meta_addr` is page-aligned, mapped read-write, and written
-                        // sequentially inside single-threaded `serial_test`.
-                        unsafe {
-                            meta_addr.store::<$type>(<$type>::MAX);
-                        }
-                        // Store 1 to the side metadata
-                        spec.store_atomic::<$type>(data_addr, 1, Ordering::SeqCst);
+                    test_side_metadata($log_bits, |arena| {
+                        let data_addr = arena.data_addr;
+                        arena.store_raw::<$type>(<$type>::MAX);
+                        arena.spec.store_atomic::<$type>(data_addr, 1, Ordering::SeqCst);
 
-                        let old_val = spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
-
-                        let old_val_from_fetch = spec.fetch_sub_atomic::<$type>(data_addr, 1, Ordering::SeqCst);
+                        let old_val = arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
+                        let old_val_from_fetch = arena.spec.fetch_sub_atomic::<$type>(data_addr, 1, Ordering::SeqCst);
                         assert_eq!(old_val_from_fetch, old_val);
 
-                        let new_val = spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
+                        let new_val = arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
                         assert_eq!(new_val, 0);
                     });
                 }
 
                 #[test]
                 fn [<$tname _fetch_sub_max>]() {
-                    test_side_metadata($log_bits, |spec, data_addr, meta_addr| {
+                    test_side_metadata($log_bits, |arena| {
+                        let data_addr = arena.data_addr;
                         let max_value: $type = max_value($log_bits) as _;
-                        // Set the metadata byte(s) to all 1s
-                        // SAFETY: `meta_addr` is page-aligned, mapped read-write, and written
-                        // sequentially inside single-threaded `serial_test`.
-                        unsafe {
-                            meta_addr.store::<$type>(<$type>::MAX);
-                        }
-                        // Store max to the side metadata
-                        spec.store_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
+                        arena.store_raw::<$type>(<$type>::MAX);
+                        arena.spec.store_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
 
-                        let old_val = spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
-
-                        let old_val_from_fetch = spec.fetch_sub_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
+                        let old_val = arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
+                        let old_val_from_fetch = arena.spec.fetch_sub_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
                         assert_eq!(old_val_from_fetch, old_val);
 
-                        let new_val = spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
+                        let new_val = arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
                         assert_eq!(new_val, 0);
                     });
                 }
 
                 #[test]
                 fn [<$tname _fetch_sub_overflow>]() {
-                    test_side_metadata($log_bits, |spec, data_addr, meta_addr| {
+                    test_side_metadata($log_bits, |arena| {
+                        let data_addr = arena.data_addr;
                         let max_value: $type = max_value($log_bits) as _;
-                        // Set the metadata byte(s) to all 1s
-                        // SAFETY: `meta_addr` is page-aligned, mapped read-write, and written
-                        // sequentially inside single-threaded `serial_test`.
-                        unsafe {
-                            meta_addr.store::<$type>(<$type>::MAX);
-                        }
-                        // Store 0 to the side metadata
-                        spec.store_atomic::<$type>(data_addr, 0, Ordering::SeqCst);
+                        arena.store_raw::<$type>(<$type>::MAX);
+                        arena.spec.store_atomic::<$type>(data_addr, 0, Ordering::SeqCst);
 
-                        let old_val = spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
-
-                        // sub 1 from 0 will cause overflow, and wrap around to max
-                        let old_val_from_fetch = spec.fetch_sub_atomic::<$type>(data_addr, 1, Ordering::SeqCst);
+                        let old_val = arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
+                        let old_val_from_fetch = arena.spec.fetch_sub_atomic::<$type>(data_addr, 1, Ordering::SeqCst);
                         assert_eq!(old_val_from_fetch, old_val);
 
-                        let new_val = spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
+                        let new_val = arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
                         assert_eq!(new_val, max_value);
                     });
                 }
 
                 #[test]
                 fn [<$tname _fetch_and>]() {
-                    test_side_metadata($log_bits, |spec, data_addr, meta_addr| {
+                    test_side_metadata($log_bits, |arena| {
+                        let data_addr = arena.data_addr;
                         let max_value: $type = max_value($log_bits) as _;
-                        // Set the metadata byte(s) to all 1s
-                        // SAFETY: `meta_addr` is page-aligned, mapped read-write, and written
-                        // sequentially inside single-threaded `serial_test`.
-                        unsafe {
-                            meta_addr.store::<$type>(<$type>::MAX);
-                        }
-                        // Store all 1s to the side metadata
-                        spec.store_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
+                        arena.store_raw::<$type>(<$type>::MAX);
+                        arena.spec.store_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
 
-                        // max and max should be max
-                        let old_val = spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
-                        let old_val_from_fetch = spec.fetch_and_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
+                        let old_val = arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
+                        let old_val_from_fetch = arena.spec.fetch_and_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
                         assert_eq!(old_val_from_fetch, old_val, "old values do not match");
-                        assert_eq!(spec.load_atomic::<$type>(data_addr, Ordering::SeqCst), max_value, "load values do not match");
-                        // SAFETY: `meta_addr` is page-aligned, mapped, initialized, and read
-                        // sequentially inside single-threaded `serial_test`.
-                        assert_eq!(unsafe { meta_addr.load::<$type>() }, <$type>::MAX, "raw values do not match");
+                        assert_eq!(arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst), max_value, "load values do not match");
+                        assert_eq!(arena.load_raw::<$type>(), <$type>::MAX, "raw values do not match");
 
-                        // max and last_bit_zero should last_bit_zero
                         let last_bit_zero = max_value - 1;
-                        let old_val = spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
-                        let old_val_from_fetch = spec.fetch_and_atomic::<$type>(data_addr, last_bit_zero, Ordering::SeqCst);
+                        let old_val = arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
+                        let old_val_from_fetch = arena.spec.fetch_and_atomic::<$type>(data_addr, last_bit_zero, Ordering::SeqCst);
                         assert_eq!(old_val_from_fetch, old_val);
-                        assert_eq!(spec.load_atomic::<$type>(data_addr, Ordering::SeqCst), last_bit_zero);
-                        // SAFETY: `meta_addr` is page-aligned, mapped, initialized, and read
-                        // sequentially inside single-threaded `serial_test`.
-                        assert_eq!(unsafe { meta_addr.load::<$type>() }, <$type>::MAX - 1);
+                        assert_eq!(arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst), last_bit_zero);
+                        assert_eq!(arena.load_raw::<$type>(), <$type>::MAX - 1);
                     });
                 }
 
                 #[test]
                 fn [<$tname _fetch_or>]() {
-                    test_side_metadata($log_bits, |spec, data_addr, meta_addr| {
+                    test_side_metadata($log_bits, |arena| {
+                        let data_addr = arena.data_addr;
                         let max_value: $type = max_value($log_bits) as _;
-                        // Set the metadata byte(s) to all 0s
-                        // SAFETY: `meta_addr` is page-aligned, mapped read-write, and written
-                        // sequentially inside single-threaded `serial_test`.
-                        unsafe {
-                            meta_addr.store::<$type>(0);
-                        }
-                        // Store 0 to the side metadata
-                        spec.store_atomic::<$type>(data_addr, 0, Ordering::SeqCst);
+                        arena.store_raw::<$type>(0);
+                        arena.spec.store_atomic::<$type>(data_addr, 0, Ordering::SeqCst);
 
-                        // 0 or 0 should be 0
-                        let old_val = spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
-                        let old_val_from_fetch = spec.fetch_or_atomic::<$type>(data_addr, 0, Ordering::SeqCst);
+                        let old_val = arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
+                        let old_val_from_fetch = arena.spec.fetch_or_atomic::<$type>(data_addr, 0, Ordering::SeqCst);
                         assert_eq!(old_val_from_fetch, old_val);
-                        assert_eq!(spec.load_atomic::<$type>(data_addr, Ordering::SeqCst), 0);
-                        // SAFETY: `meta_addr` is page-aligned, mapped, initialized, and read
-                        // sequentially inside single-threaded `serial_test`.
-                        assert_eq!(unsafe { meta_addr.load::<$type>() }, 0);
+                        assert_eq!(arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst), 0);
+                        assert_eq!(arena.load_raw::<$type>(), 0);
 
-                        // 0 and max should max
-                        let old_val = spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
-                        let old_val_from_fetch = spec.fetch_or_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
+                        let old_val = arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
+                        let old_val_from_fetch = arena.spec.fetch_or_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
                         assert_eq!(old_val_from_fetch, old_val);
-                        assert_eq!(spec.load_atomic::<$type>(data_addr, Ordering::SeqCst), max_value);
-                        // SAFETY: `meta_addr` is page-aligned, mapped, initialized, and read
-                        // sequentially inside single-threaded `serial_test`.
-                        assert_eq!(unsafe { meta_addr.load::<$type>() }, max_value);
+                        assert_eq!(arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst), max_value);
+                        assert_eq!(arena.load_raw::<$type>(), max_value);
                     });
                 }
 
                 #[test]
                 fn [<$tname _fetch_update_success>]() {
-                    test_side_metadata($log_bits, |spec, data_addr, meta_addr| {
+                    test_side_metadata($log_bits, |arena| {
+                        let data_addr = arena.data_addr;
                         let max_value: $type = max_value($log_bits) as _;
-                        // Set the metadata byte(s) to all 1s
-                        // SAFETY: `meta_addr` is page-aligned, mapped read-write, and written
-                        // sequentially inside single-threaded `serial_test`.
-                        unsafe {
-                            meta_addr.store::<$type>(<$type>::MAX);
-                        }
-                        // Store all 1s to the side metadata
-                        spec.store_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
+                        arena.store_raw::<$type>(<$type>::MAX);
+                        arena.spec.store_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
 
-                        // update from max to zero
-                        let old_val = spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
-                        let fetch_res = spec.fetch_update_atomic::<$type, _>(data_addr, Ordering::SeqCst, Ordering::SeqCst, |_x: $type| Some(0));
+                        let old_val = arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
+                        let fetch_res = arena.spec.fetch_update_atomic::<$type, _>(data_addr, Ordering::SeqCst, Ordering::SeqCst, |_x: $type| Some(0));
                         assert!(fetch_res.is_ok());
                         assert_eq!(fetch_res.unwrap(), old_val);
-                        assert_eq!(spec.load_atomic::<$type>(data_addr, Ordering::SeqCst), 0);
-                        // Only the affected bits are set to 0
-                        // SAFETY: `meta_addr` is page-aligned, mapped, initialized, and read
-                        // sequentially inside single-threaded `serial_test`.
-                        assert_eq!(unsafe { meta_addr.load::<$type>() }, <$type>::MAX & (!max_value));
+                        assert_eq!(arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst), 0);
+                        assert_eq!(arena.load_raw::<$type>(), <$type>::MAX & (!max_value));
                     });
                 }
 
                 #[test]
                 fn [<$tname _fetch_update_fail>]() {
-                    test_side_metadata($log_bits, |spec, data_addr, meta_addr| {
+                    test_side_metadata($log_bits, |arena| {
+                        let data_addr = arena.data_addr;
                         let max_value: $type = max_value($log_bits) as _;
-                        // Set the metadata byte(s) to all 1s
-                        // SAFETY: `meta_addr` is page-aligned, mapped read-write, and written
-                        // sequentially inside single-threaded `serial_test`.
-                        unsafe {
-                            meta_addr.store::<$type>(<$type>::MAX);
-                        }
-                        // Store all 1s to the side metadata
-                        spec.store_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
+                        arena.store_raw::<$type>(<$type>::MAX);
+                        arena.spec.store_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
 
-                        // update from max to zero
-                        let old_val = spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
-                        let fetch_res = spec.fetch_update_atomic::<$type, _>(data_addr, Ordering::SeqCst, Ordering::SeqCst, |_x: $type| None);
+                        let old_val = arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst);
+                        let fetch_res = arena.spec.fetch_update_atomic::<$type, _>(data_addr, Ordering::SeqCst, Ordering::SeqCst, |_x: $type| None);
                         assert!(fetch_res.is_err());
                         assert_eq!(fetch_res.err().unwrap(), old_val);
-                        assert_eq!(spec.load_atomic::<$type>(data_addr, Ordering::SeqCst), max_value);
-                        // Only the affected bits are set to 0
-                        // SAFETY: `meta_addr` is page-aligned, mapped, initialized, and read
-                        // sequentially inside single-threaded `serial_test`.
-                        assert_eq!(unsafe { meta_addr.load::<$type>() }, <$type>::MAX);
+                        assert_eq!(arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst), max_value);
+                        assert_eq!(arena.load_raw::<$type>(), <$type>::MAX);
                     });
                 }
 
                 #[test]
                 fn [<$tname _find_prev_non_zero_value_easy>]() {
-                    test_side_metadata($log_bits, |spec, data_addr, _meta_addr| {
+                    test_side_metadata($log_bits, |arena| {
+                        let data_addr = arena.data_addr;
                         let max_value: $type = max_value($log_bits) as _;
-                        // Store non zero value at data_addr
-                        spec.store_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
+                        arena.spec.store_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
 
-                        // Find the value starting from data_addr, at max 8 bytes.
-                        // We should find data_addr
-                        // SAFETY: Mapped pages in `spec` are zero-initialized by `test_side_metadata`
-                        // (`$type`-aligned) and quiescent inside single-threaded `serial_test`.
-                        let res_addr = unsafe { spec.find_prev_non_zero_value::<$type>(data_addr, 8) };
-                        assert!(res_addr.is_some());
-                        assert_eq!(res_addr.unwrap(), data_addr);
+                        let res_addr = arena.find_prev::<$type>(data_addr, 8);
+                        assert_eq!(res_addr, Some(data_addr));
                     });
                 }
 
                 #[test]
                 fn [<$tname _find_prev_non_zero_value_arbitrary_bytes>]() {
-                    test_side_metadata($log_bits, |spec, data_addr, _meta_addr| {
+                    test_side_metadata($log_bits, |arena| {
+                        let data_addr = arena.data_addr;
                         let max_value: $type = max_value($log_bits) as _;
-                        // Store non zero value at data_addr
-                        spec.store_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
+                        arena.spec.store_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
 
-                        // Start from data_addr, we offset arbitrary length, and search back to find data_addr
-                        let test_region = (1 << TEST_LOG_BYTES_IN_REGION);
-                        for len in 1..(test_region*4) {
+                        let test_region = 1 << TEST_LOG_BYTES_IN_REGION;
+                        for len in 1..(test_region * 4) {
                             let start_addr = data_addr + len;
-                            // Use len+1, as len is non inclusive.
-                            // SAFETY: Mapped pages in `spec` are initialized (`$type`-aligned) and
-                            // quiescent inside single-threaded `serial_test`.
-                            let res_addr = unsafe { spec.find_prev_non_zero_value::<$type>(start_addr, len + 1) };
-                            assert!(res_addr.is_some());
-                            assert_eq!(res_addr.unwrap(), data_addr);
+                            let res_addr = arena.find_prev::<$type>(start_addr, len + 1);
+                            assert_eq!(res_addr, Some(data_addr));
                         }
                     });
                 }
 
                 #[test]
                 fn [<$tname _find_prev_non_zero_value_arbitrary_start>]() {
-                    test_side_metadata($log_bits, |spec, data_addr, _meta_addr| {
+                    test_side_metadata($log_bits, |arena| {
+                        let data_addr = arena.data_addr;
                         let max_value: $type = max_value($log_bits) as _;
 
-                        // data_addr has a non-aligned offset
                         for offset in 0..7usize {
-                            // Apply offset and test with the new data addr
                             let test_data_addr = data_addr + offset;
-                            spec.store_atomic::<$type>(test_data_addr, max_value, Ordering::SeqCst);
-
-                            // The return result should be aligned
-                            // SAFETY: Mapped pages in `spec` are initialized (`$type`-aligned) and
-                            // quiescent inside single-threaded `serial_test`.
-                            let res_addr = unsafe { spec.find_prev_non_zero_value::<$type>(test_data_addr, 4096) };
-                            assert!(res_addr.is_some());
-                            assert_eq!(res_addr.unwrap(), data_addr);
-
-                            // Clear whatever is set
-                            spec.store_atomic::<$type>(test_data_addr, 0, Ordering::SeqCst);
+                            arena.spec.store_atomic::<$type>(test_data_addr, max_value, Ordering::SeqCst);
+                            assert_eq!(arena.find_prev::<$type>(test_data_addr, 4096), Some(data_addr));
+                            arena.spec.store_atomic::<$type>(test_data_addr, 0, Ordering::SeqCst);
                         }
                     });
                 }
 
                 #[test]
                 fn [<$tname _find_prev_non_zero_value_no_find>]() {
-                    test_side_metadata($log_bits, |spec, data_addr, _meta_addr| {
-                        // Store zero value at data_addr -- so we won't find anything
-                        spec.store_atomic::<$type>(data_addr, 0, Ordering::SeqCst);
+                    test_side_metadata($log_bits, |arena| {
+                        let data_addr = arena.data_addr;
+                        arena.spec.store_atomic::<$type>(data_addr, 0, Ordering::SeqCst);
 
-                        // Start from data_addr, we offset arbitrary length, and search back
-                        let test_region = (1 << TEST_LOG_BYTES_IN_REGION);
-                        for len in 1..(test_region*4) {
+                        let test_region = 1 << TEST_LOG_BYTES_IN_REGION;
+                        for len in 1..(test_region * 4) {
                             let start_addr = data_addr + len;
-                            // Use len+1, as len is non inclusive.
-                            // SAFETY: Mapped pages in `spec` are initialized (`$type`-aligned) and
-                            // quiescent inside single-threaded `serial_test`.
-                            let res_addr = unsafe { spec.find_prev_non_zero_value::<$type>(start_addr, len + 1) };
-                            assert!(res_addr.is_none());
+                            assert_eq!(arena.find_prev::<$type>(start_addr, len + 1), None);
                         }
                     });
                 }
 
                 #[test]
                 fn [<$tname _find_next_non_zero_value_easy>]() {
-                    test_side_metadata($log_bits, |spec, data_addr, _meta_addr| {
+                    test_side_metadata($log_bits, |arena| {
+                        let data_addr = arena.data_addr;
                         let max_value: $type = max_value($log_bits) as _;
-                        // Store non zero value at data_addr
-                        spec.store_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
+                        arena.spec.store_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
 
-                        // Find the value starting from data_addr, at max 8 bytes.
-                        // We should find data_addr
-                        // SAFETY: Mapped pages in `spec` are initialized (`$type`-aligned) and
-                        // quiescent inside single-threaded `serial_test`.
-                        let res_addr = unsafe { spec.find_next_non_zero_value::<$type>(data_addr, 8) };
-                        assert!(res_addr.is_some());
-                        assert_eq!(res_addr.unwrap(), data_addr);
+                        let res_addr = arena.find_next::<$type>(data_addr, 8);
+                        assert_eq!(res_addr, Some(data_addr));
                     });
                 }
 
                 #[test]
                 fn [<$tname _find_next_non_zero_value_arbitrary_bytes>]() {
-                    test_side_metadata($log_bits, |spec, data_addr, _meta_addr| {
+                    test_side_metadata($log_bits, |arena| {
                         let max_value: $type = max_value($log_bits) as _;
-                        let test_region = (1 << TEST_LOG_BYTES_IN_REGION);
+                        let test_region = 1 << TEST_LOG_BYTES_IN_REGION;
+                        let data_addr = arena.data_addr + test_region * 4;
 
-                        // Take a data address in the middle since metadata before
-                        // the start may not be mapped
-                        let data_addr = data_addr + test_region*4;
+                        arena.spec.store_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
+                        assert_eq!(arena.spec.load_atomic::<$type>(data_addr, Ordering::SeqCst), max_value);
 
-                        // Store non zero value at data_addr
-                        spec.store_atomic::<$type>(data_addr, max_value, Ordering::SeqCst);
-                        assert_eq!(spec.load_atomic::<$type>(data_addr, Ordering::SeqCst), max_value);
-
-                        // Start from data_addr, we offset arbitrary length, and search forwards to find data_addr
-                        for len in 1..(test_region*4) {
+                        for len in 1..(test_region * 4) {
                             let start_addr = data_addr - len;
-                            // Use len+1, as len is non inclusive.
-                            // SAFETY: Mapped pages in `spec` are initialized (`$type`-aligned) and
-                            // quiescent inside single-threaded `serial_test`.
-                            let res_addr = unsafe { spec.find_next_non_zero_value::<$type>(start_addr, len + 1) };
-                            assert!(res_addr.is_some());
-                            assert_eq!(res_addr.unwrap(), data_addr);
+                            assert_eq!(arena.find_next::<$type>(start_addr, len + 1), Some(data_addr));
                         }
                     });
                 }
 
                 #[test]
                 fn [<$tname _find_next_non_zero_value_arbitrary_start>]() {
-                    test_side_metadata($log_bits, |spec, data_addr, _meta_addr| {
+                    test_side_metadata($log_bits, |arena| {
+                        let data_addr = arena.data_addr;
                         let max_value: $type = max_value($log_bits) as _;
 
-                        // data_addr has a non-aligned offset
                         for offset in 0..7usize {
-                            // Apply offset and test with the new data addr
                             let test_data_addr = data_addr + offset;
-                            spec.store_atomic::<$type>(test_data_addr, max_value, Ordering::SeqCst);
-
-                            // The return result should be aligned
-                            // SAFETY: Mapped pages in `spec` are initialized (`$type`-aligned) and
-                            // quiescent inside single-threaded `serial_test`.
-                            let res_addr = unsafe { spec.find_next_non_zero_value::<$type>(test_data_addr, 4096) };
-                            assert!(res_addr.is_some());
-                            assert_eq!(res_addr.unwrap(), data_addr);
-
-                            // Clear whatever is set
-                            spec.store_atomic::<$type>(test_data_addr, 0, Ordering::SeqCst);
+                            arena.spec.store_atomic::<$type>(test_data_addr, max_value, Ordering::SeqCst);
+                            assert_eq!(arena.find_next::<$type>(test_data_addr, 4096), Some(data_addr));
+                            arena.spec.store_atomic::<$type>(test_data_addr, 0, Ordering::SeqCst);
                         }
                     });
                 }
 
                 #[test]
                 fn [<$tname _find_next_non_zero_value_no_find>]() {
-                    test_side_metadata($log_bits, |spec, data_addr, _meta_addr| {
-                        // Store zero value at data_addr -- so we won't find anything
-                        spec.store_atomic::<$type>(data_addr, 0, Ordering::SeqCst);
+                    test_side_metadata($log_bits, |arena| {
+                        let data_addr = arena.data_addr;
+                        arena.spec.store_atomic::<$type>(data_addr, 0, Ordering::SeqCst);
 
-                        // Start from data_addr, we offset arbitrary length, and search back
-                        let test_region = (1 << TEST_LOG_BYTES_IN_REGION);
-                        for len in 1..(test_region*4) {
+                        let test_region = 1 << TEST_LOG_BYTES_IN_REGION;
+                        for len in 1..(test_region * 4) {
                             let start_addr = data_addr - len;
-                            // Use len+1, as len is non inclusive.
-                            // SAFETY: Mapped pages in `spec` are initialized (`$type`-aligned) and
-                            // quiescent inside single-threaded `serial_test`.
-                            let res_addr = unsafe { spec.find_next_non_zero_value::<$type>(start_addr, len + 1) };
-                            assert!(res_addr.is_none());
+                            assert_eq!(arena.find_next::<$type>(start_addr, len + 1), None);
                         }
                     });
                 }
@@ -3081,7 +2587,9 @@ mod tests {
 
     #[test]
     fn test_release_acqrel_orderings_on_subbyte_spec() {
-        test_side_metadata(1, |spec, data_addr, _meta_addr| {
+        test_side_metadata(1, |arena| {
+            let spec = &arena.spec;
+            let data_addr = arena.data_addr;
             spec.store_atomic::<u8>(data_addr, 0b10, Ordering::Release);
             assert_eq!(spec.load_atomic::<u8>(data_addr, Ordering::Acquire), 0b10);
 
@@ -3128,7 +2636,9 @@ mod tests {
 
     #[test]
     fn test_mapped_slice_helpers() {
-        test_side_metadata(3, |spec, data_addr, _meta_addr| {
+        test_side_metadata(3, |arena| {
+            let spec = &arena.spec;
+            let data_addr = arena.data_addr;
             // `TEST_LOG_BYTES_IN_REGION == 12` (4 KiB/region), `log_bits == 3` (1 byte/region).
             // `test_side_metadata` maps 1 region (`4 KiB` => `1` metadata byte); map a full 4-page
             // (`16 KiB` => `4` metadata bytes) window for slice/chunk projections.
@@ -3149,21 +2659,17 @@ mod tests {
             }
 
             {
-                // SAFETY: `bytes_mut` was dropped above; `[data_addr, data_addr + four_pages)` is
-                // mapped, initialized, and immutable for the duration of this block.
-                let bytes = unsafe { spec.mapped_bytes_unchecked(data_addr, four_pages) };
-                assert_eq!(bytes, &[0x11, 0x22, 0x33, 0x44]);
-            }
-
-            {
-                // SAFETY: Previous non-atomic slices were dropped; only `AtomicU8` operations touch
-                // the 4 metadata bytes inside this block.
-                let atomics = unsafe { spec.mapped_atomic_bytes_unchecked::<4>(data_addr) };
+                // SAFETY: `bytes_mut` was dropped above; only `AtomicU8` references touch the 4
+                // mapped, initialized metadata bytes inside this block.
+                let (atomics, grid) = unsafe {
+                    (
+                        spec.mapped_atomic_bytes_unchecked::<4>(data_addr),
+                        spec.mapped_atomic_byte_chunks_unchecked::<2, 2>(data_addr),
+                    )
+                };
                 assert_eq!(atomics[0].load(Ordering::Relaxed), 0x11);
+                assert_eq!(atomics[1].load(Ordering::Relaxed), 0x22);
                 atomics[2].store(0x99, Ordering::Relaxed);
-
-                // SAFETY: Coexisting `&[[AtomicU8; 2]; 2]` shares only `AtomicU8` references.
-                let grid = unsafe { spec.mapped_atomic_byte_chunks_unchecked::<2, 2>(data_addr) };
                 assert_eq!(grid[1][0].load(Ordering::Relaxed), 0x99);
                 assert_eq!(grid[1][1].load(Ordering::Relaxed), 0x44);
             }
@@ -3183,8 +2689,7 @@ mod tests {
                 log_bytes_in_region: 3,
             };
             let unaligned_data = vm_layout::vm_layout().heap_start + 8usize;
-            // SAFETY: Expected to panic in `checked_mapped_byte_range` before any pointer dereference.
-            let _ = unsafe { spec.mapped_bytes_unchecked(unaligned_data, 64) };
+            let _ = spec.checked_mapped_byte_range(unaligned_data, 64);
         });
     }
 
@@ -3198,7 +2703,6 @@ mod tests {
             log_num_of_bits: 0,
             log_bytes_in_region: (usize::BITS as usize) - 2,
         };
-        // SAFETY: Expected to panic in `checked_meta_to_data_bytes` before any pointer dereference.
-        let _ = unsafe { spec.mapped_atomic_bytes_unchecked::<1>(Address::ZERO) };
+        let _ = spec.checked_meta_to_data_bytes(1);
     }
 }

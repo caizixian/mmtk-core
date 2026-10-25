@@ -428,16 +428,11 @@ impl Address {
     /// barrier has already recorded a write to it and can skip its slow path.
     pub fn is_field_logged<VM: VMBinding>(self) -> bool {
         debug_assert!(!self.is_zero());
-        // SAFETY: Public API preserved on `Address` for VM bindings. Callers must pass a valid
-        // heap slot address whose `GLOBAL_FIELD_UNLOG_BIT_SPEC` side metadata is mapped and free
-        // of conflicting concurrent non-atomic writes.
-        unsafe {
-            VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
-                .as_spec()
-                .extract_side_spec()
-                .load::<u8>(self)
-                == LOGGED_VALUE
-        }
+        VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
+            .as_spec()
+            .extract_side_spec()
+            .load_atomic::<u8>(self, Ordering::Relaxed)
+            == LOGGED_VALUE
     }
 
     /// Mark the field(s) covered by this address as unlogged (using a relaxed, non-atomic store),
@@ -448,13 +443,14 @@ impl Address {
             VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC.heap_bytes_per_unlog_byte();
         let a = self.align_down(heap_bytes_per_unlog_byte);
         // SAFETY: Public API preserved on `Address` (called during LXR stop-the-world promotion /
-        // remembered-set re-arming). Callers must ensure `GLOBAL_FIELD_UNLOG_BIT_SPEC` side
-        // metadata for `a` is mapped and that no concurrent thread accesses the same metadata byte.
+        // remembered-set re-arming). `set_raw_byte_atomic` writes `0xff` via a single relaxed
+        // `AtomicU8` store; callers must ensure `GLOBAL_FIELD_UNLOG_BIT_SPEC` side metadata for `a`
+        // is mapped and setting all 8 neighboring field unlog bits in that byte to `1` is sound.
         unsafe {
             VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
                 .as_spec()
                 .extract_side_spec()
-                .store_byte_relaxed(a, 0xffu8)
+                .set_raw_byte_atomic(a, Ordering::Relaxed)
         }
     }
 
@@ -502,116 +498,100 @@ impl std::str::FromStr for Address {
     }
 }
 
-/// A non-zero [`Address`] backed by [`NonNull<u8>`] (`BP 6.1`).
+/// A non-zero [`Address`] backed by [`NonZeroUsize`].
 ///
-/// Thanks to `#[repr(transparent)]` over `NonNull<u8>`, `Option<NonZeroAddress>` occupies a single
-/// pointer word via Rust's null-pointer optimization (NPO) while preserving pointer provenance on
-/// `Address <-> NonZeroAddress` round-trips in 100% safe Rust (`0` `unsafe` blocks).
-///
-/// Following VEE '09 (*Demystifying Magic*), `NonZeroAddress` can only be refined from an existing
-/// [`Address`], [`ObjectReference`], or [`NonNull<T>`] — never forged from a raw `usize` in safe
-/// code.
+/// Thanks to `#[repr(transparent)]` over `NonZeroUsize`, `Option<NonZeroAddress>` occupies a
+/// single pointer word via Rust's null-pointer optimization (NPO), automatically implements
+/// `Send + Sync` without `unsafe impl`, and preserves exposed pointer provenance on
+/// `Address <-> NonZeroAddress` round-trips in 100% safe Rust.
 #[repr(transparent)]
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct NonZeroAddress(NonNull<u8>);
-
-// SAFETY: Like `Address` and `ObjectReference`, `NonZeroAddress` is a pure non-owning address
-// value with no safe dereference operations; sending or sharing it across threads performs no
-// memory access and cannot introduce data races.
-unsafe impl Send for NonZeroAddress {}
-// SAFETY: See `Send` impl above — `NonZeroAddress` exposes no interior mutability or safe
-// dereference methods.
-unsafe impl Sync for NonZeroAddress {}
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, NoUninit)]
+pub struct NonZeroAddress(NonZeroUsize);
 
 impl NonZeroAddress {
-    /// Refine an [`Address`] into `Some(NonZeroAddress)` iff `!addr.is_zero()` (`0` `unsafe`,
-    /// preserves provenance).
+    /// Refine an [`Address`] into `Some(NonZeroAddress)` iff `!addr.is_zero()` (`0` `unsafe`).
     #[inline(always)]
-    pub fn try_from_address(addr: Address) -> Option<Self> {
-        NonNull::new(addr.to_mut_ptr::<u8>()).map(Self)
+    pub const fn try_from_address(addr: Address) -> Option<Self> {
+        match NonZeroUsize::new(addr.0) {
+            Some(nz) => Some(Self(nz)),
+            None => None,
+        }
     }
 
     /// Refine a non-zero [`Address`] into `NonZeroAddress`, panicking if `addr.is_zero()`.
     #[inline(always)]
-    pub fn from_address(addr: Address) -> Self {
-        Self::try_from_address(addr).expect("NonZeroAddress::from_address received Address::ZERO")
+    pub const fn from_address(addr: Address) -> Self {
+        match Self::try_from_address(addr) {
+            Some(nz) => nz,
+            None => panic!("NonZeroAddress::from_address received Address::ZERO"),
+        }
     }
 
-    /// Construct a `NonZeroAddress` from a [`NonNull<T>`] while preserving exact pointer
-    /// provenance (`0` `unsafe`).
+    /// Construct a `NonZeroAddress` from a [`NonNull<T>`] while exposing pointer provenance (`0`
+    /// `unsafe`).
     #[inline(always)]
-    pub const fn from_non_null<T>(ptr: NonNull<T>) -> Self {
-        Self(ptr.cast::<u8>())
+    pub fn from_non_null<T>(ptr: NonNull<T>) -> Self {
+        Self::from_address(Address::from_mut_ptr(ptr.as_ptr()))
     }
 
     /// Extract the non-zero raw [`Address`] of an [`ObjectReference`] (`0` `unsafe`).
     #[inline(always)]
-    pub fn from_object_ref(object: ObjectReference) -> Self {
-        Self::try_from_address(object.to_raw_address())
-            .expect("ObjectReference raw address is non-zero")
+    pub const fn from_object_ref(object: ObjectReference) -> Self {
+        Self(object.0)
     }
 
-    /// Recover the underlying [`Address`] (`0` `unsafe`, preserves provenance).
+    /// Recover the underlying [`Address`] (`0` `unsafe`).
     #[inline(always)]
-    pub fn to_address(self) -> Address {
-        Address::from_mut_ptr(self.0.as_ptr())
+    pub const fn to_address(self) -> Address {
+        Address(self.0.get())
     }
 
-    /// Return the underlying [`NonNull<u8>`] pointer.
+    /// Return the underlying [`NonNull<u8>`] pointer, reconstituting exposed provenance.
     #[inline(always)]
-    pub const fn as_non_null(self) -> NonNull<u8> {
-        self.0
+    pub fn as_non_null(self) -> NonNull<u8> {
+        NonNull::new(self.to_address().to_mut_ptr()).expect("NonZeroAddress is non-zero")
     }
 
-    /// Return the integer representation of the address without exposing provenance.
+    /// Return the integer representation of the address.
     #[inline(always)]
-    pub fn as_usize(self) -> usize {
-        self.0.as_ptr().addr()
+    pub const fn as_usize(self) -> usize {
+        self.0.get()
     }
 }
 
 impl fmt::UpperHex for NonZeroAddress {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:X}", self.as_usize())
+        write!(f, "{:X}", self.0)
     }
 }
 
 impl fmt::LowerHex for NonZeroAddress {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:x}", self.as_usize())
+        write!(f, "{:x}", self.0)
     }
 }
 
 impl fmt::Display for NonZeroAddress {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:#x}", self.as_usize())
+        write!(f, "{:#x}", self.0)
     }
 }
 
 impl fmt::Debug for NonZeroAddress {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:#x}", self.as_usize())
+        write!(f, "{:#x}", self.0)
     }
 }
 
-/// A non-zero [`Address`] statically guaranteed to be aligned to `1usize << LOG_ALIGN` bytes
-/// (`BP 6.1`).
+/// A non-zero [`Address`] statically guaranteed to be aligned to `1usize << LOG_ALIGN` bytes.
 ///
-/// Backed by `#[repr(transparent)] NonNull<u8>` so `Option<AlignedAddress<LOG_ALIGN>>` is 1 word
-/// (NPO) and `to_address()` recovers `Address` in **0 `unsafe`** while preserving provenance.
+/// Backed by `#[repr(transparent)] NonZeroUsize` so `Option<AlignedAddress<LOG_ALIGN>>` is 1 word
+/// (NPO) and automatically implements `Send + Sync` without `unsafe impl`.
 ///
-/// Type invariant: `self.0` is non-null AND `(self.as_usize() & (Self::ALIGN - 1)) == 0`.
+/// Type invariant: `self.0` is non-zero AND `(self.as_usize() & (Self::ALIGN - 1)) == 0`.
 #[repr(transparent)]
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct AlignedAddress<const LOG_ALIGN: u32>(NonNull<u8>);
-
-// SAFETY: Like `Address`, `ObjectReference`, and `NonZeroAddress`, `AlignedAddress` is a pure
-// non-owning address value with no safe dereference methods; moving it across threads performs no
-// memory access and cannot cause data races.
-unsafe impl<const LOG_ALIGN: u32> Send for AlignedAddress<LOG_ALIGN> {}
-// SAFETY: See `Send` impl above — `AlignedAddress` exposes no interior mutability or safe
-// dereference methods.
-unsafe impl<const LOG_ALIGN: u32> Sync for AlignedAddress<LOG_ALIGN> {}
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, NoUninit)]
+pub struct AlignedAddress<const LOG_ALIGN: u32>(NonZeroUsize);
 
 impl<const LOG_ALIGN: u32> AlignedAddress<LOG_ALIGN> {
     /// Log2 of the required alignment in bytes.
@@ -628,12 +608,15 @@ impl<const LOG_ALIGN: u32> AlignedAddress<LOG_ALIGN> {
     };
 
     /// Refine an existing [`Address`] into `Some(AlignedAddress)` iff `!addr.is_zero()` and
-    /// `addr.is_aligned_to(Self::ALIGN)` (`0` `unsafe`, preserves provenance).
+    /// `addr.is_aligned_to(Self::ALIGN)` (`0` `unsafe`).
     #[inline(always)]
-    pub fn try_from_address(addr: Address) -> Option<Self> {
+    pub const fn try_from_address(addr: Address) -> Option<Self> {
         let align = const { Self::ALIGN };
         if addr.is_aligned_to(align) {
-            NonNull::new(addr.to_mut_ptr::<u8>()).map(Self)
+            match NonZeroUsize::new(addr.0) {
+                Some(nz) => Some(Self(nz)),
+                None => None,
+            }
         } else {
             None
         }
@@ -652,17 +635,17 @@ impl<const LOG_ALIGN: u32> AlignedAddress<LOG_ALIGN> {
     }
 
     /// Align `addr` down to [`Self::ALIGN`] and return `Some(AlignedAddress)` iff the aligned
-    /// result is non-zero (`0` `unsafe`, preserves provenance).
+    /// result is non-zero (`0` `unsafe`).
     #[inline(always)]
-    pub fn align_down_from(addr: Address) -> Option<Self> {
+    pub const fn align_down_from(addr: Address) -> Option<Self> {
         let align = const { Self::ALIGN };
         Self::try_from_address(addr.align_down(align))
     }
 
-    /// Recover the underlying [`Address`] (`0` `unsafe`, preserves provenance).
+    /// Recover the underlying [`Address`] (`0` `unsafe`).
     #[inline(always)]
-    pub fn to_address(self) -> Address {
-        Address::from_mut_ptr(self.0.as_ptr())
+    pub const fn to_address(self) -> Address {
+        Address(self.0.get())
     }
 
     /// Widen to [`NonZeroAddress`] (`0` `unsafe`).
@@ -671,40 +654,40 @@ impl<const LOG_ALIGN: u32> AlignedAddress<LOG_ALIGN> {
         NonZeroAddress(self.0)
     }
 
-    /// Return the underlying [`NonNull<u8>`] pointer.
+    /// Return the underlying [`NonNull<u8>`] pointer, reconstituting exposed provenance.
     #[inline(always)]
-    pub const fn as_non_null(self) -> NonNull<u8> {
-        self.0
+    pub fn as_non_null(self) -> NonNull<u8> {
+        self.to_non_zero().as_non_null()
     }
 
-    /// Return the integer representation of the address without exposing provenance.
+    /// Return the integer representation of the address.
     #[inline(always)]
-    pub fn as_usize(self) -> usize {
-        self.0.as_ptr().addr()
+    pub const fn as_usize(self) -> usize {
+        self.0.get()
     }
 }
 
 impl<const LOG_ALIGN: u32> fmt::UpperHex for AlignedAddress<LOG_ALIGN> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:X}", self.as_usize())
+        write!(f, "{:X}", self.0)
     }
 }
 
 impl<const LOG_ALIGN: u32> fmt::LowerHex for AlignedAddress<LOG_ALIGN> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:x}", self.as_usize())
+        write!(f, "{:x}", self.0)
     }
 }
 
 impl<const LOG_ALIGN: u32> fmt::Display for AlignedAddress<LOG_ALIGN> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:#x}", self.as_usize())
+        write!(f, "{:#x}", self.0)
     }
 }
 
 impl<const LOG_ALIGN: u32> fmt::Debug for AlignedAddress<LOG_ALIGN> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:#x}", self.as_usize())
+        write!(f, "{:#x}", self.0)
     }
 }
 

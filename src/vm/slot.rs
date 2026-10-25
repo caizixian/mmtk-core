@@ -2,6 +2,8 @@
 //! customize the layout of slots and the behavior of loading and updating object references in
 //! slots.
 
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::{fmt::Debug, ops::Range};
@@ -47,8 +49,9 @@ use crate::util::{Address, ObjectReference};
 /// contains a pointer to a memory location that holds an address.
 ///
 /// ```rust
+/// # use mmtk::util::Address;
 /// pub struct SimpleSlot {
-///     slot_addr: *mut Atomic<Address>,
+///     slot_addr: Address,
 /// }
 /// ```
 ///
@@ -171,7 +174,7 @@ pub trait Slot: Copy + Send + Sync + Debug + PartialEq + Eq + Hash {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct SimpleSlot {
-    slot_addr: *mut Atomic<Address>,
+    slot_addr: Address,
 }
 
 impl SimpleSlot {
@@ -183,47 +186,42 @@ impl SimpleSlot {
     ///
     /// Arguments:
     /// *   `address`: The address in memory where an `ObjectReference` is stored.
-    pub fn from_address(address: Address) -> Self {
-        Self {
-            slot_addr: address.to_mut_ptr(),
-        }
+    pub const fn from_address(address: Address) -> Self {
+        Self { slot_addr: address }
     }
 
     /// Get the address of the slot.
     ///
     /// Return the address at which the `ObjectReference` is stored.
-    pub fn as_address(&self) -> Address {
-        Address::from_mut_ptr(self.slot_addr)
+    pub const fn as_address(&self) -> Address {
+        self.slot_addr
     }
 }
-
-// SAFETY: `SimpleSlot` is a handle to a VM memory slot accessed exclusively through lock-free
-// `Atomic<Address>` operations; transferring or sharing the handle across GC worker threads is
-// thread-safe whenever the VM upholds the `Slot` memory validity contract.
-unsafe impl Send for SimpleSlot {}
-// SAFETY: Shared references `&SimpleSlot` only perform atomic loads and stores on `Atomic<Address>`,
-// which are free of data races when called concurrently by multiple GC workers.
-unsafe impl Sync for SimpleSlot {}
 
 impl Slot for SimpleSlot {
     fn load(&self) -> Option<ObjectReference> {
         // SAFETY: Under MMTk's `Slot` VM binding contract (frozen public safe trait API):
-        // (a) `self.slot_addr` is non-null, aligned to `align_of::<Atomic<Address>>()`, and points
-        //     to live, initialized slot memory;
-        // (b) no active `&mut` reference aliases `*self.slot_addr` for the duration of this call;
+        // (a) `self.slot_addr` is non-zero, aligned to `align_of::<Atomic<Address>>()`, and points
+        //     to live, initialized slot memory with exposed provenance;
+        // (b) no active `&mut` reference aliases that slot for the duration of this call;
         // (c) no concurrent non-atomic writes race with this atomic load.
-        let addr = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
+        let addr = unsafe {
+            (*self.slot_addr.to_ptr::<Atomic<Address>>()).load(atomic::Ordering::Relaxed)
+        };
         ObjectReference::from_raw_address(addr)
     }
 
     fn store(&self, object: ObjectReference) {
         // SAFETY: Under MMTk's `Slot` VM binding contract (frozen public safe trait API):
-        // (a) `self.slot_addr` is non-null, aligned to `align_of::<Atomic<Address>>()`, and points
-        //     to live, initialized (required to form `&Atomic<Address>`), writable slot memory;
-        // (b) no active `&mut` reference aliases `*self.slot_addr` for the duration of this call;
+        // (a) `self.slot_addr` is non-zero, aligned to `align_of::<Atomic<Address>>()`, and points
+        //     to live, initialized, writable slot memory with exposed provenance;
+        // (b) no active `&mut` reference aliases that slot for the duration of this call;
         // (c) no concurrent non-atomic reads or writes race with this atomic store (concurrent GC
         //     workers tracing duplicate edges via `SimpleSlot` also use `Atomic<Address>`).
-        unsafe { (*self.slot_addr).store(object.to_raw_address(), atomic::Ordering::Relaxed) }
+        unsafe {
+            (*self.slot_addr.to_ptr::<Atomic<Address>>())
+                .store(object.to_raw_address(), atomic::Ordering::Relaxed)
+        }
     }
 }
 
@@ -401,17 +399,14 @@ mod tests {
 
     #[test]
     fn address_range_iteration() {
-        let src: Vec<usize> = (0..32).collect();
+        let src = [0usize; 8];
         let src_start = Address::from_ptr(src.as_ptr());
-        let src_slice = src_start..src_start + src.len();
-        for (i, v) in src_slice.iter_slots().enumerate() {
-            // SAFETY: `src_start` is derived from `src.as_ptr()`, carrying read provenance over
-            // all `32 * BYTES_IN_ADDRESS` initialized, `usize`-aligned bytes of `src`, which lives
-            // without mutation across the loop. `src_slice` spans the first `32` bytes
-            // (`32 / BYTES_IN_ADDRESS` words, `< 32` elements), and `AddressRangeIterator` steps
-            // by `BYTES_IN_ADDRESS`, so every `v` is non-null, `usize`-aligned, and within `src`'s
-            // provenance at initialized element `src[i]`.
-            assert_eq!(i, unsafe { v.load::<usize>() })
+        let src_slice = src_start..src_start + src.len() * BYTES_IN_ADDRESS;
+        let slots: Vec<Address> = src_slice.iter_slots().collect();
+        assert_eq!(slots.len(), src.len());
+        for (i, slot) in slots.into_iter().enumerate() {
+            assert_eq!(slot, Address::from_ref(&src[i]));
+            assert_eq!(Slot::load(&slot), None);
         }
     }
 

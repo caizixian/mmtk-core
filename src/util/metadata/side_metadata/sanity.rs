@@ -784,7 +784,7 @@ mod tests {
             name: "spec_2",
             is_global: true,
             // We specifically make up an invalid offset
-            offset: (Address::ZERO + metadata_address_range_size(&spec_1) - 1).as_usize(),
+            offset: metadata_address_range_size(&spec_1) - 1,
             log_num_of_bits: 0,
             log_bytes_in_region: 0,
         };
