@@ -20,7 +20,11 @@ pub fn bench(c: &mut Criterion) {
 
     let large = memory_manager::alloc(fixture.mutator(), 40, 0, 0, mmtk::AllocationSemantics::Los);
 
+    // SAFETY: `42` and `usize::MAX - 1024` are synthetic unmapped raw virtual addresses used only
+    // to benchmark `Address::is_mapped()` metadata lookups; they are never dereferenced.
     let low = unsafe { Address::from_usize(42usize) };
+    // SAFETY: See above; `usize::MAX - 1024` is only queried via `Address::is_mapped()` and never
+    // dereferenced.
     let high = unsafe { Address::from_usize(usize::MAX - 1024usize) };
 
     c.bench_function("is_mapped_regular", |b| {
@@ -56,11 +60,9 @@ pub fn bench(c: &mut Criterion) {
     c.bench_function("is_mapped_seq", |b| {
         b.iter(|| {
             use mmtk::util::heap::vm_layout::BYTES_IN_CHUNK;
-            let start = regular.as_usize();
             let num_chunks = 16384usize;
-            let end = start + num_chunks * BYTES_IN_CHUNK;
-            for addr_usize in (start..end).step_by(BYTES_IN_CHUNK) {
-                let addr = unsafe { Address::from_usize(addr_usize) };
+            for i in 0..num_chunks {
+                let addr = regular + i * BYTES_IN_CHUNK;
                 let _is_mapped = addr.is_mapped();
             }
         })

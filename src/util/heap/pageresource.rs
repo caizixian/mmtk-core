@@ -1,9 +1,9 @@
 use crate::util::address::Address;
-use crate::util::conversions;
 use crate::util::freelist::FreeList;
 use crate::util::opaque_pointer::*;
 use std::sync::Mutex;
 
+use super::layout::vm_layout::BYTES_IN_CHUNK;
 use super::layout::VMMap;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::heap::PageAccounting;
@@ -155,14 +155,12 @@ impl CommonPageResource {
     ) -> Address {
         let mut head_discontiguous_region = self.head_discontiguous_region.lock().unwrap();
 
-        let new_head: Address = unsafe {
-            self.vm_map.allocate_contiguous_chunks(
-                space_descriptor,
-                chunks,
-                *head_discontiguous_region,
-                freelist,
-            )
-        };
+        let new_head: Address = self.vm_map.allocate_contiguous_chunks(
+            space_descriptor,
+            chunks,
+            *head_discontiguous_region,
+            freelist,
+        );
         if new_head.is_zero() {
             return Address::ZERO;
         }
@@ -174,19 +172,57 @@ impl CommonPageResource {
     /// Release one or more contiguous chunks associated with a discontiguous
     /// space.
     pub fn release_discontiguous_chunks(&self, chunk: Address) {
+        assert!(
+            !chunk.is_zero() && chunk.is_aligned_to(BYTES_IN_CHUNK),
+            "chunk {chunk} must be non-zero and chunk-aligned"
+        );
         let mut head_discontiguous_region = self.head_discontiguous_region.lock().unwrap();
-        debug_assert!(chunk == conversions::chunk_align_down(chunk));
+        let mut cur = *head_discontiguous_region;
+        let mut found = false;
+        while !cur.is_zero() {
+            if cur == chunk {
+                found = true;
+                break;
+            }
+            cur = self.vm_map.get_next_contiguous_region(cur);
+        }
+        assert!(
+            found,
+            "chunk {chunk} is not an allocated discontiguous region of this PageResource"
+        );
         if chunk == *head_discontiguous_region {
             *head_discontiguous_region = self.vm_map.get_next_contiguous_region(chunk);
         }
+        // SAFETY: `self.head_discontiguous_region` is a private `Mutex<Address>` whose linked list
+        // only ever records non-zero, `BYTES_IN_CHUNK`-aligned region-start addresses returned by
+        // `self.vm_map.allocate_contiguous_chunks` in `grow_discontiguous_space` (and removes them
+        // here or in `release_all_chunks` under the same lock). Holding that lock and verifying
+        // `assert!(found)` above proves `chunk` is a currently allocated region-start address in
+        // `self.vm_map`.
         unsafe {
             self.vm_map.free_contiguous_chunks(chunk);
         }
     }
 
-    pub fn release_all_chunks(&self) {
+    /// Release all discontiguous chunk regions owned by this page resource back to the global pool.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that no live objects or active allocator cursors still reference any
+    /// discontiguous chunks owned by this page resource, because releasing them clears their chunk
+    /// descriptors and `SFT_MAP` entries and returns them to `self.vm_map` for reuse.
+    pub unsafe fn release_all_chunks(&self) {
         let mut head_discontiguous_region = self.head_discontiguous_region.lock().unwrap();
-        self.vm_map.free_all_chunks(*head_discontiguous_region);
+        let head = *head_discontiguous_region;
+        // SAFETY: `self.head_discontiguous_region` is a private `Mutex<Address>` initialized to
+        // `Address::ZERO` and only updated in `grow_discontiguous_space` (to region-start addresses
+        // returned by `self.vm_map.allocate_contiguous_chunks`), `release_discontiguous_chunks`,
+        // and here under the same lock, so `head` and all regions linked from it are either empty
+        // (`Address::ZERO`) or currently allocated region-start addresses of this space. The caller
+        // guarantees no live objects or active allocator cursors reference any of those chunks.
+        unsafe {
+            self.vm_map.free_all_chunks(head);
+        }
         *head_discontiguous_region = Address::ZERO;
     }
 

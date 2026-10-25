@@ -31,11 +31,49 @@ const INDEX_SHIFT: usize = TYPE_BITS;
 static DISCONTIGUOUS_SPACE_INDEX: AtomicUsize = AtomicUsize::new(DISCONTIG_INDEX_INCREMENT);
 const DISCONTIG_INDEX_INCREMENT: usize = 1 << TYPE_BITS;
 
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, PartialEq, Debug, Zeroable)]
 #[repr(transparent)]
 pub struct SpaceDescriptor(usize);
 
-unsafe impl Zeroable for SpaceDescriptor {}
+/// An atomic wrapper around [`SpaceDescriptor`] with the same layout and bit-validity as `usize`.
+#[repr(transparent)]
+pub(crate) struct AtomicSpaceDescriptor(AtomicUsize);
+
+// SAFETY: `AtomicSpaceDescriptor` is `#[repr(transparent)]` over `AtomicUsize`, which
+// `core::sync::atomic` guarantees has the same size, alignment, and bit-validity as `usize`.
+// Every bit pattern (including all-zero bytes, representing `SpaceDescriptor::UNINITIALIZED`)
+// is therefore a valid `AtomicSpaceDescriptor`.
+unsafe impl Zeroable for AtomicSpaceDescriptor {}
+
+impl AtomicSpaceDescriptor {
+    pub(crate) const fn new(descriptor: SpaceDescriptor) -> Self {
+        Self(AtomicUsize::new(descriptor.0))
+    }
+
+    #[inline]
+    pub(crate) fn load(&self, order: Ordering) -> SpaceDescriptor {
+        SpaceDescriptor(self.0.load(order))
+    }
+
+    #[inline]
+    pub(crate) fn store(&self, descriptor: SpaceDescriptor, order: Ordering) {
+        self.0.store(descriptor.0, order);
+    }
+
+    #[inline]
+    pub(crate) fn compare_exchange(
+        &self,
+        current: SpaceDescriptor,
+        new: SpaceDescriptor,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<SpaceDescriptor, SpaceDescriptor> {
+        self.0
+            .compare_exchange(current.0, new.0, success, failure)
+            .map(SpaceDescriptor)
+            .map_err(SpaceDescriptor)
+    }
+}
 
 impl SpaceDescriptor {
     pub const UNINITIALIZED: Self = SpaceDescriptor(0);
@@ -98,21 +136,49 @@ impl SpaceDescriptor {
     }
 
     pub fn get_start(self) -> Address {
-        if !vm_layout().force_use_contiguous_spaces {
-            // For 64-bit discontiguous space, use 32-bit start address
+        assert!(
+            self.is_contiguous(),
+            "SpaceDescriptor::get_start requires a contiguous space descriptor"
+        );
+        let layout = vm_layout();
+        if !layout.force_use_contiguous_spaces {
+            // For 32-bit or 64-bit discontiguous/compressed space, decode mantissa/exponent start address
             self.get_start_32()
         } else {
-            unsafe { Address::from_usize(self.get_index() << vm_layout().log_space_extent) }
+            let log_space_extent = layout.log_space_extent;
+            assert!(
+                log_space_extent < usize::BITS as usize,
+                "log_space_extent ({log_space_extent}) overflows usize::BITS ({})",
+                usize::BITS
+            );
+            // SAFETY: The `assert!`s above verified that `self` has the contiguous tag bit set and
+            // `log_space_extent < usize::BITS as usize`, so `self.get_index() << log_space_extent`
+            // is well-defined without shift overflow. `Address::from_usize` only wraps the raw
+            // integer address without dereferencing memory.
+            unsafe { Address::from_usize(self.get_index() << log_space_extent) }
         }
     }
 
     fn get_start_32(self) -> Address {
-        debug_assert!(self.is_contiguous());
+        assert!(
+            self.is_contiguous(),
+            "SpaceDescriptor::get_start_32 requires a contiguous space descriptor"
+        );
 
         let descriptor = self.0;
         let mantissa = descriptor >> MANTISSA_SHIFT;
         let exponent = (descriptor & EXPONENT_MASK) >> EXPONENT_SHIFT;
-        unsafe { Address::from_usize(mantissa << (BASE_EXPONENT + exponent)) }
+        let shift = BASE_EXPONENT + exponent;
+        assert!(
+            shift < usize::BITS as usize,
+            "SpaceDescriptor shift ({shift}) overflows usize::BITS ({})",
+            usize::BITS
+        );
+        // SAFETY: The `assert!`s above verified that `self` has the contiguous tag bit set and
+        // `shift < usize::BITS as usize`, so `mantissa << shift` is well-defined without shift
+        // overflow. `Address::from_usize` only wraps the reconstructed raw address without
+        // dereferencing memory.
+        unsafe { Address::from_usize(mantissa << shift) }
     }
 
     #[cfg(target_pointer_width = "64")]

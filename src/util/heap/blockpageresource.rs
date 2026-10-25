@@ -8,12 +8,10 @@ use crate::util::heap::pageresource::CommonPageResource;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::linear_scan::Region;
 use crate::util::opaque_pointer::*;
-use crate::util::rust_util::zeroed_alloc::new_zeroed_vec;
 use crate::vm::*;
 use atomic::Ordering;
-use spin::RwLock;
-use std::cell::UnsafeCell;
-use std::mem::MaybeUninit;
+use crossbeam::utils::CachePadded;
+use spin::{Mutex as SpinMutex, RwLock};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
 
@@ -119,21 +117,22 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         let first_block = start;
         // 3. Push all remaining blocks to one or more block lists
         let last_block = start + BYTES_IN_CHUNK;
-        let mut array = BlockQueue::new();
+        let mut blocks = Vec::with_capacity(BlockQueue::<B>::CAPACITY);
         let mut cursor = start + B::BYTES;
         while cursor < last_block {
-            let result = unsafe { array.push_relaxed(B::from_aligned_address(cursor)) };
-            if let Err(block) = result {
-                self.block_queue.add_global_array(array);
-                array = BlockQueue::new();
-                let result2 = unsafe { array.push_relaxed(block) };
-                debug_assert!(result2.is_ok());
+            if blocks.len() == BlockQueue::<B>::CAPACITY {
+                self.block_queue
+                    .add_global_array(BlockQueue::from_vec(blocks));
+                blocks = Vec::with_capacity(BlockQueue::<B>::CAPACITY);
             }
+            blocks.push(B::from_aligned_address(cursor));
             cursor += B::BYTES;
         }
-        debug_assert!(!array.is_empty());
         // 4. Push the block list to the global pool
-        self.block_queue.add_global_array(array);
+        if !blocks.is_empty() {
+            self.block_queue
+                .add_global_array(BlockQueue::from_vec(blocks));
+        }
         // Finish slow-allocation
         self.commit_pages(reserved_pages, required_pages, tls);
         Result::Ok(PRAllocResult {
@@ -179,61 +178,25 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     }
 }
 
-/// A block list that supports fast lock-free push/pop operations
+/// An immutable batch of blocks that supports fast lock-free pop operations once published to the
+/// global pool.
 struct BlockQueue<B: Region> {
-    /// The number of elements in the queue.
+    /// The number of remaining elements in the queue (`0..=data.len()`).
     cursor: AtomicUsize,
-    /// The underlying data storage.
-    ///
-    /// -   `UnsafeCell<T>`: It may be accessed by multiple threads.
-    /// -   `Box<[T]>`: It holds an array allocated on the heap.  It cannot be resized, but can be
-    ///     replaced with another array as a whole.
-    /// -   `MaybeUninit<T>`: It may contain uninitialized elements.
-    ///
-    /// The implementaiton of `BlockQueue` must ensure there is no data race, and it never reads
-    /// uninitialized elements.
-    data: UnsafeCell<Box<[MaybeUninit<B>]>>,
-}
-
-impl<B: Region> BlockQueue<B> {
-    /// Create an array
-    fn new() -> Self {
-        let zeroed_vec = new_zeroed_vec(Self::CAPACITY);
-        let boxed_slice = zeroed_vec.into_boxed_slice();
-        let data = UnsafeCell::new(boxed_slice);
-        Self {
-            cursor: AtomicUsize::new(0),
-            data,
-        }
-    }
+    /// Immutable storage of initialized blocks. Each successful decrement of `cursor` from `i` to
+    /// `i - 1` claims `data[i - 1]`.
+    data: Box<[B]>,
 }
 
 impl<B: Region> BlockQueue<B> {
     const CAPACITY: usize = 256;
 
-    /// Get an entry
-    fn get_entry(&self, i: usize) -> B {
-        unsafe { (*self.data.get())[i].assume_init() }
-    }
-
-    /// Set an entry.
-    ///
-    /// It's unsafe unless the array is accessed by only one thread (i.e. used as a thread-local array).
-    unsafe fn set_entry(&self, i: usize, block: B) {
-        (*self.data.get())[i].write(block);
-    }
-
-    /// Non-atomically push an element.
-    ///
-    /// It's unsafe unless the array is accessed by only one thread (i.e. used as a thread-local array).
-    unsafe fn push_relaxed(&self, block: B) -> Result<(), B> {
-        let i = self.cursor.load(Ordering::Relaxed);
-        if i < Self::CAPACITY {
-            self.set_entry(i, block);
-            self.cursor.store(i + 1, Ordering::Relaxed);
-            Ok(())
-        } else {
-            Err(block)
+    /// Construct a `BlockQueue` from an initialized vector of blocks.
+    fn from_vec(blocks: Vec<B>) -> Self {
+        let data = blocks.into_boxed_slice();
+        Self {
+            cursor: AtomicUsize::new(data.len()),
+            data,
         }
     }
 
@@ -251,7 +214,7 @@ impl<B: Region> BlockQueue<B> {
                 }
             });
         if let Ok(i) = i {
-            Some(self.get_entry(i - 1))
+            Some(self.data[i - 1])
         } else {
             None
         }
@@ -270,26 +233,9 @@ impl<B: Region> BlockQueue<B> {
     /// Iterate all elements in the array
     fn iterate_blocks(&self, f: &mut impl FnMut(B)) {
         let len = self.len();
-        for i in 0..len {
-            f(self.get_entry(i))
+        for &block in &self.data[..len] {
+            f(block);
         }
-    }
-
-    /// Replace the array with a new array.
-    ///
-    /// Return the old array
-    fn replace(&self, new_array: Self) -> Self {
-        // Swap cursor
-        let temp = self.cursor.load(Ordering::Relaxed);
-        self.cursor
-            .store(new_array.cursor.load(Ordering::Relaxed), Ordering::Relaxed);
-        new_array.cursor.store(temp, Ordering::Relaxed);
-        // Swap data
-        unsafe {
-            core::ptr::swap(self.data.get(), new_array.data.get());
-        }
-        // Return old array
-        new_array
     }
 }
 
@@ -303,8 +249,9 @@ pub struct BlockPool<B: Region> {
     head_global_freed_blocks: RwLock<Option<BlockQueue<B>>>,
     /// A list of BlockArray that is flushed to the global pool
     global_freed_blocks: RwLock<Vec<BlockQueue<B>>>,
-    /// Thread-local block queues
-    worker_local_freed_blocks: Vec<BlockQueue<B>>,
+    /// Cache-padded per-worker local block buffers, synchronized with an uncontended spinlock so
+    /// concurrent `flush_all` or `iterate_blocks` calls remain sound without `UnsafeCell`.
+    worker_local_freed_blocks: Vec<CachePadded<SpinMutex<Vec<B>>>>,
     /// Total number of blocks in the whole BlockQueue
     count: AtomicUsize,
 }
@@ -315,7 +262,13 @@ impl<B: Region> BlockPool<B> {
         Self {
             head_global_freed_blocks: RwLock::new(None),
             global_freed_blocks: RwLock::new(vec![]),
-            worker_local_freed_blocks: (0..num_workers).map(|_| BlockQueue::new()).collect(),
+            worker_local_freed_blocks: (0..num_workers)
+                .map(|_| {
+                    CachePadded::new(SpinMutex::new(Vec::with_capacity(
+                        BlockQueue::<B>::CAPACITY,
+                    )))
+                })
+                .collect(),
             count: AtomicUsize::new(0),
         }
     }
@@ -330,16 +283,19 @@ impl<B: Region> BlockPool<B> {
     pub fn push(&self, block: B) {
         self.count.fetch_add(1, Ordering::SeqCst);
         let id = crate::scheduler::current_worker_ordinal().unwrap();
-        let failed = unsafe {
-            self.worker_local_freed_blocks[id]
-                .push_relaxed(block)
-                .is_err()
+        let flushed = {
+            let mut local = self.worker_local_freed_blocks[id].lock();
+            if local.len() < BlockQueue::<B>::CAPACITY {
+                local.push(block);
+                None
+            } else {
+                let mut new_vec = Vec::with_capacity(BlockQueue::<B>::CAPACITY);
+                new_vec.push(block);
+                let old_vec = std::mem::replace(&mut *local, new_vec);
+                Some(BlockQueue::from_vec(old_vec))
+            }
         };
-        if failed {
-            let queue = BlockQueue::new();
-            let result = unsafe { queue.push_relaxed(block) };
-            debug_assert!(result.is_ok());
-            let old_queue = self.worker_local_freed_blocks[id].replace(queue);
+        if let Some(old_queue) = flushed {
             assert!(!old_queue.is_empty());
             self.global_freed_blocks.write().push(old_queue);
         }
@@ -347,7 +303,7 @@ impl<B: Region> BlockPool<B> {
 
     /// Pop a block from the global pool
     pub fn pop(&self) -> Option<B> {
-        if self.len() == 0 {
+        if self.is_empty() {
             return None;
         }
         let head_global_freed_blocks = self.head_global_freed_blocks.upgradeable_read();
@@ -379,17 +335,24 @@ impl<B: Region> BlockPool<B> {
 
     /// Flush a given thread-local queue to the global pool
     fn flush(&self, id: usize) {
-        if !self.worker_local_freed_blocks[id].is_empty() {
-            let queue = self.worker_local_freed_blocks[id].replace(BlockQueue::new());
-            if !queue.is_empty() {
-                self.global_freed_blocks.write().push(queue)
+        let flushed = {
+            let mut local = self.worker_local_freed_blocks[id].lock();
+            if local.is_empty() {
+                None
+            } else {
+                let old_vec =
+                    std::mem::replace(&mut *local, Vec::with_capacity(BlockQueue::<B>::CAPACITY));
+                Some(BlockQueue::from_vec(old_vec))
             }
+        };
+        if let Some(queue) = flushed {
+            self.global_freed_blocks.write().push(queue);
         }
     }
 
     /// Flush all thread-local queues to the global pool
     pub fn flush_all(&self) {
-        if self.len() == 0 {
+        if self.is_empty() {
             return;
         }
         for i in 0..self.worker_local_freed_blocks.len() {
@@ -402,6 +365,11 @@ impl<B: Region> BlockPool<B> {
         self.count.load(Ordering::SeqCst)
     }
 
+    /// Test if the pool contains no free blocks
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Iterate all the blocks in the BlockQueue
     pub fn iterate_blocks(&self, f: &mut impl FnMut(B)) {
         if let Some(array) = &*self.head_global_freed_blocks.read() {
@@ -410,8 +378,10 @@ impl<B: Region> BlockPool<B> {
         for array in &*self.global_freed_blocks.read() {
             array.iterate_blocks(f);
         }
-        for array in &self.worker_local_freed_blocks {
-            array.iterate_blocks(f);
+        for local in &self.worker_local_freed_blocks {
+            for &block in local.lock().iter() {
+                f(block);
+            }
         }
     }
 }

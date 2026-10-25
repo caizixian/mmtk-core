@@ -183,9 +183,9 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
         MonotonePageResource {
             common: CommonPageResource::new(false, true, vm_map),
             sync: Mutex::new(MonotonePageResourceSync {
-                cursor: unsafe { Address::zero() },
-                current_chunk: unsafe { Address::zero() },
-                sentinel: unsafe { Address::zero() },
+                cursor: Address::ZERO,
+                current_chunk: Address::ZERO,
+                sentinel: Address::ZERO,
                 conditional: MonotonePageResourceConditional::Discontiguous,
             }),
             _p: PhantomData,
@@ -213,16 +213,24 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
         addr.align_down(BYTES_IN_REGION)
     }
 
+    /// Reset this page resource, reclaiming all pages and discontiguous chunks back to the global pool.
+    ///
     /// # Safety
-    /// TODO: I am not sure why this is unsafe.
+    /// The caller must ensure that no live objects or active allocator cursors still reference any
+    /// pages or chunks managed by this page resource, because resetting releases all discontiguous
+    /// chunks and clears their global chunk-descriptor and SFT mappings.
     pub unsafe fn reset(&self) {
         let mut guard = self.sync.lock().unwrap();
         self.common().accounting.reset();
-        self.release_pages(&mut guard);
+        // SAFETY: The caller of `reset` guarantees that no live objects or active allocator cursors
+        // reference any pages or discontiguous chunks owned by `self`, and `guard` holds `self.sync`.
+        unsafe {
+            self.release_pages(&mut guard);
+        }
         drop(guard);
     }
 
-    pub unsafe fn get_current_chunk(&self) -> Address {
+    pub fn get_current_chunk(&self) -> Address {
         let guard = self.sync.lock().unwrap();
         guard.current_chunk
     }
@@ -316,6 +324,11 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
         }
     }
 
+    /// Release all pages and discontiguous chunks associated with this page resource.
+    ///
+    /// # Safety
+    /// The caller must ensure that no live objects or active allocator cursors still reference any
+    /// pages or discontiguous chunks managed by this page resource.
     unsafe fn release_pages(&self, guard: &mut MutexGuard<MonotonePageResourceSync>) {
         // TODO: concurrent zeroing
         if self.common().contiguous {
@@ -332,10 +345,15 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
                 self.release_pages_extent(guard.current_chunk, bytes);
             }
 
-            guard.current_chunk = Address::zero();
-            guard.sentinel = Address::zero();
-            guard.cursor = Address::zero();
-            self.common.release_all_chunks();
+            guard.current_chunk = Address::ZERO;
+            guard.sentinel = Address::ZERO;
+            guard.cursor = Address::ZERO;
+            // SAFETY: All cursors for `self` have been cleared under `guard`, and the caller of
+            // `release_pages` guarantees no live objects or active allocator cursors reference any
+            // discontiguous chunks owned by `self.common`.
+            unsafe {
+                self.common.release_all_chunks();
+            }
         }
     }
 
