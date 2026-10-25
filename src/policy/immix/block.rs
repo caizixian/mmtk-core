@@ -410,17 +410,25 @@ impl Block {
             .bset_metadata(self.start(), Block::BYTES);
     }
 
-    /// Sweep this block.
-    pub fn sweep<VM: VMBinding>(
+    /// Sweep this block during a STW `Release` pause.
+    ///
+    /// # Safety
+    /// - `self` must be an allocated block in `space` (`get_state() != BlockState::Unallocated`).
+    /// - Must be called during a STW collection pause with exclusive sweep ownership of `self` so
+    ///   no mutator or other worker concurrently zeroes `Line::MARK_TABLE`
+    ///   (`ImmixAllocator::acquire_clean_block`), mutates side pinning/VO bits, or sweeps `self`.
+    pub unsafe fn sweep<VM: VMBinding>(
         &self,
         space: &ImmixSpace<VM>,
         mark_histogram: &mut Histogram,
         line_mark_state: Option<u8>,
     ) -> BlockSweepResult {
-        space
+        let mapped = space
             .mapped_block(*self)
-            .expect("Block::sweep requires an allocated block in space")
-            .sweep(space, mark_histogram, line_mark_state)
+            .expect("Block::sweep requires an allocated block in space");
+        // SAFETY: Caller guarantees STW exclusivity over `self` and no concurrent non-atomic
+        // `Line::MARK_TABLE.bzero_metadata` or VO/pinning metadata writes on `self`.
+        unsafe { mapped.sweep(space, mark_histogram, line_mark_state) }
     }
 
     pub fn rc_sweep_nursery<VM: VMBinding>(&self, space: &ImmixSpace<VM>) -> bool {
@@ -456,8 +464,14 @@ impl Block {
     /// This is useful for clearing VO bits during nursery GC for StickyImmix
     /// at which time young objects (allocated in unmarked regions) may die
     /// but we always consider old objects (in marked regions) as live.
+    ///
+    /// # Safety
+    /// - `self` must be an allocated block in an `ImmixSpace` with mapped `Block::MARK_TABLE`,
+    ///   `Line::MARK_TABLE` (when `line_mark_state.is_some()`), and `VO_BIT` side metadata.
+    /// - Must be called during a STW collection pause with exclusive ownership of `self`'s VO-bit
+    ///   range and with no concurrent non-atomic `Line::MARK_TABLE.bzero_metadata` on `self`.
     #[cfg(feature = "vo_bit")]
-    pub fn clear_vo_bits_for_unmarked_regions(&self, line_mark_state: Option<u8>) {
+    pub unsafe fn clear_vo_bits_for_unmarked_regions(&self, line_mark_state: Option<u8>) {
         match line_mark_state {
             None => {
                 match self.get_state() {
@@ -506,13 +520,11 @@ impl<'space> MappedBlock<'space> {
     /// # Safety
     /// * `!block.is_zero()` and `block.start().is_aligned_to(Block::BYTES)`.
     /// * `block.chunk()` must be an allocated chunk of an `ImmixSpace` that lives for `'space`
-    ///   with `space.rc_enabled == rc_enabled`, so all side-metadata tables in
-    ///   `ImmixSpace::side_metadata_specs(rc_enabled)` (plus global `RC_TABLE` when `rc_enabled`,
-    ///   verified in `ImmixSpace::new`) are mapped and initialized for `[block.start(), block.end())`
-    ///   for `'space`.
-    /// * While any atomic slice returned by `rc_table` or `line_mark_table` is live, no thread may
-    ///   perform non-atomic writes or mixed-width atomic accesses on the corresponding metadata
-    ///   bytes, and no `&[u8]` / `&mut [u8]` reference may alias them.
+    ///   with `space.rc_enabled == rc_enabled` (observed via `ChunkMap::is_allocated_checked`'s
+    ///   `Acquire` load pairing with `ChunkMap::set_allocated`'s `Release` store), so all
+    ///   side-metadata tables in `ImmixSpace::side_metadata_specs(rc_enabled)` (plus global
+    ///   `RC_TABLE` when `rc_enabled`, verified in `ImmixSpace::new`) are mapped and initialized
+    ///   for `[block.start(), block.end())` for `'space`.
     #[inline(always)]
     pub(super) unsafe fn new_unchecked(block: Block, rc_enabled: bool) -> Self {
         debug_assert!(!block.is_zero() && block.start().is_aligned_to(Block::BYTES));
@@ -528,21 +540,26 @@ impl<'space> MappedBlock<'space> {
         self.block
     }
 
-    /// Project the per-line `RC_TABLE` atomic bytes covering `[block.start(), block.end())`.
+    /// Project the per-line `RC_TABLE` atomic bytes covering `[block.start(), block.end())`,
+    /// bounded to the lifetime of `&self` (never escaping as `'space` / `'static`).
     ///
     /// Panics if `!self.rc_enabled`.
     #[inline(always)]
-    pub(crate) fn rc_table(&self) -> &'space [[AtomicU8; BYTES_PER_LINE]; LINES_IN_BLOCK] {
+    pub(crate) fn rc_table(&self) -> &[[AtomicU8; BYTES_PER_LINE]; LINES_IN_BLOCK] {
         assert!(
             self.rc_enabled,
             "MappedBlock::rc_table requires an RC-enabled ImmixSpace"
         );
-        // SAFETY: `MappedBlock<'space>`'s invariant together with `self.rc_enabled` guarantees
-        // `!self.block.is_zero()`, `self.block.start()` is aligned to `Block::BYTES` (mapping to
-        // `LINES_IN_BLOCK * BYTES_PER_LINE` bytes within a single `BYTES_IN_CHUNK` chunk), global
-        // `RC_TABLE` is mapped and initialized for `'space` (checked in `ImmixSpace::new`), and all
-        // `RC_TABLE` accesses outside STW `ProcessDecs` use `AtomicU8` without non-atomic or
-        // `&mut` aliases.
+        // SAFETY:
+        // 1. `MappedBlock<'space>` together with `self.rc_enabled` guarantees `!self.block.is_zero()`,
+        //    `self.block.start()` is aligned to `Block::BYTES` (mapping to `LINES_IN_BLOCK * BYTES_PER_LINE`
+        //    bytes within a single `BYTES_IN_CHUNK` chunk), and global `RC_TABLE` is mapped and
+        //    initialized for `'space` (checked in `ImmixSpace::new`), which outlives `&self`.
+        // 2. Every safe `RC_TABLE` operation in the crate uses `AtomicU8`; the only non-atomic
+        //    `RC_TABLE` helpers (`RefCountHelper::{set_relaxed, set_line_relaxed,
+        //    object_or_line_is_dead, rc_table_range}`) are `unsafe fn`s whose own `# Safety`
+        //    contracts require their callers to guarantee exclusivity, and tying the borrow to
+        //    `&self` prevents the slice from escaping across GC phases.
         unsafe {
             crate::util::rc::RC_TABLE
                 .mapped_atomic_byte_chunks_unchecked::<LINES_IN_BLOCK, BYTES_PER_LINE>(
@@ -551,28 +568,37 @@ impl<'space> MappedBlock<'space> {
         }
     }
 
-    /// Project the per-line `IX_LINE_MARK` atomic bytes covering `[block.start(), block.end())`.
+    /// Project the per-line `IX_LINE_MARK` atomic bytes covering `[block.start(), block.end())`,
+    /// bounded to the lifetime of `&self`.
     ///
     /// Panics if `self.rc_enabled` or `super::BLOCK_ONLY`.
+    ///
+    /// # Safety
+    /// For the lifetime of the returned `&[AtomicU8; LINES_IN_BLOCK]` slice, no thread may perform
+    /// non-atomic writes (such as `ImmixAllocator::acquire_clean_block`'s
+    /// `Line::MARK_TABLE.bzero_metadata`) or mixed-width atomic accesses on `self.block`'s
+    /// `Line::MARK_TABLE` bytes, and no `&[u8]` / `&mut [u8]` slice may alias them. This holds
+    /// either during a STW collection pause (mutators parked) or when the caller holds exclusive
+    /// allocator ownership of `self.block` (e.g. a reusable block popped from `reusable_blocks`).
     #[inline(always)]
-    pub(crate) fn line_mark_table(&self) -> &'space [AtomicU8; LINES_IN_BLOCK] {
+    pub(super) unsafe fn line_mark_table(&self) -> &[AtomicU8; LINES_IN_BLOCK] {
         assert!(
             !self.rc_enabled && !super::BLOCK_ONLY,
             "MappedBlock::line_mark_table requires a non-RC line-granularity ImmixSpace"
         );
-        // SAFETY: `MappedBlock<'space>`'s invariant together with `!self.rc_enabled && !BLOCK_ONLY`
-        // guarantees `!self.block.is_zero()`, `self.block.start()` is aligned to `Block::BYTES`
-        // (mapping to `LINES_IN_BLOCK` bytes in `Line::MARK_TABLE` within a single chunk),
-        // `Line::MARK_TABLE` is mapped and initialized for `'space`, and no non-atomic `bzero`
-        // (`acquire_clean_block` on freshly acquired clean blocks) or `&mut [u8]` aliases this
-        // allocated block's `Line::MARK_TABLE` bytes while the slice is used.
+        // SAFETY: `MappedBlock<'space>` together with `!self.rc_enabled && !BLOCK_ONLY` guarantees
+        // `!self.block.is_zero()`, `self.block.start()` is aligned to `Block::BYTES` (mapping to
+        // `LINES_IN_BLOCK` bytes in `Line::MARK_TABLE` within a single chunk), and `Line::MARK_TABLE`
+        // is mapped and initialized for `'space` (outliving `&self`). Caller guarantees no
+        // concurrent non-atomic `bzero_metadata`, mixed-width atomic access, or `&[u8]`/`&mut [u8]`
+        // alias on `self.block`'s `Line::MARK_TABLE` bytes for the lifetime of `&self`.
         unsafe {
             Line::MARK_TABLE.mapped_atomic_bytes_unchecked::<LINES_IN_BLOCK>(self.block.start())
         }
     }
 
     #[inline(always)]
-    pub(super) fn rc_array(&self) -> RCArray<'space> {
+    pub(super) fn rc_array(&self) -> RCArray<'_> {
         RCArray::from_table(self.block, self.rc_table())
     }
 
@@ -603,7 +629,14 @@ impl<'space> MappedBlock<'space> {
         false
     }
 
-    pub(crate) fn sweep<VM: VMBinding>(
+    /// Sweep this allocated block during a STW `Release` pause.
+    ///
+    /// # Safety
+    /// - `self.block` must currently be allocated (`get_state() != BlockState::Unallocated`).
+    /// - Must be called during a STW collection pause with exclusive sweep ownership of
+    ///   `self.block`, so no mutator or other worker concurrently executes non-atomic
+    ///   `Line::MARK_TABLE.bzero_metadata`, mutates VO/pinning side metadata, or sweeps `self.block`.
+    pub(crate) unsafe fn sweep<VM: VMBinding>(
         &self,
         space: &ImmixSpace<VM>,
         mark_histogram: &mut Histogram,
@@ -651,7 +684,9 @@ impl<'space> MappedBlock<'space> {
             let line_mark_state = line_mark_state.unwrap();
 
             {
-                let line_marks = self.line_mark_table();
+                // SAFETY: Caller guarantees STW exclusivity over `self.block` with mutators parked,
+                // so no thread concurrently executes `Line::MARK_TABLE.bzero_metadata` on `self.block`.
+                let line_marks = unsafe { self.line_mark_table() };
                 for idx in iter_line_indices() {
                     if line_marks[idx].load(Ordering::Relaxed) == line_mark_state {
                         marked_lines += 1;
@@ -829,8 +864,15 @@ impl<'space> MappedBlock<'space> {
         false
     }
 
+    /// Clear VO bits for unmarked regions of `self.block` during STW after `Prepare`.
+    ///
+    /// # Safety
+    /// - `self.block` must be an allocated block (`get_state() != BlockState::Unallocated`).
+    /// - Must be called during a STW collection pause with exclusive ownership of `self.block`'s
+    ///   `VO_BIT` range and with no concurrent non-atomic `Line::MARK_TABLE.bzero_metadata` on
+    ///   `self.block`.
     #[cfg(feature = "vo_bit")]
-    pub(crate) fn clear_vo_bits_for_unmarked_regions(&self, line_mark_state: Option<u8>) {
+    pub(crate) unsafe fn clear_vo_bits_for_unmarked_regions(&self, line_mark_state: Option<u8>) {
         let block = self.block;
         match line_mark_state {
             None => match block.get_state() {
@@ -841,7 +883,9 @@ impl<'space> MappedBlock<'space> {
                 _ => unreachable!(),
             },
             Some(state) => {
-                let line_marks = self.line_mark_table();
+                // SAFETY: Caller guarantees STW pause with mutators parked, so no thread
+                // concurrently executes non-atomic `Line::MARK_TABLE.bzero_metadata` on `self.block`.
+                let line_marks = unsafe { self.line_mark_table() };
                 for idx in iter_line_indices() {
                     if line_marks[idx].load(Ordering::Relaxed) != state {
                         let line = block.line_at(idx);

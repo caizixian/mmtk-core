@@ -165,9 +165,10 @@ impl ChunkMap {
                 state
             );
         }
-        // Update alloc byte atomically because multiple mutators or GC workers may concurrently
-        // allocate blocks within the same chunk or query chunk states.
-        Self::TYPED_ALLOC_TABLE.store_atomic(chunk, state, Ordering::Relaxed);
+        // Update alloc byte with `Release` ordering so all prior side-metadata mappings and
+        // `SFT_MAP` updates for `chunk` happen-before lock-free `Acquire` readers (`get_internal`,
+        // `is_allocated_checked`).
+        Self::TYPED_ALLOC_TABLE.store_atomic(chunk, state, Ordering::Release);
         // If this is a newly allcoated chunk, then expand the chunk range.
         if allocated {
             debug_assert!(!chunk.start().is_zero());
@@ -210,7 +211,7 @@ impl ChunkMap {
 
     /// Get chunk state, regardless of the space. This should always be private.
     fn get_internal(&self, chunk: Chunk) -> ChunkState {
-        Self::TYPED_ALLOC_TABLE.load_atomic(chunk, Ordering::Relaxed)
+        Self::TYPED_ALLOC_TABLE.load_atomic(chunk, Ordering::Acquire)
     }
 
     /// A range of all allocated chunks by this space in the heap.

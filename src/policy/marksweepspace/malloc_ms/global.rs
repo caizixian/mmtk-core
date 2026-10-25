@@ -635,15 +635,6 @@ impl<VM: VMBinding> MallocSpace<VM> {
         }
     }
 
-    fn set_chunk_mark(&self, start: Address, size: usize) {
-        let mut chunk = start.align_down(BYTES_IN_CHUNK);
-        while chunk < start + size {
-            self.chunk_map
-                .set_allocated(Chunk::from_aligned_address(chunk), true);
-            chunk += BYTES_IN_CHUNK;
-        }
-    }
-
     pub fn alloc(&self, tls: VMThread, size: usize, align: usize, offset: usize) -> Address {
         // TODO: Should refactor this and Space.acquire()
         if self.get_gc_trigger().poll(false, Some(self)) {
@@ -657,29 +648,23 @@ impl<VM: VMBinding> MallocSpace<VM> {
             // SAFETY: `!address.is_zero()` and `(address, is_offset_malloc)` was just returned by
             // `malloc_ms_util::alloc` for a live allocation from the active malloc backend.
             let actual_size = unsafe { get_malloc_usable_size(address, is_offset_malloc) };
+            assert!(
+                actual_size > 0,
+                "malloc_usable_size returned 0 for non-null allocation {}",
+                address
+            );
+            assert!(
+                address.as_usize().checked_add(actual_size).is_some(),
+                "MallocSpace allocation range overflow: {} + {}",
+                address,
+                actual_size
+            );
 
             if !self.is_meta_space_mapped(address, actual_size) {
-                assert!(address.as_usize().checked_add(actual_size).is_some());
-                // Map the metadata space for the associated chunk
+                // Map side metadata, register SFT entries, and publish `ChunkMap` allocation under
+                // `mmap_metadata_lock` before any lock-free reader can observe the chunk as allocated.
                 self.map_metadata_and_update_bound(address, actual_size);
-                // Verify every chunk covered by `[address, address + actual_size)` has a valid SFT entry.
-                if actual_size > 0 {
-                    let first_chunk = address.chunk_index();
-                    let last_chunk = (address + (actual_size - 1)).chunk_index();
-                    for chunk_idx in first_chunk..=last_chunk {
-                        assert!(crate::mmtk::SFT_MAP
-                            .has_sft_entry(conversions::chunk_index_to_address(chunk_idx)));
-                    }
-                }
-                // SAFETY: `self` is a heap-pinned `MallocSpace` inside `'static MMTK<VM>` registered
-                // via `notify_space_creation` during `Plan::initialize_sft`, `map_metadata_and_update_bound`
-                // mapped global/local side metadata for `[address, address + actual_size)`, and every
-                // chunk in that range was just asserted to satisfy `has_sft_entry`.
-                unsafe { crate::mmtk::SFT_MAP.update(self, address, actual_size) };
             }
-
-            // Set chunk marks for the current object
-            self.set_chunk_mark(address, actual_size);
 
             // Set page marks for current object
             self.set_page_mark(address, actual_size);
@@ -703,13 +688,16 @@ impl<VM: VMBinding> MallocSpace<VM> {
     /// we will go through all the chunks for [address, address + size), and check if they are mapped.
     /// If any of the chunks is not mapped, return false. Otherwise return true.
     fn is_meta_space_mapped(&self, address: Address, size: usize) -> bool {
-        let mut chunk = address.align_down(BYTES_IN_CHUNK);
-        while chunk < address + size {
-            // is the chunk already mapped?
+        if size == 0 {
+            return self.is_meta_space_mapped_for_address(address);
+        }
+        let first_chunk = address.chunk_index();
+        let last_chunk = (address + (size - 1)).chunk_index();
+        for chunk_idx in first_chunk..=last_chunk {
+            let chunk = conversions::chunk_index_to_address(chunk_idx);
             if !self.is_meta_space_mapped_for_address(chunk) {
                 return false;
             }
-            chunk += BYTES_IN_CHUNK;
         }
         true
     }
@@ -790,16 +778,17 @@ impl<VM: VMBinding> MallocSpace<VM> {
     }
 
     fn map_metadata_and_update_bound(&self, addr: Address, size: usize) {
-        // Acquire the lock before
+        assert!(size > 0, "map_metadata_and_update_bound requires size > 0");
+        // Acquire the lock before mapping metadata, updating SFT_MAP, and publishing `chunk_map`.
         let _lock = self.mmap_metadata_lock.lock().unwrap();
 
-        // Mmap metadata for each chunk
         let map_metadata_space_for_chunk = |start: Address| {
             debug_assert!(start.is_aligned_to(BYTES_IN_CHUNK));
             assert!(!start.is_zero(), "MallocSpace chunk start cannot be zero");
-            // Ensure global and local side metadata are mapped for the chunk before setting the
-            // chunk-map allocation entry (promoted from `debug_assert!` to unconditional `assert!`
-            // so `is_allocated_checked` witnesses mapped metadata in release builds as well).
+            if self.is_meta_space_mapped_for_address(start) {
+                return;
+            }
+            // 1. Ensure global and local side metadata are mapped for the chunk.
             let mmap_metadata_result =
                 self.metadata
                     .try_map_metadata_space(start, BYTES_IN_CHUNK, self.get_name());
@@ -809,18 +798,31 @@ impl<VM: VMBinding> MallocSpace<VM> {
                 start,
                 mmap_metadata_result
             );
-            // Set the chunk mark at the end. So if we have chunk mark set, we know we have mapped side metadata
-            // for the chunk.
+            // 2. Register `self` in `SFT_MAP` *before* setting the `ChunkMap` allocation entry, so
+            //    any concurrent mutator observing `is_meta_space_mapped == true` (via `Acquire`
+            //    load on `chunk_map`) is guaranteed to see both mapped metadata and a live SFT entry.
+            assert!(
+                crate::mmtk::SFT_MAP.has_sft_entry(start),
+                "MallocSpace chunk {} is outside SFT_MAP bounds",
+                start
+            );
+            // SAFETY: `self` is a heap-pinned `MallocSpace` inside `'static MMTK<VM>` registered
+            // via `notify_space_creation` during `Plan::initialize_sft`, `try_map_metadata_space`
+            // succeeded for `[start, start + BYTES_IN_CHUNK)`, `has_sft_entry(start)` was just
+            // asserted, and `mmap_metadata_lock` serializes chunk registration.
+            unsafe { crate::mmtk::SFT_MAP.update(self, start, BYTES_IN_CHUNK) };
+
+            // 3. Publish the chunk mark last (`Ordering::Release` in `ChunkMap::set_allocated`).
             trace!("set chunk mark bit for {}", start);
             self.chunk_map
                 .set_allocated(Chunk::from_aligned_address(start), true);
         };
 
-        // Go through each chunk, and map for them.
-        let mut chunk = conversions::chunk_align_down(addr);
-        while chunk < addr + size {
-            map_metadata_space_for_chunk(chunk);
-            chunk += BYTES_IN_CHUNK;
+        // Go through each chunk covered by `[addr, addr + size)` without pointer addition wraparound.
+        let first_chunk = addr.chunk_index();
+        let last_chunk = (addr + (size - 1)).chunk_index();
+        for chunk_idx in first_chunk..=last_chunk {
+            map_metadata_space_for_chunk(conversions::chunk_index_to_address(chunk_idx));
         }
     }
 

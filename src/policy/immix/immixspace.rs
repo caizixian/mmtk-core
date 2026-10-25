@@ -1276,9 +1276,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Returns None if the search could not find any more holes.
     ///
     /// # Safety
-    /// `search_start` must lie within an allocated block of `self` whose line/RC metadata is
-    /// mapped, and when `self.rc_enabled` is true, no thread may perform concurrent non-atomic
-    /// writes to `RC_TABLE` for `search_start.block()`.
+    /// - `search_start` must lie within an allocated block of `self` whose line/RC metadata is
+    ///   mapped.
+    /// - When `self.rc_enabled` is true, no thread may perform concurrent non-atomic writes to
+    ///   `RC_TABLE` for `search_start.block()`.
+    /// - When `!self.rc_enabled`, the caller must hold exclusive allocator ownership of
+    ///   `search_start.block()` (or run during STW) so no thread concurrently executes non-atomic
+    ///   `Line::MARK_TABLE.bzero_metadata` (`ImmixAllocator::acquire_clean_block`) on
+    ///   `search_start.block()`.
     #[allow(clippy::assertions_on_constants)]
     pub(crate) unsafe fn get_next_available_lines(
         &self,
@@ -1293,7 +1298,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if self.rc_enabled {
             self.rc_get_next_available_lines(copy, mapped, start_cursor)
         } else {
-            self.normal_get_next_available_lines_mapped(mapped, start_cursor)
+            // SAFETY: Caller guarantees `!self.rc_enabled` block exclusivity (no concurrent
+            // `ImmixAllocator::acquire_clean_block` `Line::MARK_TABLE.bzero_metadata` on `mapped`).
+            unsafe { self.normal_get_next_available_lines_mapped(mapped, start_cursor) }
         }
     }
 
@@ -1386,17 +1393,36 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
+    /// Scan `Line::MARK_TABLE` in `search_start.block()` for the next unmarked line hole.
+    ///
+    /// # Safety
+    /// - `!self.rc_enabled` and `search_start` must lie within an allocated block of `self`.
+    /// - The caller must hold exclusive allocator ownership of `search_start.block()` (or run
+    ///   during STW) so no thread concurrently executes non-atomic
+    ///   `Line::MARK_TABLE.bzero_metadata` (`ImmixAllocator::acquire_clean_block`) on that block.
     #[allow(clippy::assertions_on_constants)]
-    pub fn normal_get_next_available_lines(&self, search_start: Line) -> Option<(Line, Line)> {
+    pub unsafe fn normal_get_next_available_lines(
+        &self,
+        search_start: Line,
+    ) -> Option<(Line, Line)> {
         debug_assert!(!self.rc_enabled);
         let mapped = self.mapped_block(search_start.block()).expect(
             "normal_get_next_available_lines requires search_start in an allocated Immix block",
         );
-        self.normal_get_next_available_lines_mapped(mapped, search_start.index_within_block())
+        // SAFETY: Caller guarantees exclusive ownership / STW absence of concurrent non-atomic
+        // `Line::MARK_TABLE.bzero_metadata` on `mapped`.
+        unsafe {
+            self.normal_get_next_available_lines_mapped(mapped, search_start.index_within_block())
+        }
     }
 
+    /// Scan `mapped`'s `Line::MARK_TABLE` starting at `start_cursor` for the next available hole.
+    ///
+    /// # Safety
+    /// No thread may concurrently execute non-atomic writes (`Line::MARK_TABLE.bzero_metadata`) or
+    /// hold `&[u8]`/`&mut [u8]` aliases on `mapped`'s `Line::MARK_TABLE` bytes during this call.
     #[allow(clippy::assertions_on_constants)]
-    fn normal_get_next_available_lines_mapped(
+    unsafe fn normal_get_next_available_lines_mapped(
         &self,
         mapped: MappedBlock<'_>,
         start_cursor: Fin<LINES_IN_BLOCK>,
@@ -1405,7 +1431,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let unavail_state = self.line_unavail_state.load(Ordering::Acquire);
         let current_state = self.line_mark_state.load(Ordering::Acquire);
         let block = mapped.block();
-        let line_marks = mapped.line_mark_table();
+        // SAFETY: Upheld by the caller: no concurrent non-atomic `Line::MARK_TABLE.bzero_metadata`
+        // or byte-slice alias touches `mapped`'s `Line::MARK_TABLE` bytes during this call.
+        let line_marks = unsafe { mapped.line_mark_table() };
 
         // Find start
         let mut start_idx = None;
@@ -1626,7 +1654,11 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
                 }
             }
 
-            match mapped.sweep(space, &mut histogram, line_mark_state) {
+            // SAFETY: `SweepChunk` runs during the STW `Release` stage with all mutators parked
+            // (so no `ImmixAllocator::acquire_clean_block` `bzero_metadata` can run), `mapped` was
+            // filtered to `get_state() != BlockState::Unallocated`, and this `SweepChunk` packet
+            // has exclusive sweep ownership of `self.chunk`'s blocks.
+            match unsafe { mapped.sweep(space, &mut histogram, line_mark_state) } {
                 BlockSweepResult::Swept => swept_blocks += 1,
                 BlockSweepResult::Reused => reused_blocks += 1,
                 BlockSweepResult::NoReuse => unreused_blocks += 1,
@@ -1833,7 +1865,12 @@ impl<VM: VMBinding> ClearVOBitsAfterPrepare<VM> {
             .iter_chunk_blocks(self.chunk)
             .filter(|mapped| mapped.block().get_state() != BlockState::Unallocated)
         {
-            mapped.clear_vo_bits_for_unmarked_regions(line_mark_state);
+            // SAFETY: `ClearVOBitsAfterPrepare` runs during STW immediately after `Prepare` with
+            // all mutators parked (no concurrent `Line::MARK_TABLE.bzero_metadata`), `mapped` is
+            // allocated, and this packet exclusively owns `self.chunk`'s `VO_BIT` range.
+            unsafe {
+                mapped.clear_vo_bits_for_unmarked_regions(line_mark_state);
+            }
         }
     }
 }
