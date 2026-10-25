@@ -285,12 +285,22 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
         let total_pages = mmtk.get_plan().get_total_pages();
         probe!(mmtk, heap_stats, reserved_pages, total_pages);
 
-        // Pass already-borrowed `&'static mut Mutator`s (when `!self.skip_mutator_roots`) so
+        if !mutators_to_scan.is_empty() {
+            debug_assert_eq!(
+                mutators_to_scan.len(),
+                <C::VM as VMBinding>::VMActivePlan::number_of_mutators()
+            );
+        }
+
+        // Pass already-borrowed `&'static mut Mutator`s when `stop_all_mutators` visited them so
         // `on_pause_start` never re-iterates `VMActivePlan::mutators()` while `mutators_to_scan`
-        // holds exclusive mutator borrows.
+        // holds exclusive mutator borrows; when `mutators_to_scan` is empty (e.g.,
+        // `skip_mutator_roots`, zero mutators, or a binding that scans stacks in
+        // `scan_vm_specific_roots`), zero borrows are held here and `None` falls back to
+        // `VMActivePlan::mutators()`.
         crate::plan::on_pause_start_with_mutators(
             mmtk,
-            (!self.skip_mutator_roots).then_some(mutators_to_scan.as_mut_slice()),
+            (!mutators_to_scan.is_empty()).then_some(mutators_to_scan.as_mut_slice()),
         );
 
         let root_scanning_stage = mmtk.get_plan().root_scanning_stage();

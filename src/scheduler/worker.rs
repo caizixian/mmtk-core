@@ -139,7 +139,7 @@ pub(crate) struct WorkerShouldExit;
 pub(crate) type PollResult<VM> = Result<Box<dyn GCWork<VM>>, WorkerShouldExit>;
 
 impl<VM: VMBinding> GCWorker<VM> {
-    pub(crate) fn new(
+    fn new(
         mmtk: &'static MMTK<VM>,
         ordinal: ThreadId,
         scheduler: Arc<GCWorkScheduler<VM>>,
@@ -377,6 +377,10 @@ impl<VM: VMBinding> WorkerGroup<VM> {
 
     /// Spawn GC worker threads for the first time.
     pub fn initial_spawn(&self, tls: VMThread, mmtk: &'static MMTK<VM>) {
+        assert!(
+            std::ptr::eq(self, mmtk.scheduler.worker_group.as_ref()),
+            "WorkerGroup::initial_spawn must be called on mmtk.scheduler.worker_group"
+        );
         let mut state = self.state.lock().unwrap();
 
         let WorkerCreationState::Initial { local_work_queues } = state.take().unwrap() else {
