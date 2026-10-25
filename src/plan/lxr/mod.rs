@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 mod barrier;
 mod block_allocation;
 mod gc_work;
@@ -8,7 +10,9 @@ pub(super) mod mutator;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
 
+pub(crate) use self::gc_work::mature_evac::EvacuateMatureObjects;
 pub use self::global::LXR;
+pub(crate) use self::mature_evac::RemSetEntry;
 
 use atomic::Atomic;
 use atomic::Ordering;

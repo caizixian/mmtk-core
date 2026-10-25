@@ -5,9 +5,7 @@
 
 pub mod atomic_box;
 pub(crate) mod fin;
-pub(crate) mod phase_cell;
 pub mod rev_group;
-pub(crate) mod worker_local;
 pub mod zeroed_alloc;
 
 /// Const function for min value of two usize numbers.

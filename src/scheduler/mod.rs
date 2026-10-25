@@ -14,7 +14,7 @@ pub(crate) mod affinity;
 
 #[allow(clippy::module_inception)]
 mod scheduler;
-pub(crate) use scheduler::{GCWorkScheduler, SoloStageWork};
+pub(crate) use scheduler::GCWorkScheduler;
 
 mod stat;
 mod work_counter;
@@ -34,7 +34,7 @@ mod worker_monitor;
 pub(crate) use worker::current_worker_ordinal;
 pub use worker::GCWorker;
 pub(crate) use worker::GCWorkerShared;
-pub(crate) use worker_monitor::SoloWorkerToken;
+pub(crate) use worker_monitor::WorkersParked;
 
 pub(crate) mod gc_work;
 pub use gc_work::RootKind;

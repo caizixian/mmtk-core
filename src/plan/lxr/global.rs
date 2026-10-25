@@ -282,38 +282,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn on_pause_start(&self, mmtk: &'static MMTK<Self::VM>) {
-        super::NO_EVAC.store(false, Ordering::SeqCst);
-        let pause = self.current_pause().unwrap();
-
-        // Individual RC pauses that don't overlap with concurrent tracing consist of a GC cycle.
-        // Concurrent tracing, including RC pauses in between, counts as one GC cycle.
-        // A Full GC counts as a GC cycle.
-        if pause == Pause::RefCount && !self.concurrent_work_in_progress()
-            || pause == Pause::InitialMark
-            || pause == Pause::Full
-        {
-            mmtk.gc_trigger.policy.on_gc_start(mmtk);
-        }
-
-        super::SURVIVAL_RATIO_PREDICTOR.set_alloc_size(
-            self.block_allocation
-                .total_young_allocation_in_bytes(&self.immix_space),
-        );
-
-        if pause == Pause::Full || pause == Pause::InitialMark {
-            // Reset block mark and object mark table.
-            let work_packets = self.generate_full_trace_prepare_tasks();
-            self.immix_space.scheduler().work_buckets[WorkBucketStage::RCProcessIncs]
-                .bulk_add(work_packets);
-        }
-
-        for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
-            mutator.flush();
-        }
-
-        if pause == Pause::FinalMark {
-            self.set_concurrent_marking_state(false);
-        }
+        self.on_pause_start_with_mutators(mmtk, None);
     }
 
     fn on_pause_end(&mut self, mmtk: &'static MMTK<Self::VM>, tls: VMWorkerThread) {
@@ -377,13 +346,56 @@ impl<VM: VMBinding> ConcurrentPlan for LXR<VM> {
 }
 
 impl<VM: VMBinding> LXR<VM> {
+    pub(in crate::plan) fn on_pause_start_with_mutators(
+        &self,
+        mmtk: &'static MMTK<VM>,
+        stopped_mutators: Option<&mut [&'static mut crate::plan::Mutator<VM>]>,
+    ) {
+        super::NO_EVAC.store(false, Ordering::SeqCst);
+        let pause = self.current_pause().unwrap();
+
+        // Individual RC pauses that don't overlap with concurrent tracing consist of a GC cycle.
+        // Concurrent tracing, including RC pauses in between, counts as one GC cycle.
+        // A Full GC counts as a GC cycle.
+        if pause == Pause::RefCount && !self.concurrent_work_in_progress()
+            || pause == Pause::InitialMark
+            || pause == Pause::Full
+        {
+            mmtk.gc_trigger.policy.on_gc_start(mmtk);
+        }
+
+        super::SURVIVAL_RATIO_PREDICTOR.set_alloc_size(
+            self.block_allocation
+                .total_young_allocation_in_bytes(&self.immix_space),
+        );
+
+        if pause == Pause::Full || pause == Pause::InitialMark {
+            // Reset block mark and object mark table.
+            let work_packets = self.generate_full_trace_prepare_tasks();
+            self.immix_space.scheduler().work_buckets[WorkBucketStage::RCProcessIncs]
+                .bulk_add(work_packets);
+        }
+
+        if let Some(mutators) = stopped_mutators {
+            for mutator in mutators.iter_mut() {
+                mutator.flush();
+            }
+        } else {
+            for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
+                mutator.flush();
+            }
+        }
+
+        if pause == Pause::FinalMark {
+            self.set_concurrent_marking_state(false);
+        }
+    }
+
     pub fn new(args: CreateGeneralPlanArgs<VM>) -> Box<std::cell::UnsafeCell<Self>> {
         assert!(
             VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC.is_in_header(),
             "LXR does not support placing forwarding bits on the side."
         );
-        let instance_id = args.scheduler.instance_id();
-        let num_workers = args.scheduler.num_workers();
         #[allow(unused_mut)]
         let mut specs = vec![
             MetadataSpec::OnSide(RC_TABLE),
@@ -443,7 +455,7 @@ impl<VM: VMBinding> LXR<VM> {
             rc: RefCountHelper::NEW,
             block_allocation,
             evac_set: MatureEvacuationSet::default(),
-            mature_evac_remset: MatureEvecRemSet::new(instance_id, num_workers),
+            mature_evac_remset: MatureEvecRemSet::new(),
             possibly_dead_mature_blocks: Default::default(),
             num_clean_blocks_released_lazy: Default::default(),
         }))
@@ -620,9 +632,12 @@ impl<VM: VMBinding> LXR<VM> {
             .reset_block_mark_for_mutator_reused_blocks(pause);
     }
 
-    pub(super) fn process_mature_evacuation_remset(&mut self) {
-        self.mature_evac_remset.flush_all();
-        let packets = self.mature_evac_remset.take_global_packets();
+    pub(super) fn process_mature_evacuation_remset(&self) {
+        let packets = self
+            .immix_space
+            .scheduler()
+            .worker_group
+            .drain_lxr_evac_packets();
         self.immix_space.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature]
             .bulk_add(packets);
     }

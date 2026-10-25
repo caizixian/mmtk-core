@@ -117,10 +117,121 @@ pub fn create_plan<VM: VMBinding>(
     }
 }
 
+/// Run `Plan::on_pause_start` while reusing any already-borrowed `&'static mut Mutator`s from
+/// `StopMutators` so concurrent plans never call `VMActivePlan::mutators()` while `StopMutators`
+/// holds exclusive mutator references.
+pub(crate) fn on_pause_start_with_mutators<VM: VMBinding>(
+    mmtk: &'static MMTK<VM>,
+    stopped_mutators: Option<&mut [&'static mut Mutator<VM>]>,
+) {
+    let plan = mmtk.get_plan();
+    if let Some(lxr) = plan.downcast_ref::<crate::plan::lxr::LXR<VM>>() {
+        lxr.on_pause_start_with_mutators(mmtk, stopped_mutators);
+    } else if let Some(cimmix) =
+        plan.downcast_ref::<crate::plan::concurrent::immix::ConcurrentImmix<VM>>()
+    {
+        cimmix.on_pause_start_with_mutators(mmtk, stopped_mutators);
+    } else {
+        plan.on_pause_start(mmtk);
+    }
+}
+
+/// Assert at runtime that `mmtk` is in a stop-the-world pause with all GC workers parked inside
+/// `mmtk.scheduler.worker_monitor`.
+#[inline]
+fn assert_stw_parked<VM: VMBinding>(mmtk: &'static MMTK<VM>, parked: &WorkersParked<'_>) {
+    assert!(
+        parked.monitor_eq(&mmtk.scheduler.worker_monitor),
+        "WorkersParked belongs to a different MMTK instance"
+    );
+    assert_eq!(
+        mmtk.get_gc_status(),
+        crate::global_state::GcStatus::InPause,
+        "Mutable Plan pause transition requires GcStatus::InPause"
+    );
+}
+
+/// Execute `Plan::prepare` during `WorkBucketStage::Prepare`'s pre-open hook while all mutators
+/// are paused and all GC workers are parked.
+pub(crate) fn prepare_global<P: Plan>(
+    mmtk: &'static MMTK<P::VM>,
+    tls: VMWorkerThread,
+    parked: &mut WorkersParked<'_>,
+    expected_plan_addr: usize,
+) {
+    assert_stw_parked(mmtk, parked);
+    let _plan_lease = mmtk.enter_plan_mut_lease();
+    // SAFETY:
+    // 1. `assert_stw_parked` verified that `parked` witnesses `mmtk.scheduler.worker_monitor` with
+    //    `WorkerMonitor::sync` held and all `0..worker_count` GC workers parked, and that
+    //    `mmtk.get_gc_status() == GcStatus::InPause` (all mutators stopped at GC safepoints).
+    // 2. `_plan_lease` enforces non-reentrancy on the calling thread, `Plan::prepare` performs
+    //    only internal plan/space preparation without calling `mmtk.get_plan()` or VM callbacks
+    //    (with `WorkerMonitor::notify_work_available` suppressed on this thread while `sync` is
+    //    held), and `plan_mut` is dropped before returning.
+    let plan_mut: &mut P = unsafe { mmtk.get_plan_mut() }.downcast_mut::<P>().unwrap();
+    debug_assert_eq!(expected_plan_addr, plan_mut as *const P as usize);
+    plan_mut.prepare(tls);
+}
+
+/// Execute `Plan::release` during `WorkBucketStage::Release`'s pre-open hook while all mutators
+/// are paused and all GC workers are parked.
+pub(crate) fn release_global<P: Plan>(
+    mmtk: &'static MMTK<P::VM>,
+    tls: VMWorkerThread,
+    parked: &mut WorkersParked<'_>,
+    expected_plan_addr: usize,
+) {
+    release_before_plan_mut(mmtk.get_plan());
+    {
+        assert_stw_parked(mmtk, parked);
+        let _plan_lease = mmtk.enter_plan_mut_lease();
+        // SAFETY:
+        // 1. `assert_stw_parked` verified that `parked` witnesses `mmtk.scheduler.worker_monitor`
+        //    with `WorkerMonitor::sync` held and all `0..worker_count` GC workers parked, and that
+        //    `mmtk.get_gc_status() == GcStatus::InPause` (all mutators stopped at GC safepoints).
+        // 2. `release_before_plan_mut` ran above before acquiring `plan_mut`, `_plan_lease`
+        //    enforces non-reentrancy on the calling thread, `release_plan_local` performs only
+        //    internal plan/space release updates, and `plan_mut` is dropped at the end of this
+        //    block before `release_after_plan_mut` runs.
+        let plan_mut: &mut P = unsafe { mmtk.get_plan_mut() }.downcast_mut::<P>().unwrap();
+        debug_assert_eq!(expected_plan_addr, plan_mut as *const P as usize);
+        release_plan_local::<P>(plan_mut, tls);
+    }
+    release_after_plan_mut(mmtk.get_plan());
+}
+
+/// Execute end-of-pause `Plan` bookkeeping at the end of `GCWorkScheduler::on_gc_finished` while
+/// all mutators are paused and all GC workers are parked.
+pub(crate) fn finish_pause_global<VM: VMBinding>(
+    mmtk: &'static MMTK<VM>,
+    tls: VMWorkerThread,
+    parked: &mut WorkersParked<'_>,
+) {
+    let next_gc_full_heap = compute_next_gc_full_heap(mmtk.get_plan());
+    let gc_ended = {
+        assert_stw_parked(mmtk, parked);
+        let _plan_lease = mmtk.enter_plan_mut_lease();
+        // SAFETY:
+        // 1. `assert_stw_parked` verified that `parked` witnesses `mmtk.scheduler.worker_monitor`
+        //    with `WorkerMonitor::sync` held and all `0..worker_count` GC workers parked, and that
+        //    `mmtk.get_gc_status() == GcStatus::InPause` (all mutators stopped at GC safepoints).
+        // 2. `next_gc_full_heap` was computed above before acquiring `plan_mut`, `_plan_lease`
+        //    enforces non-reentrancy on the calling thread, `finish_plan_pause` performs only
+        //    plan-local updates, and `plan_mut` is dropped at the end of this block before
+        //    `gc_trigger.policy.on_gc_end` runs.
+        let plan_mut: &mut dyn Plan<VM = VM> = unsafe { mmtk.get_plan_mut() };
+        finish_plan_pause(plan_mut, mmtk, tls, next_gc_full_heap)
+    };
+    if gc_ended {
+        mmtk.gc_trigger.policy.on_gc_end(mmtk);
+    }
+}
+
 /// Perform plan-local pause-end mutations while `&mut dyn Plan<VM = VM>` is held, returning
 /// `true` if the pause also ended the GC cycle so the caller should invoke
 /// `mmtk.gc_trigger.policy.on_gc_end(mmtk)` *after* dropping `&mut dyn Plan<VM = VM>`.
-pub(crate) fn finish_plan_pause<VM: VMBinding>(
+fn finish_plan_pause<VM: VMBinding>(
     plan: &mut dyn Plan<VM = VM>,
     mmtk: &'static MMTK<VM>,
     tls: VMWorkerThread,
@@ -177,25 +288,19 @@ pub(crate) fn on_collection_initialized<VM: VMBinding>(plan: &'static dyn Plan<V
     }
 }
 
-/// Pre-compute whether the next GC should be full-heap for generational plans while `&dyn Plan`
-/// is borrowed immutably, before acquiring `&mut dyn Plan` in `GCWorkScheduler::on_gc_finished`.
-pub(crate) fn compute_next_gc_full_heap<VM: VMBinding>(plan: &dyn Plan<VM = VM>) -> Option<bool> {
+fn compute_next_gc_full_heap<VM: VMBinding>(plan: &dyn Plan<VM = VM>) -> Option<bool> {
     plan.generational().map(|_| {
         crate::plan::generational::global::CommonGenPlan::should_next_gc_be_full_heap(plan)
     })
 }
 
-/// Run plan-specific pre-release VM callbacks (`LXR::release_before_plan_mut`) on `&dyn Plan`
-/// strictly before acquiring `&mut dyn Plan` in `Release`.
-pub(crate) fn release_before_plan_mut<VM: VMBinding>(plan: &dyn Plan<VM = VM>) {
+fn release_before_plan_mut<VM: VMBinding>(plan: &dyn Plan<VM = VM>) {
     if let Some(lxr) = plan.downcast_ref::<crate::plan::lxr::LXR<VM>>() {
         lxr.release_before_plan_mut();
     }
 }
 
-/// Run plan-local `&mut` release state updates without invoking external VM callbacks while `&mut`
-/// is live.
-pub(crate) fn release_plan_local<P: Plan>(plan_mut: &mut P, tls: VMWorkerThread) {
+fn release_plan_local<P: Plan>(plan_mut: &mut P, tls: VMWorkerThread) {
     let plan_any: &mut dyn Plan<VM = P::VM> = plan_mut;
     if let Some(lxr) = plan_any.downcast_mut::<crate::plan::lxr::LXR<P::VM>>() {
         lxr.release_plan_local(tls);
@@ -204,9 +309,7 @@ pub(crate) fn release_plan_local<P: Plan>(plan_mut: &mut P, tls: VMWorkerThread)
     }
 }
 
-/// Run plan-specific post-release shared tasks (`LXR::release_after_plan_mut`) strictly after
-/// `&mut dyn Plan` has been dropped in `Release`.
-pub(crate) fn release_after_plan_mut<VM: VMBinding>(plan: &dyn Plan<VM = VM>) {
+fn release_after_plan_mut<VM: VMBinding>(plan: &dyn Plan<VM = VM>) {
     if let Some(lxr) = plan.downcast_ref::<crate::plan::lxr::LXR<VM>>() {
         lxr.release_after_plan_mut();
     }

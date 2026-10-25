@@ -44,14 +44,10 @@ impl<VM: VMBinding> GCWork<VM> for UpdateReferences<VM> {
         #[cfg(feature = "extreme_assertions")]
         mmtk.slot_logger.reset();
 
-        let tickets = VM::VMActivePlan::mutators()
-            .map(MutatorTicket::from_mut)
-            .collect::<Vec<_>>();
-        let packets = tickets
-            .into_iter()
-            .map(|ticket| {
+        let packets = VM::VMActivePlan::mutators()
+            .map(|mutator| {
                 Box::new(ScanMutatorRoots::<OVCForwardingWorkContext<VM>>::new(
-                    ticket,
+                    mutator,
                 )) as _
             })
             .collect::<Vec<_>>();

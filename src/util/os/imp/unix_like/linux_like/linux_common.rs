@@ -1,7 +1,9 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use crate::util::address::Address;
 use crate::util::os::imp::unix_like::unix_common;
 use crate::util::os::*;
-use libc::{cpu_set_t, sched_getaffinity, sched_setaffinity, CPU_COUNT, CPU_SET, CPU_ZERO};
+use libc::{cpu_set_t, sched_setaffinity, CPU_SET, CPU_ZERO};
 use std::io::Result;
 
 pub fn set_vma_name(start: Address, size: usize, annotation: &MmapAnnotation) {
@@ -69,39 +71,13 @@ impl MmapStrategy {
 /// Get the memory maps for the process. The returned string is a multi-line string.
 /// This is only meant to be used for debugging. For example, log process memory maps after detecting a clash.
 pub fn get_process_memory_maps() -> Result<String> {
-    // print map
-    use std::fs::File;
-    use std::io::Read;
-    let mut data = String::new();
-    let mut f = File::open("/proc/self/maps")?;
-    f.read_to_string(&mut data)?;
-    Ok(data)
-}
-
-fn zeroed_cpu_set() -> cpu_set_t {
-    // SAFETY: `libc::cpu_set_t` is a C plain-old-data bitmask struct of unsigned integers for
-    // which an all-zero bit pattern is a valid initialized value, and `CPU_ZERO` initializes the
-    // stack-allocated `cpu_set_t` in place to represent an empty CPU set.
-    unsafe {
-        let mut cs: cpu_set_t = std::mem::MaybeUninit::zeroed().assume_init();
-        CPU_ZERO(&mut cs);
-        cs
-    }
+    std::fs::read_to_string("/proc/self/maps")
 }
 
 pub fn get_total_num_cpus() -> CoreNum {
-    let mut cs = zeroed_cpu_set();
-    // SAFETY: `pid == 0` queries the calling thread, and `&mut cs` points to a writable,
-    // initialized `cpu_set_t` of exact byte size `size_of::<cpu_set_t>()`.
-    let res = unsafe { sched_getaffinity(0, std::mem::size_of::<cpu_set_t>(), &mut cs) };
-    assert_eq!(
-        res,
-        0,
-        "sched_getaffinity failed: {}",
-        std::io::Error::last_os_error()
-    );
-    // SAFETY: `cs` is a valid initialized `cpu_set_t` populated by `sched_getaffinity`.
-    unsafe { CPU_COUNT(&cs) as u16 }
+    std::thread::available_parallelism()
+        .map(|n| n.get().min(CoreNum::MAX as usize) as CoreNum)
+        .unwrap_or(1)
 }
 
 pub fn bind_current_thread_to_core(core_id: CoreId) {
@@ -109,7 +85,6 @@ pub fn bind_current_thread_to_core(core_id: CoreId) {
 }
 
 pub fn bind_current_thread_to_cpuset(cpuset: &[CoreId]) {
-    let mut cs = zeroed_cpu_set();
     for &cpu in cpuset {
         let cpu_idx = cpu as usize;
         assert!(
@@ -117,15 +92,17 @@ pub fn bind_current_thread_to_cpuset(cpuset: &[CoreId]) {
             "CPU core ID {cpu_idx} exceeds CPU_SETSIZE ({})",
             libc::CPU_SETSIZE
         );
-        // SAFETY: `cs` is a valid initialized `cpu_set_t` and `cpu_idx < CPU_SETSIZE` was asserted
-        // above, satisfying `CPU_SET`'s in-bounds bit index contract.
-        unsafe {
-            CPU_SET(cpu_idx, &mut cs);
-        }
     }
-    // SAFETY: `pid == 0` sets affinity for the calling thread, and `&cs` points to a valid
-    // initialized `cpu_set_t` of exact byte size `size_of::<cpu_set_t>()`.
+    // SAFETY: `libc::cpu_set_t` is a C plain-old-data bitmask struct for which all-zero bytes are
+    // valid, `CPU_ZERO` initializes `cs` as an empty CPU set, every `cpu as usize < CPU_SETSIZE`
+    // was asserted above so `CPU_SET` stays in bounds, and `sched_setaffinity(0, ...)` reads `&cs`
+    // of exact byte size `size_of::<cpu_set_t>()` to set the calling thread's CPU affinity.
     unsafe {
+        let mut cs: cpu_set_t = std::mem::MaybeUninit::zeroed().assume_init();
+        CPU_ZERO(&mut cs);
+        for &cpu in cpuset {
+            CPU_SET(cpu as usize, &mut cs);
+        }
         sched_setaffinity(0, std::mem::size_of::<cpu_set_t>(), &cs);
     }
 }

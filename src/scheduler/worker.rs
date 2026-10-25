@@ -4,11 +4,10 @@ use super::stat::WorkerLocalStat;
 use super::work_bucket::*;
 use super::*;
 use crate::mmtk::MMTK;
+use crate::plan::lxr::{EvacuateMatureObjects, RemSetEntry};
 use crate::util::copy::GCWorkerCopyContext;
 use crate::util::heap::layout::heap_parameters::MAX_SPACES;
 use crate::util::opaque_pointer::*;
-use crate::util::rust_util::phase_cell::MmtkId;
-use crate::util::rust_util::worker_local::WorkerPerm;
 use crate::util::ObjectReference;
 use crate::vm::{Collection, GCThreadContext, VMBinding};
 use atomic::Atomic;
@@ -96,14 +95,14 @@ pub struct GCWorker<VM: VMBinding> {
     pub tls: VMWorkerThread,
     /// The ordinal of the worker, numbered from 0 to the number of workers minus one.
     pub ordinal: ThreadId,
-    /// Pre-minted instance-branded capability proving exclusive worker-local access for `(mmtk.id, ordinal)`.
-    pub(crate) perm: WorkerPerm,
     /// The reference to the scheduler.
     scheduler: Arc<GCWorkScheduler<VM>>,
     /// The copy context, used to implement copying GC.
     copy: GCWorkerCopyContext<VM>,
     /// True once `GCWorker::run` has initialized `self.copy` via `create_gc_worker_context`.
     copy_initialized: bool,
+    /// Worker-local LXR mature-evacuation remembered-set slot buffer.
+    pub(crate) lxr_evac_slots: Vec<RemSetEntry<VM>>,
     /// The reference to the MMTk instance.
     pub mmtk: &'static MMTK<VM>,
     /// Reference to the shared part of the GC worker.  It is used for synchronization.
@@ -140,32 +139,40 @@ pub(crate) struct WorkerShouldExit;
 pub(crate) type PollResult<VM> = Result<Box<dyn GCWork<VM>>, WorkerShouldExit>;
 
 impl<VM: VMBinding> GCWorker<VM> {
-    pub(crate) fn new(
+    fn new(
         mmtk: &'static MMTK<VM>,
         ordinal: ThreadId,
-        perm: WorkerPerm,
         scheduler: Arc<GCWorkScheduler<VM>>,
         shared: Arc<GCWorkerShared<VM>>,
         local_work_buffer: deque::Worker<Box<dyn GCWork<VM>>>,
     ) -> Self {
-        assert_eq!(perm.instance_id(), mmtk.id, "GCWorker::new MmtkId mismatch");
-        assert_eq!(
-            perm.ordinal(),
-            ordinal,
-            "GCWorker::new WorkerPerm ordinal mismatch"
-        );
         Self {
             tls: VMWorkerThread(VMThread::UNINITIALIZED),
             ordinal,
-            perm,
             // We will set this later
             copy: GCWorkerCopyContext::new_non_copy(),
             copy_initialized: false,
+            lxr_evac_slots: Vec::new(),
             scheduler,
             mmtk,
             shared,
             local_work_buffer,
         }
+    }
+
+    /// Flush any pending worker-local LXR mature-evacuation slots into `WorkerGroup`.
+    #[cold]
+    pub(crate) fn flush_lxr_evac_slots(&mut self) {
+        if self.lxr_evac_slots.is_empty() {
+            return;
+        }
+        let remset = std::mem::take(&mut self.lxr_evac_slots);
+        self.scheduler
+            .worker_group
+            .lxr_evac_packets
+            .lock()
+            .unwrap()
+            .push(Box::new(EvacuateMatureObjects::new(remset)));
     }
 
     const LOCALLY_CACHED_WORK_PACKETS: usize = 16;
@@ -244,15 +251,6 @@ impl<VM: VMBinding> GCWorker<VM> {
     /// * `tls`: The VM-specific thread-local storage for this GC worker thread.
     /// * `mmtk`: A reference to an MMTk instance.
     pub fn run(mut self: Box<Self>, tls: VMWorkerThread, mmtk: &'static MMTK<VM>) {
-        assert_eq!(
-            self.mmtk.id, mmtk.id,
-            "GCWorker::run called with a different MMTK instance ID than the one that owns this worker"
-        );
-        assert_eq!(
-            self.perm.instance_id(),
-            mmtk.id,
-            "GCWorker::run WorkerPerm MmtkId mismatch"
-        );
         assert!(
             std::ptr::eq(self.mmtk, mmtk),
             "GCWorker::run called with a different MMTK instance than the one that owns this worker"
@@ -301,6 +299,9 @@ impl<VM: VMBinding> GCWorker<VM> {
             );
             work.do_work_with_stat(&mut self, mmtk);
         }
+        if !self.lxr_evac_slots.is_empty() {
+            self.flush_lxr_evac_slots();
+        }
         debug!(
             "Worker exiting. ordinal: {}, {}",
             self.ordinal,
@@ -319,8 +320,6 @@ enum WorkerCreationState<VM: VMBinding> {
     Initial {
         /// The local work queues for to-be-created workers.
         local_work_queues: Vec<deque::Worker<Box<dyn GCWork<VM>>>>,
-        /// Pre-minted unique `(instance_id, ordinal)` capabilities consumed once in `create_workers`.
-        perms: Vec<WorkerPerm>,
     },
     /// All worker threads are spawn and running.  `GCWorker` structs have been transferred to
     /// worker threads.
@@ -340,6 +339,8 @@ enum WorkerCreationState<VM: VMBinding> {
 pub(crate) struct WorkerGroup<VM: VMBinding> {
     /// Shared worker data
     pub workers_shared: Vec<Arc<GCWorkerShared<VM>>>,
+    /// Flushed LXR mature-evacuation remembered-set packets drained during LXR's pause hook.
+    lxr_evac_packets: Mutex<Vec<Box<dyn GCWork<VM>>>>,
     /// The stateful part.  `None` means state transition is underway.
     state: Mutex<Option<WorkerCreationState<VM>>>,
 }
@@ -353,25 +354,8 @@ const _: () = {
 };
 
 impl<VM: VMBinding> WorkerGroup<VM> {
-    /// Create a WorkerGroup with the pre-minted `WorkerPerm` capabilities from `WorkerMonitor::new`.
-    pub fn new(instance_id: MmtkId, num_workers: usize, perms: Vec<WorkerPerm>) -> Arc<Self> {
-        assert_eq!(
-            perms.len(),
-            num_workers,
-            "WorkerGroup::new WorkerPerm count mismatch"
-        );
-        for (ordinal, perm) in perms.iter().enumerate() {
-            assert_eq!(
-                perm.instance_id(),
-                instance_id,
-                "WorkerGroup::new WorkerPerm MmtkId mismatch"
-            );
-            assert_eq!(
-                perm.ordinal(),
-                ordinal,
-                "WorkerGroup::new WorkerPerm ordinal mismatch"
-            );
-        }
+    /// Create a WorkerGroup.
+    pub fn new(num_workers: usize) -> Arc<Self> {
         let local_work_queues = (0..num_workers)
             .map(|_| deque::Worker::new_fifo())
             .collect::<Vec<_>>();
@@ -386,26 +370,24 @@ impl<VM: VMBinding> WorkerGroup<VM> {
 
         Arc::new(Self {
             workers_shared,
-            state: Mutex::new(Some(WorkerCreationState::Initial {
-                local_work_queues,
-                perms,
-            })),
+            lxr_evac_packets: Mutex::new(Vec::new()),
+            state: Mutex::new(Some(WorkerCreationState::Initial { local_work_queues })),
         })
     }
 
     /// Spawn GC worker threads for the first time.
     pub fn initial_spawn(&self, tls: VMThread, mmtk: &'static MMTK<VM>) {
+        assert!(
+            std::ptr::eq(self, mmtk.scheduler.worker_group.as_ref()),
+            "WorkerGroup::initial_spawn must be called on mmtk.scheduler.worker_group"
+        );
         let mut state = self.state.lock().unwrap();
 
-        let WorkerCreationState::Initial {
-            local_work_queues,
-            perms,
-        } = state.take().unwrap()
-        else {
+        let WorkerCreationState::Initial { local_work_queues } = state.take().unwrap() else {
             panic!("GCWorker structs have already been created");
         };
 
-        let workers = self.create_workers(local_work_queues, perms, mmtk);
+        let workers = self.create_workers(local_work_queues, mmtk);
         self.spawn(workers, tls);
 
         *state = Some(WorkerCreationState::Spawned);
@@ -437,25 +419,21 @@ impl<VM: VMBinding> WorkerGroup<VM> {
     fn create_workers(
         &self,
         local_work_queues: Vec<deque::Worker<Box<dyn GCWork<VM>>>>,
-        perms: Vec<WorkerPerm>,
         mmtk: &'static MMTK<VM>,
     ) -> Vec<Box<GCWorker<VM>>> {
         debug!("Creating GCWorker instances...");
 
         assert_eq!(self.workers_shared.len(), local_work_queues.len());
-        assert_eq!(self.workers_shared.len(), perms.len());
 
-        // Each `GCWorker` instance corresponds to a `GCWorkerShared` and unique `WorkerPerm` at the same index.
+        // Each `GCWorker` instance corresponds to a `GCWorkerShared` at the same index.
         let workers = local_work_queues
             .into_iter()
-            .zip(perms)
             .zip(self.workers_shared.iter())
             .enumerate()
-            .map(|(ordinal, ((queue, perm), shared))| {
+            .map(|(ordinal, (queue, shared))| {
                 Box::new(GCWorker::new(
                     mmtk,
                     ordinal,
-                    perm,
                     mmtk.scheduler.clone(),
                     shared.clone(),
                     queue,
@@ -525,6 +503,11 @@ impl<VM: VMBinding> WorkerGroup<VM> {
         self.workers_shared
             .iter()
             .any(|w| !w.designated_work.is_empty())
+    }
+
+    /// Drain all flushed LXR mature-evacuation packets across every worker in the group.
+    pub(crate) fn drain_lxr_evac_packets(&self) -> Vec<Box<dyn GCWork<VM>>> {
+        std::mem::take(&mut *self.lxr_evac_packets.lock().unwrap())
     }
 
     /// Get the live bytes data from the worker, and clear the local data.

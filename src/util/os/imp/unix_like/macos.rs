@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use crate::util::address::Address;
 use crate::util::os::imp::unix_like::unix_common;
 use crate::util::os::*;
@@ -75,10 +77,12 @@ impl MmapStrategy {
     /// get the flags for POSIX mmap.
     pub fn get_posix_mmap_flags(&self, fixed: bool) -> i32 {
         let mut flags = libc::MAP_PRIVATE | libc::MAP_ANONYMOUS;
-        if fixed {
+        // Only pass `MAP_FIXED` when `self.replace` explicitly permits overwriting existing
+        // mappings; when `!self.replace`, `unix_common::mmap` uses `start` as a non-destructive
+        // placement hint and unmaps + returns `AlreadyExists` if the kernel maps elsewhere.
+        if fixed && self.replace {
             flags |= libc::MAP_FIXED;
         }
-        // replace is isgnored on macOS
         if !self.reserve {
             flags |= libc::MAP_NORESERVE;
         }

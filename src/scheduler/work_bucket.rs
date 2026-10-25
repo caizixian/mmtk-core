@@ -1,7 +1,9 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use super::worker_monitor::WorkerMonitor;
+use super::worker_monitor::{WorkerMonitor, WorkersParked};
 use super::*;
+use crate::mmtk::MMTK;
+use crate::util::opaque_pointer::VMWorkerThread;
 use crate::vm::VMBinding;
 use crossbeam::deque::{Injector, Steal, Worker};
 use enum_map::Enum;
@@ -137,6 +139,9 @@ impl<VM: VMBinding> BucketQueue<VM> {
 
 pub type BucketOpenCondition<VM> = Box<dyn (Fn(&GCWorkScheduler<VM>) -> bool) + Send + Sync>;
 
+pub(crate) type PreOpenHook<VM> =
+    Box<dyn for<'a> FnOnce(&'static MMTK<VM>, VMWorkerThread, &mut WorkersParked<'a>) + Send>;
+
 pub struct WorkBucket<VM: VMBinding> {
     /// Whether this bucket has been opened. Work from an open bucket can be fetched by workers.
     open: AtomicBool,
@@ -152,6 +157,9 @@ pub struct WorkBucket<VM: VMBinding> {
     /// The open condition for a bucket. If this is `Some`, the bucket will be open
     /// when the condition is met. If this is `None`, the bucket needs to be open manually.
     can_open: Option<BucketOpenCondition<VM>>,
+    /// Optional one-shot callback invoked inside `WorkerMonitor`'s park cycle while all workers are
+    /// parked and right before this bucket opens.
+    pre_open_hook: Mutex<Option<PreOpenHook<VM>>>,
     /// After this bucket is open and all pending work packets (including the packets in this
     /// bucket) are drained, this work packet, if exists, will be added to this bucket.  When this
     /// happens, it will prevent opening subsequent work packets.
@@ -175,6 +183,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
             queue: BucketQueue::new(),
             monitor,
             can_open: None,
+            pre_open_hook: Mutex::new(None),
             sentinel: Mutex::new(None),
         }
     }
@@ -330,6 +339,44 @@ impl<VM: VMBinding> WorkBucket<VM> {
         pred: impl Fn(&GCWorkScheduler<VM>) -> bool + Send + Sync + 'static,
     ) {
         self.can_open = Some(Box::new(pred));
+    }
+
+    pub(crate) fn set_pre_open_hook(
+        &self,
+        hook: impl for<'a> FnOnce(&'static MMTK<VM>, VMWorkerThread, &mut WorkersParked<'a>)
+            + Send
+            + 'static,
+    ) {
+        assert!(
+            self.stage.is_sequentially_opened(),
+            "set_pre_open_hook requires a sequentially-opened STW stage, got {:?}",
+            self.stage
+        );
+        assert!(
+            self.is_enabled(),
+            "set_pre_open_hook called on disabled stage {:?}",
+            self.stage
+        );
+        assert!(
+            !self.is_open(),
+            "set_pre_open_hook called on already-open stage {:?}",
+            self.stage
+        );
+        let mut slot = self.pre_open_hook.lock().unwrap();
+        assert!(
+            slot.is_none(),
+            "duplicate pre_open_hook registered for {:?}",
+            self.stage
+        );
+        *slot = Some(Box::new(hook));
+    }
+
+    pub(crate) fn has_pre_open_hook(&self) -> bool {
+        self.pre_open_hook.lock().unwrap().is_some()
+    }
+
+    pub(crate) fn take_pre_open_hook(&self) -> Option<PreOpenHook<VM>> {
+        self.pre_open_hook.lock().unwrap().take()
     }
 
     pub fn set_sentinel(&self, new_sentinel: Box<dyn GCWork<VM>>) {
