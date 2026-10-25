@@ -330,7 +330,7 @@ pub(crate) fn half_open_contiguous_meta_bit_range(
             )
         }
         _ => {
-            let last_region = (Address::ZERO + CONTIGUOUS_DATA_MAX)
+            let last_region = (start + (CONTIGUOUS_DATA_MAX - start.as_usize()))
                 .align_down(1usize << spec.log_bytes_in_region);
             contiguous_end_after_region(spec, last_region)
         }
@@ -410,27 +410,17 @@ pub(crate) fn for_each_spec_data_span(
     }
 }
 
-/// Assert that side metadata is initialized and `[meta_start, meta_end)` lies strictly within both
-/// MMTk's startup-quarantined side-metadata reservation and `spec`'s window.
-#[inline]
-pub(crate) fn assert_meta_range_in_spec_bounds(
+/// Verify that `[meta_start, meta_end)` lies strictly within both `[reserved_start, reserved_end)`
+/// and `spec`'s window.
+#[inline(always)]
+pub(crate) fn assert_meta_range_within_reserved(
     spec: &SideMetadataSpec,
     chunk_anchor: Address,
+    reserved_start: Address,
+    reserved_end: Address,
     meta_start: Address,
     meta_end: Address,
 ) {
-    use super::layout::{
-        global_side_metadata_base_address, is_side_metadata_initialized,
-        side_metadata_reserved_bytes,
-    };
-
-    assert!(
-        is_side_metadata_initialized(),
-        "Side metadata is not initialized for {:?}",
-        spec
-    );
-    let reserved_start = global_side_metadata_base_address();
-    let reserved_end = reserved_start + side_metadata_reserved_bytes();
     assert!(
         !meta_start.is_zero()
             && meta_start <= meta_end
@@ -439,25 +429,56 @@ pub(crate) fn assert_meta_range_in_spec_bounds(
         "Side-metadata range [{meta_start}, {meta_end}) outside reserved window [{reserved_start}, {reserved_end}) for {spec:?}"
     );
     if spec.uses_contiguous_side_metadata() {
-        let spec_start = spec.get_starting_address();
-        let spec_end = spec.upper_bound_address_for_contiguous();
+        let range_bytes = metadata_address_range_size(spec);
+        let spec_start_raw = reserved_start
+            .as_usize()
+            .checked_add(spec.offset)
+            .expect("Contiguous side-metadata spec offset overflow");
+        let spec_end_raw = spec_start_raw
+            .checked_add(range_bytes)
+            .expect("Contiguous side-metadata spec upper bound overflow");
         assert!(
-            meta_start >= spec_start && meta_end <= spec_end,
-            "Contiguous side-metadata range [{meta_start}, {meta_end}) out of bounds [{spec_start}, {spec_end}) for {spec:?}"
+            meta_start.as_usize() >= spec_start_raw && meta_end.as_usize() <= spec_end_raw,
+            "Contiguous side-metadata range [{meta_start}, {meta_end}) out of bounds [{spec_start_raw:#x}, {spec_end_raw:#x}) for {spec:?}"
         );
     }
     #[cfg(target_pointer_width = "32")]
     if spec.uses_chunked_side_metadata() {
-        let spec_start =
-            super::address_to_meta_chunk_addr(chunk_anchor) + spec.get_offset_for_chunked();
-        let spec_end = spec.upper_bound_address_for_chunked(chunk_anchor);
+        let chunk_meta_base = super::address_to_meta_chunk_addr(chunk_anchor).as_usize();
+        let spec_start_raw = chunk_meta_base
+            .checked_add(spec.get_offset_for_chunked())
+            .expect("Chunked side-metadata spec offset overflow");
+        let spec_end_raw = chunk_meta_base
+            .checked_add(spec.upper_bound_offset())
+            .expect("Chunked side-metadata spec upper bound overflow");
         assert!(
-            meta_start >= spec_start && meta_end <= spec_end,
-            "Chunked side-metadata range [{meta_start}, {meta_end}) out of bounds [{spec_start}, {spec_end}) for {spec:?}"
+            meta_start.as_usize() >= spec_start_raw && meta_end.as_usize() <= spec_end_raw,
+            "Chunked side-metadata range [{meta_start}, {meta_end}) out of bounds [{spec_start_raw:#x}, {spec_end_raw:#x}) for {spec:?}"
         );
     }
     #[cfg(target_pointer_width = "64")]
     let _ = chunk_anchor;
+}
+
+/// Assert that side metadata is initialized and `[meta_start, meta_end)` lies strictly within both
+/// MMTk's startup-quarantined side-metadata reservation and `spec`'s window.
+#[inline(always)]
+pub(crate) fn assert_meta_range_in_spec_bounds(
+    spec: &SideMetadataSpec,
+    chunk_anchor: Address,
+    meta_start: Address,
+    meta_end: Address,
+) {
+    let (reserved_start, reserved_end) = super::layout::try_side_metadata_reserved_range()
+        .unwrap_or_else(|| panic!("Side metadata is not initialized for {:?}", spec));
+    assert_meta_range_within_reserved(
+        spec,
+        chunk_anchor,
+        reserved_start,
+        reserved_end,
+        meta_start,
+        meta_end,
+    );
 }
 
 #[inline]

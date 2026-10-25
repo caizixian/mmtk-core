@@ -151,13 +151,21 @@ fn with_mapped_side_meta_grain<R>(
     grain_end: Address,
     f: impl FnOnce(&[core::sync::atomic::AtomicU8]) -> R,
 ) -> Option<R> {
-    use crate::util::metadata::side_metadata::{helpers, is_side_metadata_initialized};
+    use crate::util::metadata::side_metadata::{helpers, try_side_metadata_reserved_range};
     use core::sync::atomic::AtomicU8;
 
-    if grain_start >= grain_end || grain_start.is_zero() || !is_side_metadata_initialized() {
+    if grain_start >= grain_end || grain_start.is_zero() {
         return None;
     }
-    helpers::assert_meta_range_in_spec_bounds(spec, chunk_anchor, grain_start, grain_end);
+    let (reserved_start, reserved_end) = try_side_metadata_reserved_range()?;
+    helpers::assert_meta_range_within_reserved(
+        spec,
+        chunk_anchor,
+        reserved_start,
+        reserved_end,
+        grain_start,
+        grain_end,
+    );
     let grain = crate::MMAPPER.granularity();
     assert_eq!(
         grain_start.align_down(grain),
@@ -169,12 +177,13 @@ fn with_mapped_side_meta_grain<R>(
     }
     let len = grain_end - grain_start;
     assert!(len <= isize::MAX as usize);
-    // SAFETY: `assert_meta_range_in_spec_bounds` verified `is_side_metadata_initialized()` and that
-    // `[grain_start, grain_end)` lies strictly within MMTk's reserved side-metadata window and
-    // `spec`'s bounds; `grain_start` sits in a single mapped, OS-zero-initialized `MMAPPER` grain
-    // (`AtomicU8` align 1, `len <= isize::MAX`), `slice` does not escape `f`, and all module
-    // callers pass either globally `AtomicU8`-only `VO_BIT_SIDE_METADATA_SPEC` or quiescent
-    // `LOCAL_MARK_BIT_SPEC` during region sweeping without non-atomic write races or `&mut` aliases.
+    // SAFETY: `try_side_metadata_reserved_range` + `assert_meta_range_within_reserved` verified
+    // initialization and that `[grain_start, grain_end)` lies strictly within MMTk's reserved
+    // side-metadata window and `spec`'s bounds; `grain_start` sits in a single mapped,
+    // OS-zero-initialized `MMAPPER` grain (`AtomicU8` align 1, `len <= isize::MAX`), `slice` does
+    // not escape `f`, and all module callers pass either globally `AtomicU8`-only
+    // `VO_BIT_SIDE_METADATA_SPEC` or quiescent `LOCAL_MARK_BIT_SPEC` during region sweeping without
+    // non-atomic write races or `&mut` aliases.
     let slice = unsafe { core::slice::from_raw_parts(grain_start.to_ptr::<AtomicU8>(), len) };
     Some(f(slice))
 }

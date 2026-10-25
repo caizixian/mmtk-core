@@ -2529,7 +2529,7 @@ mod tests {
             log_num_of_bits: 0,
             log_bytes_in_region: (usize::BITS as usize) - 2,
         };
-        let _ = spec.validate_mapped_atomic_bytes(Address::ZERO + 4096usize, 1);
+        let _ = spec.validate_mapped_atomic_bytes(vm_layout::vm_layout().heap_start, 1);
     }
 
     #[test]
@@ -2591,7 +2591,8 @@ mod tests {
                 log_num_of_bits: 0,
                 log_bytes_in_region: 3,
             };
-            let top_64 = (Address::ZERO + helpers::CONTIGUOUS_DATA_MAX) - 63usize;
+            let top_64 =
+                (data_addr + (helpers::CONTIGUOUS_DATA_MAX - data_addr.as_usize())) - 63usize;
             let (ms, msb, me, meb) =
                 helpers::half_open_contiguous_meta_bit_range(&word_spec, top_64, 64).unwrap();
             assert_eq!((msb, meb), (0, 0));
