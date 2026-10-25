@@ -1,8 +1,41 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use super::freelist::*;
 use crate::util::address::Address;
 use crate::util::constants::*;
 use crate::util::conversions;
 use crate::util::os::*;
+
+/// Linear (`!Copy`, `!Clone`) capability witnessing exclusive ownership of a page-aligned,
+/// quarantined virtual address range `[base, limit)` reserved for a [`RawMemoryFreeList`].
+#[derive(Debug)]
+pub(crate) struct QuarantinedRegion {
+    base: Address,
+    limit: Address,
+}
+
+impl QuarantinedRegion {
+    /// Mint an exclusive `QuarantinedRegion` over `[base, limit)`.
+    ///
+    /// # Safety
+    /// - `base` must be non-zero and `BYTES_IN_PAGE`-aligned, and `limit >= base` must be
+    ///   `BYTES_IN_PAGE`-aligned.
+    /// - The virtual memory range `[base, limit)` must be quarantined (`PROT_NONE` anonymous
+    ///   reservation) and exclusively owned by this `QuarantinedRegion` for the entire lifetime of
+    ///   the consuming [`RawMemoryFreeList`]: no other Rust references, heap allocations, or space
+    ///   mappings may alias or remap `[base, limit)`.
+    pub(crate) unsafe fn new_unchecked(base: Address, limit: Address) -> Self {
+        assert!(
+            !base.is_zero() && base.is_aligned_to(BYTES_IN_PAGE),
+            "QuarantinedRegion base ({base}) must be non-zero and page-aligned"
+        );
+        assert!(
+            limit >= base && limit.is_aligned_to(BYTES_IN_PAGE),
+            "QuarantinedRegion limit ({limit}) must be >= base ({base}) and page-aligned"
+        );
+        Self { base, limit }
+    }
+}
 
 /** log2 of the number of bits used by a free list entry (two entries per unit) */
 const LOG_ENTRY_BITS: usize = i32::BITS.ilog2() as _;
@@ -113,7 +146,30 @@ impl RawMemoryFreeList {
             .expect("RawMemoryFreeList page count overflow")
     }
 
-    pub fn new(
+    /// Construct a `RawMemoryFreeList` consuming an exclusively owned [`QuarantinedRegion`].
+    pub(crate) fn from_quarantined(
+        region: QuarantinedRegion,
+        pages_per_block: i32,
+        units: i32,
+        grain: i32,
+        heads: i32,
+        strategy: MmapStrategy,
+    ) -> Self {
+        let QuarantinedRegion { base, limit } = region;
+        // SAFETY: `region` is a linear `QuarantinedRegion` token guaranteeing exclusive ownership
+        // of the quarantined, page-aligned virtual address range `[base, limit)`.
+        unsafe { Self::new(base, limit, pages_per_block, units, grain, heads, strategy) }
+    }
+
+    /// Construct a `RawMemoryFreeList` backed by the raw virtual address range `[base, limit)`.
+    ///
+    /// # Safety
+    /// The caller must guarantee exclusive ownership of the virtual address range `[base, limit)`
+    /// for the entire lifetime of the returned `RawMemoryFreeList`: `[base, limit)` must not
+    /// overlap any live Rust allocations, stacks, code/data segments, or other mappings, because
+    /// [`Self::grow_freelist`] maps `[base, high_water)` with `strategy` (which may use
+    /// `MAP_FIXED` / `replace = true`) and forms `&'static mut [i32]` over it.
+    pub unsafe fn new(
         base: Address,
         limit: Address,
         pages_per_block: i32,
@@ -227,14 +283,8 @@ impl RawMemoryFreeList {
         //   writable, and zero-initialized (valid bit pattern for `i32`).
         // - `byte_len <= isize::MAX as usize` is asserted above.
         // - `self.slice` was reset to `&mut []` above (and in `#[cfg(test)] Drop` before
-        //   `OS::munmap`). When `!self.strategy.replace` on Linux/Android, `OS::dzmmap` uses
-        //   `MAP_FIXED_NOREPLACE` so `self.mmap` panics rather than aliasing any pre-existing
-        //   mapping; when `self.strategy.replace` is `true` (`MmapStrategy::RAW_MEMORY_FREELIST` /
-        //   `MmapStrategy::TEST`) or on macOS (`MAP_FIXED`), unaliased exclusivity of
-        //   `[self.base, self.limit)` relies on the Stage-1 cross-slice caller invariant
-        //   (`Map64::create_parent_freelist` quarantined space-start displacement region or
-        //   `RAW_MEMORY_FREELIST_TEST_REGION` under `MUTEX`; flagged for Stage-2 `unsafe fn new` /
-        //   region-capability tightening).
+        //   `OS::munmap`), and exclusive unaliased ownership of `[self.base, self.limit)` is
+        //   guaranteed by `QuarantinedRegion` (`from_quarantined`) or the caller of `unsafe fn new`.
         self.slice = unsafe { std::slice::from_raw_parts_mut(self.base.to_mut_ptr::<i32>(), len) };
 
         let old_max = self.current_units;
@@ -378,15 +428,20 @@ mod tests {
         let extent = BYTES_IN_PAGE;
         let pages_per_block = RawMemoryFreeList::default_block_size(list_size as _, 1);
         assert_eq!(pages_per_block, 1);
-        let mut l = RawMemoryFreeList::new(
-            start,
-            start + extent,
-            pages_per_block,
-            list_size as _,
-            grain,
-            1,
-            MmapStrategy::TEST,
-        );
+        // SAFETY: `MUTEX` serializes all tests touching the dedicated `RAW_MEMORY_FREELIST_TEST_REGION`
+        // address range, and `Drop for RawMemoryFreeList` unmaps `[base, high_water)` before
+        // `_guard` is released.
+        let mut l = unsafe {
+            RawMemoryFreeList::new(
+                start,
+                start + extent,
+                pages_per_block,
+                list_size as _,
+                grain,
+                1,
+                MmapStrategy::TEST,
+            )
+        };
         // Grow the free-list to do the actual memory-mapping.
         l.grow_freelist(list_size as _);
         let last_unit = list_size as i32 - grain;

@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use atomic::Ordering;
 
 use crate::global_state::{GcStatus, GlobalState};
@@ -10,16 +12,16 @@ use crate::util::options::{GCTriggerSelector, Options, DEFAULT_MAX_NURSERY, DEFA
 use crate::vm::VMBinding;
 use crate::MMTK;
 use std::sync::atomic::AtomicUsize;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// GCTrigger is responsible for triggering GCs based on the given policy.
 /// All the decisions about heap limit and GC triggering should be resolved here.
 /// Depending on the actual policy, we may either forward the calls either to the plan
 /// or to the binding/runtime.
 pub struct GCTrigger<VM: VMBinding> {
-    /// The current plan. This is `None` when we create `GCTrigger`, and initialized via
-    /// [`Self::set_plan`] once we have a fixed address for the plan.
-    plan: Option<&'static dyn Plan<VM = VM>>,
+    /// The current plan, initialized once via [`Self::set_plan`] after pinning the plan at a
+    /// `'static` heap address in [`MMTK::new`].
+    plan: OnceLock<&'static dyn Plan<VM = VM>>,
     /// The triggering policy.
     pub policy: Box<dyn GCTriggerPolicy<VM>>,
     scheduler: Arc<GCWorkScheduler<VM>>,
@@ -34,7 +36,7 @@ impl<VM: VMBinding> GCTrigger<VM> {
         state: Arc<GlobalState>,
     ) -> Self {
         GCTrigger {
-            plan: None,
+            plan: OnceLock::new(),
             policy: match *options.gc_trigger {
                 GCTriggerSelector::FixedHeapSize(size) => Box::new(FixedHeapSizeTrigger {
                     total_pages: conversions::bytes_to_pages_up(size),
@@ -62,13 +64,19 @@ impl<VM: VMBinding> GCTrigger<VM> {
         }
     }
 
-    /// Set the plan. This is called in `create_plan()` after we created a boxed plan.
-    pub fn set_plan(&mut self, plan: &'static dyn Plan<VM = VM>) {
-        self.plan = Some(plan);
+    /// Set the plan once after creating and leaking the boxed plan in `MMTK::new`.
+    pub fn set_plan(&self, plan: &'static dyn Plan<VM = VM>) {
+        assert!(
+            self.plan.set(plan).is_ok(),
+            "GCTrigger::set_plan called more than once"
+        );
     }
 
     fn plan(&self) -> &dyn Plan<VM = VM> {
-        self.plan.expect("GCTrigger::plan accessed before set_plan")
+        *self
+            .plan
+            .get()
+            .expect("GCTrigger::plan accessed before set_plan")
     }
 
     /// Request a GC.  Called by mutators when polling (during allocation) and when handling user

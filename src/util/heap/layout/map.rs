@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use crate::util::freelist::FreeList;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::Address;

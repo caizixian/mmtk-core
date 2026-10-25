@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use super::stat::WorkerLocalStat;
 use super::work_bucket::*;
 use super::*;
@@ -5,6 +7,8 @@ use crate::mmtk::MMTK;
 use crate::util::copy::GCWorkerCopyContext;
 use crate::util::heap::layout::heap_parameters::MAX_SPACES;
 use crate::util::opaque_pointer::*;
+use crate::util::rust_util::phase_cell::MmtkId;
+use crate::util::rust_util::worker_local::WorkerPerm;
 use crate::util::ObjectReference;
 use crate::vm::{Collection, GCThreadContext, VMBinding};
 use atomic::Atomic;
@@ -92,6 +96,8 @@ pub struct GCWorker<VM: VMBinding> {
     pub tls: VMWorkerThread,
     /// The ordinal of the worker, numbered from 0 to the number of workers minus one.
     pub ordinal: ThreadId,
+    /// Pre-minted instance-branded capability proving exclusive worker-local access for `(mmtk.id, ordinal)`.
+    pub(crate) perm: WorkerPerm,
     /// The reference to the scheduler.
     scheduler: Arc<GCWorkScheduler<VM>>,
     /// The copy context, used to implement copying GC.
@@ -137,13 +143,21 @@ impl<VM: VMBinding> GCWorker<VM> {
     pub(crate) fn new(
         mmtk: &'static MMTK<VM>,
         ordinal: ThreadId,
+        perm: WorkerPerm,
         scheduler: Arc<GCWorkScheduler<VM>>,
         shared: Arc<GCWorkerShared<VM>>,
         local_work_buffer: deque::Worker<Box<dyn GCWork<VM>>>,
     ) -> Self {
+        assert_eq!(perm.instance_id(), mmtk.id, "GCWorker::new MmtkId mismatch");
+        assert_eq!(
+            perm.ordinal(),
+            ordinal,
+            "GCWorker::new WorkerPerm ordinal mismatch"
+        );
         Self {
             tls: VMWorkerThread(VMThread::UNINITIALIZED),
             ordinal,
+            perm,
             // We will set this later
             copy: GCWorkerCopyContext::new_non_copy(),
             copy_initialized: false,
@@ -225,6 +239,15 @@ impl<VM: VMBinding> GCWorker<VM> {
     /// * `tls`: The VM-specific thread-local storage for this GC worker thread.
     /// * `mmtk`: A reference to an MMTk instance.
     pub fn run(mut self: Box<Self>, tls: VMWorkerThread, mmtk: &'static MMTK<VM>) {
+        assert_eq!(
+            self.mmtk.id, mmtk.id,
+            "GCWorker::run called with a different MMTK instance ID than the one that owns this worker"
+        );
+        assert_eq!(
+            self.perm.instance_id(),
+            mmtk.id,
+            "GCWorker::run WorkerPerm MmtkId mismatch"
+        );
         assert!(
             std::ptr::eq(self.mmtk, mmtk),
             "GCWorker::run called with a different MMTK instance than the one that owns this worker"
@@ -291,6 +314,8 @@ enum WorkerCreationState<VM: VMBinding> {
     Initial {
         /// The local work queues for to-be-created workers.
         local_work_queues: Vec<deque::Worker<Box<dyn GCWork<VM>>>>,
+        /// Pre-minted unique `(instance_id, ordinal)` capabilities consumed once in `create_workers`.
+        perms: Vec<WorkerPerm>,
     },
     /// All worker threads are spawn and running.  `GCWorker` structs have been transferred to
     /// worker threads.
@@ -298,13 +323,11 @@ enum WorkerCreationState<VM: VMBinding> {
     /// Worker threads are stopping, or have already stopped, for forking. Instances of `GCWorker`
     /// structs are collected here to be reused when GC workers are respawn.
     Surrendered {
-        /// `GCWorker` instances not currently owned by active GC worker threads.  Once GC workers
-        /// are respawn, they will take ownership of these `GCWorker` instances.
-        // Note: Clippy warns about `Vec<Box<T>>` because `Vec<T>` is already in the heap.
-        // However, the purpose of this `Vec` is allowing GC worker threads to give their
-        // `Box<GCWorker<VM>>` instances back to this pool.  Therefore, the `Box` is necessary.
-        #[allow(clippy::vec_box)]
-        workers: Vec<Box<GCWorker<VM>>>,
+        /// Type-erased `Box<GCWorker<VM>>` instances not currently owned by active GC worker
+        /// threads. Erasing `GCWorker<VM>` to `dyn Any + Send` breaks the structural auto-trait
+        /// cycle `WorkerGroup -> GCWorker -> Arc<GCWorkScheduler> -> Arc<WorkerGroup>` while still
+        /// requiring the compiler to prove `GCWorker<VM>: Send` at coercion time (`0` `unsafe`).
+        workers: Vec<Box<dyn std::any::Any + Send>>,
     },
 }
 
@@ -316,21 +339,21 @@ pub(crate) struct WorkerGroup<VM: VMBinding> {
     state: Mutex<Option<WorkerCreationState<VM>>>,
 }
 
-/// We have to persuade Rust that `WorkerGroup` is safe to share because the compiler hits an
-/// auto-trait cycle via "worker -> scheduler -> worker_group -> `Surrendered::workers` -> worker".
-// SAFETY: `workers_shared` is `Vec<Arc<GCWorkerShared<VM>>>` where `GCWorkerShared<VM>: Send + Sync`.
-// `state` is a `Mutex<Option<WorkerCreationState<VM>>>`, and every variant of `WorkerCreationState<VM>`
-// (`Vec<deque::Worker<Box<dyn GCWork<VM>>>>` and `Vec<Box<GCWorker<VM>>>`) owns exclusively `Send`
-// data (`GCWork<VM>: Send`, `GCWorkerCopyContext<VM>: Send`, `VMWorkerThread: Send`) synchronized by
-// the `Mutex`, so sharing `&WorkerGroup<VM>` across threads cannot cause unsynchronized access.
-unsafe impl<VM: VMBinding> Sync for WorkerGroup<VM> {}
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    #[allow(dead_code)]
+    fn verify_worker_group_send_sync<VM: VMBinding>() {
+        assert_send_sync::<WorkerGroup<VM>>();
+    }
+};
 
 impl<VM: VMBinding> WorkerGroup<VM> {
-    /// Create a WorkerGroup
-    pub fn new(num_workers: usize) -> Arc<Self> {
+    /// Create a WorkerGroup with pre-minted `WorkerPerm` capabilities for `instance_id`.
+    pub fn new(instance_id: MmtkId, num_workers: usize) -> Arc<Self> {
         let local_work_queues = (0..num_workers)
             .map(|_| deque::Worker::new_fifo())
             .collect::<Vec<_>>();
+        let perms = WorkerPerm::mint_for_instance(instance_id, num_workers);
 
         let workers_shared = (0..num_workers)
             .map(|i| {
@@ -342,7 +365,10 @@ impl<VM: VMBinding> WorkerGroup<VM> {
 
         Arc::new(Self {
             workers_shared,
-            state: Mutex::new(Some(WorkerCreationState::Initial { local_work_queues })),
+            state: Mutex::new(Some(WorkerCreationState::Initial {
+                local_work_queues,
+                perms,
+            })),
         })
     }
 
@@ -350,11 +376,15 @@ impl<VM: VMBinding> WorkerGroup<VM> {
     pub fn initial_spawn(&self, tls: VMThread, mmtk: &'static MMTK<VM>) {
         let mut state = self.state.lock().unwrap();
 
-        let WorkerCreationState::Initial { local_work_queues } = state.take().unwrap() else {
+        let WorkerCreationState::Initial {
+            local_work_queues,
+            perms,
+        } = state.take().unwrap()
+        else {
             panic!("GCWorker structs have already been created");
         };
 
-        let workers = self.create_workers(local_work_queues, mmtk);
+        let workers = self.create_workers(local_work_queues, perms, mmtk);
         self.spawn(workers, tls);
 
         *state = Some(WorkerCreationState::Spawned);
@@ -368,6 +398,14 @@ impl<VM: VMBinding> WorkerGroup<VM> {
             panic!("GCWorker structs have not been created, yet.");
         };
 
+        let workers: Vec<Box<GCWorker<VM>>> = workers
+            .into_iter()
+            .map(|w| {
+                w.downcast::<GCWorker<VM>>()
+                    .unwrap_or_else(|_| unreachable!("Surrendered worker must be GCWorker<VM>"))
+            })
+            .collect();
+
         self.spawn(workers, tls);
 
         *state = Some(WorkerCreationState::Spawned)
@@ -378,20 +416,25 @@ impl<VM: VMBinding> WorkerGroup<VM> {
     fn create_workers(
         &self,
         local_work_queues: Vec<deque::Worker<Box<dyn GCWork<VM>>>>,
+        perms: Vec<WorkerPerm>,
         mmtk: &'static MMTK<VM>,
     ) -> Vec<Box<GCWorker<VM>>> {
         debug!("Creating GCWorker instances...");
 
         assert_eq!(self.workers_shared.len(), local_work_queues.len());
+        assert_eq!(self.workers_shared.len(), perms.len());
 
-        // Each `GCWorker` instance corresponds to a `GCWorkerShared` at the same index.
-        let workers = (local_work_queues.into_iter())
+        // Each `GCWorker` instance corresponds to a `GCWorkerShared` and unique `WorkerPerm` at the same index.
+        let workers = local_work_queues
+            .into_iter()
+            .zip(perms)
             .zip(self.workers_shared.iter())
             .enumerate()
-            .map(|(ordinal, (queue, shared))| {
+            .map(|(ordinal, ((queue, perm), shared))| {
                 Box::new(GCWorker::new(
                     mmtk,
                     ordinal,
+                    perm,
                     mmtk.scheduler.clone(),
                     shared.clone(),
                     queue,

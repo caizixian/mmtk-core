@@ -1,4 +1,5 @@
 //! The global part of a plan implementation.
+#![deny(unsafe_op_in_unsafe_fn)]
 
 use super::PlanConstraints;
 use crate::global_state::GlobalState;
@@ -467,24 +468,15 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     /// This method should only be called after 1. side metadata is initialized (as some SFT maps may use side metadata), 2. the plan is created in the heap and won't be moved,
     /// and 3. the side metadata sanity is initialized (otherwise we may try access side metadata and trigger sanity check before side metadata sanity is initialized)
     fn initialize_sft(&self) {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        static SFT_INITIALIZED: AtomicBool = AtomicBool::new(false);
+        use crate::policy::sft_map::{ensure_sft_map_initialized, SFTMap, SftMapInitHandle};
         assert!(
-            !SFT_INITIALIZED.swap(true, Ordering::AcqRel),
-            "Plan::initialize_sft may only be called once during MMTK::new"
+            !self.base().sft_initialized.swap(true, Ordering::AcqRel),
+            "Plan::initialize_sft may only be called once per Plan instance"
         );
-        crate::mmtk::SFT_MAP.initialize_once(&crate::policy::sft_map::create_sft_map);
-        // SAFETY: `SFT_INITIALIZED.swap(true, Ordering::AcqRel)` enforces at runtime that this
-        // block executes at most once across the entire process lifetime; `MMTK::new` calls
-        // `plan.initialize_sft()` single-threaded after side metadata setup and before returning
-        // `MMTK<VM>` or spawning any mutator/GC worker threads (any second or post-init call via
-        // `&dyn Plan` panics above before reaching `get_mut()`), and `SFT_MAP.initialize_once`
-        // guarantees `SFT_MAP` is initialized before obtaining an exclusive `&mut`.
-        let sft_map: &mut dyn crate::policy::sft_map::SFTMap =
-            unsafe { crate::mmtk::SFT_MAP.get_mut() }.as_mut();
+        let mut sft_map = SftMapInitHandle::new(ensure_sft_map_initialized());
         self.for_each_space(&mut |s| {
             sft_map.notify_space_creation(s.as_sft());
-            s.initialize_sft(sft_map);
+            s.initialize_sft(&mut sft_map);
         });
     }
 
@@ -507,6 +499,7 @@ pub struct BasePlan<VM: VMBinding> {
     pub options: Arc<Options>,
     pub gc_trigger: Arc<GCTrigger<VM>>,
     pub scheduler: Arc<GCWorkScheduler<VM>>,
+    pub(crate) sft_initialized: std::sync::atomic::AtomicBool,
 
     // Spaces in base plan
     #[cfg(feature = "code_space")]
@@ -710,6 +703,7 @@ impl<VM: VMBinding> BasePlan<VM> {
             gc_trigger: args.global_args.gc_trigger,
             options: args.global_args.options,
             scheduler: args.global_args.scheduler,
+            sft_initialized: std::sync::atomic::AtomicBool::new(false),
         }
     }
 

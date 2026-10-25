@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use atomic_refcell::AtomicRefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -41,6 +43,9 @@ pub struct GlobalState {
     pub(crate) scanned_stacks: AtomicUsize,
     /// Have we scanned all the stacks?
     pub(crate) stacks_prepared: AtomicBool,
+    /// True if `StopMutators` fused `PrepareMutator` + `ScanMutatorRoots` into
+    /// `PrepareAndScanMutator` packets in `WorkBucketStage::Prepare` for the current pause.
+    pub(crate) mutators_prepared_in_scan: AtomicBool,
     /// A counter that keeps tracks of the number of bytes allocated since last stress test
     pub(crate) allocation_bytes: AtomicUsize,
     /// Are we inside the benchmark harness?
@@ -248,6 +253,7 @@ impl Default for GlobalState {
             pause_requested_time: AtomicRefCell::new(None),
             pause_start_time: AtomicRefCell::new(None),
             stacks_prepared: AtomicBool::new(false),
+            mutators_prepared_in_scan: AtomicBool::new(false),
             emergency_collection: AtomicBool::new(false),
             user_triggered_collection: AtomicBool::new(false),
             internal_triggered_collection: AtomicBool::new(false),

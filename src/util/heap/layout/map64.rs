@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use super::map::CreateFreeListResult;
 use super::map::VMMap;
 use crate::util::constants::*;
@@ -7,7 +9,7 @@ use crate::util::heap::layout::heap_parameters::*;
 use crate::util::heap::layout::vm_layout::*;
 use crate::util::heap::space_descriptor::{AtomicSpaceDescriptor, SpaceDescriptor};
 use crate::util::os::*;
-use crate::util::raw_memory_freelist::RawMemoryFreeList;
+use crate::util::raw_memory_freelist::{QuarantinedRegion, RawMemoryFreeList};
 use crate::util::Address;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -111,6 +113,11 @@ impl VMMap for Map64 {
         let index = self
             .space_index(start)
             .expect("Space start exceeds heap_end");
+        assert_ne!(
+            self.descriptor_map[index].load(Ordering::Acquire),
+            SpaceDescriptor::UNINITIALIZED,
+            "create_parent_freelist called for space index {index} ({start}) before Map64::insert"
+        );
         let mut state = self.space_state[index].lock().unwrap();
         assert!(
             !state.freelist_created,
@@ -121,12 +128,27 @@ impl VMMap for Map64 {
         units = (units as f64 * NON_MAP_FRACTION) as _;
         let list_extent =
             conversions::pages_to_bytes(RawMemoryFreeList::size_in_pages(units as _, 1) as _);
+        let base = conversions::chunk_align_up(start + list_extent);
+        assert!(
+            base - start <= self.space_size(),
+            "RawMemoryFreeList displacement ({}) exceeds space size ({})",
+            base - start,
+            self.space_size()
+        );
 
         let heads = 1;
         let pages_per_block = RawMemoryFreeList::default_block_size(units as _, heads);
-        let list = Box::new(RawMemoryFreeList::new(
-            start,
-            start + list_extent,
+        // SAFETY: `start` is space-aligned and chunk-aligned (`BYTES_IN_CHUNK >= BYTES_IN_PAGE`)
+        // and non-zero (`index != 0` because `descriptor_map[index] != UNINITIALIZED`),
+        // `list_extent` is page-aligned (`conversions::pages_to_bytes`), `CommonSpace::new`
+        // quarantined this space's contiguous virtual range before registering `descriptor_map[index]`
+        // via `Map64::insert`, `!state.freelist_created` under `self.space_state[index]` ensures
+        // this prefix is minted at most once, and displacing `state.base_address`/`state.high_water`
+        // to `base = chunk_align_up(start + list_extent)` prevents any space allocation from ever
+        // overlapping `[start, start + list_extent)`.
+        let region = unsafe { QuarantinedRegion::new_unchecked(start, start + list_extent) };
+        let list = Box::new(RawMemoryFreeList::from_quarantined(
+            region,
             pages_per_block,
             units as _,
             grain,
@@ -135,8 +157,6 @@ impl VMMap for Map64 {
         ));
 
         /* Adjust the base address and highwater to account for the allocated chunks for the map */
-        let base = conversions::chunk_align_up(start + list_extent);
-
         state.high_water = base;
         state.base_address = base;
 

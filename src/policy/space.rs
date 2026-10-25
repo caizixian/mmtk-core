@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use crate::global_state::GlobalState;
 use crate::plan::PlanConstraints;
 use crate::scheduler::GCWorkScheduler;

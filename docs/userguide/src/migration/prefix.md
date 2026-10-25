@@ -32,6 +32,50 @@ Notes for the mmtk-core developers:
 
 ## 0.34.0
 
+### `#[repr(C)]` struct layout updates in `Mutator`, `Allocators`, `FreeListAllocator`, and `BlockList`
+
+```admonish tldr
+Several `#[repr(C)]` runtime structs used for thread-local fast-path allocation were hardened to
+seal initialization and sweep invariants. Rust callers and bindings that query offsets dynamically
+via `Mutator::get_allocator_base_offset`, `AllocatorInfo::new`, or `std::mem::offset_of!` require
+no source changes, while VM bindings that hardcode C/C++/JIT struct sizes or field offsets for
+`Mutator<VM>`, `Allocators<VM>`, `FreeListAllocator<VM>`, or `BlockList` must update their native
+definitions.
+```
+
+Layout changes (affecting native C/C++ mirrors or hardcoded JIT offsets):
+
+*   struct `util::alloc::Allocators<VM>` and struct `plan::Mutator<VM>`
+    -   `Allocators<VM>`'s six `[MaybeUninit<...>; MAX_*]` arrays are now module-private and
+        followed by a `#[repr(transparent)]` `u16` initialization bitmask (`InitSelectorSet(u16)`,
+        `2` bytes plus `6` bytes of trailing pointer-alignment padding on 64-bit targets, or `+4`
+        bytes on 32-bit targets).
+    -   Fast-path `BumpAllocator` offsets at the start of `Mutator<VM>` are unchanged, whereas
+        fields of `Mutator<VM>` placed after `allocators` (`barrier`, `mutator_tls`, `plan`,
+        `config`) shift by `+8` bytes on 64-bit targets (`+4` bytes on 32-bit targets), in addition
+        to any size change in `FreeListAllocator<VM>` below.
+    -   `Mutator::on_destroy(&mut self)` remains idempotent (invoking `on_mutator_destroy()` without
+        dropping allocator slots in place); `Drop for Allocators<VM>` drops initialized allocator
+        slots when the `Mutator<VM>` itself is dropped.
+*   struct `policy::marksweepspace::native_ms::BlockList` and struct `util::alloc::FreeListAllocator<VM>`
+    -   `BlockList` removed its unused trailing lock field, shrinking each `BlockList` entry from
+        `32` bytes to `24` bytes on 64-bit targets (`16` bytes to `12` bytes on 32-bit targets).
+    -   `FreeListAllocator<VM>` wraps `available_blocks` and `unswept_blocks` in
+        `#[repr(transparent)]` `BlockLists` / `UnsweptBlockLists` (preserving identical array layout
+        while preventing arbitrary cross-list mutation from safe code), with total array size
+        reduced proportionally to `size_of::<BlockList>()`.
+
+Recommended migration for VM bindings:
+
+*   Prefer querying fast-path and barrier offsets at build/init time via
+    `memory_manager::get_allocator_mapping`, `AllocatorInfo::new::<VM>(selector)`,
+    `Mutator::<VM>::get_allocator_base_offset(selector)`, or `std::mem::offset_of!(Mutator<VM>, ...)`
+    instead of maintaining manual C/C++ struct replicas with hardcoded byte sizes.
+*   If your binding maintains a static C/C++ struct mirror of `Mutator<VM>`, update the `BlockList`
+    size (`32 -> 24` bytes on 64-bit) and append `uint16_t init_set` (plus alignment padding) at
+    the end of `Allocators`, and add a startup `static_assert(sizeof(...) == ...)` / offset check
+    against Rust's `size_of::<Mutator<VM>>()` and `offset_of!`.
+
 ### Rename "Compressor" to "OVC", and "MarkCompact" to "Lisp2"
 
 ```admonish tldr

@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 //! This module contains `WorkerMonitor` and related types.  It purposes includes:
 //!
 //! -   letting workers become active or inactive,
@@ -7,6 +9,9 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
+
+use crate::util::rust_util::phase_cell::{MmtkId, WorkersParkedToken};
+use crate::util::rust_util::worker_local::WorkerPerm;
 
 use super::{
     worker::WorkerShouldExit,
@@ -35,6 +40,8 @@ pub(crate) enum LastParkedResult {
 /// -   It allows workers to park and unpark.
 /// -   It allows mutators to notify workers to schedule a GC.
 pub(crate) struct WorkerMonitor {
+    /// Brand of the owning `MMTK<VM>` instance.
+    instance_id: MmtkId,
     /// The total number of workers.
     worker_count: usize,
     /// The synchronized part.
@@ -103,9 +110,42 @@ impl WorkerParker {
     }
 }
 
-impl WorkerMonitor {
-    pub fn new(worker_count: usize) -> Self {
+/// RAII guard ensuring `WorkerParker::parked_workers` is decremented if `park_and_wait` unwinds
+/// (for instance, due to a panic inside `on_last_parked`), preventing `parked_workers` from ever
+/// remaining permanently inflated while `WorkerMonitor::sync` becomes poisoned.
+struct ParkedWorkerGuard<'a> {
+    parker: &'a WorkerParker,
+    armed: bool,
+}
+
+impl<'a> ParkedWorkerGuard<'a> {
+    fn new(parker: &'a WorkerParker) -> Self {
         Self {
+            parker,
+            armed: true,
+        }
+    }
+
+    fn disarm(mut self, sync: &WorkerMonitorSync) {
+        self.armed = false;
+        self.parker.dec_parked_workers(sync);
+    }
+}
+
+impl Drop for ParkedWorkerGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            let old = self.parker.parked_workers.fetch_sub(1, Ordering::SeqCst);
+            debug_assert!(old <= self.parker.worker_count);
+            debug_assert!(old > 0);
+        }
+    }
+}
+
+impl WorkerMonitor {
+    pub fn new(instance_id: MmtkId, worker_count: usize) -> Self {
+        Self {
+            instance_id,
             worker_count,
             sync: Mutex::new(WorkerMonitorSync {
                 goals: Default::default(),
@@ -205,8 +245,8 @@ impl WorkerMonitor {
 
     /// Park a worker and wait on the CondVar `workers_have_anything_to_do`.
     ///
-    /// If it is the last worker parked, `on_last_parked` will be called.
-    /// The argument of `on_last_parked` is true if `sync.gc_requested` is `true`.
+    /// If it is the last worker parked, `on_last_parked` will be called with a scoped
+    /// [`WorkersParkedToken`] witnessing that all other workers of `self.instance_id` are parked.
     /// The return value of `on_last_parked` will determine whether this worker and other workers
     /// will wake up or block waiting.
     ///
@@ -214,16 +254,32 @@ impl WorkerMonitor {
     /// or `Err(WorkerShouldExit)` if the current worker should exit now.
     pub fn park_and_wait<F>(
         &self,
-        ordinal: usize,
+        perm: &WorkerPerm,
         on_last_parked: F,
     ) -> Result<(), WorkerShouldExit>
     where
-        F: FnOnce(&mut WorkerGoals) -> LastParkedResult,
+        F: for<'p> FnOnce(&mut WorkerGoals, WorkersParkedToken<'p>) -> LastParkedResult,
     {
+        assert_eq!(
+            perm.instance_id(),
+            self.instance_id,
+            "WorkerMonitor::park_and_wait MmtkId mismatch"
+        );
+        let ordinal = perm.ordinal();
+        assert!(
+            ordinal < self.worker_count,
+            "WorkerMonitor::park_and_wait ordinal {} out of bounds for worker_count {}",
+            ordinal,
+            self.worker_count
+        );
+
+        // Never recover from a poisoned `sync` mutex (`unwrap()` panics cleanly if a prior
+        // `on_last_parked` callback unwound).
         let mut sync = self.sync.lock().unwrap();
 
-        // Park this worker
+        // Park this worker under an unwind-safe RAII guard.
         let all_parked = self.parker.inc_parked_workers(&sync);
+        let park_guard = ParkedWorkerGuard::new(&self.parker);
         trace!(
             "Worker {} parked.  parked/total: {}/{}.  All parked: {}",
             ordinal,
@@ -236,7 +292,19 @@ impl WorkerMonitor {
 
         if all_parked {
             trace!("Worker {} is the last worker parked.", ordinal);
-            let result = on_last_parked(&mut sync.goals);
+            // SAFETY:
+            // 1. `perm` is a pre-minted `WorkerPerm` verified above to belong to
+            //    `self.instance_id` with `ordinal < self.worker_count`, proving the caller is an
+            //    initialized GC worker of this instance (never an external pre-init/post-shutdown
+            //    caller).
+            // 2. `sync` (`self.sync.lock().unwrap()`, never recovered from poison) is held for the
+            //    entire lifetime `'p` of `parked_token` (scoped strictly to `on_last_parked`).
+            // 3. `all_parked` (`old + 1 == self.worker_count`, mutated only under `self.sync` and
+            //    decremented on unwind by `ParkedWorkerGuard`) proves all other `worker_count - 1`
+            //    workers of `self.instance_id` are blocked in `Condvar::wait` and cannot unpark
+            //    until `sync` is released after `on_last_parked` returns.
+            let parked_token = unsafe { WorkersParkedToken::new_unchecked(self.instance_id) };
+            let result = on_last_parked(&mut sync.goals, parked_token);
             match result {
                 LastParkedResult::ParkSelf => {
                     should_wait = true;
@@ -343,7 +411,7 @@ impl WorkerMonitor {
         }
 
         // Unpark this worker.
-        self.parker.dec_parked_workers(&sync);
+        park_guard.disarm(&sync);
         trace!(
             "Worker {} unparked.  parked/total: {}/{}.",
             ordinal,
@@ -376,6 +444,9 @@ mod tests {
         Arc,
     };
 
+    use crate::util::rust_util::phase_cell::MmtkId;
+    use crate::util::rust_util::worker_local::WorkerPerm;
+
     use super::WorkerMonitor;
 
     /// Test if the `WorkerMonitor::park_and_wait` method calls the `on_last_parked` callback
@@ -383,12 +454,15 @@ mod tests {
     #[test]
     fn test_last_worker_park_wake_all() {
         let number_threads = 4;
-        let worker_monitor = Arc::new(WorkerMonitor::new(number_threads));
+        let instance_id = MmtkId::fresh();
+        let perms = WorkerPerm::mint_for_instance(instance_id, number_threads);
+        let worker_monitor = Arc::new(WorkerMonitor::new(instance_id, number_threads));
         let on_last_parked_called = AtomicUsize::new(0);
         let should_unpark = AtomicBool::new(false);
 
         std::thread::scope(|scope| {
-            for ordinal in 0..number_threads {
+            for perm in perms {
+                let ordinal = perm.ordinal();
                 let worker_monitor = worker_monitor.clone();
                 let on_last_parked_called = &on_last_parked_called;
                 let should_unpark = &should_unpark;
@@ -398,7 +472,8 @@ mod tests {
                     while !should_unpark.load(Ordering::SeqCst) {
                         println!("Thread {} parking...", ordinal);
                         worker_monitor
-                            .park_and_wait(ordinal, |_goals| {
+                            .park_and_wait(&perm, |_goals, parked| {
+                                assert_eq!(parked.instance_id(), instance_id);
                                 println!("Thread {} is the last thread parked.", ordinal);
                                 on_last_parked_called.fetch_add(1, Ordering::SeqCst);
                                 should_unpark.store(true, Ordering::SeqCst);
@@ -420,13 +495,16 @@ mod tests {
     #[test]
     fn test_last_worker_park_wake_self() {
         let number_threads = 4;
-        let worker_monitor = Arc::new(WorkerMonitor::new(number_threads));
+        let instance_id = MmtkId::fresh();
+        let perms = WorkerPerm::mint_for_instance(instance_id, number_threads);
+        let worker_monitor = Arc::new(WorkerMonitor::new(instance_id, number_threads));
         let on_last_parked_called = AtomicUsize::new(0);
         let threads_running = AtomicUsize::new(0);
         let should_unpark = AtomicBool::new(false);
 
         std::thread::scope(|scope| {
-            for ordinal in 0..number_threads {
+            for perm in perms {
+                let ordinal = perm.ordinal();
                 let worker_monitor = worker_monitor.clone();
                 let on_last_parked_called = &on_last_parked_called;
                 let threads_running = &threads_running;
@@ -438,7 +516,8 @@ mod tests {
                     while !should_unpark.load(Ordering::SeqCst) {
                         println!("Thread {} parking...", ordinal);
                         worker_monitor
-                            .park_and_wait(ordinal, |_goals| {
+                            .park_and_wait(&perm, |_goals, parked| {
+                                assert_eq!(parked.instance_id(), instance_id);
                                 println!("Thread {} is the last thread parked.", ordinal);
                                 on_last_parked_called.fetch_add(1, Ordering::SeqCst);
                                 should_unpark.store(true, Ordering::SeqCst);
@@ -469,21 +548,24 @@ mod tests {
     fn test_only_selected_workers_unpark() {
         let number_threads = 4;
         let concurrent_threads = 2;
-        let worker_monitor = Arc::new(WorkerMonitor::new(number_threads));
+        let instance_id = MmtkId::fresh();
+        let perms = WorkerPerm::mint_for_instance(instance_id, number_threads);
+        let worker_monitor = Arc::new(WorkerMonitor::new(instance_id, number_threads));
         worker_monitor.set_active_workers(concurrent_threads);
         let first_wave_unparked = AtomicUsize::new(0);
         let release_everyone = AtomicBool::new(false);
         let notifier_ran = AtomicBool::new(false);
 
         std::thread::scope(|scope| {
-            for ordinal in 0..number_threads {
+            for perm in perms {
+                let ordinal = perm.ordinal();
                 let worker_monitor = worker_monitor.clone();
                 let first_wave_unparked = &first_wave_unparked;
                 let release_everyone = &release_everyone;
                 let notifier_ran = &notifier_ran;
                 scope.spawn(move || {
                     worker_monitor
-                        .park_and_wait(ordinal, |_goals| super::LastParkedResult::WakeAll)
+                        .park_and_wait(&perm, |_goals, _parked| super::LastParkedResult::WakeAll)
                         .unwrap();
 
                     if !release_everyone.load(Ordering::SeqCst) {
@@ -508,5 +590,21 @@ mod tests {
             first_wave_unparked.load(Ordering::SeqCst),
             concurrent_threads
         );
+    }
+
+    #[test]
+    fn test_on_last_parked_panic_decrements_parked_workers_and_poisons_sync() {
+        let instance_id = MmtkId::fresh();
+        let perms = WorkerPerm::mint_for_instance(instance_id, 1);
+        let worker_monitor = WorkerMonitor::new(instance_id, 1);
+
+        let panic_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = worker_monitor.park_and_wait(&perms[0], |_goals, _parked| {
+                panic!("simulated on_last_parked panic");
+            });
+        }));
+        assert!(panic_res.is_err());
+        assert_eq!(worker_monitor.parker.parked_workers(), 0);
+        assert!(worker_monitor.sync.is_poisoned());
     }
 }

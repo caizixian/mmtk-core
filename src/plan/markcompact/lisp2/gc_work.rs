@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use super::global::Lisp2;
 use crate::plan::tracing::{PlanTrace, UnsupportedTrace};
 use crate::policy::lisp2space::Lisp2Space;
@@ -63,11 +65,18 @@ impl<VM: VMBinding> GCWork<VM> for UpdateReferences<VM> {
             .worker_group
             .get_and_clear_worker_live_bytes();
 
-        for mutator in VM::VMActivePlan::mutators() {
-            mmtk.scheduler.work_buckets[WorkBucketStage::SecondRoots].add(ScanMutatorRoots::<
-                Lisp2ForwardingGCWorkContext<VM>,
-            >(mutator));
-        }
+        let tickets = VM::VMActivePlan::mutators()
+            .map(MutatorTicket::from_mut)
+            .collect::<Vec<_>>();
+        let packets = tickets
+            .into_iter()
+            .map(|ticket| {
+                Box::new(ScanMutatorRoots::<Lisp2ForwardingGCWorkContext<VM>>::new(
+                    ticket,
+                )) as _
+            })
+            .collect::<Vec<_>>();
+        mmtk.scheduler.work_buckets[WorkBucketStage::SecondRoots].bulk_add(packets);
 
         mmtk.scheduler.work_buckets[WorkBucketStage::SecondRoots]
             .add(ScanVMSpecificRoots::<Lisp2ForwardingGCWorkContext<VM>>::new());

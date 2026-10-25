@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use super::block_allocation::BlockAllocation;
 use super::gc_work::nursery_sweeping::ReleaseLOSNursery;
 use super::gc_work::prepare::FastRCPrepare;
@@ -407,6 +409,7 @@ impl<VM: VMBinding> LXR<VM> {
             VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC.is_in_header(),
             "LXR does not support placing forwarding bits on the side."
         );
+        let instance_id = args.scheduler.instance_id();
         let num_workers = args.scheduler.num_workers();
         #[allow(unused_mut)]
         let mut specs = vec![
@@ -467,7 +470,7 @@ impl<VM: VMBinding> LXR<VM> {
             rc: RefCountHelper::NEW,
             block_allocation,
             evac_set: MatureEvacuationSet::default(),
-            mature_evac_remset: MatureEvecRemSet::new(num_workers),
+            mature_evac_remset: MatureEvecRemSet::new(instance_id, num_workers),
             possibly_dead_mature_blocks: Default::default(),
             num_clean_blocks_released_lazy: Default::default(),
         }))

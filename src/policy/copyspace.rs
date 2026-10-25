@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use crate::plan::tracing::{ObjectQueue, OptionObjectQueue};
 use crate::policy::copy_context::PolicyCopyContext;
 use crate::policy::gc_work::TRACE_KIND_TRANSITIVE_PIN;
@@ -364,12 +366,7 @@ impl<VM: VMBinding> CopySpaceCopyContext<VM> {
         }
     }
 
-    pub fn rebind(&mut self, space: &CopySpace<VM>) {
-        // SAFETY: `CopySpace` instances only exist as fields of heap-pinned `'static` `Plan`
-        // structs inside `MMTK<VM>`, and `CopySpaceCopyContext::rebind` is called during
-        // `Plan::prepare_worker` (which receives `&self` rather than `&'static self`) to point
-        // worker-local copy allocators at the plan's permanent to-space.
-        self.copy_allocator
-            .rebind(unsafe { &*(space as *const CopySpace<VM>) });
+    pub fn rebind(&mut self, space: &'static CopySpace<VM>) {
+        self.copy_allocator.rebind(space);
     }
 }

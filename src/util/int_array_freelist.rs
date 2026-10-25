@@ -1,12 +1,14 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use super::freelist::*;
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct IntArrayFreeList {
     head: i32,
     heads: i32,
-    table: Arc<RwLock<Vec<i32>>>,
-    is_child: bool,
+    table: Arc<[AtomicI32]>,
 }
 
 impl FreeList for IntArrayFreeList {
@@ -17,23 +19,35 @@ impl FreeList for IntArrayFreeList {
         self.heads
     }
     fn get_entry(&self, index: i32) -> i32 {
-        self.table.read().unwrap()[index as usize]
+        self.table[index as usize].load(Ordering::Acquire)
     }
     fn set_entry(&mut self, index: i32, value: i32) {
-        self.table.write().unwrap()[index as usize] = value;
+        self.table[index as usize].store(value, Ordering::Release);
+    }
+    fn or_entry(&mut self, index: i32, mask: i32) {
+        self.table[index as usize].fetch_or(mask, Ordering::AcqRel);
+    }
+    fn and_entry(&mut self, index: i32, mask: i32) {
+        self.table[index as usize].fetch_and(mask, Ordering::AcqRel);
     }
 }
 
 impl IntArrayFreeList {
     pub fn new(units: usize, grain: i32, heads: usize) -> Self {
-        debug_assert!(units <= MAX_UNITS as usize && heads <= MAX_HEADS as usize);
+        assert!(
+            units <= MAX_UNITS as usize && heads <= MAX_HEADS as usize,
+            "IntArrayFreeList units ({units}) or heads ({heads}) out of bounds"
+        );
         // allocate the data structure, including space for top & bottom sentinels
         let len = (units + 1 + heads) << 1;
+        let table: Arc<[AtomicI32]> = (0..len)
+            .map(|_| AtomicI32::new(0))
+            .collect::<Vec<_>>()
+            .into();
         let mut iafl = IntArrayFreeList {
             head: -1,
             heads: heads as _,
-            table: Arc::new(RwLock::new(vec![0; len])),
-            is_child: false,
+            table,
         };
         iafl.initialize_heap(units as _, grain);
         iafl
@@ -43,18 +57,12 @@ impl IntArrayFreeList {
             head: -(1 + ordinal),
             heads: parent.heads,
             table: Arc::clone(&parent.table),
-            is_child: true,
         };
-        debug_assert!(-iafl.head <= iafl.heads);
+        assert!(-iafl.head <= iafl.heads);
         iafl
     }
     pub(crate) fn get_ordinal(&self) -> i32 {
         -self.head - 1
-    }
-    pub fn resize_freelist(&mut self, units: usize, grain: i32) {
-        debug_assert!(!self.is_child);
-        *self.table.write().unwrap() = vec![0; (units + 1 + self.heads as usize) << 1];
-        self.initialize_heap(units as _, grain);
     }
 }
 
@@ -366,10 +374,9 @@ mod tests {
     }
 
     #[test]
-    fn child_survives_parent_drop_and_sees_resize() {
-        let mut parent = IntArrayFreeList::new(1, 1, 2);
+    fn child_survives_parent_drop() {
+        let parent = IntArrayFreeList::new(LIST_SIZE, 1, 2);
         let mut child = IntArrayFreeList::from_parent(&parent, 0);
-        parent.resize_freelist(LIST_SIZE, 1);
         drop(parent);
 
         assert_eq!(child.alloc(1), 0);

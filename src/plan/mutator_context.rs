@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 //! Mutator context for each application thread.
 
 use crate::plan::barriers::Barrier;
@@ -177,9 +179,20 @@ impl<VM: VMBinding> MutatorBuilder<VM> {
 /// A mutator is a per-thread data structure that manages allocations and barriers. It is usually highly coupled with the language VM.
 /// It is recommended for MMTk users 1) to have a mutator struct of the same layout in the thread local storage that can be accessed efficiently,
 /// and 2) to implement fastpath allocation and barriers for the mutator in the VM side.
+///
+/// # `#[repr(C)]` Layout Notes
+/// `Mutator<VM>` has a deterministic fixed-size `#[repr(C)]` layout:
+/// - `allocators: Allocators<VM>` contains the fixed-size `[MaybeUninit<...>; MAX_*]` allocator
+///   arrays followed by a `u16` initialization bitmask (`+8` bytes including pointer-alignment
+///   padding at the end of `Allocators<VM>`).
+/// - VM bindings that mirror `Mutator<VM>` in C/C++ or JIT code should query allocator and field
+///   offsets dynamically via [`Mutator::get_allocator_base_offset`],
+///   [`crate::util::alloc::AllocatorInfo::new`], or `std::mem::offset_of!(Mutator<VM>, ...)`
+///   rather than hardcoding struct sizes (note that `barrier` and `mutator_tls` sit after
+///   `allocators` and include `Allocators<VM>`'s trailing `8`-byte initialization metadata).
 // We are trying to make this struct fixed-sized so that VM bindings can easily define a type to have the exact same layout as this struct.
 // Currently Mutator is fixed sized, and we should try keep this invariant:
-// - Allocators are fixed-length arrays of allocators.
+// - Allocators are fixed-length arrays of allocators plus a `#[repr(transparent)]` u16 bitmask.
 // - MutatorConfig only has pointers/refs (including fat pointers), and is fixed sized.
 //
 // Soundness invariant: `allocators` and `config` are module-private and constructed exclusively in
@@ -289,12 +302,7 @@ impl<VM: VMBinding> Mutator<VM> {
         semantic: AllocationSemantics,
     ) -> &mut dyn Allocator<VM> {
         let selector = self.config.allocator_mapping[semantic];
-        // SAFETY: By `Mutator`'s private-field invariant established in `MutatorBuilder::build`,
-        // every non-`None` selector in `self.config.allocator_mapping` was verified to be in
-        // `self.config.space_mapping` and initialized in `self.allocators` by `Allocators::new`,
-        // and `AllocatorSelector::None` panics safely in `Allocators::get_allocator_mut` before
-        // reading any `MaybeUninit` slot.
-        unsafe { self.allocators.get_allocator_mut(selector) }
+        self.allocators.get_allocator_mut(selector)
     }
 
     /// Resolve and downcast the initialized allocator mapped to `semantic`.
@@ -310,79 +318,59 @@ impl<VM: VMBinding> Mutator<VM> {
             .unwrap()
     }
 
-    /// Get all the valid allocator selector (no duplicate)
-    fn get_all_allocator_selectors(&self) -> Vec<AllocatorSelector> {
-        use itertools::Itertools;
-        self.config
-            .allocator_mapping
-            .iter()
-            .map(|(_, selector)| *selector)
-            .sorted()
-            .dedup()
-            .filter(|selector| *selector != AllocatorSelector::None)
-            .collect()
-    }
-
-    /// Inform each allocator about destroying. Call allocator-specific on destroy methods.
+    /// Inform each initialized allocator about destroying without dropping or uninitializing the
+    /// allocator slots (`Drop for Allocators<VM>` is the sole drop site, so `on_destroy` is safe
+    /// and idempotent even if `&mut Mutator<VM>` remains live afterwards).
     pub fn on_destroy(&mut self) {
-        for selector in self.get_all_allocator_selectors() {
-            // SAFETY: Every `selector` returned by `get_all_allocator_selectors` comes from
-            // `self.config.allocator_mapping` and is not `AllocatorSelector::None`; by `Mutator`'s
-            // construction invariant in `MutatorBuilder::build`, that slot in `self.allocators`
-            // was initialized by `Allocators::new`.
-            unsafe { self.allocators.get_allocator_mut(selector) }.on_mutator_destroy();
-        }
+        self.allocators
+            .for_each_initialized_mut(|allocator| allocator.on_mutator_destroy());
     }
 
     /// Get the allocator for the selector.
     ///
     /// # Safety
     /// The caller must ensure `selector` is in bounds and designates an allocator slot in `self`
-    /// that was initialized when `self` was created (i.e. present in `MutatorConfig::space_mapping`,
-    /// or `AllocatorSelector::None` which panics).
+    /// that was initialized when `self` was created (panics if `selector` is `None`, out of
+    /// bounds, or uninitialized).
     /// [`crate::memory_manager::get_allocator_mapping`] can be used to get a selector.
     pub unsafe fn allocator(&self, selector: AllocatorSelector) -> &dyn Allocator<VM> {
-        // SAFETY: Guaranteed by caller contract above.
-        unsafe { self.allocators.get_allocator(selector) }
+        self.allocators.get_allocator(selector)
     }
 
     /// Get the mutable allocator for the selector.
     ///
     /// # Safety
     /// The caller must ensure `selector` is in bounds and designates an allocator slot in `self`
-    /// that was initialized when `self` was created (i.e. present in `MutatorConfig::space_mapping`,
-    /// or `AllocatorSelector::None` which panics).
+    /// that was initialized when `self` was created (panics if `selector` is `None`, out of
+    /// bounds, or uninitialized).
     /// [`crate::memory_manager::get_allocator_mapping`] can be used to get a selector.
     pub unsafe fn allocator_mut(&mut self, selector: AllocatorSelector) -> &mut dyn Allocator<VM> {
-        // SAFETY: Guaranteed by caller contract above.
-        unsafe { self.allocators.get_allocator_mut(selector) }
+        self.allocators.get_allocator_mut(selector)
     }
 
     /// Get the allocator of a concrete type for the selector.
     ///
     /// # Safety
     /// The caller must ensure `selector` is in bounds and designates an allocator slot in `self`
-    /// that was initialized when `self` was created (panics if `selector` is `None` or if `T` does
-    /// not match the concrete allocator type at `selector`).
+    /// that was initialized when `self` was created (panics if `selector` is `None`, uninitialized,
+    /// or if `T` does not match the concrete allocator type at `selector`).
     /// [`crate::memory_manager::get_allocator_mapping`] can be used to get a selector.
     pub unsafe fn allocator_impl<T: Allocator<VM>>(&self, selector: AllocatorSelector) -> &T {
-        // SAFETY: Guaranteed by caller contract above.
-        unsafe { self.allocators.get_typed_allocator(selector) }
+        self.allocators.get_typed_allocator(selector)
     }
 
     /// Get the mutable allocator of a concrete type for the selector.
     ///
     /// # Safety
     /// The caller must ensure `selector` is in bounds and designates an allocator slot in `self`
-    /// that was initialized when `self` was created (panics if `selector` is `None` or if `T` does
-    /// not match the concrete allocator type at `selector`).
+    /// that was initialized when `self` was created (panics if `selector` is `None`, uninitialized,
+    /// or if `T` does not match the concrete allocator type at `selector`).
     /// [`crate::memory_manager::get_allocator_mapping`] can be used to get a selector.
     pub unsafe fn allocator_impl_mut<T: Allocator<VM>>(
         &mut self,
         selector: AllocatorSelector,
     ) -> &mut T {
-        // SAFETY: Guaranteed by caller contract above.
-        unsafe { self.allocators.get_typed_allocator_mut(selector) }
+        self.allocators.get_typed_allocator_mut(selector)
     }
 
     /// Get the allocator of a concrete type for the semantic.
@@ -396,9 +384,8 @@ impl<VM: VMBinding> Mutator<VM> {
         &self,
         semantic: AllocationSemantics,
     ) -> &T {
-        // SAFETY: By `Mutator`'s construction invariant in `MutatorBuilder::build`, every
-        // non-`None` selector in `self.config.allocator_mapping` is initialized in `self.allocators`.
-        unsafe { self.allocator_impl::<T>(self.config.allocator_mapping[semantic]) }
+        self.allocators
+            .get_typed_allocator(self.config.allocator_mapping[semantic])
     }
 
     /// Get the mutable allocator of a concrete type for the semantic.
@@ -412,43 +399,13 @@ impl<VM: VMBinding> Mutator<VM> {
         &mut self,
         semantic: AllocationSemantics,
     ) -> &mut T {
-        // SAFETY: By `Mutator`'s construction invariant in `MutatorBuilder::build`, every
-        // non-`None` selector in `self.config.allocator_mapping` is initialized in `self.allocators`.
-        unsafe { self.allocator_impl_mut::<T>(self.config.allocator_mapping[semantic]) }
+        self.allocators
+            .get_typed_allocator_mut(self.config.allocator_mapping[semantic])
     }
 
     /// Return the base offset from a mutator pointer to the allocator specified by the selector.
     pub fn get_allocator_base_offset(selector: AllocatorSelector) -> usize {
-        use crate::util::alloc::*;
-        use std::mem::{offset_of, size_of};
-        offset_of!(Mutator<VM>, allocators)
-            + match selector {
-                AllocatorSelector::BumpPointer(index) => {
-                    offset_of!(Allocators<VM>, bump_pointer)
-                        + size_of::<BumpAllocator<VM>>() * index as usize
-                }
-                AllocatorSelector::FreeList(index) => {
-                    offset_of!(Allocators<VM>, free_list)
-                        + size_of::<FreeListAllocator<VM>>() * index as usize
-                }
-                AllocatorSelector::Immix(index) => {
-                    offset_of!(Allocators<VM>, immix)
-                        + size_of::<ImmixAllocator<VM>>() * index as usize
-                }
-                AllocatorSelector::LargeObject(index) => {
-                    offset_of!(Allocators<VM>, large_object)
-                        + size_of::<LargeObjectAllocator<VM>>() * index as usize
-                }
-                AllocatorSelector::Malloc(index) => {
-                    offset_of!(Allocators<VM>, malloc)
-                        + size_of::<MallocAllocator<VM>>() * index as usize
-                }
-                AllocatorSelector::Lisp2(index) => {
-                    offset_of!(Allocators<VM>, lisp2)
-                        + size_of::<Lisp2Allocator<VM>>() * index as usize
-                }
-                AllocatorSelector::None => panic!("Expect a valid AllocatorSelector, found None"),
-            }
+        std::mem::offset_of!(Mutator<VM>, allocators) + Allocators::<VM>::field_offset(selector)
     }
 }
 

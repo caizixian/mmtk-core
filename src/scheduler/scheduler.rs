@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use self::worker::PollResult;
 
 use super::gc_work::ScheduleCollection;
@@ -15,6 +17,7 @@ use crate::plan::Pause;
 use crate::util::opaque_pointer::*;
 use crate::util::options::AffinityKind;
 use crate::util::options::PlanSelector;
+use crate::util::rust_util::phase_cell::{MmtkId, WorkersParkedToken};
 use crate::vm::Collection;
 use crate::vm::VMBinding;
 use crate::Plan;
@@ -24,6 +27,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub struct GCWorkScheduler<VM: VMBinding> {
+    /// Brand of the owning `MMTK<VM>` instance.
+    instance_id: MmtkId,
     /// Work buckets
     pub work_buckets: EnumMap<WorkBucketStage, WorkBucket<VM>>,
     /// Workers
@@ -36,9 +41,18 @@ pub struct GCWorkScheduler<VM: VMBinding> {
 
 impl<VM: VMBinding> GCWorkScheduler<VM> {
     pub fn new(num_workers: usize, affinity: AffinityKind) -> Arc<Self> {
+        Self::new_for_instance(MmtkId::fresh(), num_workers, affinity)
+    }
+
+    pub(crate) fn new_for_instance(
+        instance_id: MmtkId,
+        num_workers: usize,
+        affinity: AffinityKind,
+    ) -> Arc<Self> {
         assert!(num_workers > 0);
-        let worker_monitor: Arc<WorkerMonitor> = Arc::new(WorkerMonitor::new(num_workers));
-        let worker_group = WorkerGroup::new(num_workers);
+        let worker_monitor: Arc<WorkerMonitor> =
+            Arc::new(WorkerMonitor::new(instance_id, num_workers));
+        let worker_group = WorkerGroup::new(instance_id, num_workers);
 
         // Create work buckets for workers.
         let mut work_buckets = EnumMap::from_fn(|stage: WorkBucketStage| {
@@ -69,11 +83,17 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
 
         Arc::new(Self {
+            instance_id,
             work_buckets,
             worker_group,
             worker_monitor,
             affinity,
         })
+    }
+
+    #[inline(always)]
+    pub(crate) const fn instance_id(&self) -> MmtkId {
+        self.instance_id
     }
 
     pub fn process_concurrent_packets_in_pause(&self) {
@@ -484,15 +504,21 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 return Ok(work);
             }
 
-            let ordinal = worker.ordinal;
             self.worker_monitor
-                .park_and_wait(ordinal, |goals| self.on_last_parked(worker, goals))?;
+                .park_and_wait(&worker.perm, |goals, parked| {
+                    self.on_last_parked(worker, goals, parked)
+                })?;
         }
     }
 
     /// Called when the last worker parked.  `goal` allows this function to inspect and change the
     /// current goal.
-    fn on_last_parked(&self, worker: &GCWorker<VM>, goals: &mut WorkerGoals) -> LastParkedResult {
+    fn on_last_parked(
+        &self,
+        worker: &GCWorker<VM>,
+        goals: &mut WorkerGoals,
+        parked: WorkersParkedToken<'_>,
+    ) -> LastParkedResult {
         let Some(ref current_goal) = goals.current() else {
             // There is no goal.  Find a request to respond to.
             return self.respond_to_requests(worker, goals);
@@ -526,7 +552,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                     }
                 } else {
                     // GC finished.
-                    let concurrent_work_scheduled = self.on_gc_finished(worker);
+                    let concurrent_work_scheduled = self.on_gc_finished(worker, parked);
 
                     // Clear the current goal
                     goals.on_current_goal_completed();
@@ -634,7 +660,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     /// Called when GC has finished, i.e. when all work packets have been executed.
     ///
     /// Return `true` if any concurrent work packets have been scheduled.
-    fn on_gc_finished(&self, worker: &GCWorker<VM>) -> bool {
+    fn on_gc_finished(&self, worker: &GCWorker<VM>, parked: WorkersParkedToken<'_>) -> bool {
         // All GC workers must have parked by now.
         debug_assert!(!self.worker_group.has_designated_work());
         self.debug_assert_all_stw_buckets_empty();
@@ -650,20 +676,23 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         // Tell GC trigger that GC ended - this happens before we resume mutators.
         mmtk.gc_trigger.policy.on_pause_end(mmtk);
 
-        // All other workers are parked, so it is safe to access the Plan instance mutably.
+        // All other workers are parked (`parked: WorkersParkedToken`), so we can acquire an
+        // instance-branded exclusive phase lease via `mmtk.phase_auth.with_exclusive`.
         probe!(mmtk, plan_end_of_gc_begin);
         let next_gc_full_heap = crate::plan::compute_next_gc_full_heap(mmtk.get_plan());
-        let gc_ended = {
-            // SAFETY: `on_gc_finished` runs on the coordinator/last-parked GC worker after all STW
-            // buckets have drained and been closed, while all other GC workers remain parked and
-            // before mutators are resumed below (`resume_mutators`). `next_gc_full_heap` was
-            // computed above before acquiring `plan_mut`, and `finish_plan_pause` performs only
-            // plan-local updates without invoking `gc_trigger.policy.on_gc_end` (which is called
-            // after `plan_mut` is dropped below), so no concurrent or re-entrant read/write access
-            // to `mmtk.plan` occurs while `plan_mut` is live.
+        let gc_ended = mmtk.phase_auth.with_exclusive(parked, |_lease| {
+            // SAFETY: `on_gc_finished` runs on the last-parked GC worker under `mmtk.phase_auth`
+            // (`parked` proves `WorkerMonitor::sync` is held and all other GC workers of
+            // `mmtk.id` are parked, and `with_exclusive` enforces non-reentrancy) after all STW
+            // buckets have drained and been closed and before mutators are resumed below
+            // (`resume_mutators`). `next_gc_full_heap` was computed above before acquiring
+            // `plan_mut`, and `finish_plan_pause` performs only plan-local updates without
+            // invoking `gc_trigger.policy.on_gc_end` (called after this closure drops `plan_mut`),
+            // so no concurrent or re-entrant read/write access to `mmtk.plan` occurs while
+            // `plan_mut` is live.
             let plan_mut: &mut dyn Plan<VM = VM> = unsafe { mmtk.get_plan_mut() };
             crate::plan::finish_plan_pause(plan_mut, mmtk, worker.tls, next_gc_full_heap)
-        };
+        });
         if gc_ended {
             mmtk.gc_trigger.policy.on_gc_end(mmtk);
         }

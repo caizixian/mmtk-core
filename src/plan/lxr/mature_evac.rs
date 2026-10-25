@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use std::sync::Mutex;
 
 use crate::plan::concurrent::Pause;
@@ -11,6 +13,8 @@ use crate::policy::space::Space;
 use crate::scheduler::WorkBucketStage;
 use crate::util::linear_scan::Region;
 use crate::util::metadata::side_metadata::spec_defs::{IX_LINE_REUSE_COUNT, LOS_PAGE_REUSE_COUNT};
+use crate::util::rust_util::phase_cell::MmtkId;
+use crate::util::rust_util::worker_local::WorkerLocalSlice;
 use crate::util::ObjectReference;
 use crate::{
     plan::lxr::LXR,
@@ -21,7 +25,6 @@ use crate::{
 use super::gc_work::mature_evac::EvacuateMatureObjects;
 use crate::util::constants::LOG_BYTES_IN_PAGE;
 use atomic::Ordering;
-use atomic_refcell::AtomicRefCell;
 use crossbeam::queue::SegQueue;
 use crossbeam::utils::CachePadded;
 use std::sync::atomic::AtomicUsize;
@@ -44,44 +47,42 @@ impl<VM: VMBinding> RemSetEntry<VM> {
     }
 }
 
+struct MatureEvacWorkerLocal<VM: VMBinding> {
+    buf: Vec<RemSetEntry<VM>>,
+    packets: Vec<Box<dyn GCWork<VM>>>,
+}
+
 pub struct MatureEvecRemSet<VM: VMBinding> {
-    gc_buffers: Vec<CachePadded<AtomicRefCell<Vec<RemSetEntry<VM>>>>>,
+    locals: WorkerLocalSlice<CachePadded<MatureEvacWorkerLocal<VM>>>,
     pub global_packets: Mutex<Vec<Box<dyn GCWork<VM>>>>,
-    local_packets: Vec<Mutex<Vec<Box<dyn GCWork<VM>>>>>,
     size: AtomicUsize,
 }
 
 impl<VM: VMBinding> MatureEvecRemSet<VM> {
-    pub fn new(workers: usize) -> Self {
-        let mut rs = Self {
-            gc_buffers: vec![],
-            global_packets: Mutex::new(vec![]),
-            local_packets: vec![],
+    pub(crate) fn new(instance_id: MmtkId, workers: usize) -> Self {
+        Self {
+            locals: WorkerLocalSlice::from_fn(instance_id, workers, |_| {
+                CachePadded::new(MatureEvacWorkerLocal {
+                    buf: Vec::new(),
+                    packets: Vec::new(),
+                })
+            }),
+            global_packets: Mutex::new(Vec::new()),
             size: AtomicUsize::new(0),
-        };
-        rs.gc_buffers
-            .resize_with(workers, || CachePadded::new(AtomicRefCell::new(vec![])));
-        rs.local_packets.resize_with(workers, || Mutex::new(vec![]));
-        rs
+        }
     }
 
     pub fn flush_all(&mut self) {
         let mature_evac_remsets = self.global_packets.get_mut().unwrap();
         self.size.store(0, Ordering::SeqCst);
-        for cell in &mut self.gc_buffers {
-            let buf = cell.get_mut();
-            if !buf.is_empty() {
-                let remset = std::mem::take(buf);
+        for slot in self.locals.get_mut_exclusive() {
+            let local = &mut **slot;
+            if !local.buf.is_empty() {
+                let remset = std::mem::take(&mut local.buf);
                 mature_evac_remsets.push(Box::new(EvacuateMatureObjects::new(remset)));
             }
-        }
-        for cell in &mut self.local_packets {
-            let buf = cell.get_mut().unwrap();
-            if !buf.is_empty() {
-                let packets = std::mem::take(buf);
-                for p in packets {
-                    mature_evac_remsets.push(p);
-                }
+            if !local.packets.is_empty() {
+                mature_evac_remsets.append(&mut local.packets);
             }
         }
     }
@@ -91,20 +92,17 @@ impl<VM: VMBinding> MatureEvecRemSet<VM> {
         std::mem::take(&mut *mature_evac_remsets)
     }
 
-    /// Flush worker `id`'s local remembered-set buffer into `self.local_packets[id]`.
+    /// Flush a worker's local remembered-set buffer into its worker-local packet list.
     #[cold]
-    fn flush(&self, id: usize) {
-        let remset = {
-            let mut buf = self.gc_buffers[id].borrow_mut();
-            if buf.is_empty() {
-                return;
-            }
-            std::mem::take(&mut *buf)
-        };
-        self.size.fetch_add(remset.len(), Ordering::SeqCst);
-        let w = EvacuateMatureObjects::new(remset);
-        let mut packet_buffer = self.local_packets[id].lock().unwrap();
-        packet_buffer.push(Box::new(w));
+    fn flush_local(local: &mut MatureEvacWorkerLocal<VM>, size: &AtomicUsize) {
+        if local.buf.is_empty() {
+            return;
+        }
+        let remset = std::mem::take(&mut local.buf);
+        size.fetch_add(remset.len(), Ordering::SeqCst);
+        local
+            .packets
+            .push(Box::new(EvacuateMatureObjects::new(remset)));
     }
 
     /// Record slot `s` into `worker`'s thread-local mature-evacuation remembered-set buffer.
@@ -126,16 +124,12 @@ impl<VM: VMBinding> MatureEvecRemSet<VM> {
             crate::scheduler::current_worker_ordinal(),
             Some(worker.ordinal)
         );
-        let id = worker.ordinal;
         let ix = lxr.immix_space.address_in_space(s.to_address());
         let entry = RemSetEntry::<VM>::encode(s, ix);
-        let should_flush = {
-            let mut buf = self.gc_buffers[id].borrow_mut();
-            buf.push(entry);
-            buf.len() >= EvacuateMatureObjects::<VM>::CAPACITY
-        };
-        if should_flush {
-            self.flush(id);
+        let local = &mut **self.locals.get_mut(&mut worker.perm);
+        local.buf.push(entry);
+        if local.buf.len() >= EvacuateMatureObjects::<VM>::CAPACITY {
+            Self::flush_local(local, &self.size);
         }
     }
 }

@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use super::global::OVC;
 use crate::plan::tracing::{PlanTrace, UnsupportedTrace};
 use crate::policy::largeobjectspace::LargeObjectSpace;
@@ -42,10 +44,18 @@ impl<VM: VMBinding> GCWork<VM> for UpdateReferences<VM> {
         #[cfg(feature = "extreme_assertions")]
         mmtk.slot_logger.reset();
 
-        for mutator in VM::VMActivePlan::mutators() {
-            mmtk.scheduler.work_buckets[WorkBucketStage::SecondRoots]
-                .add(ScanMutatorRoots::<OVCForwardingWorkContext<VM>>(mutator));
-        }
+        let tickets = VM::VMActivePlan::mutators()
+            .map(MutatorTicket::from_mut)
+            .collect::<Vec<_>>();
+        let packets = tickets
+            .into_iter()
+            .map(|ticket| {
+                Box::new(ScanMutatorRoots::<OVCForwardingWorkContext<VM>>::new(
+                    ticket,
+                )) as _
+            })
+            .collect::<Vec<_>>();
+        mmtk.scheduler.work_buckets[WorkBucketStage::SecondRoots].bulk_add(packets);
 
         mmtk.scheduler.work_buckets[WorkBucketStage::SecondRoots]
             .add(ScanVMSpecificRoots::<OVCForwardingWorkContext<VM>>::new());
