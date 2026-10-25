@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 use std::sync::{Mutex, OnceLock};
 
 use crate::memory_manager;
-use crate::util::test_util::mock_vm::{current_thread_tls, MockVM, MutatorHandle, MUTATOR_PARK};
+use crate::util::test_util::mock_vm::{MockVM, MutatorHandle, MutatorHandleRef};
 use crate::util::{ObjectReference, VMMutatorThread, VMThread};
 use crate::vm::VMBinding;
 use crate::AllocationSemantics;
@@ -210,6 +210,7 @@ pub type MutatorFixture = GenericMutatorFixture<MockVM>;
 pub struct GenericMutatorFixture<VM: VMBinding> {
     mmtk: GenericMMTKFixture<VM>,
     mutator: VMMutatorThread,
+    handle: MutatorHandleRef,
 }
 
 impl<VM: VMBinding> FixtureContent for GenericMutatorFixture<VM> {
@@ -244,23 +245,29 @@ impl<VM: VMBinding> GenericMutatorFixture<VM> {
         F: FnOnce(&mut MMTKBuilder),
     {
         let mmtk = GenericMMTKFixture::create_with_builder(with_builder, initialize_collection);
-        let mutator = MutatorHandle::bind::<VM>();
-        Self { mmtk, mutator }
+        let (mutator, handle) = MutatorHandle::bind::<VM>();
+        Self {
+            mmtk,
+            mutator,
+            handle,
+        }
     }
 
     pub fn mmtk(&self) -> &'static MMTK<VM> {
         self.mmtk.get_mmtk()
     }
 
+    #[inline]
     pub fn mutator(&mut self) -> &mut Mutator<VM> {
-        MUTATOR_PARK.claim_unparked(self.mutator.0, current_thread_tls());
-        // SAFETY: `self.mutator` was uniquely allocated and registered by `MutatorHandle::bind`
+        self.handle.verify_unparked_for_current_thread(self.mutator);
+        // SAFETY: `self.handle` was uniquely allocated and initialized by `MutatorHandle::bind`
         // when constructing this `GenericMutatorFixture` (`GenericMutatorFixture` is neither
         // `Clone` nor `Copy`). Holding `&mut self` guarantees no other fixture reference exists,
-        // and `claim_unparked` atomically verifies `self.mutator` is not parked at a GC safepoint
-        // and records `current_thread_tls()` as the sole host thread allowed to park `self.mutator`
-        // in `MUTATOR_PARK`, preventing cross-thread spoof-parking while this borrow is live.
-        unsafe { self.mutator.as_mock_mutator() }
+        // and `verify_unparked_for_current_thread` verifies `self.handle` is bound to the current
+        // host thread (serializing cross-thread ownership transfers under `MUTATOR_PARK`'s lock)
+        // and is not parked at a GC safepoint, preventing both GC worker aliasing and cross-thread
+        // spoof-parking while this borrow is live.
+        unsafe { self.handle.as_mutator() }
     }
 
     pub fn mutator_tls(&self) -> VMMutatorThread {

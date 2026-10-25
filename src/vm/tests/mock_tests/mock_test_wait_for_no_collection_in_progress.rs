@@ -52,13 +52,14 @@ pub fn disable_collection_fails_while_gc_in_progress() {
             }
         },
         || {
-            let fixture = MutatorFixture::create_with_heapsize(1024 * 1024);
-            let mmtk = fixture.mmtk();
-            let tls = fixture.mutator_tls();
+            let fixture = MMTKFixture::create();
+            let mmtk = fixture.get_mmtk();
 
-            // Thread A: trigger a GC. `handle_user_collection_request` blocks the calling
-            // thread in (our mocked) `block_for_gc` until the GC finishes.
+            // Thread A: bind its mutator on Thread A and trigger a GC.
+            // `handle_user_collection_request` blocks the calling thread in (our mocked)
+            // `block_for_gc` until the GC finishes.
             let thread_to_trigger_gc = std::thread::spawn(move || {
+                let tls = mock_api::bind_mutator();
                 memory_manager::handle_user_collection_request(mmtk, tls, true);
                 {
                     let mut sync = SHARED_DATA.mutex.lock().unwrap();

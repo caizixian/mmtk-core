@@ -11,7 +11,7 @@ use crate::util::copy::*;
 use crate::util::heap::gc_trigger::GCTriggerPolicy;
 use crate::util::opaque_pointer::*;
 use crate::util::test_util;
-use crate::util::test_util::mock_vm::thread_park::ThreadPark;
+use crate::util::test_util::mock_vm::thread_park::{GcThreadSet, ThreadPark};
 use crate::util::{Address, ObjectReference};
 use crate::vm::object_model::specs::*;
 use crate::vm::GCThreadContext;
@@ -28,6 +28,7 @@ use crate::util::test_util::mock_vm::mock_api;
 use std::any::Any;
 use std::cell::UnsafeCell;
 use std::default::Default;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 
 /// The offset between object reference and the allocation address if we use
@@ -447,19 +448,35 @@ pub struct MockVM<C: MockVMConfig = DefaultMockVMConfig> {
     pub forward_weak_refs: Box<dyn MockAny>,
 }
 
-/// Holds the type-erased `Box<Mutator<VM>>` associated with a registered mock mutator thread.
-/// The address of the leaked `'static` `MutatorHandle` is used as the `VMMutatorThread` TLS token.
+/// Holds the type-erased `Box<Mutator<VM>>` and lock-free safepoint state associated with a
+/// registered mock mutator thread.
 pub(crate) struct MutatorHandle {
     mutator: OnceLock<UnsafeCell<Box<dyn Any + Send>>>,
+    pub(super) is_parked: AtomicBool,
+    pub(super) active_thread: AtomicUsize,
 }
 
+// SAFETY: `MutatorHandle` stores `Box<dyn Any + Send>` (requiring `Mutator<VM>: Send`),
+// initialized once via `OnceLock` in `MutatorHandle::bind` before publication, alongside atomic
+// `is_parked` and `active_thread` fields. Mutable access to the `UnsafeCell` occurs only through
+// `MutatorHandleRef::as_mutator`, whose callers enforce mutual exclusion either via
+// `&mut GenericMutatorFixture` while unparked on `active_thread` or on an MMTk GC worker while all
+// mutators are parked at a safepoint.
+unsafe impl Sync for MutatorHandle {}
+
+/// Copyable handle to a `'static` [`MutatorHandle`] allocated by [`MutatorHandle::bind`].
+#[derive(Clone, Copy)]
+pub(crate) struct MutatorHandleRef(pub(super) &'static MutatorHandle);
+
 impl MutatorHandle {
-    /// Bind a mutator for the mock VM type `VM`, and return its mutator tls.
-    pub(crate) fn bind<VM: VMBinding>() -> VMMutatorThread {
+    /// Bind a mutator for the mock VM type `VM`, and return its `(VMMutatorThread, MutatorHandleRef)`.
+    pub(crate) fn bind<VM: VMBinding>() -> (VMMutatorThread, MutatorHandleRef) {
         let mmtk = mock_api::singleton::<VM>();
 
         let mutator_handle: &'static MutatorHandle = Box::leak(Box::new(MutatorHandle {
             mutator: OnceLock::new(),
+            is_parked: AtomicBool::new(false),
+            active_thread: AtomicUsize::new(current_thread_id()),
         }));
         let tls = VMMutatorThread(VMThread(OpaquePointer::from_address(Address::from_ref(
             mutator_handle,
@@ -468,36 +485,40 @@ impl MutatorHandle {
         let mutator = crate::memory_manager::bind_mutator(mmtk, tls);
         let _ = mutator_handle.mutator.set(UnsafeCell::new(mutator));
 
-        MUTATOR_PARK.register(tls.0, current_thread_tls());
-        tls
+        let handle_ref = MutatorHandleRef(mutator_handle);
+        MUTATOR_PARK.register(tls.0, handle_ref);
+        (tls, handle_ref)
     }
 }
 
-impl VMMutatorThread {
-    /// Get a mutable reference to the underlying mutator for a mock VM type.
+impl MutatorHandleRef {
+    /// Fast lock-free safepoint & thread-ownership check for `GenericMutatorFixture::mutator`.
+    /// Falls back to `MUTATOR_PARK.transfer_owner` only if the fixture moved across OS threads.
+    #[inline]
+    pub(crate) fn verify_unparked_for_current_thread(self, tls: VMMutatorThread) {
+        let current = current_thread_id();
+        if self.0.active_thread.load(Ordering::Acquire) != current {
+            MUTATOR_PARK.transfer_owner(tls.0, current);
+        }
+        assert!(
+            !self.0.is_parked.load(Ordering::Acquire),
+            "Cannot borrow fixture mutator while it is parked in a GC safepoint"
+        );
+    }
+
+    /// Obtain a mutable reference to the underlying `Mutator<VM>` without raw pointer casting.
     ///
     /// # Safety
-    /// * `self` must have been created by `MutatorHandle::bind::<VM>()` (`MockVM::bind_mutator`).
-    /// * The caller must have exclusive access to the underlying `Mutator<VM>` for the duration of
-    ///   the returned reference's use (e.g. via `&mut GenericMutatorFixture` outside a GC pause,
-    ///   or on a GC worker thread while all mutators are parked at a safepoint).
-    pub unsafe fn as_mock_mutator<VM: VMBinding>(self) -> &'static mut Mutator<VM> {
-        assert!(
-            MUTATOR_PARK.contains(self.0),
-            "VMMutatorThread {:?} is not a registered MockVM mutator",
-            self
-        );
-        let handle_ptr = self.0 .0.to_address().to_ptr::<MutatorHandle>();
-        // SAFETY: `MUTATOR_PARK` is `pub(crate)` and `ThreadPark::register` is `pub(super)` (called
-        // on `MUTATOR_PARK` solely by `MutatorHandle::bind`), so `MUTATOR_PARK.contains(self.0)`
-        // verifies `self` was created by `MutatorHandle::bind`, which leaked a valid, aligned
-        // `&'static MutatorHandle` for the lifetime of the process and never mutates
-        // `MutatorHandle` outside its inner `UnsafeCell`.
-        let handle: &'static MutatorHandle = unsafe { &*handle_ptr };
-        let cell = handle.mutator.get().expect("The mutator is not bound yet");
-        // SAFETY: `cell` was initialized by `MutatorHandle::bind`, `Mutator<VM>: Send` holds
-        // (enforced by `Box<dyn Any + Send>`), and the caller guarantees exclusive access to this
-        // `Mutator<VM>` for the duration of the returned reference's use.
+    /// The caller must have exclusive access to the underlying `Mutator<VM>` for the duration of
+    /// the returned reference's use (e.g. via `&mut GenericMutatorFixture` after
+    /// `verify_unparked_for_current_thread`, or on a GC worker thread while all mutators are
+    /// parked at a safepoint).
+    #[inline]
+    pub(crate) unsafe fn as_mutator<VM: VMBinding>(self) -> &'static mut Mutator<VM> {
+        let cell = self.0.mutator.get().expect("The mutator is not bound yet");
+        // SAFETY: `cell` was initialized once by `MutatorHandle::bind` before registration,
+        // `Mutator<VM>: Send` holds (enforced by `Box<dyn Any + Send>`), and the caller guarantees
+        // exclusive access to this `Mutator<VM>` for the duration of the returned reference's use.
         unsafe { &mut *cell.get() }
             .downcast_mut::<Mutator<VM>>()
             .unwrap_or_else(|| {
@@ -510,18 +531,23 @@ impl VMMutatorThread {
 }
 
 lazy_static! {
-    pub(crate) static ref MUTATOR_PARK: ThreadPark = ThreadPark::new("mutators");
-    // We never really park GC threads. We just reuse this struct to track GC threads.
-    pub(crate) static ref GC_THREADS: ThreadPark = ThreadPark::new("gc workers");
+    static ref MUTATOR_PARK: ThreadPark = ThreadPark::new("mutators");
+    static ref GC_THREADS: GcThreadSet = GcThreadSet::new();
 }
 
 thread_local! {
     /// Per-thread static byte whose address uniquely identifies the current OS thread as a
-    /// `VMThread` token for `MUTATOR_PARK` / `GC_THREADS` without synthesizing integer addresses.
+    /// `VMThread` / host-thread token for `MUTATOR_PARK` and `GC_THREADS` without synthesizing
+    /// arbitrary integer addresses.
     static THREAD_TLS_ANCHOR: u8 = const { 0 };
 }
 
-pub(crate) fn current_thread_tls() -> VMThread {
+#[inline]
+fn current_thread_id() -> usize {
+    THREAD_TLS_ANCHOR.with(|anchor| Address::from_ref(anchor).as_usize())
+}
+
+fn current_thread_tls() -> VMThread {
     THREAD_TLS_ANCHOR
         .with(|anchor| VMThread(OpaquePointer::from_address(Address::from_ref(anchor))))
 }
@@ -540,24 +566,25 @@ impl<C: MockVMConfig> Default for MockVM<C> {
                     GC_THREADS.contains(current_thread_tls()),
                     "ActivePlan::mutators() may only be called from a GC worker during a pause"
                 );
-                // `all_parked_threads()` asserts that every registered mutator thread is currently
+                // `all_parked_handles()` asserts that every registered mutator thread is currently
                 // parked in `MUTATOR_PARK.park(...)` (at a GC safepoint) and yields each unique
-                // `VMThread` key from the `HashMap` at most once.
+                // `'static` `MutatorHandle` from the `HashMap` at most once.
                 let mutators: Vec<&'static mut Mutator<Self>> = MUTATOR_PARK
-                    .all_parked_threads()
+                    .all_parked_handles()
                     .into_iter()
-                    .map(|tls| {
-                        // SAFETY: `MUTATOR_PARK` is `pub(crate)` with `pub(super)` registration, so
-                        // every `tls` in `MUTATOR_PARK` was uniquely created and registered by
-                        // `MutatorHandle::bind::<Self>()` and appears at most once (`HashMap`
-                        // keys). `GC_THREADS.contains(current_thread_tls())` verifies the caller is
-                        // an MMTk GC worker, and `all_parked_threads()` verifies every registered
-                        // mutator is parked at its safepoint on its owning host thread. Non-aliasing
-                        // across GC pause stages (`on_pause_start`, `Prepare`, `Release`) relies on
-                        // MMTk's frozen safe `ActivePlan::mutators` / `Collection::stop_all_mutators`
-                        // scheduler contract (and `<MockVM as Scanning>::scan_roots_in_mutator_thread`
-                        // does not access `_mutator`).
-                        unsafe { VMMutatorThread(tls).as_mock_mutator() }
+                    .map(|handle| {
+                        // SAFETY: `MUTATOR_PARK` is module-private and populated solely by
+                        // `MutatorHandle::bind`, which inserts each freshly leaked `'static`
+                        // `MutatorHandle` under its unique `VMThread` key (`assert!(prev.is_none())`),
+                        // so every `handle` is distinct. `GC_THREADS.contains(current_thread_tls())`
+                        // verifies the caller is an MMTk GC worker, and `all_parked_handles()`
+                        // verifies every registered mutator is parked at its safepoint on its
+                        // owning host thread. Non-aliasing across GC pause stages
+                        // (`on_pause_start`, `Prepare`, `Release`) relies on MMTk's frozen safe
+                        // `ActivePlan::mutators` / `Collection::stop_all_mutators` scheduler
+                        // contract (and `<MockVM as Scanning>::scan_roots_in_mutator_thread` does
+                        // not access `_mutator`).
+                        unsafe { handle.as_mutator() }
                     })
                     .collect();
                 Box::new(mutators.into_iter())
@@ -576,22 +603,22 @@ impl<C: MockVMConfig> Default for MockVM<C> {
                 info!("All threads are parked.");
 
                 MUTATOR_PARK
-                    .all_parked_threads()
+                    .all_parked_handles()
                     .into_iter()
-                    .for_each(|tls| {
-                        // SAFETY: `MUTATOR_PARK` is `pub(crate)` with `pub(super)` registration, so
-                        // every `tls` in `MUTATOR_PARK` was uniquely created and registered by
-                        // `MutatorHandle::bind::<Self>()` and appears at most once (`HashMap`
-                        // keys). `GC_THREADS.contains(current_thread_tls())` verifies the caller is
-                        // an MMTk GC worker, and `all_parked_threads()` verifies every registered
-                        // mutator is parked at its safepoint on its owning host thread. Each
-                        // `Mutator<Self>` is visited sequentially in `for_each`, and non-aliasing
-                        // of any `'static` reference retained by `mutator_visitor` across GC pause
-                        // stages relies on MMTk's frozen safe `Collection::stop_all_mutators` /
-                        // `ActivePlan::mutators` scheduler contract (with
-                        // `<MockVM as Scanning>::scan_roots_in_mutator_thread` not accessing
-                        // `_mutator`).
-                        let mutator = unsafe { VMMutatorThread(tls).as_mock_mutator() };
+                    .for_each(|handle| {
+                        // SAFETY: `MUTATOR_PARK` is module-private and populated solely by
+                        // `MutatorHandle::bind`, which inserts each freshly leaked `'static`
+                        // `MutatorHandle` under its unique `VMThread` key (`assert!(prev.is_none())`),
+                        // so every `handle` is distinct. `GC_THREADS.contains(current_thread_tls())`
+                        // verifies the caller is an MMTk GC worker, and `all_parked_handles()`
+                        // verifies every registered mutator is parked at its safepoint on its
+                        // owning host thread. Each `Mutator<Self>` is visited sequentially in
+                        // `for_each`, and non-aliasing of any `'static` reference retained by
+                        // `mutator_visitor` across GC pause stages relies on MMTk's frozen safe
+                        // `Collection::stop_all_mutators` / `ActivePlan::mutators` scheduler
+                        // contract (with `<MockVM as Scanning>::scan_roots_in_mutator_thread` not
+                        // accessing `_mutator`).
+                        let mutator = unsafe { handle.as_mutator() };
                         mutator_visitor(mutator);
                     });
             })),
@@ -600,7 +627,7 @@ impl<C: MockVMConfig> Default for MockVM<C> {
                 MUTATOR_PARK.unpark_all();
             })),
             block_for_gc: MockMethod::new_fixed(Box::new(|tls| {
-                MUTATOR_PARK.park(tls.0, current_thread_tls());
+                MUTATOR_PARK.park(tls.0, current_thread_id());
             })),
             spawn_gc_thread: MockMethod::new_fixed(Box::new(|(_parent_tls, ctx)| {
                 // Just drop the join handle. The thread will run until the process quits.
@@ -609,7 +636,7 @@ impl<C: MockVMConfig> Default for MockVM<C> {
                     .spawn(move || {
                         // Start the worker loop
                         let worker_tls = VMWorkerThread(current_thread_tls());
-                        GC_THREADS.register(worker_tls.0, worker_tls.0);
+                        GC_THREADS.register(worker_tls.0);
                         match ctx {
                             GCThreadContext::Worker(w) => crate::memory_manager::start_worker(
                                 mock_api::singleton::<Self>(),
@@ -1041,7 +1068,7 @@ impl<C: MockVMConfig> MockVM<C> {
 
     /// Bind a mutator to the MMTk singleton for this mock VM type.
     pub fn bind_mutator() -> VMMutatorThread {
-        MutatorHandle::bind::<Self>()
+        MutatorHandle::bind::<Self>().0
     }
 
     /// Get the object reference for an object that starts at `start`, using the offset

@@ -1,9 +1,11 @@
+use super::MutatorHandleRef;
 use crate::util::VMThread;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Condvar, Mutex};
 
 #[derive(Clone)]
-pub(crate) struct ThreadPark {
+pub(super) struct ThreadPark {
     name: &'static str,
     inner: Arc<Inner>,
 }
@@ -13,15 +15,11 @@ struct Inner {
     cvar: Condvar,
 }
 
-struct ThreadEntry {
-    owner_thread: VMThread,
-    is_parked: bool,
-}
-
 #[derive(Default)]
 struct State {
-    /// All registered threads, their active owning host thread token, and whether they are parked.
-    parked: HashMap<VMThread, ThreadEntry>,
+    /// All registered mutator threads mapped directly to their `'static` `MutatorHandleRef` (no
+    /// raw pointer casting from `VMThread` needed).
+    parked: HashMap<VMThread, MutatorHandleRef>,
 }
 
 impl ThreadPark {
@@ -35,22 +33,17 @@ impl ThreadPark {
         }
     }
 
-    /// Register `tid` with initial owning host thread `owner_thread`.
-    pub(super) fn register(&self, tid: VMThread, owner_thread: VMThread) {
+    /// Register `tid` with its `'static` `MutatorHandleRef`.
+    pub(super) fn register(&self, tid: VMThread, handle: MutatorHandleRef) {
         debug!("Register {:?} to {}", tid, self.name);
         let mut state = self.inner.lock.lock().unwrap();
-        state.parked.insert(
+        let prev = state.parked.insert(tid, handle);
+        assert!(
+            prev.is_none(),
+            "Duplicate registration of {:?} in {}",
             tid,
-            ThreadEntry {
-                owner_thread,
-                is_parked: false,
-            },
+            self.name
         );
-    }
-
-    pub(super) fn unregister(&self, tid: VMThread) {
-        let mut state = self.inner.lock.lock().unwrap();
-        state.parked.remove(&tid);
     }
 
     pub(super) fn contains(&self, tid: VMThread) -> bool {
@@ -58,19 +51,21 @@ impl ThreadPark {
         state.parked.contains_key(&tid)
     }
 
-    /// Verify `tid` is registered and currently NOT parked at a safepoint, and atomically record
-    /// `caller_thread` as the active host thread allowed to park `tid` in `block_for_gc`.
-    pub(crate) fn claim_unparked(&self, tid: VMThread, caller_thread: VMThread) {
-        let mut state = self.inner.lock.lock().unwrap();
-        let entry = state.parked.get_mut(&tid).unwrap_or_else(|| {
+    /// Cold-path ownership transfer when a `GenericMutatorFixture` moves across OS threads:
+    /// atomically verifies `tid` is registered and NOT parked under the `ThreadPark` lock (so it
+    /// cannot race with `park`), then updates `handle.0.active_thread` to `new_owner`.
+    pub(super) fn transfer_owner(&self, tid: VMThread, new_owner: usize) {
+        let state = self.inner.lock.lock().unwrap();
+        let handle = state.parked.get(&tid).copied().unwrap_or_else(|| {
             panic!("Thread {:?} is not registered in {}", tid, self.name);
         });
         assert!(
-            !entry.is_parked,
+            !handle.0.is_parked.load(Ordering::Acquire),
             "Cannot borrow fixture mutator {:?} while it is parked in {}",
-            tid, self.name
+            tid,
+            self.name
         );
-        entry.owner_thread = caller_thread;
+        handle.0.active_thread.store(new_owner, Ordering::Release);
     }
 
     pub(super) fn number_of_threads(&self) -> usize {
@@ -78,34 +73,40 @@ impl ThreadPark {
         state.parked.len()
     }
 
-    /// Return all registered threads, asserting that every registered thread is currently parked.
-    pub(super) fn all_parked_threads(&self) -> Vec<VMThread> {
+    /// Return all registered `'static` `MutatorHandleRef`s, asserting that every registered
+    /// mutator thread is currently parked at its safepoint.
+    pub(super) fn all_parked_handles(&self) -> Vec<MutatorHandleRef> {
         let state = self.inner.lock.lock().unwrap();
         assert!(
-            state.parked.values().all(|entry| entry.is_parked),
+            state
+                .parked
+                .values()
+                .all(|handle| handle.0.is_parked.load(Ordering::Acquire)),
             "All registered threads in {} must be parked before GC accesses mutators",
             self.name
         );
-        state.parked.keys().copied().collect()
+        state.parked.values().copied().collect()
     }
 
     /// Park `tid` on `caller_thread` (set its state = parked and wait for `unpark_all()`).
-    pub(super) fn park(&self, tid: VMThread, caller_thread: VMThread) {
-        let mut state = self.inner.lock.lock().unwrap();
+    pub(super) fn park(&self, tid: VMThread, caller_thread: usize) {
+        let state = self.inner.lock.lock().unwrap();
 
         // Verify registration, active host thread ownership, and unparked state before parking.
-        if let Some(entry) = state.parked.get_mut(&tid) {
+        if let Some(&handle) = state.parked.get(&tid) {
+            let expected_owner = handle.0.active_thread.load(Ordering::Acquire);
             assert_eq!(
-                entry.owner_thread, caller_thread,
-                "Host thread {:?} cannot park {:?} in {} owned by {:?}",
-                caller_thread, tid, self.name, entry.owner_thread
+                expected_owner, caller_thread,
+                "Host thread {:#x} cannot park {:?} in {} owned by {:#x}",
+                caller_thread, tid, self.name, expected_owner
             );
             assert!(
-                !entry.is_parked,
+                !handle.0.is_parked.load(Ordering::Acquire),
                 "Thread {:?} in {} is already parked",
-                tid, self.name
+                tid,
+                self.name
             );
-            entry.is_parked = true;
+            handle.0.is_parked.store(true, Ordering::Release);
         } else {
             panic!(
                 "Thread {:?} not registered to {} before park() f",
@@ -132,16 +133,18 @@ impl ThreadPark {
                             tid, self.name
                         )
                     })
+                    .0
                     .is_parked
+                    .load(Ordering::Acquire)
             })
             .unwrap();
     }
 
     /// Unpark all registered threads (wake everyone up).
     pub(super) fn unpark_all(&self) {
-        let mut state = self.inner.lock.lock().unwrap();
-        for entry in state.parked.values_mut() {
-            entry.is_parked = false;
+        let state = self.inner.lock.lock().unwrap();
+        for handle in state.parked.values() {
+            handle.0.is_parked.store(false, Ordering::Release);
         }
         self.inner.cvar.notify_all();
     }
@@ -153,8 +156,37 @@ impl ThreadPark {
             .inner
             .cvar
             .wait_while(state, |state| {
-                state.parked.is_empty() || !state.parked.values().all(|entry| entry.is_parked)
+                state.parked.is_empty()
+                    || !state
+                        .parked
+                        .values()
+                        .all(|handle| handle.0.is_parked.load(Ordering::Acquire))
             })
             .unwrap();
+    }
+}
+
+/// Registry of active MMTk GC worker host threads spawned via `MockVM::spawn_gc_thread`.
+pub(super) struct GcThreadSet {
+    threads: Mutex<HashSet<VMThread>>,
+}
+
+impl GcThreadSet {
+    pub(super) fn new() -> Self {
+        Self {
+            threads: Mutex::new(HashSet::new()),
+        }
+    }
+
+    pub(super) fn register(&self, tid: VMThread) {
+        self.threads.lock().unwrap().insert(tid);
+    }
+
+    pub(super) fn unregister(&self, tid: VMThread) {
+        self.threads.lock().unwrap().remove(&tid);
+    }
+
+    pub(super) fn contains(&self, tid: VMThread) -> bool {
+        self.threads.lock().unwrap().contains(&tid)
     }
 }
