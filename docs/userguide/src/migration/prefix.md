@@ -32,13 +32,14 @@ Notes for the mmtk-core developers:
 
 ## 0.34.0
 
-### `SideMetadataSpec::{load_byte, scan_non_zero_values}` are now `unsafe fn`
+### `SideMetadataSpec::{load_byte, scan_non_zero_values}` & `MetadataByteArrayRef::get` are `unsafe`
 
 ```admonish tldr
-`util::metadata::side_metadata::SideMetadataSpec::load_byte` and
-`SideMetadataSpec::scan_non_zero_values` are now `pub unsafe fn`, matching
+`util::metadata::side_metadata::SideMetadataSpec::load_byte`,
+`SideMetadataSpec::scan_non_zero_values`, and
+`util::metadata::side_metadata::MetadataByteArrayRef::get` are now `pub unsafe fn`, matching
 `SideMetadataSpec::{load, store, find_prev_non_zero_value, find_next_non_zero_value}`. VM bindings
-that call either non-atomic method directly must wrap calls in `unsafe` after ensuring the target
+that call these non-atomic methods directly must wrap calls in `unsafe` after ensuring the target
 side-metadata range is mapped and free of concurrent mutations, or use `SideMetadataSpec`'s atomic
 accessors (`load_atomic`, `store_atomic`) where concurrent access is possible.
 ```
@@ -55,21 +56,34 @@ API changes:
         +   Callers must ensure the side-metadata entries covering `[data_start_addr, data_end_addr)`
             are mapped, initialized, and not mutated concurrently (including from inside
             `visit_data`).
+*   struct `util::metadata::side_metadata::MetadataByteArrayRef<const ENTRIES: usize>`
+    -   `get(&self, index: usize) -> u8` is now `pub unsafe fn`.
+        +   Callers must ensure the side-metadata byte at `index` is mapped, initialized, and not
+            concurrently modified, and that 32-bit chunked local side-metadata ranges lie within a
+            single chunk.
 
-### `#[repr(C)]` struct layout updates in `FreeListAllocator` and `BlockList`
+### Layout and field-privacy updates in `FreeListAllocator`, `BlockList`, and `GCWorkerCopyContext`
 
 ```admonish tldr
 Native mark-sweep's `BlockList` was simplified to an intrusive singly-linked `(first, last)` list,
 shrinking each `BlockList` entry to `2` pointer words (`16` bytes on 64-bit, `8` bytes on 32-bit),
 while `Mutator<VM>` and `Allocators<VM>` preserve their exact inline sizes and field offsets from
-0.33.0 via niche-optimized `Option<&'static ...>` space references. Rust callers and bindings that
-query offsets dynamically via `Mutator::get_allocator_base_offset`, `AllocatorInfo::new`, or
-`std::mem::offset_of!` require no changes; only native C/C++/JIT code mirroring `BlockList` directly
-must update its `BlockList` definition.
+0.33.0 via niche-optimized `Option<&'static ...>` space references. In addition,
+`util::copy::GCWorkerCopyContext<VM>`'s `copy`, `immix`, and `immix_hybrid` fields are now
+module-private (use `copy_context.alloc_copy(...)` and `copy_context.post_copy(...)`). Rust callers
+using the public methods and bindings that query offsets dynamically via
+`Mutator::get_allocator_base_offset`, `AllocatorInfo::new`, or `std::mem::offset_of!` require no
+offset changes; only native C/C++/JIT code mirroring `BlockList` directly must update its
+`BlockList` definition.
 ```
 
-Layout changes (affecting native C/C++ mirrors or hardcoded JIT offsets):
+API and layout changes:
 
+*   struct `util::copy::GCWorkerCopyContext<VM>`
+    -   Fields `copy`, `immix`, and `immix_hybrid` (previously `[MaybeUninit<...>; 1]`) are now
+        module-private.
+        +   VM bindings should allocate and finalize copied objects via
+            `copy_context.alloc_copy(...)` and `copy_context.post_copy(...)`.
 *   struct `util::alloc::allocators::Allocators<VM>` and struct `plan::Mutator<VM>`
     -   `Allocators<VM>`'s six allocator arrays are now module-private and safely initialized inline
         using niche-optimized `Option<&'static ...>` space references (`None` for unconfigured slots)

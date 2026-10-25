@@ -15,25 +15,63 @@ use crate::vm::VMBinding;
 use super::Address;
 
 /// Expose `zero_meta_bits` when running `cargo bench`.
+///
+/// # Safety
+///
+/// * `meta_start_bit < 8`, `meta_end_bit < 8`, and `(meta_start_addr, meta_start_bit)` must not
+///   exceed `(meta_end_addr, meta_end_bit)`.
+/// * When the bit range is non-empty, every touched byte (`[meta_start_addr, meta_end_addr)` when
+///   `meta_end_bit == 0`, or `[meta_start_addr, meta_end_addr + 1)` when `meta_end_bit != 0`) must
+///   be non-null, mapped, and writable.
+/// * Whole bytes in the range are overwritten non-atomically and must have no concurrent reads,
+///   writes, or atomic accesses and no live Rust references aliasing them; partial boundary bytes
+///   must be initialized and accessed concurrently only via `AtomicU8` without non-atomic aliases.
 #[inline(always)]
-pub fn zero_meta_bits(
+pub unsafe fn zero_meta_bits(
     meta_start_addr: Address,
     meta_start_bit: u8,
     meta_end_addr: Address,
     meta_end_bit: u8,
 ) {
-    SideMetadataSpec::zero_meta_bits(meta_start_addr, meta_start_bit, meta_end_addr, meta_end_bit)
+    // SAFETY: Guaranteed by caller.
+    unsafe {
+        SideMetadataSpec::zero_meta_bits(
+            meta_start_addr,
+            meta_start_bit,
+            meta_end_addr,
+            meta_end_bit,
+        )
+    }
 }
 
 /// Expose `set_meta_bits` when running `cargo bench`.
+///
+/// # Safety
+///
+/// * `meta_start_bit < 8`, `meta_end_bit < 8`, and `(meta_start_addr, meta_start_bit)` must not
+///   exceed `(meta_end_addr, meta_end_bit)`.
+/// * When the bit range is non-empty, every touched byte (`[meta_start_addr, meta_end_addr)` when
+///   `meta_end_bit == 0`, or `[meta_start_addr, meta_end_addr + 1)` when `meta_end_bit != 0`) must
+///   be non-null, mapped, and writable.
+/// * Whole bytes in the range are overwritten non-atomically and must have no concurrent reads,
+///   writes, or atomic accesses and no live Rust references aliasing them; partial boundary bytes
+///   must be initialized and accessed concurrently only via `AtomicU8` without non-atomic aliases.
 #[inline(always)]
-pub fn set_meta_bits(
+pub unsafe fn set_meta_bits(
     meta_start_addr: Address,
     meta_start_bit: u8,
     meta_end_addr: Address,
     meta_end_bit: u8,
 ) {
-    SideMetadataSpec::set_meta_bits(meta_start_addr, meta_start_bit, meta_end_addr, meta_end_bit)
+    // SAFETY: Guaranteed by caller.
+    unsafe {
+        SideMetadataSpec::set_meta_bits(
+            meta_start_addr,
+            meta_start_bit,
+            meta_end_addr,
+            meta_end_bit,
+        )
+    }
 }
 
 /// Expose `address_to_meta_address` when running `cargo bench`.

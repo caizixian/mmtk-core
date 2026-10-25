@@ -35,15 +35,9 @@ const DISCONTIG_INDEX_INCREMENT: usize = 1 << TYPE_BITS;
 #[repr(transparent)]
 pub struct SpaceDescriptor(usize);
 
-/// An atomic wrapper around [`SpaceDescriptor`] with the same layout and bit-validity as `usize`.
+/// An atomic wrapper around [`SpaceDescriptor`].
 #[repr(transparent)]
 pub(crate) struct AtomicSpaceDescriptor(AtomicUsize);
-
-// SAFETY: `AtomicSpaceDescriptor` is `#[repr(transparent)]` over `AtomicUsize`, which
-// `core::sync::atomic` guarantees has the same size, alignment, and bit-validity as `usize`.
-// Every bit pattern (including all-zero bytes, representing `SpaceDescriptor::UNINITIALIZED`)
-// is therefore a valid `AtomicSpaceDescriptor`.
-unsafe impl Zeroable for AtomicSpaceDescriptor {}
 
 impl AtomicSpaceDescriptor {
     pub(crate) const fn new(descriptor: SpaceDescriptor) -> Self {

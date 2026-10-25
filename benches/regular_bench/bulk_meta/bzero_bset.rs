@@ -38,8 +38,13 @@ pub fn bench(c: &mut Criterion) {
         let end = start + LINE_META_BYTES;
 
         b.iter(|| {
-            test_private::set_meta_bits(start, 0, end, 0);
-            test_private::zero_meta_bits(start, 0, end, 0);
+            // SAFETY: `[start, end)` covers all `LINE_META_BYTES` initialized, writable bytes of
+            // `buf`, which is exclusively owned by this single-threaded benchmark closure with no
+            // concurrent accesses or live Rust references during `b.iter`.
+            unsafe {
+                test_private::set_meta_bits(start, 0, end, 0);
+                test_private::zero_meta_bits(start, 0, end, 0);
+            }
         })
     });
 
@@ -54,8 +59,13 @@ pub fn bench(c: &mut Criterion) {
         let end = start + BLOCK_META_BYTES;
 
         b.iter(|| {
-            test_private::set_meta_bits(start, 0, end, 0);
-            test_private::zero_meta_bits(start, 0, end, 0);
+            // SAFETY: `[start, end)` covers all `BLOCK_META_BYTES` initialized, writable bytes of
+            // `buf`, which is exclusively owned by this single-threaded benchmark closure with no
+            // concurrent accesses or live Rust references during `b.iter`.
+            unsafe {
+                test_private::set_meta_bits(start, 0, end, 0);
+                test_private::zero_meta_bits(start, 0, end, 0);
+            }
         })
     });
 

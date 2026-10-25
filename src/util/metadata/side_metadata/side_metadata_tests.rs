@@ -706,12 +706,17 @@ mod tests {
                 |start_byte: usize, start_bit: u8, end_byte: usize, end_bit: u8| -> u32 {
                     let mut word: u32 = u32::MAX;
                     let start = Address::from_mut_ptr(&mut word);
-                    SideMetadataSpec::zero_meta_bits(
-                        start + start_byte,
-                        start_bit,
-                        start + end_byte,
-                        end_bit,
-                    );
+                    // SAFETY: `[start, start + 4)` is an initialized, writable, exclusively owned
+                    // stack `u32` with no concurrent accesses or live Rust references, and every
+                    // caller below passes a valid bit subrange within `[start:0, (start + 4):0)`.
+                    unsafe {
+                        SideMetadataSpec::zero_meta_bits(
+                            start + start_byte,
+                            start_bit,
+                            start + end_byte,
+                            end_bit,
+                        );
+                    }
                     word
                 };
 

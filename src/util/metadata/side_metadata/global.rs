@@ -344,13 +344,34 @@ impl SideMetadataSpec {
         MMAPPER.is_mapped_address(meta_addr)
     }
 
-    /// This method is used for bulk zeroing side metadata for a data address range.
-    pub(crate) fn zero_meta_bits(
+    /// Bulk-zero the half-open side-metadata bit range
+    /// `[meta_start_addr:meta_start_bit, meta_end_addr:meta_end_bit)`.
+    ///
+    /// # Safety
+    ///
+    /// * `meta_start_bit < 8`, `meta_end_bit < 8`, and `(meta_start_addr, meta_start_bit)` must
+    ///   not exceed `(meta_end_addr, meta_end_bit)`.
+    /// * When the bit range is non-empty, every touched byte (`[meta_start_addr, meta_end_addr)`
+    ///   when `meta_end_bit == 0`, or `[meta_start_addr, meta_end_addr + 1)` when
+    ///   `meta_end_bit != 0`) must be non-null, mapped, and writable.
+    /// * Whole bytes in the range are overwritten non-atomically and must have no concurrent
+    ///   reads, writes, or atomic accesses and no live Rust references aliasing them.
+    /// * Partial boundary bytes (`meta_start_bit != 0` or `meta_end_bit != 0`) are updated via
+    ///   `AtomicU8` RMW and must be initialized, with any concurrent accesses to those boundary
+    ///   bytes using `AtomicU8` operations only and no live non-atomic references aliasing them.
+    pub(crate) unsafe fn zero_meta_bits(
         meta_start_addr: Address,
         meta_start_bit: u8,
         meta_end_addr: Address,
         meta_end_bit: u8,
     ) {
+        assert!(
+            meta_start_bit < 8
+                && meta_end_bit < 8
+                && (meta_start_addr < meta_end_addr
+                    || (meta_start_addr == meta_end_addr && meta_start_bit <= meta_end_bit)),
+            "Invalid metadata bit range [{meta_start_addr}:{meta_start_bit}, {meta_end_addr}:{meta_end_bit})"
+        );
         let mut visitor = |range| {
             match range {
                 BitByteRange::Bytes { start, end } => {
@@ -366,12 +387,10 @@ impl SideMetadataSpec {
                     // Get a mask that the bits we need to zero are set to zero, and the other bits are 1.
                     let mask: u8 =
                         u8::MAX.checked_shl(bit_end as u32).unwrap_or(0) | !(u8::MAX << bit_start);
-                    // SAFETY: `zero_meta_bits` (preserved with its cross-slice `pub(crate)`
-                    // signature for `test_private`) requires the side-metadata bit range
-                    // `[meta_start_addr:meta_start_bit, meta_end_addr:meta_end_bit)` to be non-null,
-                    // mapped, and initialized (`AtomicU8` has alignment 1), with all concurrent
-                    // accesses to shared boundary bytes using atomic byte operations without live
-                    // `&mut` references.
+                    // SAFETY: Caller guarantees every touched partial boundary byte `addr` is
+                    // non-null, mapped, writable, and initialized (`AtomicU8` has alignment 1),
+                    // with any concurrent accesses using `AtomicU8` operations only and no live
+                    // non-atomic references aliasing it.
                     unsafe { <u8 as MetadataValue>::fetch_and(addr, mask, Ordering::SeqCst) };
                     false
                 }
@@ -387,13 +406,34 @@ impl SideMetadataSpec {
         );
     }
 
-    /// This method is used for bulk setting side metadata for a data address range.
-    pub(crate) fn set_meta_bits(
+    /// Bulk-set the half-open side-metadata bit range
+    /// `[meta_start_addr:meta_start_bit, meta_end_addr:meta_end_bit)` to all-ones.
+    ///
+    /// # Safety
+    ///
+    /// * `meta_start_bit < 8`, `meta_end_bit < 8`, and `(meta_start_addr, meta_start_bit)` must
+    ///   not exceed `(meta_end_addr, meta_end_bit)`.
+    /// * When the bit range is non-empty, every touched byte (`[meta_start_addr, meta_end_addr)`
+    ///   when `meta_end_bit == 0`, or `[meta_start_addr, meta_end_addr + 1)` when
+    ///   `meta_end_bit != 0`) must be non-null, mapped, and writable.
+    /// * Whole bytes in the range are overwritten non-atomically and must have no concurrent
+    ///   reads, writes, or atomic accesses and no live Rust references aliasing them.
+    /// * Partial boundary bytes (`meta_start_bit != 0` or `meta_end_bit != 0`) are updated via
+    ///   `AtomicU8` RMW and must be initialized, with any concurrent accesses to those boundary
+    ///   bytes using `AtomicU8` operations only and no live non-atomic references aliasing them.
+    pub(crate) unsafe fn set_meta_bits(
         meta_start_addr: Address,
         meta_start_bit: u8,
         meta_end_addr: Address,
         meta_end_bit: u8,
     ) {
+        assert!(
+            meta_start_bit < 8
+                && meta_end_bit < 8
+                && (meta_start_addr < meta_end_addr
+                    || (meta_start_addr == meta_end_addr && meta_start_bit <= meta_end_bit)),
+            "Invalid metadata bit range [{meta_start_addr}:{meta_start_bit}, {meta_end_addr}:{meta_end_bit})"
+        );
         let mut visitor = |range| {
             match range {
                 BitByteRange::Bytes { start, end } => {
@@ -409,12 +449,10 @@ impl SideMetadataSpec {
                     // Get a mask that the bits we need to set are 1, and the other bits are 0.
                     let mask: u8 = !(u8::MAX.checked_shl(bit_end as u32).unwrap_or(0))
                         & (u8::MAX << bit_start);
-                    // SAFETY: `set_meta_bits` (preserved with its cross-slice `pub(crate)`
-                    // signature for `test_private`) requires the side-metadata bit range
-                    // `[meta_start_addr:meta_start_bit, meta_end_addr:meta_end_bit)` to be non-null,
-                    // mapped, and initialized (`AtomicU8` has alignment 1), with all concurrent
-                    // accesses to shared boundary bytes using atomic byte operations without live
-                    // `&mut` references.
+                    // SAFETY: Caller guarantees every touched partial boundary byte `addr` is
+                    // non-null, mapped, writable, and initialized (`AtomicU8` has alignment 1),
+                    // with any concurrent accesses using `AtomicU8` operations only and no live
+                    // non-atomic references aliasing it.
                     unsafe { <u8 as MetadataValue>::fetch_or(addr, mask, Ordering::SeqCst) };
                     false
                 }
@@ -432,17 +470,23 @@ impl SideMetadataSpec {
 
     /// This method does bulk update for the given data range. It calculates the metadata bits for the given data range,
     /// and invokes the given method to update the metadata bits.
+    #[inline]
     pub(super) fn bulk_update_metadata(
         &self,
         start: Address,
         size: usize,
-        update_meta_bits: &impl Fn(Address, u8, Address, u8),
+        update_meta_bits: unsafe fn(Address, u8, Address, u8),
     ) {
         if self.uses_contiguous_side_metadata() {
             if let Some((ms, msb, me, meb)) =
                 helpers::half_open_contiguous_meta_bit_range(self, start, size)
             {
-                update_meta_bits(ms, msb, me, meb);
+                // SAFETY: `half_open_contiguous_meta_bit_range` computed a valid ordered bit range
+                // (`msb < 8`, `meb < 8`) for `[start, start + size)`, and `bzero_metadata` /
+                // `bset_metadata`'s mapped-region contract ensures touched side-metadata bytes are
+                // non-null, mapped, and writable with exclusive whole-byte ownership and
+                // initialized `AtomicU8`-only boundary bytes.
+                unsafe { update_meta_bits(ms, msb, me, meb) };
             }
         } else {
             // On 32-bit targets, local policy-specific side metadata is chunked: adjacent data chunks
@@ -467,7 +511,14 @@ impl SideMetadataSpec {
                     meta_end_shift -= BITS_IN_BYTE as u8;
                     meta_end += 1usize;
                 }
-                update_meta_bits(meta_start, meta_start_shift, meta_end, meta_end_shift);
+                // SAFETY: `for_each_spec_data_span` split `[start, start + size)` into single-chunk
+                // spans with `meta_start_shift < 8`, `meta_end_shift < 8`, and `(meta_start,
+                // meta_start_shift) <= (meta_end, meta_end_shift)`, and `bzero_metadata` /
+                // `bset_metadata`'s mapped-region contract ensures non-null, mapped, writable side
+                // metadata with exclusive whole bytes and initialized `AtomicU8`-only boundary bytes.
+                unsafe {
+                    update_meta_bits(meta_start, meta_start_shift, meta_end, meta_end_shift);
+                }
             });
         }
     }
@@ -488,7 +539,7 @@ impl SideMetadataSpec {
         #[cfg(feature = "extreme_assertions")]
         sanity::verify_bzero(self, start, size);
 
-        self.bulk_update_metadata(start, size, &Self::zero_meta_bits)
+        self.bulk_update_metadata(start, size, Self::zero_meta_bits)
     }
 
     /// Bulk set a specific metadata for a memory region. Note that this method is more sophisiticated than a simple memset, especially in the following
@@ -507,7 +558,7 @@ impl SideMetadataSpec {
         #[cfg(feature = "extreme_assertions")]
         sanity::verify_bset(self, start, size);
 
-        self.bulk_update_metadata(start, size, &Self::set_meta_bits)
+        self.bulk_update_metadata(start, size, Self::set_meta_bits)
     }
 
     /// Bulk copy the `other` side metadata for a memory region to this side metadata.
@@ -1685,13 +1736,15 @@ impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
     /// * `bytes` - The size of the heap range.
     ///
     pub fn new(metadata_spec: &SideMetadataSpec, start: Address, bytes: usize) -> Self {
-        debug_assert_eq!(
+        assert_eq!(
             metadata_spec.log_num_of_bits, LOG_BITS_IN_BYTE as usize,
             "Each heap entry should map to a byte in side-metadata"
         );
-        debug_assert_eq!(
-            bytes >> metadata_spec.log_bytes_in_region,
-            ENTRIES,
+        assert_eq!(
+            1usize
+                .checked_shl(metadata_spec.log_bytes_in_region as u32)
+                .and_then(|region_bytes| ENTRIES.checked_mul(region_bytes)),
+            Some(bytes),
             "Heap range size and MetadataByteArray size does not match"
         );
         Self {
@@ -1709,9 +1762,18 @@ impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
         ENTRIES
     }
 
-    /// Get a byte from the metadata byte array at the given index.
+    /// Non-atomically load a byte from the metadata byte array at `index`.
+    ///
+    /// # Safety
+    ///
+    /// * The side-metadata byte at `index` for the heap range passed to [`Self::new`] must be
+    ///   non-null, mapped, readable, and initialized (and on 32-bit chunked local side metadata,
+    ///   that heap range must lie within a single chunk so all `ENTRIES` metadata bytes are
+    ///   contiguous at `self.meta_start`).
+    /// * No other thread may concurrently write to or atomically modify that metadata byte for the
+    ///   duration of this call, and no live `&mut` reference may alias it.
     #[allow(clippy::let_and_return)]
-    pub fn get(&self, index: usize) -> u8 {
+    pub unsafe fn get(&self, index: usize) -> u8 {
         assert!(
             index < ENTRIES,
             "index out of bounds: the len is {ENTRIES} but the index is {index}"
@@ -1719,14 +1781,10 @@ impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
         #[cfg(feature = "extreme_assertions")]
         let _lock = sanity::SANITY_LOCK.lock().unwrap();
         let entry_addr = self.meta_start + index;
-        // SAFETY: `MetadataByteArrayRef` (preserved with its public signature; e.g. Immix
-        // `Block::line_mark_table`) requires the `ENTRIES` 1-byte side-metadata entries starting
-        // at `self.meta_start` for `[start, start + bytes)` to be non-null, mapped, initialized,
-        // and not concurrently mutated when `get` is called. `assert!(index < ENTRIES)` bounds
-        // `entry_addr` within `[self.meta_start, self.meta_start + ENTRIES)` (`u8` has alignment 1).
-        // Holding `meta_start: Address` rather than `&'static [u8; ENTRIES]` avoids UB from
-        // asserting `'static` immutability over side-metadata bytes that are mutated between reads.
-        let value = unsafe { entry_addr.load::<u8>() };
+        // SAFETY: `assert!(index < ENTRIES)` bounds `index` within `[0, ENTRIES)`, and caller
+        // guarantees `entry_addr` is non-null, mapped, readable, initialized (`u8` alignment 1),
+        // and free of concurrent writes, atomic modifications, or live `&mut` aliases.
+        let value = unsafe { <u8 as MetadataValue>::load(entry_addr) };
         #[cfg(feature = "extreme_assertions")]
         {
             let data_addr = self.heap_range_start + (index << self.spec.log_bytes_in_region);
@@ -2378,34 +2436,88 @@ mod tests {
         };
 
         with_addr(&mut raw_word, |addr| {
-            SideMetadataSpec::set_meta_bits(addr, 0, addr, 4);
+            // SAFETY: `[addr, addr + 8)` is an initialized, writable, exclusively owned stack
+            // `u64` with no concurrent accesses or live Rust references during `f(addr)`.
+            unsafe { SideMetadataSpec::set_meta_bits(addr, 0, addr, 4) };
         });
         assert_eq!(u64::from_le(raw_word), 0b1111);
 
         with_addr(&mut raw_word, |addr| {
-            SideMetadataSpec::zero_meta_bits(addr, 1, addr, 3);
+            // SAFETY: `[addr, addr + 8)` is an initialized, writable, exclusively owned stack
+            // `u64` with no concurrent accesses or live Rust references during `f(addr)`.
+            unsafe { SideMetadataSpec::zero_meta_bits(addr, 1, addr, 3) };
         });
         assert_eq!(u64::from_le(raw_word), 0b1001);
 
         with_addr(&mut raw_word, |addr| {
-            SideMetadataSpec::set_meta_bits(addr, 2, addr, 6);
+            // SAFETY: `[addr, addr + 8)` is an initialized, writable, exclusively owned stack
+            // `u64` with no concurrent accesses or live Rust references during `f(addr)`.
+            unsafe { SideMetadataSpec::set_meta_bits(addr, 2, addr, 6) };
         });
         assert_eq!(u64::from_le(raw_word), 0b0011_1101);
 
         with_addr(&mut raw_word, |addr| {
-            SideMetadataSpec::zero_meta_bits(addr, 0, addr + 1usize, 0);
+            // SAFETY: `[addr, addr + 8)` is an initialized, writable, exclusively owned stack
+            // `u64` with no concurrent accesses or live Rust references during `f(addr)`.
+            unsafe { SideMetadataSpec::zero_meta_bits(addr, 0, addr + 1usize, 0) };
         });
         assert_eq!(u64::from_le(raw_word), 0b0);
 
         with_addr(&mut raw_word, |addr| {
-            SideMetadataSpec::set_meta_bits(addr, 2, addr + 1usize, 2);
+            // SAFETY: `[addr, addr + 8)` is an initialized, writable, exclusively owned stack
+            // `u64` with no concurrent accesses or live Rust references during `f(addr)`.
+            unsafe { SideMetadataSpec::set_meta_bits(addr, 2, addr + 1usize, 2) };
         });
         assert_eq!(u64::from_le(raw_word), 0b11_1111_1100);
 
         with_addr(&mut raw_word, |addr| {
-            SideMetadataSpec::set_meta_bits(addr, 0, addr + 1usize, 2);
+            // SAFETY: `[addr, addr + 8)` is an initialized, writable, exclusively owned stack
+            // `u64` with no concurrent accesses or live Rust references during `f(addr)`.
+            unsafe { SideMetadataSpec::set_meta_bits(addr, 0, addr + 1usize, 2) };
         });
         assert_eq!(u64::from_le(raw_word), 0b11_1111_1111);
+    }
+
+    #[test]
+    fn test_metadata_byte_array_ref_get() {
+        test_side_metadata(3, |arena| {
+            let region = 1usize << TEST_LOG_BYTES_IN_REGION;
+            arena
+                .spec
+                .store_atomic::<u8>(arena.data_addr, 0x5a, Ordering::SeqCst);
+            let arr = MetadataByteArrayRef::<1>::new(&arena.spec, arena.data_addr, region);
+            assert_eq!(arr.len(), 1);
+            // SAFETY: `arena` mapped and initialized the 1-byte side-metadata entry for
+            // `[arena.data_addr, arena.data_addr + region)` in this single-threaded test with no
+            // concurrent writes or `&mut` aliases.
+            assert_eq!(unsafe { arr.get(0) }, 0x5a);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Heap range size and MetadataByteArray size does not match")]
+    fn test_metadata_byte_array_ref_mismatched_size_panics() {
+        let spec = SideMetadataSpec {
+            name: "byte_array_mismatch",
+            is_global: true,
+            offset: 0,
+            log_num_of_bits: 3,
+            log_bytes_in_region: 8,
+        };
+        let _ = MetadataByteArrayRef::<2>::new(&spec, vm_layout::vm_layout().heap_start, 256);
+    }
+
+    #[test]
+    #[should_panic(expected = "Each heap entry should map to a byte in side-metadata")]
+    fn test_metadata_byte_array_ref_non_byte_spec_panics() {
+        let spec = SideMetadataSpec {
+            name: "byte_array_non_byte",
+            is_global: true,
+            offset: 0,
+            log_num_of_bits: 0,
+            log_bytes_in_region: 8,
+        };
+        let _ = MetadataByteArrayRef::<1>::new(&spec, vm_layout::vm_layout().heap_start, 256);
     }
 
     #[test]
