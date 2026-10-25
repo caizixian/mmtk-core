@@ -93,7 +93,7 @@ impl<C: GCWorkContext> GCWork<C::VM> for Prepare<C> {
             // after all mutators have stopped and before `PrepareMutator`/`PrepareCollector` packets
             // are added below, while all other GC workers are parked. No concurrent or re-entrant
             // read/write access to `mmtk.plan` occurs during this block, and `mmtk.get_plan_mut()`
-            // derives `&mut` from `MMTK::plan`'s `Box<UnsafeCell<dyn Plan>>`.
+            // derives `&mut` from `MMTK::plan`'s `NonNull<UnsafeCell<dyn Plan>>`.
             let plan_mut: &mut C::PlanType = unsafe { mmtk.get_plan_mut() }
                 .downcast_mut::<C::PlanType>()
                 .unwrap();
@@ -186,7 +186,7 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
             // before `ReleaseMutator`/`ReleaseCollector` packets are enqueued below. `on_gc_release`
             // above has already returned, so no concurrent or re-entrant read/write access to
             // `mmtk.plan` occurs during this block, and `mmtk.get_plan_mut()` derives `&mut` from
-            // `MMTK::plan`'s `Box<UnsafeCell<dyn Plan>>`.
+            // `MMTK::plan`'s `NonNull<UnsafeCell<dyn Plan>>`.
             let plan_mut: &mut C::PlanType = unsafe { mmtk.get_plan_mut() }
                 .downcast_mut::<C::PlanType>()
                 .unwrap();

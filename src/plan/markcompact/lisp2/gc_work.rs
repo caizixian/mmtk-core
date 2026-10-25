@@ -48,7 +48,7 @@ impl<VM: VMBinding> GCWork<VM> for UpdateReferences<VM> {
             // remain stopped), before any `ScanMutatorRoots`/`ScanVMSpecificRoots` packets are
             // added below. No concurrent or re-entrant read/write access to `mmtk.plan` occurs
             // during this block, and `mmtk.get_plan_mut()` derives `&mut` from `MMTK::plan`'s
-            // `Box<UnsafeCell<dyn Plan>>`.
+            // `NonNull<UnsafeCell<dyn Plan>>`.
             let plan_mut = unsafe { mmtk.get_plan_mut() }
                 .downcast_mut::<Lisp2<VM>>()
                 .unwrap();
