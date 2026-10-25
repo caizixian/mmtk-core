@@ -172,13 +172,20 @@ pub trait ObjectModel<VM: VMBinding> {
     /// * `mask`: is an optional mask value for the metadata. This value is used in cases like the forwarding pointer metadata, where some of the bits are reused by other metadata such as the forwarding bits.
     ///
     /// # Safety
-    /// This is a non-atomic load, thus not thread-safe.
+    ///
+    /// * `object` must refer to a live allocated object whose header range for `metadata_spec` is
+    ///   mapped, initialized, and properly aligned for `T`.
+    /// * This is a non-atomic load, so the caller must ensure no concurrent writes race with this
+    ///   access to the same metadata byte/word.
     unsafe fn load_metadata<T: MetadataValue>(
         metadata_spec: &HeaderMetadataSpec,
         object: ObjectReference,
         mask: Option<T>,
     ) -> T {
-        metadata_spec.load::<T>(object.to_header::<VM>(), mask)
+        let header = object.to_header::<VM>();
+        // SAFETY: The caller upholds that `object`'s header metadata at `metadata_spec` is mapped,
+        // initialized, aligned for `T`, and free of concurrent conflicting writes.
+        unsafe { metadata_spec.load::<T>(header, mask) }
     }
 
     /// A function to atomically load the specified per-object metadata's content.
@@ -211,14 +218,22 @@ pub trait ObjectModel<VM: VMBinding> {
     /// * `mask`: is an optional mask value for the metadata. This value is used in cases like the forwarding pointer metadata, where some of the bits are reused by other metadata such as the forwarding bits.
     ///
     /// # Safety
-    /// This is a non-atomic store, thus not thread-safe.
+    ///
+    /// * `object` must refer to a live allocated object whose header range for `metadata_spec` is
+    ///   mapped, initialized, writable, and properly aligned for `T`.
+    /// * This is a non-atomic store (and a non-atomic read-modify-write for sub-byte or masked
+    ///   specs), so the caller must ensure exclusive access to the underlying byte/word with no
+    ///   concurrent reads or writes.
     unsafe fn store_metadata<T: MetadataValue>(
         metadata_spec: &HeaderMetadataSpec,
         object: ObjectReference,
         val: T,
         mask: Option<T>,
     ) {
-        metadata_spec.store::<T>(object.to_header::<VM>(), val, mask)
+        let header = object.to_header::<VM>();
+        // SAFETY: The caller upholds that `object`'s header metadata at `metadata_spec` is mapped,
+        // initialized, aligned for `T`, and exclusively accessed without concurrent reads/writes.
+        unsafe { metadata_spec.store::<T>(header, val, mask) }
     }
 
     /// A function to atomically store a value to the specified per-object metadata.

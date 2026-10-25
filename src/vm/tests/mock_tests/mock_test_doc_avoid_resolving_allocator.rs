@@ -25,13 +25,21 @@ pub fn acquire_typed_allocator() {
                 fixture.get_mmtk(),
                 AllocationSemantics::Default,
             );
+            assert!(matches!(
+                selector,
+                crate::util::alloc::AllocatorSelector::BumpPointer(_)
+            ));
             let default_allocator_offset =
                 crate::plan::Mutator::<MockVM>::get_allocator_base_offset(selector);
-            let mutator = memory_manager::bind_mutator(fixture.get_mmtk(), tls_opaque_pointer);
+            let mut mutator = memory_manager::bind_mutator(fixture.get_mmtk(), tls_opaque_pointer);
 
             // At run time: allocate with the default semantics without resolving allocator
             let default_allocator: &mut BumpAllocator<MockVM> = {
-                let mutator_addr = Address::from_ref(&*mutator);
+                let mutator_addr = Address::from_mut_ptr(&mut *mutator);
+                // SAFETY: `selector` was verified to be a `BumpPointer` selector for the active
+                // plan, `default_allocator_offset` is the initialized `BumpAllocator<MockVM>`
+                // offset within `Mutator<MockVM>`, and `mutator_addr` is derived from `&mut *mutator`
+                // with exclusive write provenance over the live `Mutator<MockVM>` allocation.
                 unsafe {
                     (mutator_addr + default_allocator_offset).as_mut_ref::<BumpAllocator<MockVM>>()
                 }

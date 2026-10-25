@@ -26,51 +26,44 @@ use super::mock_method::*;
 use crate::util::test_util::mock_vm::mock_api;
 
 use std::any::Any;
+use std::cell::UnsafeCell;
 use std::default::Default;
-use std::ptr::NonNull;
+use std::sync::{Arc, OnceLock, RwLock};
 
 /// The offset between object reference and the allocation address if we use
 /// the default mock VM.
 pub const DEFAULT_OBJECT_REF_OFFSET: usize = crate::util::constants::BYTES_IN_ADDRESS;
 
-/// To mock VMBinding methods, we have to create a static instance of the mock VM.
+/// To mock VMBinding methods, we maintain a process-global instance of the mock VM.
 /// A test may define its own mock VM type (see [`define_mock_vm`](crate::define_mock_vm)), so the
-/// instance is type-erased, and is checked against the expected mock VM type when it is accessed.
-/// There can only be one mock VM instance (and one MMTk instance) in a process.
-static mut MOCK_VM_INSTANCE: Option<NonNull<dyn Any>> = None;
-
-// MockVM only allows mock methods with references of no lifetime or static lifetime.
-// If `VMBinding` methods has references of a specific lifetime,
-// the references need to be turned into static lifetime before we can call mock methods.
-// This is correct as long as we only use the references within the mock methods, and
-// we do not store them for access after the mock method returns.
-macro_rules! lifetime {
-    ($e: expr) => {
-        unsafe {
-            // The dynamic nature of this lifetime-removal macro makes it impossible to reason
-            // about the source and destination types of the `transmute`.
-            #[allow(clippy::missing_transmute_annotations)]
-            std::mem::transmute($e)
-        }
-    };
-}
+/// instance is type-erased behind `Arc<dyn Any + Send + Sync>`, and is checked against the
+/// expected mock VM type when it is accessed.
+static MOCK_VM_INSTANCE: RwLock<Option<Arc<dyn Any + Send + Sync>>> = RwLock::new(None);
 
 /// Call `MockMethod`.
 macro_rules! mock {
     ($fn: ident($($arg:expr),*)) => {
         {
             let arg_tuple = ($($arg),*);
-            Self::write_mockvm(|mock| mock.$fn.call(arg_tuple))
+            Self::read_mockvm(|mock| mock.$fn.call(arg_tuple))
         }
     };
 }
+
+/// Call a higher-ranked [`MockMethodFn`] whose closure accepts borrowed parameters directly.
+macro_rules! mock_hrtb {
+    ($fn: ident($($arg:expr),*)) => {
+        Self::read_mockvm(|mock| (mock.$fn.next_closure_fn())($($arg),*))
+    };
+}
+
 /// Call `MockAny`.
 #[allow(unused_macros)] // This macro is unused for now.
 macro_rules! mock_any {
     ($fn: ident($($arg:expr),*)) => {
         {
             let arg_tuple = ($($arg),*);
-            *Self::write_mockvm(|mock| mock.$fn.call_any(Box::new(arg_tuple))).downcast().unwrap()
+            *Self::read_mockvm(|mock| mock.$fn.call_any(Box::new(arg_tuple))).downcast().unwrap()
         }
     };
 }
@@ -331,14 +324,11 @@ define_mock_vm! {
 ///
 /// ## Methods with reference types
 ///
-/// As we cannot have extra type parameters (including generic lifetime paraeters) on `MockVM`, `MockVM` can only
-/// have `MockMethod` with types of `'static` lifetime. To create a mock method for methods with
-/// reference types, just replace the lifetime specifier in the reference with `'static` lifetime.
-/// For example, [`crate::vm::ActivePlan::mutators`] has a signature of `fn<'a>() -> Box<dyn Iterator<Item = &'a mut Mutator<VM>> + 'a>`,
-/// we just replace all the lifetime specifiers with `'static.`, and create
-/// `MockMethod<(), Box<dyn Iterator<Item = &'static mut Mutator<MockVM>> + 'static>>`.
-/// When we invoke the `MockMethod`, we can use the `lifetime!` macro to hack the lifetime.
-/// Though this is unsafe, it is correct as long as we only use the reference within the mock implementation.
+/// Methods whose arguments contain non-`'static` references use [`MockMethodFn`] with a
+/// higher-ranked `dyn for<'a> Fn(...) -> R + Send + Sync` signature so that borrowed arguments
+/// are checked statically without lifetime transmutation. For return iterators over parked
+/// mutators, [`crate::vm::ActivePlan::mutators`] reborrows each `'static` mutator reference from
+/// `MockMethod<(), Box<dyn Iterator<Item = &'static mut Mutator<MockVM>> + 'static>>` to `'a`.
 ///
 /// ## Methods with generic type parameters
 ///
@@ -350,9 +340,8 @@ define_mock_vm! {
 /// We can use trait objects if the trait is object safe. For example,
 /// [`crate::vm::ActivePlan::vm_trace_object`] has a signature of
 /// `fn<Q: ObjectQueue>(&mut Q, ObjectReference, &mut GCWorker<VM>) -> ObjectReference`,
-/// we can mock `&mut Q` as `&mut dyn ObjectQueue`, and use
-/// `MockMethod<(&'static mut dyn ObjectQueue, ObjectReference, &'static mut GCWorker<MockVM>), ObjectReference>`
-/// for the method.
+/// so we mock `&mut Q` as `&mut dyn ObjectQueue` using
+/// `MockMethodFn<dyn Fn(&mut dyn ObjectQueue, ObjectReference, &mut GCWorker<MockVM>) -> ObjectReference + Send + Sync>`.
 ///
 /// ### Use `MockAny`
 ///
@@ -385,17 +374,15 @@ pub struct MockVM<C: MockVMConfig = DefaultMockVMConfig> {
     pub is_mutator: MockMethod<VMThread, bool>,
     pub mutator: MockMethod<VMMutatorThread, &'static mut Mutator<Self>>,
     pub mutators: MockMethod<(), Box<dyn Iterator<Item = &'static mut Mutator<Self>> + 'static>>,
-    pub vm_trace_object: MockMethod<
-        (
-            &'static mut dyn ObjectQueue,
-            ObjectReference,
-            &'static mut GCWorker<Self>,
-        ),
-        ObjectReference,
+    pub vm_trace_object: MockMethodFn<
+        dyn Fn(&mut dyn ObjectQueue, ObjectReference, &mut GCWorker<Self>) -> ObjectReference
+            + Send
+            + Sync,
     >,
     // collection
-    pub stop_all_mutators:
-        MockMethod<(VMWorkerThread, Box<dyn FnMut(&'static mut Mutator<Self>)>), ()>,
+    pub stop_all_mutators: MockMethodFn<
+        dyn Fn(VMWorkerThread, &mut dyn FnMut(&'static mut Mutator<Self>)) + Send + Sync,
+    >,
     pub resume_mutators: MockMethod<VMWorkerThread, ()>,
     pub block_for_gc: MockMethod<VMMutatorThread, ()>,
     pub spawn_gc_thread: MockMethod<(VMThread, GCThreadContext<Self>), ()>,
@@ -405,21 +392,19 @@ pub struct MockVM<C: MockVMConfig = DefaultMockVMConfig> {
     pub vm_live_bytes: MockMethod<(), usize>,
     pub create_gc_trigger: MockMethod<(), Box<dyn GCTriggerPolicy<Self>>>,
     // object model
-    pub copy_object: MockMethod<
-        (
-            ObjectReference,
-            CopySemantics,
-            &'static GCWorkerCopyContext<Self>,
-        ),
-        ObjectReference,
+    pub copy_object: MockMethodFn<
+        dyn Fn(ObjectReference, CopySemantics, &mut GCWorkerCopyContext<Self>) -> ObjectReference
+            + Send
+            + Sync,
     >,
-    pub try_copy_object: MockMethod<
-        (
-            ObjectReference,
-            CopySemantics,
-            &'static GCWorkerCopyContext<Self>,
-        ),
-        Option<ObjectReference>,
+    pub try_copy_object: MockMethodFn<
+        dyn Fn(
+                ObjectReference,
+                CopySemantics,
+                &mut GCWorkerCopyContext<Self>,
+            ) -> Option<ObjectReference>
+            + Send
+            + Sync,
     >,
     pub copy_object_to: MockMethod<(ObjectReference, ObjectReference, Address), Address>,
     pub get_object_size: MockMethod<ObjectReference, usize>,
@@ -436,24 +421,22 @@ pub struct MockVM<C: MockVMConfig = DefaultMockVMConfig> {
     pub weakref_clear_referent: MockMethod<ObjectReference, ()>,
     pub weakref_set_referent: MockMethod<(ObjectReference, ObjectReference), ()>,
     pub weakref_get_referent: MockMethod<ObjectReference, Option<ObjectReference>>,
-    pub weakref_enqueue_references: MockMethod<(&'static [ObjectReference], VMWorkerThread), ()>,
+    pub weakref_enqueue_references:
+        MockMethodFn<dyn Fn(&[ObjectReference], VMWorkerThread) + Send + Sync>,
     // scanning
     pub support_slot_enqueuing: MockMethod<(VMWorkerThread, ObjectReference), bool>,
-    pub scan_object: MockMethod<
-        (
-            VMWorkerThread,
-            ObjectReference,
-            &'static mut dyn SlotVisitor<C::VMSlot>,
-        ),
-        (),
+    pub scan_object: MockMethodFn<
+        dyn for<'a, 'b> Fn(
+                VMWorkerThread,
+                ObjectReference,
+                &'a mut (dyn SlotVisitor<C::VMSlot> + 'b),
+            ) + Send
+            + Sync,
     >,
-    pub scan_object_and_trace_edges: MockMethod<
-        (
-            VMWorkerThread,
-            ObjectReference,
-            &'static mut dyn ObjectTracer,
-        ),
-        (),
+    pub scan_object_and_trace_edges: MockMethodFn<
+        dyn for<'a, 'b> Fn(VMWorkerThread, ObjectReference, &'a mut (dyn ObjectTracer + 'b))
+            + Send
+            + Sync,
     >,
     pub scan_roots_in_mutator_thread: Box<dyn MockAny>,
     pub scan_vm_specific_roots: Box<dyn MockAny>,
@@ -464,41 +447,56 @@ pub struct MockVM<C: MockVMConfig = DefaultMockVMConfig> {
     pub forward_weak_refs: Box<dyn MockAny>,
 }
 
-/// This struct is used to hold a pointer to a `Mutator<VM>` for a mock VM type.
-/// The pointer to this struct is used as the 'mutator tls' pointer for MMTK.
-/// The mutator is type-erased so we can check its type when we access it.
-#[derive(Clone)]
-pub struct MutatorHandle {
-    pub ptr: *mut dyn Any,
+/// Holds the type-erased `Box<Mutator<VM>>` associated with a registered mock mutator thread.
+/// The address of the leaked `'static` `MutatorHandle` is used as the `VMMutatorThread` TLS token.
+pub(crate) struct MutatorHandle {
+    mutator: OnceLock<UnsafeCell<Box<dyn Any + Send>>>,
 }
 
 impl MutatorHandle {
     /// Bind a mutator for the mock VM type `VM`, and return its mutator tls.
-    pub fn bind<VM: VMBinding>() -> VMMutatorThread {
+    pub(crate) fn bind<VM: VMBinding>() -> VMMutatorThread {
         let mmtk = mock_api::singleton::<VM>();
 
-        let mutator_handle = Box::new(MutatorHandle {
-            ptr: std::ptr::null_mut::<Mutator<VM>>(),
-        });
-        let mutator_handle_ptr = Box::into_raw(mutator_handle);
-        let tls = VMMutatorThread(VMThread(OpaquePointer::from_address(
-            Address::from_mut_ptr(mutator_handle_ptr),
-        )));
+        let mutator_handle: &'static MutatorHandle = Box::leak(Box::new(MutatorHandle {
+            mutator: OnceLock::new(),
+        }));
+        let tls = VMMutatorThread(VMThread(OpaquePointer::from_address(Address::from_ref(
+            mutator_handle,
+        ))));
 
         let mutator = crate::memory_manager::bind_mutator(mmtk, tls);
-        let mutator_ptr: *mut Mutator<VM> = Box::into_raw(mutator);
-
-        unsafe {
-            (*mutator_handle_ptr).ptr = mutator_ptr;
-        }
+        let _ = mutator_handle.mutator.set(UnsafeCell::new(mutator));
 
         MUTATOR_PARK.register(tls.0);
         tls
     }
+}
 
-    pub fn as_mutator<VM: VMBinding>(&self) -> &'static mut Mutator<VM> {
-        assert!(!self.ptr.is_null(), "The mutator is not bound yet");
-        unsafe { &mut *self.ptr }
+impl VMMutatorThread {
+    /// Get a mutable reference to the underlying mutator for a mock VM type.
+    ///
+    /// # Safety
+    /// * `self` must have been created by `MutatorHandle::bind::<VM>()` (`MockVM::bind_mutator`).
+    /// * The caller must have exclusive access to the underlying `Mutator<VM>` for the duration of
+    ///   the returned reference's use (e.g. via `&mut GenericMutatorFixture` outside a GC pause,
+    ///   or on a GC worker thread while all mutators are parked at a safepoint).
+    pub unsafe fn as_mock_mutator<VM: VMBinding>(self) -> &'static mut Mutator<VM> {
+        assert!(
+            MUTATOR_PARK.contains(self.0),
+            "VMMutatorThread {:?} is not a registered MockVM mutator",
+            self
+        );
+        let handle_ptr = self.0 .0.to_address().to_ptr::<MutatorHandle>();
+        // SAFETY: `MUTATOR_PARK.contains(self.0)` verifies `self` was registered by
+        // `MutatorHandle::bind`, which leaked a valid, aligned `&'static MutatorHandle` for the
+        // lifetime of the process and never mutates `MutatorHandle` outside its inner `UnsafeCell`.
+        let handle: &'static MutatorHandle = unsafe { &*handle_ptr };
+        let cell = handle.mutator.get().expect("The mutator is not bound yet");
+        // SAFETY: `cell` was initialized by `MutatorHandle::bind`, `Mutator<VM>: Send` holds
+        // (enforced by `Box<dyn Any + Send>`), and the caller guarantees exclusive access to this
+        // `Mutator<VM>` for the duration of the returned reference's use.
+        unsafe { &mut *cell.get() }
             .downcast_mut::<Mutator<VM>>()
             .unwrap_or_else(|| {
                 panic!(
@@ -509,26 +507,21 @@ impl MutatorHandle {
     }
 }
 
-unsafe impl Sync for MutatorHandle {}
-unsafe impl Send for MutatorHandle {}
-
-impl VMMutatorThread {
-    /// Get a mutable reference to the underlying mutator for a mock VM type.
-    pub fn as_mock_mutator<VM: VMBinding>(self) -> &'static mut Mutator<VM> {
-        unsafe { &*self.0 .0.to_address().to_ptr::<MutatorHandle>() }.as_mutator()
-    }
-}
-
 lazy_static! {
     pub static ref MUTATOR_PARK: ThreadPark = ThreadPark::new("mutators");
     // We never really park GC threads. We just reuse this struct to track GC threads.
     pub static ref GC_THREADS: ThreadPark = ThreadPark::new("gc workers");
 }
 
+thread_local! {
+    /// Per-thread static byte whose address uniquely identifies the current OS thread as a
+    /// `VMThread` token for `GC_THREADS` without synthesizing arbitrary integer addresses.
+    static THREAD_TLS_ANCHOR: u8 = const { 0 };
+}
+
 fn current_thread_tls() -> VMThread {
-    VMThread(OpaquePointer::from_address(unsafe {
-        Address::from_usize(thread_id::get())
-    }))
+    THREAD_TLS_ANCHOR
+        .with(|anchor| VMThread(OpaquePointer::from_address(Address::from_ref(anchor))))
 }
 
 impl<C: MockVMConfig> Default for MockVM<C> {
@@ -539,29 +532,50 @@ impl<C: MockVMConfig> Default for MockVM<C> {
                 MUTATOR_PARK.number_of_threads()
             })),
             is_mutator: MockMethod::new_fixed(Box::new(|tls: VMThread| MUTATOR_PARK.contains(tls))),
-            mutator: MockMethod::new_fixed(Box::new(|tls| tls.as_mock_mutator())),
+            mutator: MockMethod::new_unimplemented(),
             mutators: MockMethod::new_fixed(Box::new(|()| {
-                // Just return an iterator over all registered mutators
+                assert!(
+                    GC_THREADS.contains(current_thread_tls()),
+                    "ActivePlan::mutators() may only be called from a GC worker during a pause"
+                );
+                // `all_parked_threads()` asserts that every registered mutator thread is currently
+                // parked in `MUTATOR_PARK.park(...)` (at a GC safepoint) and yields each unique
+                // `VMThread` key from the `HashMap` at most once.
                 let mutators: Vec<&'static mut Mutator<Self>> = MUTATOR_PARK
-                    .all_threads()
+                    .all_parked_threads()
                     .into_iter()
-                    .map(|tls| VMMutatorThread(tls).as_mock_mutator())
+                    .map(|tls| {
+                        // SAFETY: Every `tls` in `MUTATOR_PARK` was registered by
+                        // `MutatorHandle::bind::<Self>()` and is distinct (`HashMap` keys). All
+                        // mutators are verified parked at a safepoint (`all_parked_threads`), and
+                        // MMTk's `WorkBucketStage` barriers serialize `Prepare`, `Closure`, and
+                        // `Release` mutator work packets before `resume_mutators` unparks threads.
+                        unsafe { VMMutatorThread(tls).as_mock_mutator() }
+                    })
                     .collect();
                 Box::new(mutators.into_iter())
             })),
-            vm_trace_object: MockMethod::new_fixed(Box::new(|(_, object, _)| {
+            vm_trace_object: MockMethodFn::new_fixed(Box::new(|_, object, _| {
                 panic!("MMTk cannot trace object {:?} as it does not belong to any MMTk space. If the object is known to the VM, the binding can override this method and handle its tracing.", object)
             })),
 
-            stop_all_mutators: MockMethod::new_fixed(Box::new(|(_tls, mut mutator_visitor)| {
+            stop_all_mutators: MockMethodFn::new_fixed(Box::new(|_tls, mutator_visitor| {
                 info!("Waiting for all threads to park...");
                 MUTATOR_PARK.wait_all_parked();
                 info!("All threads are parked.");
 
                 MUTATOR_PARK
-                    .all_threads()
+                    .all_parked_threads()
                     .into_iter()
-                    .for_each(|tls| mutator_visitor(VMMutatorThread(tls).as_mock_mutator()));
+                    .for_each(|tls| {
+                        // SAFETY: Every `tls` in `MUTATOR_PARK` was registered by
+                        // `MutatorHandle::bind::<Self>()`, is distinct (`HashMap` keys), and is
+                        // verified parked in `MUTATOR_PARK` (`all_parked_threads`). Each mutator
+                        // is visited sequentially in `for_each` during the `StopMutators` stage
+                        // before `Prepare` or `resume_mutators` runs.
+                        let mutator = unsafe { VMMutatorThread(tls).as_mock_mutator() };
+                        mutator_visitor(mutator);
+                    });
             })),
             resume_mutators: MockMethod::new_fixed(Box::new(|_tls| {
                 info!("Resuming all parked threads...");
@@ -596,8 +610,8 @@ impl<C: MockVMConfig> Default for MockVM<C> {
             vm_live_bytes: MockMethod::new_default(),
             create_gc_trigger: MockMethod::new_unimplemented(),
 
-            copy_object: MockMethod::new_unimplemented(),
-            try_copy_object: MockMethod::new_unimplemented(),
+            copy_object: MockMethodFn::new_fixed(Box::new(|_, _, _| unimplemented!())),
+            try_copy_object: MockMethodFn::new_fixed(Box::new(|_, _, _| unimplemented!())),
             copy_object_to: MockMethod::new_unimplemented(),
             get_object_size: MockMethod::new_unimplemented(),
             get_object_size_when_copied: MockMethod::new_unimplemented(),
@@ -616,11 +630,13 @@ impl<C: MockVMConfig> Default for MockVM<C> {
             weakref_clear_referent: MockMethod::new_unimplemented(),
             weakref_get_referent: MockMethod::new_unimplemented(),
             weakref_set_referent: MockMethod::new_unimplemented(),
-            weakref_enqueue_references: MockMethod::new_unimplemented(),
+            weakref_enqueue_references: MockMethodFn::new_fixed(Box::new(|_, _| unimplemented!())),
 
             support_slot_enqueuing: MockMethod::new_fixed(Box::new(|_| true)),
-            scan_object: MockMethod::new_unimplemented(),
-            scan_object_and_trace_edges: MockMethod::new_unimplemented(),
+            scan_object: MockMethodFn::new_fixed(Box::new(|_, _, _| unimplemented!())),
+            scan_object_and_trace_edges: MockMethodFn::new_fixed(Box::new(
+                |_, _, _| unimplemented!(),
+            )),
             // We instantiate a `MockMethod` with the arguments as `DefaultRootsWorkFactory<..., UnsupportedTrace<MockVM>, ...>`,
             // thus the mock method expects the actual call arguments to match the type.
             // In most cases, this won't work and this `MockMethod` is just a place holder. It is
@@ -670,9 +686,6 @@ impl<C: MockVMConfig> Default for MockVM<C> {
     }
 }
 
-unsafe impl<C: MockVMConfig> Sync for MockVM<C> {}
-unsafe impl<C: MockVMConfig> Send for MockVM<C> {}
-
 impl<C: MockVMConfig> VMBinding for MockVM<C> {
     type VMSlot = C::VMSlot;
     type VMMemorySlice = C::VMMemorySlice;
@@ -705,7 +718,7 @@ impl<C: MockVMConfig> crate::vm::ActivePlan<MockVM<C>> for MockVM<C> {
 
     fn mutators<'a>() -> Box<dyn Iterator<Item = &'a mut Mutator<Self>> + 'a> {
         let ret = mock!(mutators());
-        lifetime!(ret)
+        Box::new(ret.map(|m| &mut *m))
     }
 
     fn vm_trace_object<Q: ObjectQueue>(
@@ -713,23 +726,16 @@ impl<C: MockVMConfig> crate::vm::ActivePlan<MockVM<C>> for MockVM<C> {
         object: ObjectReference,
         worker: &mut GCWorker<Self>,
     ) -> ObjectReference {
-        mock!(vm_trace_object(
-            lifetime!(queue as &mut dyn ObjectQueue),
-            object,
-            lifetime!(worker)
-        ))
+        mock_hrtb!(vm_trace_object(queue, object, worker))
     }
 }
 
 impl<C: MockVMConfig> crate::vm::Collection<MockVM<C>> for MockVM<C> {
-    fn stop_all_mutators<F>(tls: VMWorkerThread, mutator_visitor: F)
+    fn stop_all_mutators<F>(tls: VMWorkerThread, mut mutator_visitor: F)
     where
         F: FnMut(&'static mut Mutator<Self>),
     {
-        mock!(stop_all_mutators(
-            tls,
-            lifetime!(Box::new(mutator_visitor) as Box<dyn FnMut(&'static mut Mutator<Self>)>)
-        ))
+        mock_hrtb!(stop_all_mutators(tls, &mut mutator_visitor))
     }
 
     fn resume_mutators(tls: VMWorkerThread) {
@@ -787,7 +793,7 @@ impl<C: MockVMConfig> crate::vm::ObjectModel<MockVM<C>> for MockVM<C> {
         semantics: CopySemantics,
         copy_context: &mut GCWorkerCopyContext<Self>,
     ) -> ObjectReference {
-        mock!(copy_object(from, semantics, lifetime!(copy_context)))
+        mock_hrtb!(copy_object(from, semantics, copy_context))
     }
 
     fn try_copy(
@@ -795,7 +801,7 @@ impl<C: MockVMConfig> crate::vm::ObjectModel<MockVM<C>> for MockVM<C> {
         semantics: CopySemantics,
         copy_context: &mut GCWorkerCopyContext<Self>,
     ) -> Option<ObjectReference> {
-        mock!(try_copy_object(from, semantics, lifetime!(copy_context)))
+        mock_hrtb!(try_copy_object(from, semantics, copy_context))
     }
 
     fn copy_to(from: ObjectReference, to: ObjectReference, region: Address) -> Address {
@@ -854,7 +860,7 @@ impl<C: MockVMConfig> crate::vm::ReferenceGlue<MockVM<C>> for MockVM<C> {
         mock!(weakref_get_referent(object))
     }
     fn enqueue_references(references: &[ObjectReference], tls: VMWorkerThread) {
-        mock!(weakref_enqueue_references(lifetime!(references), tls))
+        mock_hrtb!(weakref_enqueue_references(references, tls))
     }
 }
 
@@ -869,22 +875,14 @@ impl<C: MockVMConfig> crate::vm::Scanning<MockVM<C>> for MockVM<C> {
         object: ObjectReference,
         slot_visitor: &mut impl SlotVisitor<C::VMSlot>,
     ) {
-        mock!(scan_object(
-            tls,
-            object,
-            lifetime!(slot_visitor as &mut dyn SlotVisitor<C::VMSlot>)
-        ))
+        mock_hrtb!(scan_object(tls, object, slot_visitor))
     }
     fn scan_object_and_trace_edges<OT: ObjectTracer>(
         tls: VMWorkerThread,
         object: ObjectReference,
         object_tracer: &mut OT,
     ) {
-        mock!(scan_object_and_trace_edges(
-            tls,
-            object,
-            lifetime!(object_tracer as &mut dyn ObjectTracer)
-        ))
+        mock_hrtb!(scan_object_and_trace_edges(tls, object, object_tracer))
     }
     fn scan_roots_in_mutator_thread(
         _tls: VMWorkerThread,
@@ -915,8 +913,6 @@ impl<C: MockVMConfig> crate::vm::Scanning<MockVM<C>> for MockVM<C> {
         _worker: &mut GCWorker<Self>,
         _tracer_context: impl ObjectTracerContext<Self>,
     ) -> bool {
-        // let worker: &'static mut GCWorker<Self> = lifetime!(worker);
-        // mock_any!(process_weak_refs(worker, tracer_context))
         warn!("process_weak_refs is not properly mocked. The default implementation does nothing.");
         false
     }
@@ -924,8 +920,6 @@ impl<C: MockVMConfig> crate::vm::Scanning<MockVM<C>> for MockVM<C> {
         _worker: &mut GCWorker<Self>,
         _tracer_context: impl ObjectTracerContext<Self>,
     ) {
-        // let worker: &'static mut GCWorker<Self> = lifetime!(worker);
-        // mock_any!(forward_weak_refs(worker, tracer_context))
         warn!("forward_weak_refs is not properly mocked. The default implementation does nothing.");
     }
 }
@@ -933,26 +927,13 @@ impl<C: MockVMConfig> crate::vm::Scanning<MockVM<C>> for MockVM<C> {
 impl<C: MockVMConfig> MockVM<C> {
     /// Initialize the static mock VM instance.
     pub fn init_mockvm(mockvm: Self) {
-        unsafe {
-            if (*std::ptr::addr_of!(MOCK_VM_INSTANCE)).is_some() {
-                warn!("MockVM is already initialized. Overwriting the existing instance. This may change the behavior of MockVM.");
-            }
-            let boxed: Box<dyn Any> = Box::new(mockvm);
-            MOCK_VM_INSTANCE = Some(NonNull::new_unchecked(Box::into_raw(boxed)));
+        let mut guard = MOCK_VM_INSTANCE
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if guard.is_some() {
+            warn!("MockVM is already initialized. Overwriting the existing instance. This may change the behavior of MockVM.");
         }
-    }
-
-    fn instance() -> &'static mut Self {
-        let ptr = unsafe { MOCK_VM_INSTANCE }
-            .expect("MockVM is not initialized. Use with_mockvm() to run the test.");
-        unsafe { &mut *ptr.as_ptr() }
-            .downcast_mut::<Self>()
-            .unwrap_or_else(|| {
-                panic!(
-                    "The initialized mock VM is not a {}",
-                    std::any::type_name::<Self>()
-                )
-            })
+        *guard = Some(Arc::new(mockvm));
     }
 
     /// Read from the static mock VM instance.
@@ -960,7 +941,22 @@ impl<C: MockVMConfig> MockVM<C> {
     where
         F: FnOnce(&Self) -> R,
     {
-        func(Self::instance())
+        let arc = {
+            let guard = MOCK_VM_INSTANCE
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard
+                .as_ref()
+                .expect("MockVM is not initialized. Use with_mockvm() to run the test.")
+                .clone()
+        };
+        let mock = arc.downcast_ref::<Self>().unwrap_or_else(|| {
+            panic!(
+                "The initialized mock VM is not a {}",
+                std::any::type_name::<Self>()
+            )
+        });
+        func(mock)
     }
 
     /// Write to the static mock VM instance.
@@ -968,7 +964,22 @@ impl<C: MockVMConfig> MockVM<C> {
     where
         F: FnOnce(&mut Self) -> R,
     {
-        func(Self::instance())
+        let mut guard = MOCK_VM_INSTANCE
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let arc = guard
+            .as_mut()
+            .expect("MockVM is not initialized. Use with_mockvm() to run the test.");
+        let any_mut = Arc::get_mut(arc).expect(
+            "Cannot mutably borrow MockVM while another thread or reentrant call holds a read handle",
+        );
+        let mock = any_mut.downcast_mut::<Self>().unwrap_or_else(|| {
+            panic!(
+                "The initialized mock VM is not a {}",
+                std::any::type_name::<Self>()
+            )
+        });
+        func(mock)
     }
 
     /// A test that uses this mock VM type should use this method to wrap the entire test.

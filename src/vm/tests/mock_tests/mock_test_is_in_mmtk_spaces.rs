@@ -17,6 +17,8 @@ pub fn near_zero() {
                 // FIXME: `is_in_mmtk_space` will crash if we pass it an address lower than
                 // DEFAULT_OBJECT_REF_OFFSET.  We need to clarify its requirement on the argument,
                 // and decide if we need to test calling `is_in_mmtk_space` with 0 as an argument.
+                // SAFETY: Constructs a hard-coded low address (`DEFAULT_OBJECT_REF_OFFSET`) without
+                // dereferencing it, testing `is_in_mmtk_spaces` on unmapped low addresses.
                 let addr = unsafe { Address::from_usize(DEFAULT_OBJECT_REF_OFFSET) };
                 assert!(
                     !memory_manager::is_in_mmtk_spaces(
@@ -73,17 +75,13 @@ pub fn large_offsets_aligned() {
         default_setup,
         || {
             SINGLE_OBJECT.with_fixture(|fixture| {
+                let base = fixture.objref.to_raw_address();
                 for log_offset in 12usize..(usize::BITS as usize) {
                     let offset = 1usize << log_offset;
-                    let addr = match fixture
-                        .objref
-                        .to_raw_address()
-                        .as_usize()
-                        .checked_add(offset)
-                    {
-                        Some(n) => unsafe { Address::from_usize(n) },
-                        None => break,
-                    };
+                    if base.as_usize().checked_add(offset).is_none() {
+                        break;
+                    }
+                    let addr = base + offset;
                     // It's just a smoke test.  It is hard to predict if the addr is still in any space,
                     // but it must not crash.
                     let _ = memory_manager::is_in_mmtk_spaces(
@@ -102,17 +100,13 @@ pub fn negative_offsets() {
         default_setup,
         || {
             SINGLE_OBJECT.with_fixture(|fixture| {
+                let base = fixture.objref.to_raw_address();
                 for log_offset in 1usize..(usize::BITS as usize) {
                     let offset = 1usize << log_offset;
-                    let addr = match fixture
-                        .objref
-                        .to_raw_address()
-                        .as_usize()
-                        .checked_sub(offset)
-                    {
-                        Some(n) => unsafe { Address::from_usize(n) },
-                        None => break,
-                    };
+                    if base.as_usize() < offset {
+                        break;
+                    }
+                    let addr = base - offset;
                     // It's just a smoke test.  It is hard to predict if the addr is still in any space,
                     // but it must not crash.
                     let _ = memory_manager::is_in_mmtk_spaces(

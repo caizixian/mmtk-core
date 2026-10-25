@@ -47,14 +47,26 @@ impl ThreadPark {
         state.parked.contains_key(&tid)
     }
 
+    /// Return whether `tid` is registered and currently NOT parked at a safepoint.
+    pub fn is_not_parked(&self, tid: VMThread) -> bool {
+        let state = self.inner.lock.lock().unwrap();
+        state.parked.get(&tid) == Some(&false)
+    }
+
     pub fn number_of_threads(&self) -> usize {
         let state = self.inner.lock.lock().unwrap();
         state.parked.len()
     }
 
-    pub fn all_threads(&self) -> Vec<VMThread> {
+    /// Return all registered threads, asserting that every registered thread is currently parked.
+    pub fn all_parked_threads(&self) -> Vec<VMThread> {
         let state = self.inner.lock.lock().unwrap();
-        state.parked.keys().cloned().collect()
+        assert!(
+            state.parked.values().all(|&is_parked| is_parked),
+            "All registered threads in {} must be parked before GC accesses mutators",
+            self.name
+        );
+        state.parked.keys().copied().collect()
     }
 
     /// Park the current thread (set its state = parked and wait for unpark_all()).

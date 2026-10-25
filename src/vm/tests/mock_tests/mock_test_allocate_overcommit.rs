@@ -14,7 +14,7 @@ pub fn allocate_overcommit() {
         default_setup,
         || {
             const MB: usize = 1024 * 1024;
-            let fixture = MutatorFixture::create_with_heapsize(MB);
+            let mut fixture = MutatorFixture::create_with_heapsize(MB);
 
             if *fixture.mmtk().get_plan().options().plan == crate::util::options::PlanSelector::NoGC
             {

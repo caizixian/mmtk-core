@@ -177,6 +177,10 @@ pub struct SimpleSlot {
 impl SimpleSlot {
     /// Create a simple slot from an address.
     ///
+    /// Note: Under the [`Slot`] VM binding contract, any [`SimpleSlot`] passed to [`Slot::load`]
+    /// or [`Slot::store`] must point to a live, initialized, word-aligned `Atomic<Address>` slot
+    /// for the duration of the GC/barrier operation.
+    ///
     /// Arguments:
     /// *   `address`: The address in memory where an `ObjectReference` is stored.
     pub fn from_address(address: Address) -> Self {
@@ -193,16 +197,28 @@ impl SimpleSlot {
     }
 }
 
+// SAFETY: `SimpleSlot` is a handle to a VM memory slot accessed exclusively through lock-free
+// `Atomic<Address>` operations; transferring or sharing the handle across GC worker threads is
+// thread-safe whenever the VM upholds the `Slot` memory validity contract.
 unsafe impl Send for SimpleSlot {}
+// SAFETY: Shared references `&SimpleSlot` only perform atomic loads and stores on `Atomic<Address>`,
+// which are free of data races when called concurrently by multiple GC workers.
 unsafe impl Sync for SimpleSlot {}
 
 impl Slot for SimpleSlot {
     fn load(&self) -> Option<ObjectReference> {
+        // SAFETY: Under MMTk's `Slot` VM binding contract (frozen public safe trait API),
+        // `self.slot_addr` is non-null, aligned to `align_of::<Atomic<Address>>()`, and points to
+        // live, initialized slot memory valid for atomic word reads during scanning/barriers.
         let addr = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
         ObjectReference::from_raw_address(addr)
     }
 
     fn store(&self, object: ObjectReference) {
+        // SAFETY: Under MMTk's `Slot` VM binding contract (frozen public safe trait API),
+        // `self.slot_addr` is non-null, aligned to `align_of::<Atomic<Address>>()`, and points to
+        // live, writable slot memory; using an atomic store avoids data races when multiple GC
+        // workers trace duplicate edges (`may_trace_duplicate_edges`).
         unsafe { (*self.slot_addr).store(object.to_raw_address(), atomic::Ordering::Relaxed) }
     }
 }
@@ -219,12 +235,11 @@ impl Slot for SimpleSlot {
 /// `SimpleSlot`.
 impl Slot for Address {
     fn load(&self) -> Option<ObjectReference> {
-        let addr = unsafe { Address::load(*self) };
-        ObjectReference::from_raw_address(addr)
+        SimpleSlot::from_address(*self).load()
     }
 
     fn store(&self, object: ObjectReference) {
-        unsafe { Address::store(*self, object) }
+        SimpleSlot::from_address(*self).store(object)
     }
 
     fn to_address(&self) -> Address {
@@ -311,13 +326,14 @@ impl MemorySlice for Range<Address> {
             0,
             "bytes are not a multiple of words"
         );
-        // Raw memory copy
-        unsafe {
-            let words = tgt.bytes() >> LOG_BYTES_IN_ADDRESS;
-            let src = src.start().to_ptr::<usize>();
-            let tgt = tgt.start().to_mut_ptr::<usize>();
-            std::ptr::copy(src, tgt, words)
-        }
+        let bytes = tgt.bytes();
+        let src = src.start().to_ptr::<u8>();
+        let tgt = tgt.start().to_mut_ptr::<u8>();
+        // SAFETY: Under MMTk's `MemorySlice` VM binding contract (frozen public safe trait API),
+        // `src` and `tgt` represent valid, initialized, equal-length (`bytes`) heap memory ranges
+        // with read provenance on `src` and exclusive write provenance on `tgt`. Copying as `u8`
+        // requires only 1-byte alignment and handles potentially overlapping ranges via `ptr::copy`.
+        unsafe { std::ptr::copy(src, tgt, bytes) }
     }
 }
 
@@ -371,6 +387,11 @@ mod tests {
         let src: Vec<usize> = (0..32).collect();
         let src_slice = Address::from_ptr(&src[0])..Address::from_ptr(&src[0]) + src.len();
         for (i, v) in src_slice.iter_slots().enumerate() {
+            // SAFETY: `src` holds `32 * BYTES_IN_ADDRESS` initialized, `usize`-aligned bytes and
+            // lives without mutation across the loop. `src_slice` spans the first `32` bytes
+            // (`32 / BYTES_IN_ADDRESS` words, which is `< 32` elements), and `AddressRangeIterator`
+            // steps by `BYTES_IN_ADDRESS`, so every `v` is non-null, `usize`-aligned, and points to
+            // initialized element `src[i]`.
             assert_eq!(i, unsafe { v.load::<usize>() })
         }
     }

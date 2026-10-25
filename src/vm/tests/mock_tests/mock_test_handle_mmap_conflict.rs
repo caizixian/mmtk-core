@@ -9,6 +9,9 @@ pub fn test_handle_mmap_conflict() {
     with_mockvm(
         default_setup,
         || {
+            // SAFETY: Hard-coded page-aligned test virtual address passed to `OS::dzmmap`, which
+            // uses non-replacing `MAP_FIXED_NOREPLACE` (`MmapStrategy::TEST`) rather than
+            // dereferencing existing mappings.
             let start = unsafe { Address::from_usize(0x100_0000) };
             let one_megabyte = 1000000;
             let mmap1_res = OS::dzmmap(start, one_megabyte, MmapStrategy::TEST, mmap_anno_test!());

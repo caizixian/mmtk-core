@@ -39,7 +39,7 @@ pub fn allocate_oom_unwind_leaves_inconsistent_state() {
             const HEAP: usize = 4 * MB;
             const CHUNK: usize = 4096;
 
-            let fixture = MutatorFixture::create_with_heapsize(HEAP);
+            let mut fixture = MutatorFixture::create_with_heapsize(HEAP);
             let mmtk = fixture.mmtk();
 
             // The heap is filled with `at_safepoint: false` allocations, which return immediately (success
@@ -90,10 +90,12 @@ pub fn allocate_oom_unwind_leaves_inconsistent_state() {
             // `thrown_oom` is only set after the callback returns, so it must still be unset.
             let selector =
                 memory_manager::get_allocator_mapping(mmtk, AllocationSemantics::Default);
-            let thrown_oom = unsafe { fixture.mutator().allocator(selector) }
-                .get_context()
-                .thrown_oom
-                .load(Ordering::Relaxed);
+            let mutator = fixture.mutator();
+            // SAFETY: `selector` was returned by `memory_manager::get_allocator_mapping` for
+            // `AllocationSemantics::Default` on the same `mmtk` instance `mutator` is bound to,
+            // so the corresponding allocator slot in `mutator` is valid and initialized.
+            let allocator = unsafe { mutator.allocator(selector) };
+            let thrown_oom = allocator.get_context().thrown_oom.load(Ordering::Relaxed);
             assert!(
                 !thrown_oom,
                 "thrown_oom should not be left set after a failed OOM handling attempt"

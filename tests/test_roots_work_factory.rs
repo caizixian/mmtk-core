@@ -24,11 +24,11 @@ impl MockScanning {
     }
 }
 
-static SLOTS: [Address; 3] = [
-    unsafe { Address::from_usize(0x8) },
-    unsafe { Address::from_usize(0x8) },
-    unsafe { Address::from_usize(0x8) },
-];
+static DUMMY_ROOTS: [usize; 3] = [0; 3];
+
+fn dummy_slots() -> [Address; 3] {
+    std::array::from_fn(|i| Address::from_ref(&DUMMY_ROOTS[i]))
+}
 
 /// A factory with a plain value, a boxed value and a shared data with Arc.
 #[derive(Clone)]
@@ -42,7 +42,7 @@ struct MockFactory {
 
 impl RootsWorkFactory<Address> for MockFactory {
     fn create_process_roots_work_with_root_kind(&mut self, slots: Vec<Address>, _kind: RootKind) {
-        assert_eq!(slots, SLOTS);
+        assert_eq!(slots, dummy_slots());
         match self.round {
             1 => {
                 assert_eq!(self.v, "y");
@@ -85,7 +85,8 @@ fn test_scan() {
         a: Arc::new(Mutex::new("a".to_string())),
     };
     let mut scanning = MockScanning::default();
-    scanning.add_roots(&SLOTS);
+    let slots = dummy_slots();
+    scanning.add_roots(&slots);
     scanning.mock_scan_roots(factory);
 }
 
@@ -105,8 +106,9 @@ fn test_clone() {
     *factory2.a.lock().unwrap() = "a2".to_string();
 
     let mut scanning = MockScanning::default();
+    let slots = dummy_slots();
 
-    scanning.add_roots(&SLOTS);
+    scanning.add_roots(&slots);
     scanning.mock_scan_roots(factory1);
     scanning.mock_scan_roots(factory2);
 }

@@ -22,7 +22,7 @@ mod simple_slots {
             default_setup,
             || {
                 FIXTURE.with_fixture(|fixture| {
-                    let mut rust_slot: Atomic<ObjectReference> = Atomic::new(fixture.objref1);
+                    let rust_slot: Atomic<ObjectReference> = Atomic::new(fixture.objref1);
 
                     let slot = SimpleSlot::from_address(Address::from_ref(&rust_slot));
                     let objref = slot.load();
@@ -40,7 +40,7 @@ mod simple_slots {
             default_setup,
             || {
                 FIXTURE.with_fixture(|fixture| {
-                    let mut rust_slot: Atomic<ObjectReference> = Atomic::new(fixture.objref1);
+                    let rust_slot: Atomic<ObjectReference> = Atomic::new(fixture.objref1);
 
                     let slot = SimpleSlot::from_address(Address::from_ref(&rust_slot));
                     slot.store(fixture.objref2);
@@ -58,40 +58,64 @@ mod simple_slots {
 #[cfg(target_pointer_width = "64")]
 mod compressed_oop {
     use super::*;
+    use std::fmt;
+    use std::hash::{Hash, Hasher};
 
     /// This represents a location that holds a 32-bit pointer on a 64-bit machine.
     ///
     /// OpenJDK uses this kind of slot to store compressed OOPs on 64-bit machines.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-    pub struct CompressedOopSlot {
-        slot_addr: *mut Atomic<u32>,
+    #[derive(Clone, Copy)]
+    pub struct CompressedOopSlot<'a> {
+        slot: &'a Atomic<u32>,
     }
 
-    unsafe impl Send for CompressedOopSlot {}
-    unsafe impl Sync for CompressedOopSlot {}
-
-    impl CompressedOopSlot {
-        pub fn from_address(address: Address) -> Self {
-            Self {
-                slot_addr: address.to_mut_ptr(),
-            }
+    impl fmt::Debug for CompressedOopSlot<'_> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("CompressedOopSlot")
+                .field("slot", &std::ptr::from_ref(self.slot))
+                .finish()
         }
+    }
+
+    impl PartialEq for CompressedOopSlot<'_> {
+        fn eq(&self, other: &Self) -> bool {
+            std::ptr::eq(self.slot, other.slot)
+        }
+    }
+
+    impl Eq for CompressedOopSlot<'_> {}
+
+    impl Hash for CompressedOopSlot<'_> {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            std::ptr::hash(self.slot, state);
+        }
+    }
+
+    impl<'a> CompressedOopSlot<'a> {
+        pub fn from_atomic(slot: &'a Atomic<u32>) -> Self {
+            Self { slot }
+        }
+
         pub fn as_address(&self) -> Address {
-            Address::from_mut_ptr(self.slot_addr)
+            Address::from_ref(self.slot)
         }
     }
 
-    impl Slot for CompressedOopSlot {
+    impl Slot for CompressedOopSlot<'_> {
         fn load(&self) -> Option<ObjectReference> {
-            let compressed = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
+            let compressed = self.slot.load(atomic::Ordering::Relaxed);
             let expanded = (compressed as usize) << 3;
-            ObjectReference::from_raw_address(unsafe { Address::from_usize(expanded) })
+            // SAFETY: Constructing a decoded `Address` from the shifted 32-bit compressed OOP
+            // bit-pattern does not dereference memory; `ObjectReference::from_raw_address` returns
+            // `None` if `expanded` is zero.
+            let raw_addr = unsafe { Address::from_usize(expanded) };
+            ObjectReference::from_raw_address(raw_addr)
         }
 
         fn store(&self, object: ObjectReference) {
             let expanded = object.to_raw_address().as_usize();
             let compressed = (expanded >> 3) as u32;
-            unsafe { (*self.slot_addr).store(compressed, atomic::Ordering::Relaxed) }
+            self.slot.store(compressed, atomic::Ordering::Relaxed);
         }
     }
 
@@ -104,12 +128,14 @@ mod compressed_oop {
         // Note: We cannot guarantee GC will allocate an object in the low address region.
         // So we make up addresses just for testing the bit operations of compressed OOP slots.
         let compressed1 = (COMPRESSABLE_ADDR1 >> 3) as u32;
-        let objref1 =
-            ObjectReference::from_raw_address(unsafe { Address::from_usize(COMPRESSABLE_ADDR1) });
+        // SAFETY: `COMPRESSABLE_ADDR1` is a non-zero, 8-byte-aligned synthetic address used solely
+        // to test 3-bit shift encoding/decoding without dereferencing the referent.
+        let addr1 = unsafe { Address::from_usize(COMPRESSABLE_ADDR1) };
+        let objref1 = ObjectReference::from_raw_address(addr1);
 
-        let mut rust_slot: Atomic<u32> = Atomic::new(compressed1);
+        let rust_slot: Atomic<u32> = Atomic::new(compressed1);
 
-        let slot = CompressedOopSlot::from_address(Address::from_ref(&rust_slot));
+        let slot = CompressedOopSlot::from_atomic(&rust_slot);
         let objref = slot.load();
 
         assert_eq!(objref, objref1);
@@ -121,13 +147,14 @@ mod compressed_oop {
         // So we make up addresses just for testing the bit operations of compressed OOP slots.
         let compressed1 = (COMPRESSABLE_ADDR1 >> 3) as u32;
         let compressed2 = (COMPRESSABLE_ADDR2 >> 3) as u32;
-        let objref2 =
-            ObjectReference::from_raw_address(unsafe { Address::from_usize(COMPRESSABLE_ADDR2) })
-                .unwrap();
+        // SAFETY: `COMPRESSABLE_ADDR2` is a non-zero, 8-byte-aligned synthetic address used solely
+        // to test 3-bit shift encoding/decoding without dereferencing the referent.
+        let addr2 = unsafe { Address::from_usize(COMPRESSABLE_ADDR2) };
+        let objref2 = ObjectReference::from_raw_address(addr2).unwrap();
 
-        let mut rust_slot: Atomic<u32> = Atomic::new(compressed1);
+        let rust_slot: Atomic<u32> = Atomic::new(compressed1);
 
-        let slot = CompressedOopSlot::from_address(Address::from_ref(&rust_slot));
+        let slot = CompressedOopSlot::from_atomic(&rust_slot);
         slot.store(objref2);
         assert_eq!(rust_slot.load(Ordering::SeqCst), compressed2);
 
@@ -138,36 +165,53 @@ mod compressed_oop {
 
 mod offset_slot {
     use super::*;
+    use std::fmt;
+    use std::hash::{Hash, Hasher};
 
     /// This represents a slot that holds a pointer to the *middle* of an object, and the offset is known.
     ///
     /// Julia uses this trick to facilitate deleting array elements from the front.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-    pub struct OffsetSlot {
-        slot_addr: *mut Atomic<Address>,
+    #[derive(Clone, Copy)]
+    pub struct OffsetSlot<'a> {
+        slot: &'a Atomic<Address>,
         offset: usize,
     }
 
-    unsafe impl Send for OffsetSlot {}
-    unsafe impl Sync for OffsetSlot {}
+    impl fmt::Debug for OffsetSlot<'_> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("OffsetSlot")
+                .field("slot", &std::ptr::from_ref(self.slot))
+                .field("offset", &self.offset)
+                .finish()
+        }
+    }
 
-    impl OffsetSlot {
-        pub fn new_no_offset(address: Address) -> Self {
-            Self {
-                slot_addr: address.to_mut_ptr(),
-                offset: 0,
-            }
+    impl PartialEq for OffsetSlot<'_> {
+        fn eq(&self, other: &Self) -> bool {
+            std::ptr::eq(self.slot, other.slot) && self.offset == other.offset
+        }
+    }
+
+    impl Eq for OffsetSlot<'_> {}
+
+    impl Hash for OffsetSlot<'_> {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            std::ptr::hash(self.slot, state);
+            self.offset.hash(state);
+        }
+    }
+
+    impl<'a> OffsetSlot<'a> {
+        pub fn new_no_offset(slot: &'a Atomic<Address>) -> Self {
+            Self { slot, offset: 0 }
         }
 
-        pub fn new_with_offset(address: Address, offset: usize) -> Self {
-            Self {
-                slot_addr: address.to_mut_ptr(),
-                offset,
-            }
+        pub fn new_with_offset(slot: &'a Atomic<Address>, offset: usize) -> Self {
+            Self { slot, offset }
         }
 
         pub fn slot_address(&self) -> Address {
-            Address::from_mut_ptr(self.slot_addr)
+            Address::from_ref(self.slot)
         }
 
         pub fn offset(&self) -> usize {
@@ -175,9 +219,9 @@ mod offset_slot {
         }
     }
 
-    impl Slot for OffsetSlot {
+    impl Slot for OffsetSlot<'_> {
         fn load(&self) -> Option<ObjectReference> {
-            let middle = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
+            let middle = self.slot.load(atomic::Ordering::Relaxed);
             let begin = middle - self.offset;
             ObjectReference::from_raw_address(begin)
         }
@@ -190,7 +234,7 @@ mod offset_slot {
             // if multiple GC workers call `store` with the same `object` value,
             // they always compute to the same `middle` value,
             // and it is stored via a single atomic store.
-            unsafe { (*self.slot_addr).store(middle, atomic::Ordering::Relaxed) }
+            self.slot.store(middle, atomic::Ordering::Relaxed);
         }
     }
 
@@ -203,9 +247,9 @@ mod offset_slot {
             || {
                 FIXTURE.with_fixture(|fixture| {
                     let addr1 = fixture.objref1.to_raw_address();
-                    let mut rust_slot: Atomic<Address> = Atomic::new(addr1 + OFFSET);
+                    let rust_slot: Atomic<Address> = Atomic::new(addr1 + OFFSET);
 
-                    let slot = OffsetSlot::new_with_offset(Address::from_ref(&rust_slot), OFFSET);
+                    let slot = OffsetSlot::new_with_offset(&rust_slot, OFFSET);
                     let objref = slot.load();
 
                     assert_eq!(objref, Some(fixture.objref1));
@@ -223,9 +267,9 @@ mod offset_slot {
                 FIXTURE.with_fixture(|fixture| {
                     let addr1 = fixture.objref1.to_raw_address();
                     let addr2 = fixture.objref2.to_raw_address();
-                    let mut rust_slot: Atomic<Address> = Atomic::new(addr1 + OFFSET);
+                    let rust_slot: Atomic<Address> = Atomic::new(addr1 + OFFSET);
 
-                    let slot = OffsetSlot::new_with_offset(Address::from_ref(&rust_slot), OFFSET);
+                    let slot = OffsetSlot::new_with_offset(&rust_slot, OFFSET);
                     slot.store(fixture.objref2);
                     assert_eq!(rust_slot.load(Ordering::SeqCst), addr2 + OFFSET);
 
@@ -240,34 +284,56 @@ mod offset_slot {
 
 mod tagged_slot {
     use super::*;
+    use std::fmt;
+    use std::hash::{Hash, Hasher};
 
     /// This slot represents a slot that holds a tagged pointer.
     /// The last two bits are tag bits and are not part of the object reference.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-    pub struct TaggedSlot {
-        slot_addr: *mut Atomic<usize>,
+    #[derive(Clone, Copy)]
+    pub struct TaggedSlot<'a> {
+        slot: &'a Atomic<usize>,
     }
 
-    unsafe impl Send for TaggedSlot {}
-    unsafe impl Sync for TaggedSlot {}
+    impl fmt::Debug for TaggedSlot<'_> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("TaggedSlot")
+                .field("slot", &std::ptr::from_ref(self.slot))
+                .finish()
+        }
+    }
 
-    impl TaggedSlot {
+    impl PartialEq for TaggedSlot<'_> {
+        fn eq(&self, other: &Self) -> bool {
+            std::ptr::eq(self.slot, other.slot)
+        }
+    }
+
+    impl Eq for TaggedSlot<'_> {}
+
+    impl Hash for TaggedSlot<'_> {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            std::ptr::hash(self.slot, state);
+        }
+    }
+
+    impl<'a> TaggedSlot<'a> {
         // The DummyVM has OBJECT_REF_OFFSET = 4.
         // Using a two-bit tag should be safe on both 32-bit and 64-bit platforms.
         const TAG_BITS_MASK: usize = 0b11;
 
-        pub fn new(address: Address) -> Self {
-            Self {
-                slot_addr: address.to_mut_ptr(),
-            }
+        pub fn new(slot: &'a Atomic<usize>) -> Self {
+            Self { slot }
         }
     }
 
-    impl Slot for TaggedSlot {
+    impl Slot for TaggedSlot<'_> {
         fn load(&self) -> Option<ObjectReference> {
-            let tagged = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
+            let tagged = self.slot.load(atomic::Ordering::Relaxed);
             let untagged = tagged & !Self::TAG_BITS_MASK;
-            ObjectReference::from_raw_address(unsafe { Address::from_usize(untagged) })
+            // SAFETY: Constructing a decoded `Address` after stripping low tag bits does not
+            // dereference memory; `ObjectReference::from_raw_address` handles zero cleanly.
+            let raw_addr = unsafe { Address::from_usize(untagged) };
+            ObjectReference::from_raw_address(raw_addr)
         }
 
         // Note on thread-safety: `TaggedSlot::store` doesn't modify the tag bits.
@@ -275,10 +341,10 @@ mod tagged_slot {
         // they will apply the same tag bits, resulting in the same `new_tagged` value.
         // It is then stored via a single atomic store.
         fn store(&self, object: ObjectReference) {
-            let old_tagged = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
+            let old_tagged = self.slot.load(atomic::Ordering::Relaxed);
             let new_untagged = object.to_raw_address().as_usize();
             let new_tagged = new_untagged | (old_tagged & Self::TAG_BITS_MASK);
-            unsafe { (*self.slot_addr).store(new_tagged, atomic::Ordering::Relaxed) }
+            self.slot.store(new_tagged, atomic::Ordering::Relaxed);
         }
     }
 
@@ -291,13 +357,13 @@ mod tagged_slot {
             default_setup,
             || {
                 FIXTURE.with_fixture(|fixture| {
-                    let mut rust_slot1: Atomic<usize> =
+                    let rust_slot1: Atomic<usize> =
                         Atomic::new(fixture.objref1.to_raw_address().as_usize() | TAG1);
-                    let mut rust_slot2: Atomic<usize> =
+                    let rust_slot2: Atomic<usize> =
                         Atomic::new(fixture.objref1.to_raw_address().as_usize() | TAG2);
 
-                    let slot1 = TaggedSlot::new(Address::from_ref(&rust_slot1));
-                    let slot2 = TaggedSlot::new(Address::from_ref(&rust_slot2));
+                    let slot1 = TaggedSlot::new(&rust_slot1);
+                    let slot2 = TaggedSlot::new(&rust_slot2);
                     let objref1 = slot1.load();
                     let objref2 = slot2.load();
 
@@ -316,13 +382,13 @@ mod tagged_slot {
             default_setup,
             || {
                 FIXTURE.with_fixture(|fixture| {
-                    let mut rust_slot1: Atomic<usize> =
+                    let rust_slot1: Atomic<usize> =
                         Atomic::new(fixture.objref1.to_raw_address().as_usize() | TAG1);
-                    let mut rust_slot2: Atomic<usize> =
+                    let rust_slot2: Atomic<usize> =
                         Atomic::new(fixture.objref1.to_raw_address().as_usize() | TAG2);
 
-                    let slot1 = TaggedSlot::new(Address::from_ref(&rust_slot1));
-                    let slot2 = TaggedSlot::new(Address::from_ref(&rust_slot2));
+                    let slot1 = TaggedSlot::new(&rust_slot1);
+                    let slot2 = TaggedSlot::new(&rust_slot2);
                     slot1.store(fixture.objref2);
                     slot2.store(fixture.objref2);
 
@@ -362,18 +428,15 @@ mod mixed {
     /// If a VM supports multiple kinds of slots, we can use tagged union to represent all of them.
     /// This is for testing, only.  A Rust `enum` may not be the most efficient representation.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-    pub enum DummyVMSlot {
+    pub enum DummyVMSlot<'a> {
         Simple(SimpleSlot),
         #[cfg(target_pointer_width = "64")]
-        Compressed(CompressedOopSlot),
-        Offset(OffsetSlot),
-        Tagged(TaggedSlot),
+        Compressed(CompressedOopSlot<'a>),
+        Offset(OffsetSlot<'a>),
+        Tagged(TaggedSlot<'a>),
     }
 
-    unsafe impl Send for DummyVMSlot {}
-    unsafe impl Sync for DummyVMSlot {}
-
-    impl Slot for DummyVMSlot {
+    impl Slot for DummyVMSlot<'_> {
         fn load(&self) -> Option<ObjectReference> {
             match self {
                 DummyVMSlot::Simple(e) => e.load(),
@@ -415,13 +478,13 @@ mod mixed {
                     let addr1 = fixture.objref1.to_raw_address();
                     let addr2 = fixture.objref2.to_raw_address();
 
-                    let mut rust_slot1: Atomic<ObjectReference> = Atomic::new(fixture.objref1);
-                    let mut rust_slot3: Atomic<Address> = Atomic::new(addr1 + OFFSET);
-                    let mut rust_slot4: Atomic<usize> = Atomic::new(addr1.as_usize() | TAG1);
+                    let rust_slot1: Atomic<ObjectReference> = Atomic::new(fixture.objref1);
+                    let rust_slot3: Atomic<Address> = Atomic::new(addr1 + OFFSET);
+                    let rust_slot4: Atomic<usize> = Atomic::new(addr1.as_usize() | TAG1);
 
                     let slot1 = SimpleSlot::from_address(Address::from_ref(&rust_slot1));
-                    let slot3 = OffsetSlot::new_with_offset(Address::from_ref(&rust_slot3), OFFSET);
-                    let slot4 = TaggedSlot::new(Address::from_ref(&rust_slot4));
+                    let slot3 = OffsetSlot::new_with_offset(&rust_slot3, OFFSET);
+                    let slot4 = TaggedSlot::new(&rust_slot4);
 
                     let ds1 = DummyVMSlot::Simple(slot1);
                     let ds3 = DummyVMSlot::Offset(slot3);
