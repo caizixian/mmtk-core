@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 pub mod heap_parameters;
 pub mod vm_layout;
 
@@ -5,7 +7,7 @@ mod mmapper;
 pub use self::mmapper::Mmapper;
 
 mod map;
-pub(crate) use self::map::CreateFreeListResult;
+pub(crate) use self::map::AllocatedChunkRegion;
 pub use self::map::VMMap;
 use self::vm_layout::vm_layout;
 mod map32;

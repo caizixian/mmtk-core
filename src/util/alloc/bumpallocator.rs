@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use std::sync::Arc;
 
 use crate::util::Address;
@@ -21,8 +23,9 @@ pub struct BumpAllocator<VM: VMBinding> {
     pub tls: VMThread,
     /// Bump-pointer itself.
     pub bump_pointer: BumpPointer,
-    /// [`Space`](src/policy/space/Space) instance associated with this allocator instance.
-    space: &'static dyn Space<VM>,
+    /// [`Space`](src/policy/space/Space) instance associated with this allocator instance,
+    /// or `None` for unconfigured slots in [`super::allocators::Allocators`].
+    space: Option<&'static dyn Space<VM>>,
     pub(in crate::util::alloc) context: Arc<AllocatorContext<VM>>,
 }
 
@@ -45,6 +48,50 @@ impl BumpPointer {
     pub fn reset(&mut self, start: Address, end: Address) {
         self.cursor = start;
         self.limit = end;
+    }
+
+    /// Set `cursor = start` and encode `remaining_bytes` into `limit` (`< cursor`) so fast-path
+    /// `cursor + size > limit` trips into `alloc_slow_once_precise_stress`.
+    #[inline]
+    pub(crate) fn reset_for_stress_test(&mut self, start: Address, remaining_bytes: usize) {
+        assert!(
+            remaining_bytes == 0 || start.as_usize() > remaining_bytes,
+            "Stress-test bump buffer start ({}) must exceed remaining_bytes ({})",
+            start,
+            remaining_bytes
+        );
+        self.cursor = start;
+        // SAFETY: `Address::from_usize` wraps `remaining_bytes` as an integer sentinel (`< cursor`
+        // when non-zero) without Rust-level UB; this sentinel is never dereferenced as a pointer
+        // and is restored via `cursor + limit.as_usize()`.
+        self.limit = unsafe { Address::from_usize(remaining_bytes) };
+    }
+
+    /// Fold an active `[cursor, limit)` buffer into a stress-test sentinel limit (`limit - cursor`).
+    /// No-op if `limit <= cursor` (already folded or empty).
+    #[inline]
+    pub(crate) fn fold_limit_for_stress_test(&mut self) -> Option<(Address, Address)> {
+        if self.cursor < self.limit {
+            let old_limit = self.limit;
+            let remaining = self.limit - self.cursor;
+            self.reset_for_stress_test(self.cursor, remaining);
+            Some((old_limit, self.limit))
+        } else {
+            None
+        }
+    }
+
+    /// Restore a stress-folded `[cursor, limit)` buffer back to `cursor + limit.as_usize()`.
+    /// No-op if `limit >= cursor` (already restored or empty).
+    #[inline]
+    pub(crate) fn restore_limit_for_stress_test(&mut self) -> Option<(Address, Address)> {
+        if self.limit < self.cursor {
+            let old_limit = self.limit;
+            self.limit = self.cursor + self.limit.as_usize();
+            Some((old_limit, self.limit))
+        } else {
+            None
+        }
     }
 }
 
@@ -71,7 +118,7 @@ impl<VM: VMBinding> BumpAllocator<VM> {
 
     pub(crate) fn rebind(&mut self, space: &'static dyn Space<VM>) {
         self.reset();
-        self.space = space;
+        self.space = Some(space);
     }
 }
 
@@ -82,7 +129,7 @@ use super::allocator::AllocatorContext;
 
 impl<VM: VMBinding> Allocator<VM> for BumpAllocator<VM> {
     fn get_space(&self) -> &'static dyn Space<VM> {
-        self.space
+        self.space.expect("BumpAllocator slot is not initialized")
     }
 
     fn get_context(&self) -> &AllocatorContext<VM> {
@@ -175,6 +222,23 @@ impl<VM: VMBinding> Allocator<VM> for BumpAllocator<VM> {
 }
 
 impl<VM: VMBinding> BumpAllocator<VM> {
+    pub(in crate::util::alloc) fn new_uninit(
+        tls: VMThread,
+        context: Arc<AllocatorContext<VM>>,
+    ) -> Self {
+        BumpAllocator {
+            tls,
+            bump_pointer: BumpPointer::default(),
+            space: None,
+            context,
+        }
+    }
+
+    #[inline(always)]
+    pub(in crate::util::alloc) fn is_initialized(&self) -> bool {
+        self.space.is_some()
+    }
+
     pub(crate) fn new(
         tls: VMThread,
         space: &'static dyn Space<VM>,
@@ -183,7 +247,7 @@ impl<VM: VMBinding> BumpAllocator<VM> {
         BumpAllocator {
             tls,
             bump_pointer: BumpPointer::default(),
-            space,
+            space: Some(space),
             context,
         }
     }
@@ -200,7 +264,7 @@ impl<VM: VMBinding> BumpAllocator<VM> {
         }
 
         let block_size = (size + BLOCK_MASK) & (!BLOCK_MASK);
-        let acquired_start = self.space.acquire(
+        let acquired_start = self.get_space().acquire(
             self.tls,
             bytes_to_pages_up(block_size),
             self.get_context().get_alloc_options(),
@@ -222,12 +286,8 @@ impl<VM: VMBinding> BumpAllocator<VM> {
                 // manipulating the limit as below.
                 // The assumption here is that we use an address range such that
                 // cursor > block_size always.
-                // SAFETY: `Address::from_usize` simply wraps `block_size` without Rust-level UB.
-                // This fake limit is never dereferenced: it is strictly smaller than `acquired_start`
-                // so fastpath `cursor + size > limit` triggers slowpath entry, where
-                // `alloc_slow_once_precise_stress` recovers the real limit via `cursor + limit.as_usize()`.
-                let stress_limit = unsafe { Address::from_usize(block_size) };
-                self.set_limit(acquired_start, stress_limit);
+                self.bump_pointer
+                    .reset_for_stress_test(acquired_start, block_size);
                 // Note that we have just acquired a new block so we know that we don't have to go
                 // through the entire allocation sequence again, we can directly call the slow path
                 // allocation.

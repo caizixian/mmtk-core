@@ -1,10 +1,12 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use crate::util::address::Address;
 use crate::util::freelist::FreeList;
 use crate::util::opaque_pointer::*;
 use std::sync::Mutex;
 
 use super::layout::vm_layout::BYTES_IN_CHUNK;
-use super::layout::VMMap;
+use super::layout::{AllocatedChunkRegion, VMMap};
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::heap::PageAccounting;
 use crate::vm::VMBinding;
@@ -23,8 +25,6 @@ pub trait PageResource<VM: VMBinding>: 'static {
         self.alloc_pages(space_descriptor, reserved_pages, required_pages, tls)
     }
 
-    // XXX: In the original code reserve_pages & clear_request explicitly
-    //      acquired a lock.
     fn reserve_pages(&self, pages: usize) -> usize {
         self.common().accounting.reserve(pages);
         pages
@@ -59,16 +59,8 @@ pub trait PageResource<VM: VMBinding>: 'static {
         tls: VMThread,
     ) -> Result<PRAllocResult, PRAllocFail>;
 
-    /**
-     * Commit pages to the page budget.  This is called after
-     * successfully determining that the request can be satisfied by
-     * both the page budget and virtual memory.  This simply accounts
-     * for the discrepancy between <code>committed</code> and
-     * <code>reserved</code> while the request was pending.
-     *
-     * This *MUST* be called by each PageResource during the
-     * allocPages, and the caller must hold the lock.
-     */
+    /// Commit pages to the page budget. Called after determining that the request can be satisfied
+    /// by both the page budget and virtual memory, while holding the page resource lock.
     fn commit_pages(&self, reserved_pages: usize, actual_pages: usize, _tls: VMThread) {
         let delta = actual_pages - reserved_pages;
         self.common().accounting.reserve(delta);
@@ -83,18 +75,7 @@ pub trait PageResource<VM: VMBinding>: 'static {
         self.common().accounting.get_committed_pages()
     }
 
-    /// Return the number of available physical pages by this resource. This includes all pages
-    /// currently unused by this resource. If the resource is using a discontiguous space, it also
-    /// includes the currently unassigned discontiguous space.
-    ///
-    /// Note: This just considers physical pages (i.e. virtual memory pages allocated for use by
-    /// this resource). This calculation is orthogonal to and does not consider any restrictions on
-    /// the number of pages this resource may actually use at any time (i.e. the number of
-    /// committed and reserved pages).
-    ///
-    /// Note: The calculation is made on the assumption that all space that could be assigned to
-    /// this resource would be assigned to this resource (i.e. the unused discontiguous space could
-    /// just as likely be assigned to another competing resource).
+    /// Return the number of available physical pages by this resource.
     fn get_available_physical_pages(&self) -> usize;
 
     fn common(&self) -> &CommonPageResource;
@@ -103,12 +84,7 @@ pub trait PageResource<VM: VMBinding>: 'static {
         self.common().vm_map
     }
 
-    // Some page resources need to record the start address.
-    // This method will be called after the start address of the discontigous region is determined.
-    // `start` is the computed start address.  By default, this does nothing.
-    fn update_discontiguous_start(&mut self, _start: Address) {
-        // Do nothing.
-    }
+    fn update_discontiguous_start(&mut self, _start: Address) {}
 }
 
 pub struct PRAllocResult {
@@ -125,108 +101,127 @@ pub struct CommonPageResource {
     pub growable: bool,
 
     pub vm_map: &'static dyn VMMap,
-    head_discontiguous_region: Mutex<Address>,
+    /// Owned chunk regions allocated via `grow_discontiguous_space` in chronological order
+    /// (newest region at the back; reverse iteration yields newest-to-oldest order).
+    discontiguous_regions: Mutex<Vec<AllocatedChunkRegion>>,
 }
 
 impl CommonPageResource {
     pub fn new(contiguous: bool, growable: bool, vm_map: &'static dyn VMMap) -> CommonPageResource {
         CommonPageResource {
             accounting: PageAccounting::new(),
-
             contiguous,
             growable,
             vm_map,
-
-            head_discontiguous_region: Mutex::new(Address::ZERO),
+            discontiguous_regions: Mutex::new(Vec::new()),
         }
     }
 
-    /// Extend the virtual memory associated with a particular discontiguous
-    /// space.  This simply involves requesting a suitable number of chunks
-    /// from the pool of chunks available to discontiguous spaces.
-    ///
-    /// If the concrete page resource is using a `FreeList`, it should pass it
-    /// via `freelist`, or `None` if not using `FreeList`.
+    /// Extend the virtual memory associated with a discontiguous (or growable 64-bit) space.
     pub fn grow_discontiguous_space(
         &self,
         space_descriptor: SpaceDescriptor,
         chunks: usize,
         freelist: Option<&mut dyn FreeList>,
     ) -> Address {
-        let mut head_discontiguous_region = self.head_discontiguous_region.lock().unwrap();
-
-        let new_head: Address = self.vm_map.allocate_contiguous_chunks(
-            space_descriptor,
-            chunks,
-            *head_discontiguous_region,
-            freelist,
-        );
-        if new_head.is_zero() {
+        let mut regions = self.discontiguous_regions.lock().unwrap();
+        let Some(region) =
+            self.vm_map
+                .allocate_contiguous_chunks(space_descriptor, chunks, freelist)
+        else {
             return Address::ZERO;
+        };
+        let start = region.start();
+        if !self.contiguous {
+            regions.push(region);
         }
-
-        *head_discontiguous_region = new_head;
-        new_head
+        start
     }
 
-    /// Release one or more contiguous chunks associated with a discontiguous
-    /// space.
-    pub fn release_discontiguous_chunks(&self, chunk: Address) {
+    /// Remove the owned discontiguous region starting at `chunk`, run `before_free(num_chunks)`,
+    /// and return the region to `self.vm_map`.
+    pub(crate) fn release_discontiguous_chunks_with(
+        &self,
+        chunk: Address,
+        before_free: impl FnOnce(usize),
+    ) {
         assert!(
             !chunk.is_zero() && chunk.is_aligned_to(BYTES_IN_CHUNK),
             "chunk {chunk} must be non-zero and chunk-aligned"
         );
-        let mut head_discontiguous_region = self.head_discontiguous_region.lock().unwrap();
-        let mut cur = *head_discontiguous_region;
-        let mut found = false;
-        while !cur.is_zero() {
-            if cur == chunk {
-                found = true;
-                break;
-            }
-            cur = self.vm_map.get_next_contiguous_region(cur);
-        }
-        assert!(
-            found,
-            "chunk {chunk} is not an allocated discontiguous region of this PageResource"
-        );
-        if chunk == *head_discontiguous_region {
-            *head_discontiguous_region = self.vm_map.get_next_contiguous_region(chunk);
-        }
-        // SAFETY: `self.head_discontiguous_region` is a private `Mutex<Address>` whose linked list
-        // only ever records non-zero, `BYTES_IN_CHUNK`-aligned region-start addresses returned by
-        // `self.vm_map.allocate_contiguous_chunks` in `grow_discontiguous_space` (and removes them
-        // here or in `release_all_chunks` under the same lock). Holding that lock and verifying
-        // `assert!(found)` above proves `chunk` is a currently allocated region-start address in
-        // `self.vm_map`.
-        unsafe {
-            self.vm_map.free_contiguous_chunks(chunk);
-        }
+        let region = {
+            let mut regions = self.discontiguous_regions.lock().unwrap();
+            let idx = regions
+                .iter()
+                .position(|r| r.start() == chunk)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "chunk {chunk} is not an allocated discontiguous region of this PageResource"
+                    )
+                });
+            regions.remove(idx)
+        };
+        before_free(region.chunks());
+        self.vm_map.free_contiguous_chunks(region);
     }
 
     /// Release all discontiguous chunk regions owned by this page resource back to the global pool.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that no live objects or active allocator cursors still reference any
-    /// discontiguous chunks owned by this page resource, because releasing them clears their chunk
-    /// descriptors and `SFT_MAP` entries and returns them to `self.vm_map` for reuse.
-    pub unsafe fn release_all_chunks(&self) {
-        let mut head_discontiguous_region = self.head_discontiguous_region.lock().unwrap();
-        let head = *head_discontiguous_region;
-        // SAFETY: `self.head_discontiguous_region` is a private `Mutex<Address>` initialized to
-        // `Address::ZERO` and only updated in `grow_discontiguous_space` (to region-start addresses
-        // returned by `self.vm_map.allocate_contiguous_chunks`), `release_discontiguous_chunks`,
-        // and here under the same lock, so `head` and all regions linked from it are either empty
-        // (`Address::ZERO`) or currently allocated region-start addresses of this space. The caller
-        // guarantees no live objects or active allocator cursors reference any of those chunks.
-        unsafe {
-            self.vm_map.free_all_chunks(head);
+    pub fn release_all_chunks(&self) {
+        let drained: Vec<AllocatedChunkRegion> =
+            std::mem::take(&mut *self.discontiguous_regions.lock().unwrap());
+        for region in drained {
+            self.vm_map.free_contiguous_chunks(region);
         }
-        *head_discontiguous_region = Address::ZERO;
     }
 
-    pub fn get_head_discontiguous_region(&self) -> Address {
-        *self.head_discontiguous_region.lock().unwrap()
+    /// Snapshot `(start, bytes)` for all owned discontiguous regions in newest-to-oldest order.
+    pub(crate) fn discontiguous_region_ranges(&self) -> Vec<(Address, usize)> {
+        let regions = self.discontiguous_regions.lock().unwrap();
+        regions
+            .iter()
+            .rev()
+            .map(|r| (r.start(), r.bytes()))
+            .collect()
+    }
+
+    /// Truncate discontiguous regions in newest-to-oldest order after the region containing `top`
+    /// (freeing older regions), returning `Some((current_chunk_start, current_chunk_end, live_bytes))`
+    /// when at least one live region remains or `None` if no discontiguous regions are owned.
+    pub(crate) fn truncate_discontiguous_regions_at(
+        &self,
+        mut top: Address,
+    ) -> Option<(Address, Address, usize)> {
+        let (result, to_free) = {
+            let mut regions = self.discontiguous_regions.lock().unwrap();
+            if regions.is_empty() {
+                return None;
+            }
+            let mut live_size = 0usize;
+            let mut found = None;
+            let mut drain_end = 0usize;
+            for (idx, region) in regions.iter().enumerate().rev() {
+                let start = region.start();
+                let end = start + region.bytes();
+                if top.is_zero() {
+                    top = start;
+                }
+                if top >= start && top < end {
+                    live_size += top - start;
+                    found = Some((start, end, live_size));
+                    drain_end = idx;
+                    break;
+                }
+                live_size += region.bytes();
+            }
+            let to_free: Vec<AllocatedChunkRegion> = regions.drain(0..drain_end).collect();
+            (
+                found.unwrap_or((Address::ZERO, Address::ZERO, live_size)),
+                to_free,
+            )
+        };
+        for region in to_free {
+            self.vm_map.free_contiguous_chunks(region);
+        }
+        Some(result)
     }
 }

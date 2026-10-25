@@ -3,19 +3,16 @@
 use crate::scheduler::GCWork;
 use crate::util::linear_scan::Region;
 use crate::util::linear_scan::RegionIterator;
-use crate::util::metadata::side_metadata::{
-    address_to_meta_address, MetadataCodec, SideMetadataSpec, TypedSideSpec, U8Bits,
-};
+use crate::util::metadata::side_metadata::{address_to_meta_address, SideMetadataSpec};
 use crate::util::Address;
 use crate::vm::VMBinding;
-use bytemuck::{AnyBitPattern, NoUninit};
 use spin::Mutex;
 use std::ops::Range;
 use std::sync::atomic::Ordering;
 
 /// Data structure to reference a MMTk 4 MB chunk.
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct Chunk(Address);
 
 impl Region for Chunk {
@@ -54,20 +51,8 @@ impl Chunk {
 /// Highest bit: 0 = free, 1 = allocated
 /// Lower 4 bits: Space index (0-15) if the chunk is allocated.
 #[repr(transparent)]
-#[derive(PartialEq, Eq, Clone, Copy, NoUninit, AnyBitPattern)]
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub struct ChunkState(u8);
-
-impl MetadataCodec<u8> for ChunkState {
-    #[inline(always)]
-    fn encode(self) -> u8 {
-        self.0
-    }
-
-    #[inline(always)]
-    fn decode(raw: u8) -> Self {
-        Self(raw)
-    }
-}
 
 impl ChunkState {
     const ALLOC_BIT_MASK: u8 = 0x80;
@@ -132,9 +117,6 @@ impl ChunkMap {
     pub const ALLOC_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::CHUNK_MARK;
 
-    const TYPED_ALLOC_TABLE: TypedSideSpec<Chunk, U8Bits, ChunkState> =
-        TypedSideSpec::new(Self::ALLOC_TABLE);
-
     pub fn new(space_index: usize) -> Self {
         Self {
             space_index,
@@ -168,7 +150,7 @@ impl ChunkMap {
         // Update alloc byte with `Release` ordering so all prior side-metadata mappings and
         // `SFT_MAP` updates for `chunk` happen-before lock-free `Acquire` readers (`get_internal`,
         // `is_allocated_checked`).
-        Self::TYPED_ALLOC_TABLE.store_atomic(chunk, state, Ordering::Release);
+        Self::ALLOC_TABLE.store_atomic::<u8>(chunk.start(), state.0, Ordering::Release);
         // If this is a newly allcoated chunk, then expand the chunk range.
         if allocated {
             debug_assert!(!chunk.start().is_zero());
@@ -215,7 +197,7 @@ impl ChunkMap {
 
     /// Get chunk state, regardless of the space. This should always be private.
     fn get_internal(&self, chunk: Chunk) -> ChunkState {
-        Self::TYPED_ALLOC_TABLE.load_atomic(chunk, Ordering::Acquire)
+        ChunkState(Self::ALLOC_TABLE.load_atomic::<u8>(chunk.start(), Ordering::Acquire))
     }
 
     /// A range of all allocated chunks by this space in the heap.

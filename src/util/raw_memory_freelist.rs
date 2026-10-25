@@ -6,37 +6,6 @@ use crate::util::constants::*;
 use crate::util::conversions;
 use crate::util::os::*;
 
-/// Linear (`!Copy`, `!Clone`) capability witnessing exclusive ownership of a page-aligned,
-/// quarantined virtual address range `[base, limit)` reserved for a [`RawMemoryFreeList`].
-#[derive(Debug)]
-pub(crate) struct QuarantinedRegion {
-    base: Address,
-    limit: Address,
-}
-
-impl QuarantinedRegion {
-    /// Mint an exclusive `QuarantinedRegion` over `[base, limit)`.
-    ///
-    /// # Safety
-    /// - `base` must be non-zero and `BYTES_IN_PAGE`-aligned, and `limit >= base` must be
-    ///   `BYTES_IN_PAGE`-aligned.
-    /// - The virtual memory range `[base, limit)` must be quarantined (`PROT_NONE` anonymous
-    ///   reservation) and exclusively owned by this `QuarantinedRegion` for the entire lifetime of
-    ///   the consuming [`RawMemoryFreeList`]: no other Rust references, heap allocations, or space
-    ///   mappings may alias or remap `[base, limit)`.
-    pub(crate) unsafe fn new_unchecked(base: Address, limit: Address) -> Self {
-        assert!(
-            !base.is_zero() && base.is_aligned_to(BYTES_IN_PAGE),
-            "QuarantinedRegion base ({base}) must be non-zero and page-aligned"
-        );
-        assert!(
-            limit >= base && limit.is_aligned_to(BYTES_IN_PAGE),
-            "QuarantinedRegion limit ({limit}) must be >= base ({base}) and page-aligned"
-        );
-        Self { base, limit }
-    }
-}
-
 /** log2 of the number of bits used by a free list entry (two entries per unit) */
 const LOG_ENTRY_BITS: usize = i32::BITS.ilog2() as _;
 
@@ -146,46 +115,15 @@ impl RawMemoryFreeList {
             .expect("RawMemoryFreeList page count overflow")
     }
 
-    /// Construct a `RawMemoryFreeList` consuming an exclusively owned [`QuarantinedRegion`].
-    pub(crate) fn from_quarantined(
-        region: QuarantinedRegion,
+    /// Construct a `RawMemoryFreeList` backed by its own dedicated quarantined anonymous virtual
+    /// address range (`PROT_NONE` until pages are demand-zero committed by [`Self::grow_freelist`]).
+    pub fn new(
         pages_per_block: i32,
         units: i32,
         grain: i32,
         heads: i32,
         strategy: MmapStrategy,
     ) -> Self {
-        let QuarantinedRegion { base, limit } = region;
-        // SAFETY: `region` is a linear `QuarantinedRegion` token guaranteeing exclusive ownership
-        // of the quarantined, page-aligned virtual address range `[base, limit)`.
-        unsafe { Self::new(base, limit, pages_per_block, units, grain, heads, strategy) }
-    }
-
-    /// Construct a `RawMemoryFreeList` backed by the raw virtual address range `[base, limit)`.
-    ///
-    /// # Safety
-    /// The caller must guarantee exclusive ownership of the virtual address range `[base, limit)`
-    /// for the entire lifetime of the returned `RawMemoryFreeList`: `[base, limit)` must not
-    /// overlap any live Rust allocations, stacks, code/data segments, or other mappings, because
-    /// [`Self::grow_freelist`] maps `[base, high_water)` with `strategy` (which may use
-    /// `MAP_FIXED` / `replace = true`) and forms `&'static mut [i32]` over it.
-    pub unsafe fn new(
-        base: Address,
-        limit: Address,
-        pages_per_block: i32,
-        units: i32,
-        grain: i32,
-        heads: i32,
-        strategy: MmapStrategy,
-    ) -> Self {
-        assert!(
-            !base.is_zero() && base.is_aligned_to(BYTES_IN_PAGE),
-            "RawMemoryFreeList base ({base}) must be non-zero and page-aligned"
-        );
-        assert!(
-            limit >= base && limit.is_aligned_to(BYTES_IN_PAGE),
-            "RawMemoryFreeList limit ({limit}) must be >= base ({base}) and page-aligned"
-        );
         assert!(
             matches!(
                 strategy.prot,
@@ -210,9 +148,25 @@ impl RawMemoryFreeList {
         let required_bytes =
             conversions::pages_to_bytes(Self::size_in_pages(units, heads) as usize);
         assert!(
-            limit - base >= required_bytes,
-            "RawMemoryFreeList region [{base}, {limit}) is smaller than required {required_bytes} bytes"
+            required_bytes > 0 && required_bytes <= isize::MAX as usize,
+            "RawMemoryFreeList required_bytes ({required_bytes}) out of bounds"
         );
+        let base = OS::dzmmap_anywhere(
+            required_bytes,
+            BYTES_IN_PAGE,
+            MmapStrategy::QUARANTINE,
+            &MmapAnnotation::Misc {
+                name: "RawMemoryFreeList",
+            },
+        )
+        .unwrap_or_else(|e| {
+            panic!("Failed to quarantine {required_bytes} bytes for RawMemoryFreeList: {e:?}")
+        });
+        assert!(
+            !base.is_zero() && base.is_aligned_to(BYTES_IN_PAGE),
+            "OS::dzmmap_anywhere returned invalid base ({base}) for RawMemoryFreeList"
+        );
+        let limit = base + required_bytes;
         Self {
             head: -1,
             heads,
@@ -223,7 +177,7 @@ impl RawMemoryFreeList {
             grain,
             current_units: 0,
             pages_per_block,
-            strategy,
+            strategy: strategy.replace(true),
             slice: &mut [],
         }
     }
@@ -254,6 +208,7 @@ impl RawMemoryFreeList {
         self.grow_list_by_blocks(blocks, required_units);
         true
     }
+
     fn grow_list_by_blocks(&mut self, blocks: i32, new_max: i32) {
         debug_assert!(
             (new_max <= self.grain) || (((new_max / self.grain) * self.grain) == new_max)
@@ -263,7 +218,6 @@ impl RawMemoryFreeList {
         self.slice = &mut [];
 
         if blocks > 0 {
-            // Allocate more VM from the OS
             self.raise_high_water(blocks);
         }
 
@@ -274,17 +228,16 @@ impl RawMemoryFreeList {
         );
         let len = byte_len >> LOG_BYTES_IN_ENTRY;
         // SAFETY:
-        // - `self.base` was asserted non-zero and page-aligned (`BYTES_IN_PAGE >= 4096`) in
-        //   `RawMemoryFreeList::new`, so `self.base.to_mut_ptr::<i32>()` is non-null and aligned
-        //   to `align_of::<i32>()` (4 bytes).
-        // - Every page in `self.base..self.high_water` has been demand-zero mapped via
-        //   `OS::dzmmap` in `raise_high_water` with readable and writable protection (verified in
-        //   `new`), so `len` contiguous `i32` elements (`byte_len` bytes) are mapped, readable,
-        //   writable, and zero-initialized (valid bit pattern for `i32`).
-        // - `byte_len <= isize::MAX as usize` is asserted above.
-        // - `self.slice` was reset to `&mut []` above (and in `#[cfg(test)] Drop` before
-        //   `OS::munmap`), and exclusive unaliased ownership of `[self.base, self.limit)` is
-        //   guaranteed by `QuarantinedRegion` (`from_quarantined`) or the caller of `unsafe fn new`.
+        // - `[self.base, self.limit)` is a dedicated, private anonymous virtual reservation
+        //   obtained from `OS::dzmmap_anywhere` in `RawMemoryFreeList::new` and unmapped only in
+        //   `Drop` (after resetting `self.slice = &mut []`), so no other Rust reference or mapping
+        //   can alias `[self.base, self.high_water)`.
+        // - `self.base` was asserted non-zero and `BYTES_IN_PAGE`-aligned (`>= 4096`), so
+        //   `self.base.to_mut_ptr::<i32>()` is non-null and aligned to `align_of::<i32>()` (4B).
+        // - Every page in `self.base..self.high_water` has been demand-zero committed via
+        //   `OS::dzmmap` in `raise_high_water` with readable+writable protection (verified in
+        //   `new`), so `len` contiguous `i32` elements (`byte_len <= isize::MAX as usize`) are
+        //   mapped, initialized to `0i32`, and exclusively owned by `self`.
         self.slice = unsafe { std::slice::from_raw_parts_mut(self.base.to_mut_ptr::<i32>(), len) };
 
         let old_max = self.current_units;
@@ -345,14 +298,9 @@ impl RawMemoryFreeList {
         if grow_extent > self.limit - self.high_water {
             grow_extent = self.limit - self.high_water;
         }
-        self.mmap(self.high_water, grow_extent);
-        self.high_water += grow_extent;
-    }
-
-    fn mmap(&self, start: Address, bytes: usize) {
         let res = OS::dzmmap(
-            start,
-            bytes,
+            self.high_water,
+            grow_extent,
             self.strategy,
             &MmapAnnotation::Misc {
                 name: "RawMemoryFreeList",
@@ -360,99 +308,52 @@ impl RawMemoryFreeList {
         );
         assert!(
             res.is_ok(),
-            "Failed to mmap memory for RawMemoryFreeList: start = {start}, bytes = {bytes}, strategy = {:?}",
+            "Failed to mmap memory for RawMemoryFreeList: start = {}, bytes = {grow_extent}, strategy = {:?}",
+            self.high_water,
             self.strategy
         );
-    }
-    pub fn get_limit(&self) -> Address {
-        self.limit
+        self.high_water += grow_extent;
     }
 }
 
-/**
- * See documentation of `mod tests` below for the necessity of `impl Drop`.
- */
-#[cfg(test)]
 impl Drop for RawMemoryFreeList {
     fn drop(&mut self) {
         self.slice = &mut [];
-        let len = self.high_water - self.base;
+        let len = self.limit - self.base;
         if len != 0 {
             let _ = OS::munmap(self.base, len);
         }
     }
 }
 
-/**
- * The initialization of `RawMemoryFreeList` involves memory-mapping a fixed range of virtual address.
- *
- * This raises an implicit assumption that a test process can only have one `RawMemoryFreeList` instance at a time unless each instance uses different fixed address ranges.
- *
- * We use a single fixed address range for all the following tests. So the tests cannot be executed in parallel. Which means:
- *
- * 1. Each test should hold a global mutex to prevent parallel execution.
- * 2. `RawMemoryFreeList` should implement `Drop` trait to unmap the memory properly at the end of each test.
- */
 #[cfg(test)]
 mod tests {
     use super::FreeList;
     use super::*;
-    use std::sync::{Mutex, MutexGuard};
 
     const TOP_SENTINEL: i32 = -1;
     const FIRST_UNIT: i32 = 0;
 
-    lazy_static! {
-        /**
-         * See documentation of `mod tests` above for for the necessity of this mutex.
-         */
-        static ref MUTEX: Mutex<()> = Mutex::new(());
-    }
-
-    fn new_raw_memory_freelist<'a>(
-        list_size: usize,
-        grain: i32,
-    ) -> (MutexGuard<'a, ()>, RawMemoryFreeList, i32, i32, i32) {
-        /*
-         * Note: The mutex could be poisoned!
-         * Test `free_list_access_out_of_bounds` below is expected to panic and poison the mutex.
-         * So we need to manually recover the lock here, if it is poisoned.
-         *
-         * See documentation of `mod tests` above for more details.
-         */
-        let guard = match MUTEX.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let start = crate::util::test_util::RAW_MEMORY_FREELIST_TEST_REGION.start;
-        let extent = BYTES_IN_PAGE;
+    fn new_raw_memory_freelist(list_size: usize, grain: i32) -> (RawMemoryFreeList, i32, i32) {
         let pages_per_block = RawMemoryFreeList::default_block_size(list_size as _, 1);
         assert_eq!(pages_per_block, 1);
-        // SAFETY: `MUTEX` serializes all tests touching the dedicated `RAW_MEMORY_FREELIST_TEST_REGION`
-        // address range, and `Drop for RawMemoryFreeList` unmaps `[base, high_water)` before
-        // `_guard` is released.
-        let mut l = unsafe {
-            RawMemoryFreeList::new(
-                start,
-                start + extent,
-                pages_per_block,
-                list_size as _,
-                grain,
-                1,
-                MmapStrategy::TEST,
-            )
-        };
-        // Grow the free-list to do the actual memory-mapping.
+        let mut l = RawMemoryFreeList::new(
+            pages_per_block,
+            list_size as _,
+            grain,
+            1,
+            MmapStrategy::TEST,
+        );
         l.grow_freelist(list_size as _);
         let last_unit = list_size as i32 - grain;
         let bottom_sentinel = list_size as i32;
-        (guard, l, list_size as _, last_unit, bottom_sentinel)
+        (l, last_unit, bottom_sentinel)
     }
 
     #[test]
-    #[allow(clippy::cognitive_complexity)] // extensive checks, and it doesn't matter for tests
+    #[allow(clippy::cognitive_complexity)]
     fn new_free_list_grain1() {
-        let (_guard, l, _, last_unit, bottom_sentinel) = new_raw_memory_freelist(5, 1);
+        let (l, last_unit, bottom_sentinel) = new_raw_memory_freelist(5, 1);
         assert_eq!(l.head(), TOP_SENTINEL);
 
         assert_eq!(l.get_prev(TOP_SENTINEL), last_unit);
@@ -490,9 +391,9 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::cognitive_complexity)] // extensive checks, and it doesn't matter for tests
+    #[allow(clippy::cognitive_complexity)]
     fn new_free_list_grain2() {
-        let (_guard, l, _, last_unit, bottom_sentinel) = new_raw_memory_freelist(6, 2);
+        let (l, last_unit, bottom_sentinel) = new_raw_memory_freelist(6, 2);
         assert_eq!(l.head(), TOP_SENTINEL);
 
         assert_eq!(l.get_prev(TOP_SENTINEL), last_unit);
@@ -532,14 +433,13 @@ mod tests {
     #[test]
     #[should_panic]
     fn free_list_access_out_of_bounds() {
-        let (_guard, l, _, _, _) = new_raw_memory_freelist(5, 1);
+        let (l, _, _) = new_raw_memory_freelist(5, 1);
         l.get_size(4096);
-        // `_guard` should be dropped during stack unwinding
     }
 
     #[test]
     fn alloc_fit() {
-        let (_guard, mut l, _, last_unit, _) = new_raw_memory_freelist(6, 2);
+        let (mut l, last_unit, _) = new_raw_memory_freelist(6, 2);
         let result = l.alloc(2);
         assert_eq!(result, 0);
 
@@ -553,13 +453,13 @@ mod tests {
         assert_eq!(l.get_prev(FIRST_UNIT), -1);
         assert_eq!(l.get_right(FIRST_UNIT), 2);
         assert_eq!(l.get_next(FIRST_UNIT), 2);
-        assert!(!l.is_free(FIRST_UNIT)); // not free
+        assert!(!l.is_free(FIRST_UNIT));
         assert!(l.is_coalescable(FIRST_UNIT));
         assert!(l.is_multi(FIRST_UNIT));
 
         assert_eq!(l.get_size(2), 2);
         assert_eq!(l.get_left(2), 0);
-        assert_eq!(l.get_prev(2), -1); // no prev now
+        assert_eq!(l.get_prev(2), -1);
         assert_eq!(l.get_right(2), 4);
         assert_eq!(l.get_next(2), 4);
         assert!(l.is_free(2));
@@ -568,9 +468,9 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::cognitive_complexity)] // extensive checks, and it doesn't matter for tests
+    #[allow(clippy::cognitive_complexity)]
     fn alloc_split() {
-        let (_guard, mut l, _, last_unit, _) = new_raw_memory_freelist(6, 2);
+        let (mut l, last_unit, _) = new_raw_memory_freelist(6, 2);
         let result = l.alloc(1);
         assert_eq!(result, 0);
 
@@ -580,25 +480,25 @@ mod tests {
 
         assert_eq!(l.get_size(FIRST_UNIT), 1);
         assert_eq!(l.get_left(FIRST_UNIT), -1);
-        assert_eq!(l.get_prev(FIRST_UNIT), 1); // prev is 1 now
-        assert_eq!(l.get_right(FIRST_UNIT), 1); // right is 1 now
+        assert_eq!(l.get_prev(FIRST_UNIT), 1);
+        assert_eq!(l.get_right(FIRST_UNIT), 1);
         assert_eq!(l.get_next(FIRST_UNIT), 2);
-        assert!(!l.is_free(FIRST_UNIT)); // not free
+        assert!(!l.is_free(FIRST_UNIT));
         assert!(l.is_coalescable(FIRST_UNIT));
-        assert!(!l.is_multi(FIRST_UNIT)); // not multi
+        assert!(!l.is_multi(FIRST_UNIT));
 
         assert_eq!(l.get_size(1), 1);
-        assert_eq!(l.get_left(1), 0); // unit1's left is 0
-        assert_eq!(l.get_prev(1), -1); // unit1's prev is -1 (no prev, unit1 is removed form the list)
+        assert_eq!(l.get_left(1), 0);
+        assert_eq!(l.get_prev(1), -1);
         assert_eq!(l.get_right(1), 2);
         assert_eq!(l.get_next(1), 2);
-        assert!(l.is_free(1)); // not free
+        assert!(l.is_free(1));
         assert!(l.is_coalescable(1));
-        assert!(!l.is_multi(1)); // not multi
+        assert!(!l.is_multi(1));
 
         assert_eq!(l.get_size(2), 2);
         assert_eq!(l.get_left(2), 1);
-        assert_eq!(l.get_prev(2), 1); // uni2's prev is 1 now
+        assert_eq!(l.get_prev(2), 1);
         assert_eq!(l.get_right(2), 4);
         assert_eq!(l.get_next(2), 4);
         assert!(l.is_free(2));
@@ -608,29 +508,21 @@ mod tests {
 
     #[test]
     fn alloc_split_twice() {
-        let (_guard, mut l, _, _, _) = new_raw_memory_freelist(6, 2);
-        // Alloc size 1 and cause split
+        let (mut l, _, _) = new_raw_memory_freelist(6, 2);
         let res1 = l.alloc(1);
         assert_eq!(res1, 0);
-        // Alloc size 1
         let res2 = l.alloc(1);
         assert_eq!(res2, 1);
-
-        // Next available unit has no prev now
         assert_eq!(l.get_prev(2), -1);
     }
 
     #[test]
     fn alloc_skip() {
-        let (_guard, mut l, _, _, _) = new_raw_memory_freelist(6, 2);
-        // Alloc size 1 and cause split
+        let (mut l, _, _) = new_raw_memory_freelist(6, 2);
         let res1 = l.alloc(1);
         assert_eq!(res1, 0);
-        // Alloc size 2, we skip unit1
         let res2 = l.alloc(2);
         assert_eq!(res2, 2);
-
-        // unit1 is still free, and linked with unit4
         assert!(l.is_free(1));
         assert_eq!(l.get_next(1), 4);
         assert_eq!(l.get_prev(4), 1);
@@ -638,7 +530,7 @@ mod tests {
 
     #[test]
     fn alloc_exhaust() {
-        let (_guard, mut l, _, _, _) = new_raw_memory_freelist(6, 2);
+        let (mut l, _, _) = new_raw_memory_freelist(6, 2);
         let res1 = l.alloc(2);
         assert_eq!(res1, 0);
         let res2 = l.alloc(2);
@@ -651,16 +543,12 @@ mod tests {
 
     #[test]
     fn free_unit() {
-        let (_guard, mut l, _, _, _) = new_raw_memory_freelist(6, 2);
+        let (mut l, _, _) = new_raw_memory_freelist(6, 2);
         let res1 = l.alloc(2);
         assert_eq!(res1, 0);
         let res2 = l.alloc(2);
         assert_eq!(res2, 2);
-
-        // Unit4 is still free, but has no prev
         assert_eq!(l.get_prev(4), -1);
-
-        // Free Unit2
         let freed = l.free(res2, false);
         assert_eq!(freed, res2);
         assert!(l.is_free(res2));
@@ -668,53 +556,42 @@ mod tests {
 
     #[test]
     fn free_coalesce() {
-        let (_guard, mut l, _, _, _) = new_raw_memory_freelist(6, 2);
+        let (mut l, _, _) = new_raw_memory_freelist(6, 2);
         let res1 = l.alloc(2);
         assert_eq!(res1, 0);
         let res2 = l.alloc(2);
         assert_eq!(res2, 2);
-
-        // Free Unit2. It will coalesce with Unit4
         let coalesced_size = l.free(res2, true);
         assert_eq!(coalesced_size, 4);
     }
 
     #[test]
     fn free_cant_coalesce() {
-        let (_guard, mut l, _, _, _) = new_raw_memory_freelist(6, 2);
+        let (mut l, _, _) = new_raw_memory_freelist(6, 2);
         let res1 = l.alloc(2);
         assert_eq!(res1, 0);
         let res2 = l.alloc(2);
         assert_eq!(res2, 2);
         let res3 = l.alloc(1);
         assert_eq!(res3, 4);
-
-        // Free Unit2. It cannot coalesce with Unit4
         let coalesced_size = l.free(res2, true);
         assert_eq!(coalesced_size, 2);
     }
 
     #[test]
     fn free_realloc() {
-        let (_guard, mut l, _, _, _) = new_raw_memory_freelist(6, 2);
+        let (mut l, _, _) = new_raw_memory_freelist(6, 2);
         let res1 = l.alloc(2);
         assert_eq!(res1, 0);
         let res2 = l.alloc(2);
         assert_eq!(res2, 2);
-
-        // Unit4 is still free, but has no prev
         assert_eq!(l.get_prev(4), -1);
-
-        // Free Unit2
         let freed = l.free(res2, false);
         assert_eq!(freed, res2);
         assert!(l.is_free(res2));
-
-        // Alloc again
         let res3 = l.alloc(2);
         assert_eq!(res3, 2);
         assert!(!l.is_free(res3));
-
         let res4 = l.alloc(1);
         assert_eq!(res4, 4);
     }

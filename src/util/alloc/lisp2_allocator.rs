@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use std::sync::Arc;
 
 use super::allocator::AllocatorContext;
@@ -92,6 +94,21 @@ impl<VM: VMBinding> Lisp2Allocator<VM> {
     /// The number of bytes that the allocator reserves for its own header.
     pub const HEADER_RESERVED_IN_BYTES: usize =
         crate::policy::lisp2space::Lisp2Space::<VM>::HEADER_RESERVED_IN_BYTES;
+
+    pub(in crate::util::alloc) fn new_uninit(
+        tls: VMThread,
+        context: Arc<AllocatorContext<VM>>,
+    ) -> Self {
+        Lisp2Allocator {
+            bump_allocator: BumpAllocator::new_uninit(tls, context),
+        }
+    }
+
+    #[inline(always)]
+    pub(in crate::util::alloc) fn is_initialized(&self) -> bool {
+        self.bump_allocator.is_initialized()
+    }
+
     pub(crate) fn new(
         tls: VMThread,
         space: &'static dyn Space<VM>,

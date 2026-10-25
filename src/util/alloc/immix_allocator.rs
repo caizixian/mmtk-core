@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -23,7 +25,7 @@ pub struct ImmixAllocator<VM: VMBinding> {
     /// The fastpath bump pointer.
     pub bump_pointer: BumpPointer,
     /// [`Space`](src/policy/space/Space) instance associated with this allocator instance.
-    space: &'static ImmixSpace<VM>,
+    space: Option<&'static ImmixSpace<VM>>,
     context: Arc<AllocatorContext<VM>>,
     /// *unused*
     hot: bool,
@@ -48,7 +50,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
 impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
     fn get_space(&self) -> &'static dyn Space<VM> {
-        self.space as _
+        self.immix_space() as _
     }
 
     fn get_context(&self) -> &AllocatorContext<VM> {
@@ -168,6 +170,18 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
 }
 
 impl<VM: VMBinding> ImmixAllocator<VM> {
+    pub(in crate::util::alloc) fn new_uninit(
+        tls: VMThread,
+        context: Arc<AllocatorContext<VM>>,
+    ) -> Self {
+        Self::new(tls, None, context, false)
+    }
+
+    #[inline(always)]
+    pub(in crate::util::alloc) fn is_initialized(&self) -> bool {
+        self.space.is_some()
+    }
+
     pub(crate) fn new(
         tls: VMThread,
         space: Option<&'static dyn Space<VM>>,
@@ -176,7 +190,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     ) -> Self {
         ImmixAllocator {
             tls,
-            space: space.unwrap().downcast_ref::<ImmixSpace<VM>>().unwrap(),
+            space: space.map(|s| s.downcast_ref::<ImmixSpace<VM>>().unwrap()),
             context,
             bump_pointer: BumpPointer::default(),
             hot: false,
@@ -187,8 +201,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         }
     }
 
+    #[inline(always)]
     pub(crate) fn immix_space(&self) -> &'static ImmixSpace<VM> {
-        self.space
+        self.space.expect("ImmixAllocator slot is not initialized")
     }
 
     /// Large-object (larger than a line) bump allocation.
@@ -238,13 +253,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     fn acquire_recyclable_lines(&mut self, size: usize, align: usize, offset: usize) -> bool {
         while self.line.is_some() || self.acquire_recyclable_block() {
             let line = self.line.unwrap();
-            // SAFETY: `self.line` is only set from `acquire_recyclable_block` (returning a
-            // reusable block owned by `self` in `BlockState::Reusing` / initialized state) and
-            // advanced strictly within `[block.start_line(), block.end_line())`, so `line` lies
-            // in an allocated `ImmixSpace` block with mapped line/RC metadata and no concurrent
-            // non-atomic writes to `RC_TABLE`.
-            let next_lines =
-                unsafe { self.immix_space().get_next_available_lines(self.copy, line) };
+            let next_lines = self.immix_space().get_next_available_lines(self.copy, line);
             if let Some((start_line, end_line)) = next_lines {
                 // Find recyclable lines. Update the bump allocation cursor and limit.
                 self.bump_pointer.cursor = start_line.start();
@@ -275,7 +284,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 };
                 // mark objects if concurrent marking is active
                 if self.immix_space().should_allocate_as_live() {
-                    let state = self.space.line_mark_state.load(Ordering::Acquire);
+                    let state = self.immix_space().line_mark_state.load(Ordering::Acquire);
                     Line::eager_mark_lines::<VM>(state, start_line..end_line);
                     // Objects allocated here are not in the SATB snapshot, log them.
                     if self.immix_space().common().needs_log_bit {
@@ -324,12 +333,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 );
                 // FIXME: Why don't we need this for LXR? Conix needs this.
                 if !self.immix_space().rc_enabled {
-                    // Bulk clear stale line mark state
-                    Line::MARK_TABLE
-                        .bzero_metadata(block.start(), crate::policy::immix::block::Block::BYTES);
+                    // Atomically clear stale line mark state
+                    block.clear_line_mark_table();
                     // mark objects if concurrent marking is active
                     if self.immix_space().should_allocate_as_live() {
-                        let state = self.space.line_mark_state.load(Ordering::Acquire);
+                        let state = self.immix_space().line_mark_state.load(Ordering::Acquire);
                         Line::eager_mark_lines::<VM>(state, block.start_line()..block.end_line());
                         // Objects allocated here are not in the SATB snapshot, log them
                         if self.immix_space().common().needs_log_bit {
@@ -377,14 +385,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     /// thread local buffer size, which should be always smaller than the bump cursor. This method
     /// may be reentrant. We need to check before setting the values.
     fn set_limit_for_stress(&mut self) {
-        if self.bump_pointer.cursor < self.bump_pointer.limit {
-            let old_limit = self.bump_pointer.limit;
-            // SAFETY: `Address::from_usize` wraps the remaining buffer byte count without Rust-level
-            // UB. This sentinel limit (`< cursor` because heap addresses exceed block size) is never
-            // dereferenced and is restored to `cursor + limit.as_usize()` in `restore_limit_for_stress`.
-            let new_limit =
-                unsafe { Address::from_usize(self.bump_pointer.limit - self.bump_pointer.cursor) };
-            self.bump_pointer.limit = new_limit;
+        if let Some((old_limit, new_limit)) = self.bump_pointer.fold_limit_for_stress_test() {
             trace!(
                 "{:?}: set_limit_for_stress. normal c {} l {} -> {}",
                 self.tls,
@@ -394,15 +395,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             );
         }
 
-        if self.large_bump_pointer.cursor < self.large_bump_pointer.limit {
-            let old_lg_limit = self.large_bump_pointer.limit;
-            // SAFETY: `Address::from_usize` wraps the remaining large-buffer byte count without
-            // Rust-level UB. This sentinel limit is never dereferenced and is restored to
-            // `cursor + limit.as_usize()` in `restore_limit_for_stress`.
-            let new_lg_limit = unsafe {
-                Address::from_usize(self.large_bump_pointer.limit - self.large_bump_pointer.cursor)
-            };
-            self.large_bump_pointer.limit = new_lg_limit;
+        if let Some((old_lg_limit, new_lg_limit)) =
+            self.large_bump_pointer.fold_limit_for_stress_test()
+        {
             trace!(
                 "{:?}: set_limit_for_stress. large c {} l {} -> {}",
                 self.tls,
@@ -418,10 +413,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     /// actual limit from the size and the cursor. This method may be reentrant. We need to check
     /// before setting the values.
     fn restore_limit_for_stress(&mut self) {
-        if self.bump_pointer.limit < self.bump_pointer.cursor {
-            let old_limit = self.bump_pointer.limit;
-            let new_limit = self.bump_pointer.cursor + self.bump_pointer.limit.as_usize();
-            self.bump_pointer.limit = new_limit;
+        if let Some((old_limit, new_limit)) = self.bump_pointer.restore_limit_for_stress_test() {
             trace!(
                 "{:?}: restore_limit_for_stress. normal c {} l {} -> {}",
                 self.tls,
@@ -431,11 +423,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             );
         }
 
-        if self.large_bump_pointer.limit < self.large_bump_pointer.cursor {
-            let old_lg_limit = self.large_bump_pointer.limit;
-            let new_lg_limit =
-                self.large_bump_pointer.cursor + self.large_bump_pointer.limit.as_usize();
-            self.large_bump_pointer.limit = new_lg_limit;
+        if let Some((old_lg_limit, new_lg_limit)) =
+            self.large_bump_pointer.restore_limit_for_stress_test()
+        {
             trace!(
                 "{:?}: restore_limit_for_stress. large c {} l {} -> {}",
                 self.tls,

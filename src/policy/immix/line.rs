@@ -49,10 +49,6 @@ impl Line {
     pub const MARK_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_LINE_MARK;
 
-    const TYPED_MARK_TABLE: TypedSideSpec<Line, U8Bits, u8> = TypedSideSpec::new(Self::MARK_TABLE);
-    const TYPED_REUSE_COUNT_TABLE: TypedSideSpec<Line, U8Bits, u8> =
-        TypedSideSpec::new(IX_LINE_REUSE_COUNT);
-
     /// Get the block containing the line.
     pub fn block(&self) -> Block {
         debug_assert!(!super::BLOCK_ONLY);
@@ -74,13 +70,13 @@ impl Line {
     /// Mark the line. This will update the side line mark table.
     pub fn mark(&self, state: u8) {
         debug_assert!(!super::BLOCK_ONLY);
-        Self::TYPED_MARK_TABLE.store_atomic(*self, state, Ordering::Relaxed);
+        Self::MARK_TABLE.store_atomic::<u8>(self.start(), state, Ordering::Relaxed);
     }
 
     /// Atomically load the current line mark state.
     pub fn get_mark_state(&self) -> u8 {
         debug_assert!(!super::BLOCK_ONLY);
-        Self::TYPED_MARK_TABLE.load_atomic(*self, Ordering::Relaxed)
+        Self::MARK_TABLE.load_atomic::<u8>(self.start(), Ordering::Relaxed)
     }
 
     /// Test line mark state.
@@ -126,9 +122,9 @@ impl Line {
     pub fn inc_reuse_counts(lines: Range<Line>) {
         let mut l = lines.start;
         while l < lines.end {
-            let count = Self::TYPED_REUSE_COUNT_TABLE.load_atomic(l, Ordering::SeqCst);
+            let count = IX_LINE_REUSE_COUNT.load_atomic::<u8>(l.start(), Ordering::SeqCst);
             let new_count = if count == u8::MAX { 0 } else { count + 1 };
-            Self::TYPED_REUSE_COUNT_TABLE.store_atomic(l, new_count, Ordering::SeqCst);
+            IX_LINE_REUSE_COUNT.store_atomic::<u8>(l.start(), new_count, Ordering::SeqCst);
             l = l.next();
         }
     }

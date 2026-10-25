@@ -1,41 +1,40 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use super::metadata::*;
+use crate::global_state::GcStatus;
 use crate::plan::tracing::{ObjectQueue, OptionObjectQueue};
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
-use crate::policy::space::CommonSpace;
-use crate::scheduler::GCWorkScheduler;
-use crate::util::heap::chunk_map::Chunk;
-use crate::util::heap::chunk_map::ChunkMap;
+use crate::policy::space::{CommonSpace, Space};
+use crate::scheduler::{GCWork, GCWorkScheduler, GCWorker};
+use crate::util::constants::BYTES_IN_PAGE;
+use crate::util::copy::CopySemantics;
+use crate::util::heap::chunk_map::{Chunk, ChunkMap};
 use crate::util::heap::gc_trigger::GCTrigger;
+use crate::util::heap::layout::vm_layout::BYTES_IN_CHUNK;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::heap::PageResource;
 use crate::util::linear_scan::Region;
 use crate::util::malloc::library::{BYTES_IN_MALLOC_PAGE, LOG_BYTES_IN_MALLOC_PAGE};
 use crate::util::malloc::malloc_ms_util::*;
-use crate::util::metadata::side_metadata;
 use crate::util::metadata::side_metadata::{
-    SideMetadataContext, SideMetadataSanity, SideMetadataSpec,
+    self, SideMetadataContext, SideMetadataSanity, SideMetadataSpec,
 };
 use crate::util::metadata::vo_bit::VO_BIT_SIDE_METADATA_SPEC;
 use crate::util::metadata::MetadataSpec;
 use crate::util::object_enum::ObjectEnumerator;
 use crate::util::opaque_pointer::*;
-use crate::util::Address;
-use crate::util::ObjectReference;
-use crate::util::{conversions, metadata};
-use crate::vm::VMBinding;
-use crate::vm::{ActivePlan, Collection, ObjectModel};
-use crate::{policy::space::Space, util::heap::layout::vm_layout::BYTES_IN_CHUNK};
+use crate::util::{conversions, metadata, Address, ObjectReference};
+use crate::vm::{ActivePlan, Collection, ObjectModel, VMBinding};
+use crate::MMTK;
 #[cfg(debug_assertions)]
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::marker::PhantomData;
 #[cfg(debug_assertions)]
 use std::sync::atomic::AtomicU32;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 // If true, we will use a hashmap to store all the allocated memory from malloc, and use it
 // to make sure our allocation is correct.
@@ -44,280 +43,33 @@ const ASSERT_ALLOCATION: bool = false;
 
 const VO_REGION_SHIFT: usize = VO_BIT_SIDE_METADATA_SPEC.log_bytes_in_region;
 const VO_META_BYTES_PER_CHUNK: usize = BYTES_IN_CHUNK >> (VO_REGION_SHIFT + 3);
-const ACTIVE_PAGE_META_BYTES_PER_CHUNK: usize =
-    BYTES_IN_CHUNK >> (LOG_BYTES_IN_MALLOC_PAGE as usize);
 
 const _: () = assert!((1usize << VO_REGION_SHIFT) == ObjectReference::ALIGNMENT);
 const _: () = assert!(VO_META_BYTES_PER_CHUNK % 16 == 0);
 
-/// Linear `!Copy` capability witnessing exclusive STW sweep ownership of a single allocated
-/// 4 MiB `Chunk` in `MallocSpace` together with mapped `MallocSpace` side metadata
-/// (`VO_BIT_SIDE_METADATA_SPEC`, `ACTIVE_PAGE_METADATA_SPEC`, and optional `OnSide`
-/// `LOCAL_MARK_BIT_SPEC`) across `[chunk.start(), chunk.end())`.
-pub(super) struct MallocExclusiveChunk<'stw> {
+struct ChunkSweepLease<'a> {
+    sweeping_chunks: &'a Mutex<HashSet<Chunk>>,
     chunk: Chunk,
-    on_side_mark_spec: Option<SideMetadataSpec>,
-    _stw: PhantomData<&'stw mut ()>,
 }
 
-impl<'stw> MallocExclusiveChunk<'stw> {
-    /// Mint an exclusive STW chunk token for `chunk`.
-    ///
-    /// # Safety
-    /// * `chunk` must be a non-zero allocated chunk owned by `MallocSpace` (`owns_chunk(chunk)`,
-    ///   i.e. allocated in `MallocSpace::chunk_map` with `SFT_MAP` pointing to that `MallocSpace`,
-    ///   ruling out any 4-bit `ChunkState` `space_index` collision), and all specs in
-    ///   `MallocSpace::metadata` (`VO_BIT_SIDE_METADATA_SPEC`, `ACTIVE_PAGE_METADATA_SPEC`,
-    ///   `OFFSET_MALLOC_METADATA_SPEC`, and `on_side_mark_spec` if `Some`) must be mapped and
-    ///   initialized across `[chunk.start(), chunk.end())` for `'stw`.
-    /// * For the entire `'stw` lifetime, the holder must have unique ownership of `chunk`'s
-    ///   chunk-local side metadata (`VO_BIT_SIDE_METADATA_SPEC`, `ACTIVE_PAGE_METADATA_SPEC`, and
-    ///   `on_side_mark_spec`): mutators are stopped at STW `Release` and no other `MallocExclusiveChunk`
-    ///   exists for `chunk`.
-    /// * Every address in `[chunk.start(), chunk.end())` whose `VO_BIT` is `1` must be the
-    ///   `ObjectReference` of a currently live (not yet `free`d) `MallocSpace` allocation.
-    #[inline]
-    unsafe fn new_unchecked(chunk: Chunk, on_side_mark_spec: Option<SideMetadataSpec>) -> Self {
-        debug_assert!(chunk != Chunk::ZERO);
+impl<'a> ChunkSweepLease<'a> {
+    fn acquire(sweeping_chunks: &'a Mutex<HashSet<Chunk>>, chunk: Chunk) -> Self {
+        let inserted = sweeping_chunks.lock().unwrap().insert(chunk);
+        assert!(
+            inserted,
+            "Concurrent sweep attempted on MallocSpace chunk {:?}",
+            chunk
+        );
         Self {
+            sweeping_chunks,
             chunk,
-            on_side_mark_spec,
-            _stw: PhantomData,
-        }
-    }
-
-    #[inline(always)]
-    fn chunk(&self) -> Chunk {
-        self.chunk
-    }
-
-    #[inline(always)]
-    fn on_side_mark_spec(&self) -> Option<SideMetadataSpec> {
-        self.on_side_mark_spec
-    }
-
-    /// Borrow all chunk-local side-metadata tables as disjoint `&mut [u8; ...]` slices.
-    ///
-    /// Taking `&mut self` statically prevents calling `tables_mut()` twice to create aliasing
-    /// `&mut` slices over the same chunk's side metadata.
-    fn tables_mut(&mut self) -> MallocChunkTables<'_> {
-        let chunk_start = self.chunk.start();
-        let vo_meta_start =
-            side_metadata::address_to_meta_address(&VO_BIT_SIDE_METADATA_SPEC, chunk_start);
-        let vo_meta_end = vo_meta_start + VO_META_BYTES_PER_CHUNK;
-
-        let page_meta_start =
-            side_metadata::address_to_meta_address(&ACTIVE_PAGE_METADATA_SPEC, chunk_start);
-        let page_meta_end = page_meta_start + ACTIVE_PAGE_META_BYTES_PER_CHUNK;
-
-        assert!(
-            (
-                VO_BIT_SIDE_METADATA_SPEC.is_global,
-                VO_BIT_SIDE_METADATA_SPEC.offset
-            ) != (
-                ACTIVE_PAGE_METADATA_SPEC.is_global,
-                ACTIVE_PAGE_METADATA_SPEC.offset
-            ) && (vo_meta_end <= page_meta_start || page_meta_end <= vo_meta_start),
-            "MallocSpace VO_BIT and ACTIVE_PAGE_METADATA_SPEC metadata ranges overlap"
-        );
-
-        let local_mark_bits = if let Some(mark_spec) = self.on_side_mark_spec {
-            assert!(
-                mark_spec.log_num_of_bits == 0 && mark_spec.log_bytes_in_region == VO_REGION_SHIFT,
-                "OnSide LOCAL_MARK_BIT_SPEC geometry ({:?}) must match VO_BIT_SIDE_METADATA_SPEC",
-                mark_spec
-            );
-            let mark_meta_start = side_metadata::address_to_meta_address(&mark_spec, chunk_start);
-            let mark_meta_end = mark_meta_start + VO_META_BYTES_PER_CHUNK;
-            assert!(
-                (mark_spec.is_global, mark_spec.offset)
-                    != (VO_BIT_SIDE_METADATA_SPEC.is_global, VO_BIT_SIDE_METADATA_SPEC.offset)
-                    && (mark_spec.is_global, mark_spec.offset)
-                        != (
-                            ACTIVE_PAGE_METADATA_SPEC.is_global,
-                            ACTIVE_PAGE_METADATA_SPEC.offset
-                        )
-                    && (mark_meta_end <= vo_meta_start || vo_meta_end <= mark_meta_start)
-                    && (mark_meta_end <= page_meta_start || page_meta_end <= mark_meta_start),
-                "OnSide LOCAL_MARK_BIT_SPEC metadata range overlaps VO_BIT or ACTIVE_PAGE_METADATA_SPEC"
-            );
-            // SAFETY: `MallocExclusiveChunk` guarantees `mark_spec` is mapped and initialized for
-            // `[chunk_start, chunk_start + BYTES_IN_CHUNK)` (a single chunk on exact byte
-            // boundaries), `&mut self` together with the disjointness assertions above guarantees
-            // unique `&mut` access to `[mark_meta_start, mark_meta_end)`, and no raw-pointer
-            // side-metadata access touches `mark_spec` while `MallocChunkTables` is live.
-            let slice =
-                unsafe { mark_spec.mapped_bytes_mut_unchecked(chunk_start, BYTES_IN_CHUNK) };
-            Some(
-                slice
-                    .try_into()
-                    .expect("OnSide LOCAL_MARK_BIT_SPEC chunk byte length mismatch"),
-            )
-        } else {
-            None
-        };
-
-        // SAFETY: `MallocExclusiveChunk` guarantees `ACTIVE_PAGE_METADATA_SPEC` is mapped and
-        // initialized for `[chunk_start, chunk_start + BYTES_IN_CHUNK)`, `&mut self` + the
-        // disjointness assertions above guarantee unique `&mut` access, and no raw-pointer
-        // side-metadata access touches `ACTIVE_PAGE_METADATA_SPEC` while `MallocChunkTables` is live.
-        let active_pages_slice = unsafe {
-            ACTIVE_PAGE_METADATA_SPEC.mapped_bytes_mut_unchecked(chunk_start, BYTES_IN_CHUNK)
-        };
-        // SAFETY: `MallocExclusiveChunk` guarantees `VO_BIT_SIDE_METADATA_SPEC` is mapped and
-        // initialized for `[chunk_start, chunk_start + BYTES_IN_CHUNK)`, `&mut self` + the
-        // disjointness assertions above guarantee unique `&mut` access, and no raw-pointer
-        // side-metadata access touches `VO_BIT` while `MallocChunkTables` is live.
-        let vo_bits_slice = unsafe {
-            VO_BIT_SIDE_METADATA_SPEC.mapped_bytes_mut_unchecked(chunk_start, BYTES_IN_CHUNK)
-        };
-
-        MallocChunkTables {
-            chunk_start,
-            active_pages: active_pages_slice
-                .try_into()
-                .expect("ACTIVE_PAGE_METADATA_SPEC chunk byte length mismatch"),
-            vo_bits: vo_bits_slice
-                .try_into()
-                .expect("VO_BIT_SIDE_METADATA_SPEC chunk byte length mismatch"),
-            local_mark_bits,
-            #[cfg(feature = "extreme_assertions")]
-            cleared_vo_addrs: Vec::new(),
-            #[cfg(feature = "extreme_assertions")]
-            cleared_page_ranges: Vec::new(),
         }
     }
 }
 
-/// Disjoint mutable borrows of a single 4 MiB chunk's chunk-local side-metadata tables during STW
-/// `MallocSpace` sweeping (`BP 2.4`, `#58`).
-pub(super) struct MallocChunkTables<'a> {
-    chunk_start: Address,
-    active_pages: &'a mut [u8; ACTIVE_PAGE_META_BYTES_PER_CHUNK],
-    vo_bits: &'a mut [u8; VO_META_BYTES_PER_CHUNK],
-    local_mark_bits: Option<&'a mut [u8; VO_META_BYTES_PER_CHUNK]>,
-    #[cfg(feature = "extreme_assertions")]
-    cleared_vo_addrs: Vec<Address>,
-    #[cfg(feature = "extreme_assertions")]
-    cleared_page_ranges: Vec<(Address, usize)>,
-}
-
-impl<'a> MallocChunkTables<'a> {
-    #[inline(always)]
-    fn vo_bits(&self) -> &[u8; VO_META_BYTES_PER_CHUNK] {
-        self.vo_bits
-    }
-
-    #[inline(always)]
-    fn side_mark_bits(&self) -> Option<&[u8; VO_META_BYTES_PER_CHUNK]> {
-        self.local_mark_bits.as_deref()
-    }
-
-    #[inline(always)]
-    fn vo_bit_pos(&self, addr: Address) -> (usize, u8) {
-        debug_assert!(addr >= self.chunk_start && addr < self.chunk_start + BYTES_IN_CHUNK);
-        debug_assert!(addr.is_aligned_to(ObjectReference::ALIGNMENT));
-        let region_idx = (addr - self.chunk_start) >> VO_REGION_SHIFT;
-        let byte_idx = region_idx >> 3;
-        let mask = 1u8 << (region_idx & 7);
-        (byte_idx, mask)
-    }
-
-    #[inline(always)]
-    fn is_vo_bit_set(&self, addr: Address) -> Option<ObjectReference> {
-        let (byte_idx, mask) = self.vo_bit_pos(addr);
-        if (self.vo_bits[byte_idx] & mask) != 0 {
-            ObjectReference::from_raw_address(addr)
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    fn unset_vo_bit(&mut self, object: ObjectReference) {
-        let addr = object.to_raw_address();
-        let (byte_idx, mask) = self.vo_bit_pos(addr);
-        debug_assert_ne!(
-            self.vo_bits[byte_idx] & mask,
-            0,
-            "{:x}: VO bit not set",
-            object
-        );
-        self.vo_bits[byte_idx] &= !mask;
-        #[cfg(feature = "extreme_assertions")]
-        self.cleared_vo_addrs.push(addr);
-    }
-
-    #[inline]
-    fn is_marked<VM: VMBinding>(&self, object: ObjectReference) -> bool {
-        if let Some(mark_bits) = self.local_mark_bits.as_deref() {
-            let (byte_idx, mask) = self.vo_bit_pos(object.to_raw_address());
-            (mark_bits[byte_idx] & mask) != 0
-        } else {
-            is_marked::<VM>(object, Ordering::Relaxed)
-        }
-    }
-
-    #[inline]
-    fn unset_mark_bit<VM: VMBinding>(&mut self, object: ObjectReference) {
-        let addr = object.to_raw_address();
-        if self.local_mark_bits.is_some() {
-            let (byte_idx, mask) = self.vo_bit_pos(addr);
-            if let Some(mark_bits) = self.local_mark_bits.as_deref_mut() {
-                mark_bits[byte_idx] &= !mask;
-            }
-        } else {
-            VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.store_atomic::<VM, u8>(
-                object,
-                0,
-                None,
-                Ordering::Relaxed,
-            );
-        }
-    }
-
-    #[inline]
-    fn clear_all_side_mark_bits(&mut self) {
-        if let Some(mark_bits) = self.local_mark_bits.as_deref_mut() {
-            mark_bits.fill(0);
-        }
-    }
-
-    /// Clear active-page bytes in `[start, start + size)` within this chunk and return how many
-    /// active pages transitioned from `1` to `0`.
-    fn unset_page_marks(&mut self, start: Address, size: usize) -> usize {
-        assert!(
-            start >= self.chunk_start
-                && size <= (self.chunk_start + BYTES_IN_CHUNK) - start
-                && start.is_aligned_to(BYTES_IN_MALLOC_PAGE)
-                && conversions::raw_is_aligned(size, BYTES_IN_MALLOC_PAGE),
-            "unset_page_marks range [{}, +{}) out of chunk {} bounds or unaligned",
-            start,
-            size,
-            self.chunk_start
-        );
-        if size == 0 {
-            return 0;
-        }
-        let start_idx = (start - self.chunk_start) >> (LOG_BYTES_IN_MALLOC_PAGE as usize);
-        let page_count = size >> (LOG_BYTES_IN_MALLOC_PAGE as usize);
-        let mut cleared_pages = 0;
-        for page_byte in &mut self.active_pages[start_idx..start_idx + page_count] {
-            if *page_byte != 0 {
-                cleared_pages += 1;
-                *page_byte = 0;
-            }
-        }
-        #[cfg(feature = "extreme_assertions")]
-        self.cleared_page_ranges.push((start, size));
-        cleared_pages
-    }
-
-    /// Consume `self` (ending all `&mut [u8]` side-metadata borrows) and return recorded updates
-    /// so `extreme_assertions` sanity tables can be synchronized without aliasing `&mut [u8]`.
-    #[cfg(feature = "extreme_assertions")]
-    fn into_sanity_updates(self) -> (Vec<Address>, Vec<(Address, usize)>) {
-        (self.cleared_vo_addrs, self.cleared_page_ranges)
+impl Drop for ChunkSweepLease<'_> {
+    fn drop(&mut self) {
+        self.sweeping_chunks.lock().unwrap().remove(&self.chunk);
     }
 }
 
@@ -330,10 +82,11 @@ pub struct MallocSpace<VM: VMBinding> {
     /// Work packet scheduler
     scheduler: Arc<GCWorkScheduler<VM>>,
     gc_trigger: Arc<GCTrigger<VM>>,
-    #[allow(dead_code)]
     descriptor: SpaceDescriptor,
     chunk_map: ChunkMap,
     mmap_metadata_lock: Mutex<()>,
+    sweeping_chunks: Mutex<HashSet<Chunk>>,
+    sft_ref: OnceLock<&'static (dyn SFT + Sync + 'static)>,
     // Mapping between allocated address and its size - this is used to check correctness.
     // Size will be set to zero when the memory is freed.
     #[cfg(debug_assertions)]
@@ -448,8 +201,9 @@ impl<VM: VMBinding> Space<VM> for MallocSpace<VM> {
         self.gc_trigger.as_ref()
     }
 
-    fn initialize_sft(&self, _sft_map: &mut dyn crate::policy::sft_map::SFTMap) {
-        // Do nothing - we will set sft when we get new results from malloc
+    fn initialize_sft_static(&'static self) {
+        let _ = self.sft_ref.set(self);
+        crate::mmtk::SFT_MAP.notify_space_creation_static(self);
     }
 
     fn release_multiple_pages(&mut self, _start: Address) {
@@ -534,9 +288,6 @@ impl<VM: VMBinding> Space<VM> for MallocSpace<VM> {
     }
 }
 
-use crate::scheduler::GCWorker;
-use crate::util::copy::CopySemantics;
-
 impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for MallocSpace<VM> {
     fn trace_object<Q: ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(
         &self,
@@ -596,6 +347,8 @@ impl<VM: VMBinding> MallocSpace<VM> {
             descriptor,
             chunk_map,
             mmap_metadata_lock: Mutex::new(()),
+            sweeping_chunks: Mutex::new(HashSet::new()),
+            sft_ref: OnceLock::new(),
             #[cfg(debug_assertions)]
             active_mem: Mutex::new(HashMap::new()),
             #[cfg(debug_assertions)]
@@ -604,14 +357,6 @@ impl<VM: VMBinding> MallocSpace<VM> {
             completed_work_packets: AtomicU32::new(0),
             #[cfg(debug_assertions)]
             work_live_bytes: AtomicUsize::new(0),
-        }
-    }
-
-    #[inline(always)]
-    fn on_side_mark_spec(&self) -> Option<SideMetadataSpec> {
-        match *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC {
-            MetadataSpec::OnSide(spec) => Some(spec),
-            MetadataSpec::InHeader(_) => None,
         }
     }
 
@@ -645,11 +390,9 @@ impl<VM: VMBinding> MallocSpace<VM> {
             return Address::ZERO;
         }
 
-        let (address, is_offset_malloc) = alloc::<VM>(size, align, offset);
+        let (address, actual_size, is_offset_malloc) =
+            alloc_with_usable_size::<VM>(size, align, offset);
         if !address.is_zero() {
-            // SAFETY: `!address.is_zero()` and `(address, is_offset_malloc)` was just returned by
-            // `malloc_ms_util::alloc` for a live allocation from the active malloc backend.
-            let actual_size = unsafe { get_malloc_usable_size(address, is_offset_malloc) };
             assert!(
                 actual_size > 0,
                 "malloc_usable_size returned 0 for non-null allocation {}",
@@ -724,54 +467,6 @@ impl<VM: VMBinding> MallocSpace<VM> {
         self.owns_chunk(Chunk::from_aligned_address(chunk_start))
     }
 
-    /// Free an allocation starting at `addr` that was previously returned by [`Self::alloc`].
-    ///
-    /// # Safety
-    /// - `addr` must be the exact non-zero allocation start address returned by [`Self::alloc`] for
-    ///   a live (not yet freed) allocation in `self`, with mapped side metadata.
-    /// - The allocation must not be accessed or freed again after this call.
-    pub unsafe fn free(&self, addr: Address) {
-        let offset_malloc_bit = is_offset_malloc(addr);
-        // SAFETY: Caller guarantees `addr` is a non-zero live `MallocSpace` allocation whose
-        // `OFFSET_MALLOC_METADATA_SPEC` bit `offset_malloc_bit` matches how `addr` was allocated.
-        let bytes = unsafe { get_malloc_usable_size(addr, offset_malloc_bit) };
-        // SAFETY: `addr`, `bytes`, and `offset_malloc_bit` correspond to a live allocation in `self`.
-        unsafe { self.free_internal(addr, bytes, offset_malloc_bit) };
-    }
-
-    // XXX optimize: We pass the bytes in to free as otherwise there were multiple
-    // indirect call instructions in the generated assembly
-    /// Free a live allocation in `self` given its start address, usable byte size, and offset-malloc flag.
-    ///
-    /// # Safety
-    /// - `addr` must be a non-zero live allocation returned by `malloc_ms_util::alloc` in `self`,
-    ///   matching `offset_malloc_bit` and `bytes`, with mapped `OFFSET_MALLOC_METADATA_SPEC` metadata.
-    /// - `addr` must not be accessed or freed again after this call.
-    unsafe fn free_internal(&self, addr: Address, bytes: usize, offset_malloc_bit: bool) {
-        if offset_malloc_bit {
-            trace!("Free memory {:x}", addr);
-            // SAFETY: Caller guarantees `addr` is a live offset allocation (`offset_malloc_bit`)
-            // returned by `align_offset_alloc` and not freed again.
-            unsafe { offset_free(addr) };
-            unset_offset_malloc_bit(addr);
-        } else {
-            let ptr = addr.to_mut_ptr();
-            trace!("Free memory {:?}", ptr);
-            // SAFETY: Caller guarantees `addr` (`ptr`) was returned directly by `calloc`/`posix_memalign`
-            // (`!offset_malloc_bit`) and has not yet been freed.
-            unsafe {
-                free(ptr);
-            }
-        }
-
-        self.active_bytes.fetch_sub(bytes, Ordering::SeqCst);
-
-        #[cfg(debug_assertions)]
-        if ASSERT_ALLOCATION {
-            self.active_mem.lock().unwrap().insert(addr, 0).unwrap();
-        }
-    }
-
     pub fn trace_object<Q: ObjectQueue>(
         &self,
         queue: &mut Q,
@@ -820,11 +515,10 @@ impl<VM: VMBinding> MallocSpace<VM> {
                 "MallocSpace chunk {} is outside SFT_MAP bounds",
                 start
             );
-            // SAFETY: `self` is a heap-pinned `MallocSpace` inside `'static MMTK<VM>` registered
-            // via `notify_space_creation` during `Plan::initialize_sft`, `try_map_metadata_space`
-            // succeeded for `[start, start + BYTES_IN_CHUNK)`, `has_sft_entry(start)` was just
-            // asserted, and `mmap_metadata_lock` serializes chunk registration.
-            unsafe { crate::mmtk::SFT_MAP.update(self, start, BYTES_IN_CHUNK) };
+            let sft = *self.sft_ref.get().expect(
+                "Space::initialize_sft must be called before MallocSpace chunk registration",
+            );
+            crate::mmtk::SFT_MAP.update_static(sft, start, BYTES_IN_CHUNK);
 
             // 3. Publish the chunk mark last (`Ordering::Release` in `ChunkMap::set_allocated`).
             trace!("set chunk mark bit for {}", start);
@@ -858,202 +552,45 @@ impl<VM: VMBinding> MallocSpace<VM> {
         crate::util::metadata::vo_bit::is_vo_bit_set_for_addr(addr)
     }
 
-    pub fn prepare(&mut self, _full_heap: bool) {}
+    pub(crate) fn prepare_shared(&self, _full_heap: bool) {}
 
-    pub fn release(&mut self) {
+    pub fn prepare(&mut self, full_heap: bool) {
+        self.prepare_shared(full_heap);
+    }
+
+    pub(crate) fn release_shared(&self) {
         use crate::scheduler::WorkBucketStage;
-        // Reborrow `self: &mut Self` as `shared_self: &Self` BEFORE extending its lifetime for
-        // worker packets so `self: &mut Self` is never touched again after `&'static Self` exists
-        // (preserving Stacked Borrows / Tree Borrows aliasing invariants).
-        let shared_self: &Self = self;
-        // SAFETY: Every `MallocSpace` lives inside the heap-pinned `Plan` owned by `'static MMTK<VM>`,
-        // and all `WorkBucketStage::Release` tasks complete before `MMTK` could ever be dropped.
-        let space: &'static Self = unsafe { &*(shared_self as *const Self) };
-        let on_side_mark_spec = shared_self.on_side_mark_spec();
-        let mut prev_chunk: Option<Chunk> = None;
-        let mut work_packets: Vec<Box<dyn GCWork<VM>>> = Vec::new();
-        for chunk in shared_self
+
+        let space_descriptor = self.descriptor;
+        let work_packets: Vec<Box<dyn GCWork<VM>>> = self
             .chunk_map
             .all_chunks()
-            .filter(|&chunk| shared_self.owns_chunk(chunk))
-        {
-            assert!(
-                prev_chunk.is_none_or(|prev| prev < chunk),
-                "ChunkMap::all_chunks must yield strictly monotonic chunks for disjoint MallocExclusiveChunk ownership"
-            );
-            prev_chunk = Some(chunk);
-            // SAFETY: `MallocSpace::release` runs during STW `Release` while all mutators are
-            // parked; strictly monotonic `prev_chunk < chunk` proves each `chunk` is minted into at
-            // most one linear `MSSweepChunk` packet, `shared_self.owns_chunk(chunk)` (paired with
-            // `map_metadata_and_update_bound`'s `SFT_MAP.update` before `Release` `set_allocated`)
-            // proves `chunk` belongs to `shared_self` (ruling out 4-bit `space_index` collisions)
-            // with `VO_BIT`, `ACTIVE_PAGE_METADATA_SPEC`, `OFFSET_MALLOC_METADATA_SPEC`, and
-            // `on_side_mark_spec` mapped across `chunk` for `'static`, and every set `VO_BIT` in
-            // `chunk` denotes a live `MallocSpace` object.
-            let exclusive =
-                unsafe { MallocExclusiveChunk::new_unchecked(chunk, on_side_mark_spec) };
-            work_packets.push(Box::new(MSSweepChunk {
-                ms: space,
-                chunk: Some(exclusive),
-            }));
-        }
+            .filter(|&chunk| self.owns_chunk(chunk))
+            .map(|chunk| -> Box<dyn GCWork<VM>> {
+                Box::new(MSSweepChunk {
+                    space_descriptor,
+                    chunk,
+                })
+            })
+            .collect();
 
         debug!("Generated {} sweep work packets", work_packets.len());
         #[cfg(debug_assertions)]
         {
-            shared_self
-                .total_work_packets
+            self.total_work_packets
                 .store(work_packets.len() as u32, Ordering::SeqCst);
-            shared_self
-                .completed_work_packets
-                .store(0, Ordering::SeqCst);
-            shared_self.work_live_bytes.store(0, Ordering::SeqCst);
+            self.completed_work_packets.store(0, Ordering::SeqCst);
+            self.work_live_bytes.store(0, Ordering::SeqCst);
         }
 
-        shared_self.scheduler.work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
+        self.scheduler.work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
     }
 
-    pub fn end_of_gc(&mut self) {}
-
-    /// Sweep all dead objects in the chunk starting at `chunk_start`.
-    ///
-    /// # Safety
-    /// - `chunk_start` must be non-zero, aligned to `BYTES_IN_CHUNK`, and correspond to an
-    ///   allocated chunk owned by `self` (`self.owns_chunk(...)`, i.e. allocated in `self.chunk_map`
-    ///   with mapped side metadata and `SFT_MAP` pointing to `self`).
-    /// - Called during the STW `Release` stage by the unique worker assigned to `chunk_start`
-    ///   (no mutators are allocating and no other thread accesses `chunk_start`'s chunk-local side
-    ///   metadata), and every set `VO_BIT` in `chunk_start` must denote a live `MallocSpace` object.
-    pub unsafe fn sweep_chunk(&self, chunk_start: Address) {
-        assert!(
-            !chunk_start.is_zero() && chunk_start.is_aligned_to(BYTES_IN_CHUNK),
-            "sweep_chunk requires a non-zero chunk-aligned address: {}",
-            chunk_start
-        );
-        let chunk = Chunk::from_aligned_address(chunk_start);
-        assert!(
-            self.owns_chunk(chunk),
-            "sweep_chunk requires an allocated chunk owned by MallocSpace: {:?}",
-            chunk
-        );
-        // SAFETY: `self.owns_chunk(chunk)` verified `chunk` is allocated in `self.chunk_map` with
-        // mapped `MallocSpace` side metadata and an `SFT_MAP` entry pointing to `self` (ruling out
-        // 4-bit `space_index` collisions), and caller upholds exclusive STW sweep ownership and
-        // live VO-marked object invariants for `chunk`.
-        let exclusive =
-            unsafe { MallocExclusiveChunk::new_unchecked(chunk, self.on_side_mark_spec()) };
-        self.sweep_exclusive_chunk(exclusive);
+    pub fn release(&mut self) {
+        self.release_shared();
     }
 
-    /// Given a live (not-yet-freed) object in `MallocSpace`, return its malloc start address,
-    /// whether it is an offset malloc, and its malloc usable size.
-    ///
-    /// # Safety
-    /// `object` must be a currently allocated (not yet `free`d) object in `MallocSpace` with
-    /// mapped `OFFSET_MALLOC_METADATA_SPEC` metadata for `object.to_object_start::<VM>()`.
-    unsafe fn get_malloc_addr_size(object: ObjectReference) -> (Address, bool, usize) {
-        let obj_start = object.to_object_start::<VM>();
-        let offset_malloc_bit = is_offset_malloc(obj_start);
-        // SAFETY: Caller guarantees `object` (`obj_start`) is a live `MallocSpace` allocation whose
-        // `OFFSET_MALLOC_METADATA_SPEC` bit `offset_malloc_bit` matches how `obj_start` was allocated.
-        let bytes = unsafe { get_malloc_usable_size(obj_start, offset_malloc_bit) };
-        (obj_start, offset_malloc_bit, bytes)
-    }
-
-    /// Scan word-aligned addresses in `[start, end)` within `tables`'s chunk using safe 128-bit
-    /// `[u64; 2]` zero-skipping on `tables.vo_bits()`, invoking `visit` for each VO-marked object.
-    ///
-    /// Queries `(obj_start, offset_malloc_bit, bytes)` *before* invoking `visit` because `visit`
-    /// may sweep and `libc::free` dead objects.
-    ///
-    /// # Safety
-    /// Every address in `[start, end)` whose `VO_BIT` is `1` in `tables` must be a currently
-    /// allocated (not-yet-freed) `MallocSpace` object with mapped `OFFSET_MALLOC_METADATA_SPEC`
-    /// metadata.
-    unsafe fn for_each_object_in_chunk_range(
-        tables: &mut MallocChunkTables<'_>,
-        start: Address,
-        end: Address,
-        mut visit: impl FnMut(&mut MallocChunkTables<'_>, ObjectReference, Address, bool, usize),
-    ) {
-        let chunk_start = tables.chunk_start;
-        debug_assert!(start >= chunk_start && start < end && end <= chunk_start + BYTES_IN_CHUNK);
-        debug_assert!(start.is_aligned_to(ObjectReference::ALIGNMENT));
-        debug_assert!(end.is_aligned_to(ObjectReference::ALIGNMENT));
-
-        let bulk_load_size: usize = 128usize << VO_REGION_SHIFT;
-        let mut cursor = start;
-        while cursor < end {
-            if cursor.is_aligned_to(bulk_load_size) && end - cursor >= bulk_load_size {
-                let pair_idx = (cursor - chunk_start) / bulk_load_size;
-                let pair = as_u64_pairs(tables.vo_bits())[pair_idx];
-                if pair == [0, 0] {
-                    cursor += bulk_load_size;
-                    continue;
-                }
-            }
-
-            if let Some(object) = tables.is_vo_bit_set(cursor) {
-                // SAFETY: `object` has its VO bit set in `[start, end)`, so by caller invariant it
-                // is a live `MallocSpace` allocation with mapped `OFFSET_MALLOC_METADATA_SPEC`; we
-                // query its start address and usable size once before `visit` potentially frees it.
-                let (obj_start, offset_malloc_bit, bytes) =
-                    unsafe { Self::get_malloc_addr_size(object) };
-                let next_cursor = (obj_start + bytes)
-                    .align_up(ObjectReference::ALIGNMENT)
-                    .max(cursor + ObjectReference::ALIGNMENT);
-                visit(tables, object, obj_start, offset_malloc_bit, bytes);
-                cursor = next_cursor;
-            } else {
-                cursor += ObjectReference::ALIGNMENT;
-            }
-        }
-    }
-
-    /// Sweep `object` if unmarked (freeing its malloc backing and clearing its VO bit in `tables`),
-    /// or clear empty active-page bytes preceding a live `object` in `tables`.
-    /// Returns `true` if `object` was swept (freed).
-    ///
-    /// # Safety
-    /// `(obj_start, offset_malloc_bit, bytes)` must describe the live (not-yet-freed) `MallocSpace`
-    /// allocation `object` in `tables`'s chunk, with mapped `OFFSET_MALLOC_METADATA_SPEC` metadata.
-    unsafe fn sweep_object_with_tables(
-        &self,
-        tables: &mut MallocChunkTables<'_>,
-        object: ObjectReference,
-        obj_start: Address,
-        offset_malloc_bit: bool,
-        bytes: usize,
-        empty_page_start: &mut Address,
-    ) -> bool {
-        if !tables.is_marked::<VM>(object) {
-            // Dead object: free malloc memory and clear VO bit through `tables` (no raw VO_BIT pointer!).
-            trace!("Object {} has been allocated but not marked", object);
-            // SAFETY: `(obj_start, bytes, offset_malloc_bit)` describes the dead live allocation
-            // `object`, which has not yet been freed and whose VO bit is cleared immediately below
-            // so it will never be visited or freed again.
-            unsafe { self.free_internal(obj_start, bytes, offset_malloc_bit) };
-            trace!("free object {}", object);
-            tables.unset_vo_bit(object);
-            true
-        } else {
-            // Live object that we have marked: clear empty pages between previous live object and this one.
-            if !empty_page_start.is_zero() {
-                let chunk_end = tables.chunk_start + BYTES_IN_CHUNK;
-                let current_page = obj_start.align_down(BYTES_IN_MALLOC_PAGE).min(chunk_end);
-                if current_page > *empty_page_start {
-                    let cleared = tables
-                        .unset_page_marks(*empty_page_start, current_page - *empty_page_start);
-                    if cleared != 0 {
-                        self.active_pages.fetch_sub(cleared, Ordering::SeqCst);
-                    }
-                }
-            }
-
-            *empty_page_start = (obj_start + bytes).align_up(BYTES_IN_MALLOC_PAGE);
-            false
-        }
-    }
+    pub fn end_of_gc(&self) {}
 
     /// Used when each chunk is done. Only called in debug build.
     #[cfg(debug_assertions)]
@@ -1081,26 +618,74 @@ impl<VM: VMBinding> MallocSpace<VM> {
         }
     }
 
-    /// Sweep a chunk exclusively owned via a linear [`MallocExclusiveChunk`].
-    ///
-    /// Stacked Borrows discipline (`#58`): all chunk-local reads and writes to `VO_BIT`,
-    /// `ACTIVE_PAGE_METADATA_SPEC`, and `OnSide` `LOCAL_MARK_BIT_SPEC` go exclusively through
-    /// `MallocChunkTables<'_>` (`&mut [u8]` slices), while `OFFSET_MALLOC_METADATA_SPEC` uses
-    /// strictly atomic operations on its disjoint metadata table. `tables` is dropped before any
-    /// `SFT_MAP.clear` or `extreme_assertions` sanity-table synchronization runs.
-    fn sweep_exclusive_chunk(&self, mut exclusive: MallocExclusiveChunk<'_>) {
-        // We can do xor on bulk for mark bits and valid object bits. If the result is zero, that means
-        // the objects in it are all alive (both valid object bit and mark bit is set), and we do not
-        // need to do anything for the region. Otherwise, we will sweep each single object in the region.
-        // Note: Enabling this would result in inaccurate page accounting. We disable this by default, and
-        // we will sweep object one by one.
-        const BULK_XOR_ON_MARK_BITS: bool = false;
+    /// Project the mapped `VO_BIT` atomic bytes for an allocated `chunk` owned by `self`.
+    fn chunk_vo_bytes(&self, chunk: Chunk) -> &[AtomicU8; VO_META_BYTES_PER_CHUNK] {
+        assert!(
+            !side_metadata::global_side_metadata_base_address().is_zero(),
+            "MallocSpace::chunk_vo_bytes called before side metadata initialization"
+        );
+        let chunk_start = chunk.start();
+        assert!(
+            self.owns_chunk(chunk),
+            "MallocSpace::chunk_vo_bytes requires an allocated chunk owned by MallocSpace: {:?}",
+            chunk
+        );
+        let vo_meta_start =
+            side_metadata::address_to_meta_address(&VO_BIT_SIDE_METADATA_SPEC, chunk_start);
+        if VO_BIT_SIDE_METADATA_SPEC.uses_contiguous_side_metadata() {
+            let spec_start = VO_BIT_SIDE_METADATA_SPEC.get_starting_address();
+            let spec_end = VO_BIT_SIDE_METADATA_SPEC.upper_bound_address_for_contiguous();
+            assert!(
+                vo_meta_start >= spec_start
+                    && vo_meta_start
+                        .as_usize()
+                        .checked_add(VO_META_BYTES_PER_CHUNK)
+                        .is_some_and(|end| end <= spec_end.as_usize()),
+                "VO_BIT metadata [{vo_meta_start}, + {VO_META_BYTES_PER_CHUNK}) for MallocSpace chunk {chunk:?} falls outside contiguous spec window [{spec_start}, {spec_end})"
+            );
+        }
+        let first_page = vo_meta_start.align_down(BYTES_IN_PAGE);
+        let last_page = (vo_meta_start + (VO_META_BYTES_PER_CHUNK - 1)).align_down(BYTES_IN_PAGE);
+        let mut page = first_page;
+        loop {
+            assert!(
+                crate::MMAPPER.is_mapped_address(page),
+                "VO_BIT side-metadata page {} for MallocSpace chunk {:?} is not mapped",
+                page,
+                chunk
+            );
+            if page == last_page {
+                break;
+            }
+            page += BYTES_IN_PAGE;
+        }
+        // SAFETY:
+        // 1. `self.owns_chunk(chunk)` and the page-mapping loop above unconditionally verify that
+        //    `chunk_start` is non-zero, chunk-aligned, owned by `self`, and that every OS page of
+        //    `[vo_meta_start, vo_meta_start + VO_META_BYTES_PER_CHUNK)` is mapped (never unmapped
+        //    for the process lifetime); `mapped_atomic_bytes_unchecked` additionally checks byte
+        //    alignment, single-chunk containment, and bounds.
+        // 2. All safe `VO_BIT` operations (`vo_bit::{set_vo_bit, unset_vo_bit, is_vo_bit_set,
+        //    is_vo_bit_set_for_addr}`) access `VO_BIT_SIDE_METADATA_SPEC` via `AtomicU8`, and no
+        //    `&[u8]` / `&mut [u8]` slice is created over `VO_BIT` in `MallocSpace`.
+        unsafe {
+            VO_BIT_SIDE_METADATA_SPEC
+                .mapped_atomic_bytes_unchecked::<VO_META_BYTES_PER_CHUNK>(chunk_start)
+        }
+    }
 
-        let chunk = exclusive.chunk();
+    /// Atomically sweep an allocated `chunk` owned by `self` during a STW `InPause` collection.
+    fn sweep_allocated_chunk(&self, mmtk: &'static MMTK<VM>, chunk: Chunk) {
+        assert_eq!(
+            mmtk.get_gc_status(),
+            GcStatus::InPause,
+            "MallocSpace::sweep_allocated_chunk must execute during a STW GC pause"
+        );
+        let _lease = ChunkSweepLease::acquire(&self.sweeping_chunks, chunk);
+
         let chunk_start = chunk.start();
         let chunk_end = chunk_start + BYTES_IN_CHUNK;
-        #[cfg(feature = "extreme_assertions")]
-        let on_side_mark_spec = exclusive.on_side_mark_spec();
+        let vo_bytes = self.chunk_vo_bytes(chunk);
 
         #[cfg(debug_assertions)]
         let mut live_bytes = 0usize;
@@ -1108,160 +693,41 @@ impl<VM: VMBinding> MallocSpace<VM> {
         debug!("Check active chunk {:?}", chunk_start);
         let mut empty_page_start = Address::ZERO;
 
-        // Scope `tables` (`&mut [u8]` borrows) strictly inside this block so all mutable
-        // side-metadata slices are dropped before any `SideMetadataSpec` raw-pointer sync or
-        // `SFT_MAP.clear` runs below.
-        #[cfg(feature = "extreme_assertions")]
-        let (cleared_vo_addrs, cleared_page_ranges) = {
-            let mut tables = exclusive.tables_mut();
-            self.sweep_tables(
-                &mut tables,
-                chunk_start,
-                chunk_end,
-                BULK_XOR_ON_MARK_BITS,
-                &mut empty_page_start,
-                #[cfg(debug_assertions)]
-                &mut live_bytes,
-            );
-            tables.into_sanity_updates()
-        };
-        #[cfg(not(feature = "extreme_assertions"))]
-        {
-            let mut tables = exclusive.tables_mut();
-            self.sweep_tables(
-                &mut tables,
-                chunk_start,
-                chunk_end,
-                BULK_XOR_ON_MARK_BITS,
-                &mut empty_page_start,
-                #[cfg(debug_assertions)]
-                &mut live_bytes,
-            );
-        }
-
-        #[cfg(feature = "extreme_assertions")]
-        {
-            for addr in cleared_vo_addrs {
-                VO_BIT_SIDE_METADATA_SPEC.store_atomic::<u8>(addr, 0, Ordering::Relaxed);
-            }
-            for (start, size) in cleared_page_ranges {
-                ACTIVE_PAGE_METADATA_SPEC.bzero_metadata(start, size);
-            }
-            if let Some(mark_spec) = on_side_mark_spec {
-                mark_spec.bzero_metadata(chunk_start, BYTES_IN_CHUNK);
-            }
-        }
-
-        if empty_page_start.is_zero() {
-            self.chunk_map.set_allocated(chunk, false);
-            // SAFETY: `chunk_start` is chunk-aligned and was verified to have an SFT entry when
-            // `MallocExclusiveChunk` was minted; this worker has exclusive STW sweep ownership of
-            // `chunk`.
-            unsafe { crate::mmtk::SFT_MAP.clear(chunk_start) };
-        }
-
-        #[cfg(debug_assertions)]
-        self.debug_sweep_chunk_done(live_bytes);
-    }
-
-    fn sweep_tables(
-        &self,
-        tables: &mut MallocChunkTables<'_>,
-        chunk_start: Address,
-        chunk_end: Address,
-        bulk_xor_on_mark_bits: bool,
-        empty_page_start: &mut Address,
-        #[cfg(debug_assertions)] live_bytes: &mut usize,
-    ) {
-        if bulk_xor_on_mark_bits && tables.side_mark_bits().is_some() {
-            let bulk_load_size: usize = 128usize << VO_REGION_SHIFT;
-            let num_pairs = VO_META_BYTES_PER_CHUNK / 16;
-
-            for pair_idx in 0..num_pairs {
-                let address = chunk_start + pair_idx * bulk_load_size;
-                let vo_pair = as_u64_pairs(tables.vo_bits())[pair_idx];
-                let mark_pair = as_u64_pairs(tables.side_mark_bits().unwrap())[pair_idx];
-
-                if (vo_pair[0] ^ mark_pair[0]) | (vo_pair[1] ^ mark_pair[1]) != 0 {
-                    let end = address + bulk_load_size;
-                    let sweep_in_bulk = |tables: &mut MallocChunkTables<'_>,
-                                         object: ObjectReference,
-                                         obj_start: Address,
-                                         offset_malloc_bit: bool,
-                                         bytes: usize| {
-                        // SAFETY: `(obj_start, offset_malloc_bit, bytes)` was queried from the
-                        // live `object` immediately prior to this closure call.
-                        unsafe {
-                            self.sweep_object_with_tables(
-                                tables,
-                                object,
-                                obj_start,
-                                offset_malloc_bit,
-                                bytes,
-                                empty_page_start,
-                            );
-                        }
-                    };
-                    // SAFETY: `MallocExclusiveChunk` guarantees every VO-marked address in
-                    // `[address, end)` is a live `MallocSpace` allocation with mapped metadata, and
-                    // each dead object's VO bit is cleared immediately when freed.
-                    unsafe {
-                        Self::for_each_object_in_chunk_range(tables, address, end, sweep_in_bulk);
-                    }
-                } else if vo_pair != [0, 0] {
-                    // TODO we aren't actually accounting for the case where an object is alive and spans
-                    // a page boundary as we don't know what the object sizes are/what is alive in the bulk region
-                    *empty_page_start = (*empty_page_start)
-                        .max((address + bulk_load_size).align_up(BYTES_IN_MALLOC_PAGE));
+        let mut byte_idx = 0usize;
+        while byte_idx < VO_META_BYTES_PER_CHUNK {
+            if (byte_idx & 15) == 0 && byte_idx + 16 <= VO_META_BYTES_PER_CHUNK {
+                let any_nonzero = vo_bytes[byte_idx..byte_idx + 16]
+                    .iter()
+                    .fold(0u8, |acc, b| acc | b.load(Ordering::Relaxed));
+                if any_nonzero == 0 {
+                    byte_idx += 16;
+                    continue;
                 }
             }
 
-            #[cfg(debug_assertions)]
-            {
-                let count_live = |tables: &mut MallocChunkTables<'_>,
-                                  object: ObjectReference,
-                                  obj_start: Address,
-                                  _offset_malloc_bit: bool,
-                                  bytes: usize| {
-                    if ASSERT_ALLOCATION {
-                        debug_assert!(
-                            self.active_mem.lock().unwrap().contains_key(&obj_start),
-                            "Address {} with VO bit is not in active_mem",
-                            obj_start
-                        );
-                        debug_assert_eq!(
-                            self.active_mem.lock().unwrap().get(&obj_start),
-                            Some(&bytes),
-                            "Address {} size in active_mem does not match the size from malloc_usable_size",
-                            obj_start
-                        );
-                    }
-                    debug_assert!(
-                        tables.is_marked::<VM>(object),
-                        "Dead object = {} found after sweep",
-                        object
-                    );
-                    *live_bytes += bytes;
-                };
-                // SAFETY: All dead objects were swept above and had their VO bits cleared, so every
-                // remaining VO-marked address in `[chunk_start, chunk_end)` is a live allocation.
-                unsafe {
-                    Self::for_each_object_in_chunk_range(
-                        tables,
-                        chunk_start,
-                        chunk_end,
-                        count_live,
-                    );
-                }
+            let mut bits = vo_bytes[byte_idx].load(Ordering::Relaxed);
+            if bits == 0 {
+                byte_idx += 1;
+                continue;
             }
 
-            tables.clear_all_side_mark_bits();
-        } else {
-            let sweep_one = |tables: &mut MallocChunkTables<'_>,
-                             object: ObjectReference,
-                             obj_start: Address,
-                             offset_malloc_bit: bool,
-                             bytes: usize| {
+            while bits != 0 {
+                let bit = bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                let addr = chunk_start + (((byte_idx << 3) + bit) << VO_REGION_SHIFT);
+                let object = ObjectReference::from_raw_address(addr)
+                    .expect("VO-marked address in non-zero MallocSpace chunk cannot be zero");
+
+                let obj_start = object.to_object_start::<VM>();
+                let is_offset = is_offset_malloc(obj_start);
+                // SAFETY: `GcStatus::InPause` guarantees all mutators are stopped, `_lease`
+                // guarantees exclusive sweep ownership of `chunk` (no concurrent sweeper on
+                // `chunk`), and `self.owns_chunk(chunk)` guarantees `chunk` belongs to `self`.
+                // Every set `VO_BIT` in `self` was set in `initialize_object_metadata` for a live
+                // allocation from `alloc_with_usable_size` (with matching `is_offset`) and is
+                // cleared via `unset_vo_bit` before freeing below.
+                let bytes = unsafe { get_malloc_usable_size(obj_start, is_offset) };
+
                 #[cfg(debug_assertions)]
                 if ASSERT_ALLOCATION {
                     debug_assert!(
@@ -1272,70 +738,108 @@ impl<VM: VMBinding> MallocSpace<VM> {
                     debug_assert_eq!(
                         self.active_mem.lock().unwrap().get(&obj_start),
                         Some(&bytes),
-                        "Address {} size in active_mem does not match the size from malloc_usable_size",
+                        "Address {} size in active_mem does not match malloc_usable_size",
                         obj_start
                     );
                 }
 
-                // SAFETY: `(obj_start, offset_malloc_bit, bytes)` was queried from the live
-                // `object` immediately before invoking this closure.
-                let live = !unsafe {
-                    self.sweep_object_with_tables(
-                        tables,
-                        object,
-                        obj_start,
-                        offset_malloc_bit,
-                        bytes,
-                        empty_page_start,
-                    )
-                };
-                if live {
-                    tables.unset_mark_bit::<VM>(object);
+                if !is_marked::<VM>(object, Ordering::Relaxed) {
+                    trace!("Object {} has been allocated but not marked", object);
+                    unset_vo_bit(object);
+                    if is_offset {
+                        unset_offset_malloc_bit(obj_start);
+                    }
+                    // SAFETY: Same live-allocation + `GcStatus::InPause` + `_lease` proof as above;
+                    // `unset_vo_bit(object)` cleared the VO bit first so `obj_start` can never be
+                    // visited or freed again.
+                    unsafe {
+                        if is_offset {
+                            offset_free(obj_start);
+                        } else {
+                            free(obj_start.to_mut_ptr());
+                        }
+                    }
+                    self.active_bytes.fetch_sub(bytes, Ordering::SeqCst);
+                    #[cfg(debug_assertions)]
+                    if ASSERT_ALLOCATION {
+                        self.active_mem
+                            .lock()
+                            .unwrap()
+                            .insert(obj_start, 0)
+                            .unwrap();
+                    }
+                } else {
+                    unset_mark_bit::<VM>(object);
                     #[cfg(debug_assertions)]
                     {
-                        *live_bytes += bytes;
+                        live_bytes += bytes;
                     }
+                    if !empty_page_start.is_zero() {
+                        let current_page =
+                            obj_start.align_down(BYTES_IN_MALLOC_PAGE).min(chunk_end);
+                        if current_page > empty_page_start {
+                            let cleared =
+                                unset_page_marks(empty_page_start, current_page - empty_page_start);
+                            if cleared != 0 {
+                                self.active_pages.fetch_sub(cleared, Ordering::SeqCst);
+                            }
+                        }
+                    }
+                    empty_page_start = (obj_start + bytes).align_up(BYTES_IN_MALLOC_PAGE);
                 }
-            };
-            // SAFETY: `MallocExclusiveChunk` guarantees every VO-marked address in
-            // `[chunk_start, chunk_end)` is a live `MallocSpace` allocation with mapped metadata.
-            unsafe {
-                Self::for_each_object_in_chunk_range(tables, chunk_start, chunk_end, sweep_one);
             }
 
-            if !empty_page_start.is_zero() && *empty_page_start < chunk_end {
-                // Clear trailing empty pages at the end of a chunk after the last live object.
-                let cleared =
-                    tables.unset_page_marks(*empty_page_start, chunk_end - *empty_page_start);
-                if cleared != 0 {
-                    self.active_pages.fetch_sub(cleared, Ordering::SeqCst);
-                }
-            }
+            byte_idx += 1;
         }
 
-        if empty_page_start.is_zero() {
-            let cleared = tables.unset_page_marks(chunk_start, BYTES_IN_CHUNK);
+        if !empty_page_start.is_zero() && empty_page_start < chunk_end {
+            let cleared = unset_page_marks(empty_page_start, chunk_end - empty_page_start);
             if cleared != 0 {
                 self.active_pages.fetch_sub(cleared, Ordering::SeqCst);
             }
         }
+
+        if empty_page_start.is_zero() {
+            let cleared = unset_page_marks(chunk_start, BYTES_IN_CHUNK);
+            if cleared != 0 {
+                self.active_pages.fetch_sub(cleared, Ordering::SeqCst);
+            }
+            self.chunk_map.set_allocated(chunk, false);
+            crate::mmtk::SFT_MAP.clear_checked(chunk_start);
+        }
+
+        #[cfg(debug_assertions)]
+        self.debug_sweep_chunk_done(live_bytes);
     }
 }
 
-use crate::scheduler::GCWork;
-use crate::MMTK;
-
-/// Simple work packet that sweeps a single exclusively-owned 4 MiB chunk.
-pub struct MSSweepChunk<VM: VMBinding> {
-    ms: &'static MallocSpace<VM>,
-    chunk: Option<MallocExclusiveChunk<'static>>,
+fn with_malloc_space<VM: VMBinding, R>(
+    mmtk: &'static MMTK<VM>,
+    descriptor: SpaceDescriptor,
+    f: impl FnOnce(&MallocSpace<VM>) -> R,
+) -> R {
+    let mut f = Some(f);
+    let mut out = None;
+    mmtk.get_plan().for_each_space(&mut |s| {
+        if let Some(ms) = s.downcast_ref::<MallocSpace<VM>>() {
+            if ms.descriptor == descriptor {
+                out = Some((f.take().unwrap())(ms));
+            }
+        }
+    });
+    out.expect("MallocSpace must be registered in Plan::for_each_space")
 }
 
-impl<VM: VMBinding> GCWork<VM> for MSSweepChunk<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        let exclusive = self.chunk.take().expect(
-            "MSSweepChunk::do_work must execute at most once per linear MallocExclusiveChunk",
-        );
-        self.ms.sweep_exclusive_chunk(exclusive);
+/// Work packet that sweeps a single allocated 4 MiB chunk in `MallocSpace`.
+pub struct MSSweepChunk {
+    space_descriptor: SpaceDescriptor,
+    chunk: Chunk,
+}
+
+impl<VM: VMBinding> GCWork<VM> for MSSweepChunk {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        with_malloc_space(mmtk, self.space_descriptor, |ms| {
+            ms.sweep_allocated_chunk(mmtk, self.chunk);
+        });
     }
 }

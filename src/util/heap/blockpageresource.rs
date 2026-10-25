@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use super::pageresource::{PRAllocFail, PRAllocResult};
 use super::{FreeListPageResource, PageResource};
 use crate::util::address::Address;
@@ -368,6 +370,16 @@ impl<B: Region> BlockPool<B> {
     /// Test if the pool contains no free blocks
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Clear all global and worker-local free block queues in place.
+    pub fn clear(&self) {
+        *self.head_global_freed_blocks.write() = None;
+        self.global_freed_blocks.write().clear();
+        for local in &self.worker_local_freed_blocks {
+            local.lock().clear();
+        }
+        self.count.store(0, Ordering::SeqCst);
     }
 
     /// Iterate all the blocks in the BlockQueue
