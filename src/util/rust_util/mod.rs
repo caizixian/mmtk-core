@@ -71,15 +71,26 @@ impl<T> InitializeOnce<T> {
     /// initialization is done (`Once` returns).
     pub fn initialize_once(&self, init_fn: &'static dyn Fn() -> T) {
         self.once.call_once(|| {
-            unsafe { &mut *self.v.get() }.write(init_fn());
+            let val = init_fn();
+            // SAFETY: `Once::call_once` guarantees that at most one thread executes this closure
+            // to completion while blocking any concurrent `initialize_once` callers, and
+            // `InitializeOnce`'s lifecycle invariant requires `initialize_once` to complete before
+            // `get_ref` or `get_mut` is called. Evaluating `init_fn()` before forming `&mut` also
+            // prevents re-entrant aliasing if `init_fn` were to inspect global state.
+            unsafe { &mut *self.v.get() }.write(val);
         });
         debug_assert!(self.once.is_completed());
     }
 
-    /// Get the value. This should only be used after initialize_once()
+    /// Get the value. This should only be used after `initialize_once()` has completed.
     pub fn get_ref(&self) -> &T {
-        // We only assert in debug builds.
+        // We only assert in debug builds to avoid an atomic branch on hot paths (e.g. `SFT_MAP`).
         debug_assert!(self.once.is_completed());
+        // SAFETY: `InitializeOnce` instances are initialized during MMTk startup via
+        // `initialize_once` (enforced by `debug_assert!` above) before any thread reads them via
+        // `get_ref`/`Deref`, and `Once::call_once` establishes happens-before synchronization for
+        // the write to `self.v`. Any single-threaded boot-time mutation via `get_mut` finishes
+        // before concurrent readers access `&self`.
         unsafe { (*self.v.get()).assume_init_ref() }
     }
 
@@ -88,11 +99,17 @@ impl<T> InitializeOnce<T> {
     /// and before the plan creation is done, the binding cannot use MMTK at all.
     ///
     /// # Safety
-    /// The caller needs to make sure there is no race when mutating the value.
+    /// - `self.initialize_once(...)` must have already completed before calling `get_mut`.
+    /// - The caller must ensure exclusive access: no other `&T` or `&mut T` derived from `self`
+    ///   may exist concurrently on this or any other thread for the lifetime of the returned
+    ///   `&mut T`.
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn get_mut(&self) -> &mut T {
         // We only assert in debug builds.
         debug_assert!(self.once.is_completed());
+        // SAFETY: Upheld by the caller: `self.v` has been initialized by `initialize_once`, and
+        // no concurrent shared or mutable references to `self.v`'s contents exist during the
+        // returned mutable borrow.
         unsafe { (*self.v.get()).assume_init_mut() }
     }
 }
@@ -104,6 +121,12 @@ impl<T> std::ops::Deref for InitializeOnce<T> {
     }
 }
 
+// SAFETY: Concurrent initialization of `self.v` is synchronized by `std::sync::Once`, after which
+// `get_ref` only exposes shared `&T` references (while `get_mut` is `unsafe` and requires caller-
+// guaranteed exclusive access). Note: all concrete types stored in static `InitializeOnce<T>` in
+// `mmtk-core` (`VMLayout`, `Box<dyn SFTMap>` whose concrete impls are `Sync`, `Box<dyn VMMap>`,
+// `Box<dyn Mmapper>`) are safe to share across threads; tightening the bound to `T: Send + Sync`
+// requires adding `: Send + Sync` to `trait SFTMap` in Stage 2.
 unsafe impl<T> Sync for InitializeOnce<T> {}
 
 /// Create a formatted string that makes the best effort idenfying the current process and thread.

@@ -15,8 +15,6 @@ pub struct SlotLogger<SL: Slot> {
     slot_log: RwLock<HashSet<SL>>,
 }
 
-unsafe impl<SL: Slot> Sync for SlotLogger<SL> {}
-
 impl<SL: Slot> SlotLogger<SL> {
     pub fn new() -> Self {
         Self {

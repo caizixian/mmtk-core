@@ -8,8 +8,13 @@ use libc::c_void;
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct OpaquePointer(*mut c_void);
 
-// We never really dereference an opaque pointer in mmtk-core.
+// SAFETY: `OpaquePointer` is an opaque handle (`*mut c_void`) that is never dereferenced by any
+// safe method in `mmtk-core`; sharing `&OpaquePointer` across threads only exposes raw pointer
+// value conversions and null checks, which cannot cause data races or memory unsafety.
 unsafe impl Sync for OpaquePointer {}
+// SAFETY: `OpaquePointer` does not own or dereference its underlying `*mut c_void` in safe code,
+// so transferring an `OpaquePointer` value to another thread cannot violate thread-affinity or
+// aliasing invariants without an explicit `unsafe` pointer dereference by the caller.
 unsafe impl Send for OpaquePointer {}
 
 impl Default for OpaquePointer {

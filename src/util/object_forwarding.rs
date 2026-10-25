@@ -185,26 +185,24 @@ pub fn clear_forwarding_bits<VM: VMBinding>(object: ObjectReference) {
 }
 
 /// Read the forwarding pointer of an object.
-/// This function is called on forwarded/being_forwarded objects.
+/// This function is called on forwarded objects.
 pub fn read_forwarding_pointer<VM: VMBinding>(object: ObjectReference) -> ObjectReference {
     debug_assert!(
-        is_forwarded_or_being_forwarded::<VM>(object),
-        "read_forwarding_pointer called for object {:?} that has not started forwarding!",
+        is_forwarded::<VM>(object),
+        "read_forwarding_pointer called for object {:?} that has not finished forwarding!",
         object,
     );
 
-    // We write the forwarding poiner. We know it is an object reference.
-    unsafe {
-        // We use "unchecked" convertion becasue we guarantee the forwarding pointer we stored
-        // previously is from a valid `ObjectReference` which is never zero.
-        ObjectReference::from_raw_address_unchecked(crate::util::Address::from_usize(
-            VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC.load_atomic::<VM, usize>(
-                object,
-                Some(FORWARDING_POINTER_MASK),
-                Ordering::SeqCst,
-            ),
-        ))
-    }
+    let raw = VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC.load_atomic::<VM, usize>(
+        object,
+        Some(FORWARDING_POINTER_MASK),
+        Ordering::SeqCst,
+    );
+    // SAFETY: `Address::from_usize` merely wraps `raw` in `#[repr(transparent)] Address` without
+    // dereferencing memory; `ObjectReference::from_raw_address` then validates `raw != 0` before
+    // constructing `NonZeroUsize` (avoiding niche UB even if miscalled before `FORWARDED`).
+    ObjectReference::from_raw_address(unsafe { crate::util::Address::from_usize(raw) })
+        .expect("Forwarding pointer must be non-zero for a forwarded object")
 }
 
 /// Write the forwarding pointer of an object.
@@ -266,7 +264,7 @@ pub(crate) fn debug_print_object_forwarding_info<VM: VMBinding>(object: ObjectRe
     println!(
         "forwarding bits = {:?}, forwarding pointer = {:?}",
         forwarding_bits,
-        if state_is_forwarded_or_being_forwarded(forwarding_bits) {
+        if forwarding_bits == FORWARDED {
             Some(read_forwarding_pointer::<VM>(object))
         } else {
             None

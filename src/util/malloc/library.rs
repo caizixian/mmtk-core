@@ -56,6 +56,12 @@ mod libc_malloc {
     pub use libc::malloc_usable_size;
     #[cfg(target_os = "macos")]
     extern "C" {
+        /// Return the size of the memory block backed by `ptr` on macOS.
+        ///
+        /// # Safety
+        ///
+        /// `ptr` must be either null or a live heap pointer allocated by the system `malloc`
+        /// family and not yet freed.
         pub fn malloc_size(ptr: *const libc::c_void) -> usize;
     }
     #[cfg(target_os = "macos")]

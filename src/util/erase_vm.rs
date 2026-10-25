@@ -14,17 +14,15 @@
 
 macro_rules! define_erased_vm_mut_ref {
     ($new_type: ident = $orig_type: ty) => {
-        pub struct $new_type<'a>(usize, PhantomData<&'a ()>);
+        pub struct $new_type<'a>(&'a mut (dyn std::any::Any + 'static), PhantomData<&'a ()>);
         impl<'a> $new_type<'a> {
             pub fn new<VM: VMBinding>(r: &'a mut $orig_type) -> Self {
-                let worker_as_usize: usize = (r as *mut $orig_type).expose_provenance();
-                Self(worker_as_usize, PhantomData)
+                Self(r, PhantomData)
             }
             pub fn into_mut<VM: VMBinding>(self) -> &'a mut $orig_type {
-                unsafe {
-                    &mut *(std::ptr::with_exposed_provenance(self.0) as *const $orig_type
-                        as *mut $orig_type)
-                }
+                self.0
+                    .downcast_mut::<$orig_type>()
+                    .expect("Mismatched VMBinding type when un-erasing reference")
             }
         }
     };

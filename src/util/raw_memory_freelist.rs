@@ -114,6 +114,22 @@ impl RawMemoryFreeList {
         heads: i32,
         strategy: MmapStrategy,
     ) -> Self {
+        assert!(
+            !base.is_zero() && base.is_aligned_to(BYTES_IN_PAGE),
+            "RawMemoryFreeList base ({base}) must be non-zero and page-aligned"
+        );
+        assert!(
+            limit >= base && limit.is_aligned_to(BYTES_IN_PAGE),
+            "RawMemoryFreeList limit ({limit}) must be >= base ({base}) and page-aligned"
+        );
+        assert!(
+            matches!(
+                strategy.prot,
+                MmapProtection::ReadWrite | MmapProtection::ReadWriteExec
+            ),
+            "RawMemoryFreeList requires readable and writable MmapProtection, got {:?}",
+            strategy.prot
+        );
         debug_assert!(units <= MAX_UNITS && heads <= MAX_HEADS);
         debug_assert!(
             base + conversions::pages_to_bytes(Self::size_in_pages(units, heads) as _) <= limit
@@ -129,9 +145,7 @@ impl RawMemoryFreeList {
             current_units: 0,
             pages_per_block,
             strategy,
-            // SAFETY: when a RawMemoryFreelist is created, its address range is
-            // base..base, a zero-sized slice starting at base
-            slice: unsafe { std::slice::from_raw_parts_mut(base.to_mut_ptr::<i32>(), 0) },
+            slice: &mut [],
         }
     }
 
@@ -160,13 +174,34 @@ impl RawMemoryFreeList {
             (new_max <= self.grain) || (((new_max / self.grain) * self.grain) == new_max)
         );
 
+        // Drop the old slice reference before growing the mapping and recreating the slice.
+        self.slice = &mut [];
+
         if blocks > 0 {
             // Allocate more VM from the OS
             self.raise_high_water(blocks);
         }
 
-        let len = (self.high_water - self.base) >> LOG_BYTES_IN_ENTRY;
-        // SAFETY: The memory is mapped and valid after `raise_high_water`.
+        let byte_len = self.high_water - self.base;
+        assert!(
+            byte_len <= isize::MAX as usize,
+            "RawMemoryFreeList mapping exceeds isize::MAX bytes"
+        );
+        let len = byte_len >> LOG_BYTES_IN_ENTRY;
+        // SAFETY:
+        // - `self.base` was asserted non-zero and page-aligned (`BYTES_IN_PAGE >= 4096`) in
+        //   `RawMemoryFreeList::new`, so `self.base.to_mut_ptr::<i32>()` is non-null and aligned
+        //   to `align_of::<i32>()` (4 bytes).
+        // - Every page in `self.base..self.high_water` has been demand-zero mapped via
+        //   `OS::dzmmap` in `raise_high_water` with readable and writable protection (verified in
+        //   `new`), so `len` contiguous `i32` elements (`byte_len` bytes) are mapped, readable,
+        //   writable, and zero-initialized (valid bit pattern for `i32`).
+        // - `byte_len <= isize::MAX as usize` is asserted above.
+        // - `self.slice` was reset to `&mut []` above, and `[self.base, self.limit)` is the
+        //   dedicated virtual address region reserved for this `RawMemoryFreeList` instance
+        //   (`Map64` space-displacement region or `RAW_MEMORY_FREELIST_TEST_REGION` under `MUTEX`),
+        //   so no other reference aliases `self.base..self.high_water` for the lifetime of the
+        //   slice (and `#[cfg(test)] Drop` resets `self.slice = &mut []` before `OS::munmap`).
         self.slice = unsafe { std::slice::from_raw_parts_mut(self.base.to_mut_ptr::<i32>(), len) };
 
         let old_max = self.current_units;
@@ -215,8 +250,8 @@ impl RawMemoryFreeList {
             self.high_water, self.limit,
             "Attempt to grow FreeList beyond limit"
         );
-        if self.high_water + grow_extent > self.limit {
-            grow_extent = self.high_water - self.limit;
+        if grow_extent > self.limit - self.high_water {
+            grow_extent = self.limit - self.high_water;
         }
         self.mmap(self.high_water, grow_extent);
         self.high_water += grow_extent;
@@ -248,6 +283,7 @@ impl RawMemoryFreeList {
 #[cfg(test)]
 impl Drop for RawMemoryFreeList {
     fn drop(&mut self) {
+        self.slice = &mut [];
         let len = self.high_water - self.base;
         if len != 0 {
             let _ = OS::munmap(self.base, len);

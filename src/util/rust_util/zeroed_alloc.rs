@@ -39,10 +39,41 @@ use bytemuck::Zeroable;
 ///
 /// Returns the created vector.
 pub(crate) fn new_zeroed_vec<T: Zeroable>(size: usize) -> Vec<T> {
+    if size == 0 || std::mem::size_of::<T>() == 0 {
+        return (0..size).map(|_| T::zeroed()).collect();
+    }
     let layout = Layout::array::<T>(size).unwrap();
-    let ptr = unsafe { alloc_zeroed(layout) } as *mut T;
+    debug_assert!(layout.size() > 0);
+    // SAFETY: `size > 0` and `size_of::<T>() > 0` were checked above, and `Layout::array`
+    // succeeded without overflow, so `layout` has non-zero size and valid alignment for `T`.
+    let ptr = unsafe { alloc_zeroed(layout) }.cast::<T>();
     if ptr.is_null() {
         handle_alloc_error(layout);
     }
+    // SAFETY:
+    // - `ptr` is non-null (`handle_alloc_error` diverges if null) and was allocated by the global
+    //   allocator with exact layout `Layout::array::<T>(size)` (`size_of::<T>() > 0`).
+    // - `alloc_zeroed` initialized all `size * size_of::<T>()` bytes to zero, and `T: Zeroable`
+    //   guarantees that all-zero bytes form valid initialized values of `T` for all `size` items.
+    // - `length == capacity == size`, and `Layout::array::<T>(size)` verified total byte size
+    //   `<= isize::MAX`.
     unsafe { Vec::from_raw_parts(ptr, size, size) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_zeroed_vec_empty_and_zst() {
+        let empty: Vec<u64> = new_zeroed_vec(0);
+        assert!(empty.is_empty());
+
+        let zst: Vec<()> = new_zeroed_vec(16);
+        assert_eq!(zst.len(), 16);
+
+        let non_empty: Vec<usize> = new_zeroed_vec(128);
+        assert_eq!(non_empty.len(), 128);
+        assert!(non_empty.iter().all(|&x| x == 0));
+    }
 }

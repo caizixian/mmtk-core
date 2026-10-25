@@ -39,6 +39,8 @@ pub fn address_to_chunk_index(addr: Address) -> usize {
 
 /// Convert a chunk index to the start address of the chunk.
 pub fn chunk_index_to_address(chunk: usize) -> Address {
+    // SAFETY: `Address::from_usize` constructs a transparent `usize` wrapper without dereferencing
+    // memory; `chunk << LOG_BYTES_IN_CHUNK` computes the chunk-aligned virtual address for `chunk`.
     unsafe { Address::from_usize(chunk << LOG_BYTES_IN_CHUNK) }
 }
 
@@ -101,23 +103,30 @@ mod tests {
     #[test]
     fn test_page_align() {
         use crate::util::constants::BYTES_IN_PAGE;
+        // SAFETY: Test-only synthetic `Address` value used strictly for pure alignment arithmetic
+        // and never dereferenced.
         let addr = unsafe { Address::from_usize(0x2345_6789) };
-        assert_eq!(page_align_down(addr), unsafe {
-            Address::from_usize(0x2345_6789 & !(BYTES_IN_PAGE - 1))
-        });
+        // SAFETY: Test-only synthetic `Address` value used strictly for equality comparison and
+        // never dereferenced.
+        let expected = unsafe { Address::from_usize(0x2345_6789 & !(BYTES_IN_PAGE - 1)) };
+        assert_eq!(page_align_down(addr), expected);
         assert!(!is_page_aligned(addr));
         assert!(is_page_aligned(page_align_down(addr)));
     }
 
     #[test]
     fn test_chunk_align() {
+        // SAFETY: Test-only synthetic `Address` value used strictly for pure alignment arithmetic
+        // and never dereferenced.
         let addr = unsafe { Address::from_usize(0x2345_6789) };
-        assert_eq!(chunk_align_down(addr), unsafe {
-            Address::from_usize(0x2340_0000)
-        });
-        assert_eq!(chunk_align_up(addr), unsafe {
-            Address::from_usize(0x2380_0000)
-        });
+        // SAFETY: Test-only synthetic `Address` value used strictly for equality comparison and
+        // never dereferenced.
+        let expected_down = unsafe { Address::from_usize(0x2340_0000) };
+        // SAFETY: Test-only synthetic `Address` value used strictly for equality comparison and
+        // never dereferenced.
+        let expected_up = unsafe { Address::from_usize(0x2380_0000) };
+        assert_eq!(chunk_align_down(addr), expected_down);
+        assert_eq!(chunk_align_up(addr), expected_up);
     }
 
     #[test]

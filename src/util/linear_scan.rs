@@ -54,6 +54,11 @@ impl<VM: VMBinding, S: LinearScanObjectSize, const ATOMIC_LOAD_VO_BIT: bool> std
             let is_object = if ATOMIC_LOAD_VO_BIT {
                 vo_bit::is_vo_bit_set_for_addr(self.cursor)
             } else {
+                // SAFETY: `self.cursor` is maintained aligned to `ObjectReference::ALIGNMENT`
+                // (`new` asserts `start` is word-aligned and every step aligns up to or adds
+                // `ObjectReference::ALIGNMENT`), `is_vo_bit_set_unsafe` checks `is_mapped` before
+                // loading, and `ObjectIterator<..., false>`'s type-level contract requires that no
+                // other thread concurrently mutates VO-bit side metadata covering `[start, end)`.
                 unsafe { vo_bit::is_vo_bit_set_unsafe(self.cursor) }
             };
 
@@ -224,7 +229,9 @@ mod tests {
 
     #[test]
     fn test_region_methods() {
+        // SAFETY: Synthetic non-dereferenced `Address` used only to test pure `Region` arithmetic.
         let addr4k = unsafe { Address::from_usize(PAGE_SIZE) };
+        // SAFETY: Synthetic non-dereferenced `Address` used only to test pure `Region` arithmetic.
         let addr4k1 = unsafe { Address::from_usize(PAGE_SIZE + 1) };
 
         // align
@@ -245,6 +252,7 @@ mod tests {
 
     #[test]
     fn test_region_iterator_normal() {
+        // SAFETY: Synthetic non-dereferenced `Address` used only to test `RegionIterator` stepping.
         let addr4k = unsafe { Address::from_usize(PAGE_SIZE) };
         let page = Page::from_aligned_address(addr4k);
         let end_page = page.next_nth(5);
@@ -268,6 +276,7 @@ mod tests {
 
     #[test]
     fn test_region_iterator_same_start_end() {
+        // SAFETY: Synthetic non-dereferenced `Address` used only to test `RegionIterator` bounds.
         let addr4k = unsafe { Address::from_usize(PAGE_SIZE) };
         let page = Page::from_aligned_address(addr4k);
 
@@ -281,6 +290,7 @@ mod tests {
 
     #[test]
     fn test_region_iterator_smaller_end() {
+        // SAFETY: Synthetic non-dereferenced `Address` used only to test `RegionIterator` bounds.
         let addr4k = unsafe { Address::from_usize(PAGE_SIZE) };
         let page = Page::from_aligned_address(addr4k);
         let end = Page::from_aligned_address(Address::ZERO);

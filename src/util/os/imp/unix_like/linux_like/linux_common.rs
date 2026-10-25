@@ -14,6 +14,10 @@ pub fn set_vma_name(start: Address, size: usize, annotation: &MmapAnnotation) {
     let anno_str = annotation.to_string();
     let anno_cstr = std::ffi::CString::new(anno_str).unwrap();
     let result = unix_common::wrap_libc_call(
+        // SAFETY: `PR_SET_VMA` + `PR_SET_VMA_ANON_NAME` expects `(unsigned long start,
+        // unsigned long size, const char *name)`. `anno_cstr` is a valid NUL-terminated `CString`
+        // borrowed for the duration of the syscall, and `PR_SET_VMA_ANON_NAME` only updates kernel
+        // debug VMA metadata without modifying process memory mappings or contents.
         &|| unsafe {
             libc::prctl(
                 libc::PR_SET_VMA,
@@ -35,6 +39,9 @@ pub fn set_hugepage(start: Address, size: usize, options: HugePageSupport) -> Re
     match options {
         HugePageSupport::No => Ok(()),
         HugePageSupport::TransparentHugePages => unix_common::wrap_libc_call(
+            // SAFETY: `MADV_HUGEPAGE` is a non-destructive kernel backing-page hint (`VM_HUGEPAGE`)
+            // that preserves all memory contents and mappings (returning an `errno` if `[start,
+            // start + size)` is unmapped or unaligned).
             &|| unsafe { libc::madvise(start.to_mut_ptr(), size, libc::MADV_HUGEPAGE) },
             0,
         ),
@@ -71,34 +78,54 @@ pub fn get_process_memory_maps() -> Result<String> {
     Ok(data)
 }
 
-pub fn get_total_num_cpus() -> CoreNum {
-    use std::mem::MaybeUninit;
+fn zeroed_cpu_set() -> cpu_set_t {
+    // SAFETY: `libc::cpu_set_t` is a C plain-old-data bitmask struct of unsigned integers for
+    // which an all-zero bit pattern is a valid initialized value, and `CPU_ZERO` initializes the
+    // stack-allocated `cpu_set_t` in place to represent an empty CPU set.
     unsafe {
-        let mut cs = MaybeUninit::zeroed().assume_init();
+        let mut cs: cpu_set_t = std::mem::MaybeUninit::zeroed().assume_init();
         CPU_ZERO(&mut cs);
-        sched_getaffinity(0, std::mem::size_of::<cpu_set_t>(), &mut cs);
-        CPU_COUNT(&cs) as u16
+        cs
     }
+}
+
+pub fn get_total_num_cpus() -> CoreNum {
+    let mut cs = zeroed_cpu_set();
+    // SAFETY: `pid == 0` queries the calling thread, and `&mut cs` points to a writable,
+    // initialized `cpu_set_t` of exact byte size `size_of::<cpu_set_t>()`.
+    let res = unsafe { sched_getaffinity(0, std::mem::size_of::<cpu_set_t>(), &mut cs) };
+    assert_eq!(
+        res,
+        0,
+        "sched_getaffinity failed: {}",
+        std::io::Error::last_os_error()
+    );
+    // SAFETY: `cs` is a valid initialized `cpu_set_t` populated by `sched_getaffinity`.
+    unsafe { CPU_COUNT(&cs) as u16 }
 }
 
 pub fn bind_current_thread_to_core(core_id: CoreId) {
-    use std::mem::MaybeUninit;
-    unsafe {
-        let mut cs = MaybeUninit::zeroed().assume_init();
-        CPU_ZERO(&mut cs);
-        CPU_SET(core_id as usize, &mut cs);
-        sched_setaffinity(0, std::mem::size_of::<cpu_set_t>(), &cs);
-    }
+    bind_current_thread_to_cpuset(&[core_id]);
 }
 
 pub fn bind_current_thread_to_cpuset(cpuset: &[CoreId]) {
-    use std::mem::MaybeUninit;
-    unsafe {
-        let mut cs = MaybeUninit::zeroed().assume_init();
-        CPU_ZERO(&mut cs);
-        for cpu in cpuset {
-            CPU_SET(*cpu as usize, &mut cs);
+    let mut cs = zeroed_cpu_set();
+    for &cpu in cpuset {
+        let cpu_idx = cpu as usize;
+        assert!(
+            cpu_idx < libc::CPU_SETSIZE as usize,
+            "CPU core ID {cpu_idx} exceeds CPU_SETSIZE ({})",
+            libc::CPU_SETSIZE
+        );
+        // SAFETY: `cs` is a valid initialized `cpu_set_t` and `cpu_idx < CPU_SETSIZE` was asserted
+        // above, satisfying `CPU_SET`'s in-bounds bit index contract.
+        unsafe {
+            CPU_SET(cpu_idx, &mut cs);
         }
+    }
+    // SAFETY: `pid == 0` sets affinity for the calling thread, and `&cs` points to a valid
+    // initialized `cpu_set_t` of exact byte size `size_of::<cpu_set_t>()`.
+    unsafe {
         sched_setaffinity(0, std::mem::size_of::<cpu_set_t>(), &cs);
     }
 }
