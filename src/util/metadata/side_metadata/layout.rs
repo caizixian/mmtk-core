@@ -9,6 +9,7 @@ use crate::util::os::{HugePageSupport, MmapAnnotation};
 use crate::util::Address;
 use crate::util::{constants::LOG_BYTES_IN_PAGE, conversions::raw_align_up};
 use crate::MMAPPER;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
 /// The compile-time base offset for global side metadata layout. We treat offsets as relative
@@ -17,9 +18,10 @@ pub(crate) const GLOBAL_SIDE_METADATA_BASE_OFFSET: usize = 0;
 
 /// The run-time base address for side metadata. This is initialized at startup by mmapping necessary memory address for side metadata,
 /// and should be used as the base when computing actual side metadata addresses.
-/// We use OnceLock to ensure it is only initialized once. To eliminate the cost of accessing OnceLock after initialization, we can use get().unwrap_unchecked().
-/// TODO: use `OncLock::get_unchecked()` once it is stabilized.
+/// `SIDE_METADATA_BASE_ADDRESS` enforces single initialization and debug-build readiness checks, while
+/// `SIDE_METADATA_BASE_RAW` caches the raw address for single-instruction `Relaxed` hot-path loads without `OnceLock` state-check overhead or `unwrap_unchecked` UB.
 static SIDE_METADATA_BASE_ADDRESS: OnceLock<Address> = OnceLock::new();
+static SIDE_METADATA_BASE_RAW: AtomicUsize = AtomicUsize::new(0);
 
 /// The upper bound for VM side metadata layout. We need to list all the VM side metadata specs, compute the upper bound, and store it here.
 static VM_SIDE_METADATA_UPPER_BOUND_OFFSET: OnceLock<usize> = OnceLock::new();
@@ -60,10 +62,10 @@ pub(super) fn initialize_side_metadata_base(
         let core_end = super::spec_defs::LAST_LOCAL_SIDE_METADATA_SPEC.upper_bound_offset();
         let vm_end = *VM_SIDE_METADATA_UPPER_BOUND_OFFSET.get().unwrap();
         info!(
-            "Initializing side metadata base: vm_specs_registered={} core_end={} vm_end={}",
+            "Initializing side metadata base: vm_specs_registered={} core_end={} vm_end=0x{:x}",
             VM_SIDE_METADATA_UPPER_BOUND_OFFSET.get().is_some(),
             core_end,
-            unsafe { Address::from_usize(vm_end) }
+            vm_end
         );
     }
     let total_bytes = side_metadata_reserved_bytes();
@@ -99,6 +101,11 @@ pub(super) fn initialize_side_metadata_base(
         base,
         base + total_bytes
     );
+    assert!(
+        SIDE_METADATA_BASE_ADDRESS.get().is_none(),
+        "side metadata base address is already initialized"
+    );
+    SIDE_METADATA_BASE_RAW.store(base.as_usize(), Ordering::Release);
     SIDE_METADATA_BASE_ADDRESS.set(base).unwrap();
 }
 
@@ -123,16 +130,14 @@ pub fn global_side_metadata_base_address() -> Address {
             );
         }
 
+        #[cfg(not(feature = "test_private"))]
         assert!(
             SIDE_METADATA_BASE_ADDRESS.get().is_some(),
             "global_side_metadata_base_address() called before side metadata base was initialized"
         );
     }
 
-    // TODO: use `OnceLock::get_unchecked()` once it is stabilized.
-    // Otherwise, even though this uses `unwrap_unchecked`, the compiler still needs to atomically load the
-    // initialization flag inside of `get`. See https://github.com/rust-lang/libs-team/issues/654.
-    unsafe { *SIDE_METADATA_BASE_ADDRESS.get().unwrap_unchecked() }
+    Address::ZERO + SIDE_METADATA_BASE_RAW.load(Ordering::Relaxed)
 }
 
 // Local side metadata start address. This is derived from the end of global side metadata.

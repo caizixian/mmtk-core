@@ -46,9 +46,15 @@ impl VMGlobalLogBitSpec {
             // If the log bit is in the side metadata, we can simply set the entire byte to 0xff. Because we
             // know we are setting log bit for mature space, and every object in the space should have log
             // bit as 1.
-            MetadataSpec::OnSide(spec) => unsafe {
-                spec.set_raw_byte_atomic(object.to_raw_address(), order)
-            },
+            MetadataSpec::OnSide(spec) => {
+                // SAFETY: `VMGlobalLogBitSpec` is a 1-bit specification (`spec.log_num_of_bits == 0 < 3`),
+                // `object` is a live mature-space object whose global log-bit side metadata byte is mapped,
+                // and `set_raw_byte_atomic` writes `0xff` via an atomic `u8` store (1-byte aligned, race-free).
+                // Setting adjacent bits in the same byte to `UNLOGGED_VALUE` (1) is benign for mature-space
+                // objects: `1` is the conservative "unlogged" state, which at worst causes an extra idempotent
+                // write-barrier slow-path invocation on neighboring mature objects.
+                unsafe { spec.set_raw_byte_atomic(object.to_raw_address(), order) }
+            }
         }
     }
 

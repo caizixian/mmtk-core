@@ -47,90 +47,81 @@ mod tests {
                 log_bytes_in_region: 0,
             };
 
+            assert_eq!(address_to_meta_address(&gspec, Address::ZERO), global_base);
             assert_eq!(
-                address_to_meta_address(&gspec, unsafe { Address::from_usize(0) }),
-                global_base
-            );
-            assert_eq!(
-                address_to_meta_address(&lspec, unsafe { Address::from_usize(0) }),
+                address_to_meta_address(&lspec, Address::ZERO),
                 local_side_metadata_base_address()
             );
 
             assert_eq!(
-                address_to_meta_address(&gspec, unsafe { Address::from_usize(7) }),
+                address_to_meta_address(&gspec, Address::ZERO + 7usize),
                 global_base
             );
             assert_eq!(
-                address_to_meta_address(&lspec, unsafe { Address::from_usize(7) }),
+                address_to_meta_address(&lspec, Address::ZERO + 7usize),
                 local_side_metadata_base_address()
             );
 
             assert_eq!(
-                address_to_meta_address(&gspec, unsafe { Address::from_usize(27) }),
+                address_to_meta_address(&gspec, Address::ZERO + 27usize),
                 global_base + 3usize
             );
             assert_eq!(
-                address_to_meta_address(&lspec, unsafe { Address::from_usize(129) }),
+                address_to_meta_address(&lspec, Address::ZERO + 129usize),
                 local_side_metadata_base_address() + 16usize
             );
 
             gspec.log_bytes_in_region = 2;
             lspec.log_bytes_in_region = 1;
 
+            assert_eq!(address_to_meta_address(&gspec, Address::ZERO), global_base);
             assert_eq!(
-                address_to_meta_address(&gspec, unsafe { Address::from_usize(0) }),
-                global_base
-            );
-            assert_eq!(
-                address_to_meta_address(&lspec, unsafe { Address::from_usize(0) }),
+                address_to_meta_address(&lspec, Address::ZERO),
                 local_side_metadata_base_address()
             );
 
             assert_eq!(
-                address_to_meta_address(&gspec, unsafe { Address::from_usize(32) }),
+                address_to_meta_address(&gspec, Address::ZERO + 32usize),
                 global_base + 1usize
             );
             assert_eq!(
-                address_to_meta_address(&lspec, unsafe { Address::from_usize(32) }),
+                address_to_meta_address(&lspec, Address::ZERO + 32usize),
                 local_side_metadata_base_address() + 2usize
             );
 
             assert_eq!(
-                address_to_meta_address(&gspec, unsafe { Address::from_usize(316) }),
+                address_to_meta_address(&gspec, Address::ZERO + 316usize),
                 global_base + 9usize
             );
             assert_eq!(
-                address_to_meta_address(&lspec, unsafe { Address::from_usize(316) }),
+                address_to_meta_address(&lspec, Address::ZERO + 316usize),
                 local_side_metadata_base_address() + 19usize
             );
 
             gspec.log_num_of_bits = 1;
             lspec.log_num_of_bits = 3;
 
+            assert_eq!(address_to_meta_address(&gspec, Address::ZERO), global_base);
             assert_eq!(
-                address_to_meta_address(&gspec, unsafe { Address::from_usize(0) }),
-                global_base
-            );
-            assert_eq!(
-                address_to_meta_address(&lspec, unsafe { Address::from_usize(0) }),
+                address_to_meta_address(&lspec, Address::ZERO),
                 local_side_metadata_base_address()
             );
 
             assert_eq!(
-                address_to_meta_address(&gspec, unsafe { Address::from_usize(32) }),
+                address_to_meta_address(&gspec, Address::ZERO + 32usize),
                 global_base + 2usize
             );
             assert_eq!(
-                address_to_meta_address(&lspec, unsafe { Address::from_usize(32) }),
+                address_to_meta_address(&lspec, Address::ZERO + 32usize),
                 local_side_metadata_base_address() + 16usize
             );
 
             assert_eq!(
-                address_to_meta_address(&gspec, unsafe { Address::from_usize(316) }),
+                address_to_meta_address(&gspec, Address::ZERO + 316usize),
                 global_base + 19usize
             );
             assert_eq!(
-                address_to_meta_address(&lspec, unsafe { Address::from_usize(318) }),
+                address_to_meta_address(&lspec, Address::ZERO + 318usize),
                 local_side_metadata_base_address() + 159usize
             );
         });
@@ -151,7 +142,7 @@ mod tests {
             }
 
             let spec = spec_defs::LAST_GLOBAL_SIDE_METADATA_SPEC;
-            let data_addr = unsafe { Address::from_usize(0) };
+            let data_addr = Address::ZERO;
             let meta_addr = address_to_meta_address(&spec, data_addr);
             assert!(meta_addr >= base);
             assert!(meta_addr < global_end);
@@ -191,37 +182,16 @@ mod tests {
                 log_bytes_in_region: 0,
             };
 
-            assert_eq!(
-                meta_byte_lshift(&spec, unsafe { Address::from_usize(0) }),
-                0
-            );
-            assert_eq!(
-                meta_byte_lshift(&spec, unsafe { Address::from_usize(5) }),
-                5
-            );
-            assert_eq!(
-                meta_byte_lshift(&spec, unsafe { Address::from_usize(15) }),
-                7
-            );
+            assert_eq!(meta_byte_lshift(&spec, Address::ZERO), 0);
+            assert_eq!(meta_byte_lshift(&spec, Address::ZERO + 5usize), 5);
+            assert_eq!(meta_byte_lshift(&spec, Address::ZERO + 15usize), 7);
 
             spec.log_num_of_bits = 2;
 
-            assert_eq!(
-                meta_byte_lshift(&spec, unsafe { Address::from_usize(0) }),
-                0
-            );
-            assert_eq!(
-                meta_byte_lshift(&spec, unsafe { Address::from_usize(5) }),
-                4
-            );
-            assert_eq!(
-                meta_byte_lshift(&spec, unsafe { Address::from_usize(15) }),
-                4
-            );
-            assert_eq!(
-                meta_byte_lshift(&spec, unsafe { Address::from_usize(0x10010) }),
-                0
-            );
+            assert_eq!(meta_byte_lshift(&spec, Address::ZERO), 0);
+            assert_eq!(meta_byte_lshift(&spec, Address::ZERO + 5usize), 4);
+            assert_eq!(meta_byte_lshift(&spec, Address::ZERO + 15usize), 4);
+            assert_eq!(meta_byte_lshift(&spec, Address::ZERO + 0x10010usize), 0);
         });
     }
 
@@ -640,19 +610,19 @@ mod tests {
                     // Set metadata for the regions
                     regions
                         .iter()
-                        .for_each(|addr| unsafe { spec.store::<u8>(*addr, 1) });
-                    regions
-                        .iter()
-                        .for_each(|addr| assert!(unsafe { spec.load::<u8>(*addr) } == 1));
+                        .for_each(|addr| spec.store_atomic::<u8>(*addr, 1, Ordering::SeqCst));
+                    regions.iter().for_each(|addr| {
+                        assert_eq!(spec.load_atomic::<u8>(*addr, Ordering::SeqCst), 1)
+                    });
 
                     // bulk zero the 8 regions (1 bit for each, in total 1 byte)
                     spec.bzero_metadata(regions[0], region_size * 8);
                     // Check if the first 8 regions are set to 0
-                    regions[0..8]
-                        .iter()
-                        .for_each(|addr| assert!(unsafe { spec.load::<u8>(*addr) } == 0));
+                    regions[0..8].iter().for_each(|addr| {
+                        assert_eq!(spec.load_atomic::<u8>(*addr, Ordering::SeqCst), 0)
+                    });
                     // Check if the 9th region is still 1
-                    assert!(unsafe { spec.load::<u8>(regions[8]) } == 1);
+                    assert_eq!(spec.load_atomic::<u8>(regions[8], Ordering::SeqCst), 1);
                 },
                 || {
                     sanity::reset();
@@ -698,21 +668,21 @@ mod tests {
                     // Set metadata for the regions
                     regions
                         .iter()
-                        .for_each(|addr| unsafe { spec.store::<u8>(*addr, 1) });
-                    regions
-                        .iter()
-                        .for_each(|addr| assert!(unsafe { spec.load::<u8>(*addr) } == 1));
+                        .for_each(|addr| spec.store_atomic::<u8>(*addr, 1, Ordering::SeqCst));
+                    regions.iter().for_each(|addr| {
+                        assert_eq!(spec.load_atomic::<u8>(*addr, Ordering::SeqCst), 1)
+                    });
 
                     // bulk zero the first 4 regions (1 bit for each, in total 4 bits)
                     spec.bzero_metadata(regions[0], region_size * 4);
                     // Check if the first 4 regions are set to 0
-                    regions[0..4]
-                        .iter()
-                        .for_each(|addr| assert!(unsafe { spec.load::<u8>(*addr) } == 0));
+                    regions[0..4].iter().for_each(|addr| {
+                        assert_eq!(spec.load_atomic::<u8>(*addr, Ordering::SeqCst), 0)
+                    });
                     // Check if the rest regions is still 1
-                    regions[4..9]
-                        .iter()
-                        .for_each(|addr| assert!(unsafe { spec.load::<u8>(*addr) } == 1));
+                    regions[4..9].iter().for_each(|addr| {
+                        assert_eq!(spec.load_atomic::<u8>(*addr, Ordering::SeqCst), 1)
+                    });
                 },
                 || {
                     sanity::reset();
@@ -724,39 +694,31 @@ mod tests {
     #[test]
     fn test_side_metadata_zero_meta_bits() {
         serial_test(|| {
-            let size = 4usize;
-            let allocate_u32 = || -> Address {
-                let ptr = unsafe {
-                    std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(size, 4).unwrap())
+            let size = std::mem::size_of::<u32>();
+            let zero_range_in_full_u32 =
+                |start_byte: usize, start_bit: u8, end_byte: usize, end_bit: u8| -> u32 {
+                    let mut word: u32 = u32::MAX;
+                    let start = Address::from_mut_ptr(&mut word);
+                    SideMetadataSpec::zero_meta_bits(
+                        start + start_byte,
+                        start_bit,
+                        start + end_byte,
+                        end_bit,
+                    );
+                    word
                 };
-                Address::from_mut_ptr(ptr)
-            };
-            let fill_1 = |addr: Address| unsafe {
-                addr.store(u32::MAX);
-            };
 
-            let start = allocate_u32();
-            let end = start + size;
-
-            fill_1(start);
             // zero the word
-            SideMetadataSpec::zero_meta_bits(start, 0, end, 0);
-            assert_eq!(unsafe { start.load::<u32>() }, 0);
+            assert_eq!(zero_range_in_full_u32(0, 0, size, 0), 0);
 
-            fill_1(start);
             // zero first 2 bits
-            SideMetadataSpec::zero_meta_bits(start, 0, start, 2);
-            assert_eq!(unsafe { start.load::<u32>() }, 0xFFFF_FFFC); // ....1100
+            assert_eq!(zero_range_in_full_u32(0, 0, 0, 2), 0xFFFF_FFFC); // ....1100
 
-            fill_1(start);
             // zero last 2 bits
-            SideMetadataSpec::zero_meta_bits(end - 1, 6, end, 0);
-            assert_eq!(unsafe { start.load::<u32>() }, 0x3FFF_FFFF); // 0011....
+            assert_eq!(zero_range_in_full_u32(size - 1, 6, size, 0), 0x3FFF_FFFF); // 0011....
 
-            fill_1(start);
             // zero everything except first 2 bits and last 2 bits
-            SideMetadataSpec::zero_meta_bits(start, 2, end - 1, 6);
-            assert_eq!(unsafe { start.load::<u32>() }, 0xC000_0003); // 1100....0011
+            assert_eq!(zero_range_in_full_u32(0, 2, size - 1, 6), 0xC000_0003); // 1100....0011
         });
     }
 

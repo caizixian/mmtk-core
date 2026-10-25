@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 pub mod access;
 pub mod bscan;
 pub mod bzero_bset;

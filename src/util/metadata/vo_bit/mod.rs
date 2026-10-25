@@ -96,10 +96,17 @@ pub(crate) fn unset_vo_bit_nocheck(object: ObjectReference) {
 ///
 /// # Safety
 ///
-/// This is unsafe: check the comment on `side_metadata::store`
+/// * `object` must reside in a space whose VO-bit side metadata is mapped and writable.
+/// * Because `VO_BIT_SIDE_METADATA_SPEC` packs 8 word-aligned addresses into a single metadata byte,
+///   no other thread may concurrently read, write, or atomically modify the VO-bit metadata byte
+///   covering `object` (and its 7 neighboring word-aligned addresses in the same 8-word region).
 pub(crate) unsafe fn unset_vo_bit_unsafe(object: ObjectReference) {
     debug_assert!(is_vo_bit_set(object), "{:x}: VO bit not set", object);
-    VO_BIT_SIDE_METADATA_SPEC.store::<u8>(object.to_raw_address(), 0);
+    // SAFETY: Caller guarantees the VO-bit side-metadata byte for `object` is mapped and
+    // exclusively accessed without concurrent reads, writes, or atomic operations.
+    unsafe {
+        VO_BIT_SIDE_METADATA_SPEC.store::<u8>(object.to_raw_address(), 0);
+    }
 }
 
 /// Check if the VO bit is set for an object.
@@ -112,7 +119,9 @@ pub(crate) fn is_vo_bit_set(object: ObjectReference) -> bool {
 ///
 /// The `address` must be word-aligned.
 pub(crate) fn is_vo_bit_set_for_addr(address: Address) -> Option<ObjectReference> {
-    is_vo_bit_set_inner::<true>(address)
+    check_vo_bit(address, |addr| {
+        VO_BIT_SIDE_METADATA_SPEC.load_atomic::<u8>(addr, Ordering::SeqCst)
+    })
 }
 
 /// Check if an address can be turned directly into an object reference using the VO bit.
@@ -123,12 +132,18 @@ pub(crate) fn is_vo_bit_set_for_addr(address: Address) -> Option<ObjectReference
 ///
 /// # Safety
 ///
-/// This is unsafe: check the comment on `side_metadata::load`
+/// No other thread may concurrently write to or atomically modify the VO-bit side-metadata byte
+/// covering `address` (if mapped) for the duration of this call.
 pub(crate) unsafe fn is_vo_bit_set_unsafe(address: Address) -> Option<ObjectReference> {
-    is_vo_bit_set_inner::<false>(address)
+    check_vo_bit(address, |addr| {
+        // SAFETY: `check_vo_bit` verified that VO-bit side metadata for `addr` is mapped before
+        // invoking this closure, and the caller guarantees no concurrent thread writes to or
+        // atomically modifies that VO-bit metadata byte.
+        unsafe { VO_BIT_SIDE_METADATA_SPEC.load::<u8>(addr) }
+    })
 }
 
-fn is_vo_bit_set_inner<const ATOMIC: bool>(addr: Address) -> Option<ObjectReference> {
+fn check_vo_bit(addr: Address, load_vo_bit: impl FnOnce(Address) -> u8) -> Option<ObjectReference> {
     debug_assert!(
         addr.is_aligned_to(ObjectReference::ALIGNMENT),
         "Address is not word-aligned: {addr}"
@@ -139,13 +154,11 @@ fn is_vo_bit_set_inner<const ATOMIC: bool>(addr: Address) -> Option<ObjectRefere
         return None;
     }
 
-    let vo_bit = if ATOMIC {
-        VO_BIT_SIDE_METADATA_SPEC.load_atomic::<u8>(addr, Ordering::SeqCst)
+    if load_vo_bit(addr) == 1 {
+        ObjectReference::from_raw_address(addr)
     } else {
-        unsafe { VO_BIT_SIDE_METADATA_SPEC.load::<u8>(addr) }
-    };
-
-    (vo_bit == 1).then(|| get_object_ref_for_vo_addr(addr))
+        None
+    }
 }
 
 /// Bulk zero the VO bit.
@@ -180,6 +193,11 @@ pub(crate) const VO_BIT_WORD_TO_REGION: usize = 1
 
 /// Bulk check if a VO bit word. Return true if there is any bit set in the word.
 pub(crate) fn get_raw_vo_bit_word(addr: Address) -> usize {
+    // SAFETY: Cross-slice `pub(crate)` helper called on mapped space pages (e.g. `LargeObjectSpace`
+    // page scan during quiescent VO-bit phases). `VO_BIT_SIDE_METADATA_SPEC` is chunk-mapped (4 MiB
+    // chunks => >= 8 KiB contiguous metadata per chunk, word-aligned), so aligning the metadata
+    // byte address down to `BYTES_IN_ADDRESS` stays within the same mapped metadata page, and VO
+    // bits are not concurrently mutated during internal-pointer / VO-bit scanning phases.
     unsafe { VO_BIT_SIDE_METADATA_SPEC.load_raw_word(addr) }
 }
 
@@ -192,6 +210,11 @@ pub(crate) fn find_object_from_internal_pointer<VM: VMBinding>(
         return None;
     }
 
+    // SAFETY: `VO_BIT_SIDE_METADATA_SPEC.is_mapped(start)` was verified above and
+    // `find_prev_non_zero_value` checks `is_mapped` at every `MMAPPER` granularity boundary before
+    // loading any metadata byte/word. Per MMTk's VO-bit availability contract (stack scanning,
+    // tracing when `NEED_VO_BITS_DURING_TRACING` is set, or quiescent heap-iteration phases), no
+    // concurrent thread is mutating the VO-bit metadata in the searched heap range.
     if let Some(vo_addr) = unsafe {
         VO_BIT_SIDE_METADATA_SPEC.find_prev_non_zero_value::<u8>(start, search_limit_bytes)
     } {
@@ -205,8 +228,11 @@ pub(crate) fn find_object_from_internal_pointer<VM: VMBinding>(
 pub(crate) fn get_object_ref_for_vo_addr(vo_addr: Address) -> ObjectReference {
     // VO bit should be set on the address.
     debug_assert!(vo_addr.is_aligned_to(ObjectReference::ALIGNMENT));
-    debug_assert!(unsafe { is_vo_addr(vo_addr) });
-    unsafe { ObjectReference::from_raw_address_unchecked(vo_addr) }
+    debug_assert!(
+        VO_BIT_SIDE_METADATA_SPEC.is_mapped(vo_addr)
+            && VO_BIT_SIDE_METADATA_SPEC.load_atomic::<u8>(vo_addr, Ordering::Relaxed) != 0
+    );
+    ObjectReference::from_raw_address(vo_addr).expect("VO bit cannot be set at null address")
 }
 
 /// Check if the address could be an internal pointer in the object.
@@ -232,7 +258,11 @@ pub(crate) fn is_internal_ptr_from_vo_bit<VM: VMBinding>(
 /// Non-atomically check if the VO bit is set for this address.
 ///
 /// # Safety
-/// The caller needs to make sure that no one is modifying VO bit.
+/// * The VO-bit side metadata for `addr` must be mapped and readable.
+/// * No other thread may concurrently write to or atomically modify the VO-bit side-metadata byte
+///   covering `addr` for the duration of this call.
 pub(crate) unsafe fn is_vo_addr(addr: Address) -> bool {
-    VO_BIT_SIDE_METADATA_SPEC.load::<u8>(addr) != 0
+    // SAFETY: Caller guarantees VO-bit side metadata for `addr` is mapped and not concurrently
+    // written or atomically modified by another thread.
+    unsafe { VO_BIT_SIDE_METADATA_SPEC.load::<u8>(addr) != 0 }
 }

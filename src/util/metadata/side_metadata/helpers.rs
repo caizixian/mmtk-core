@@ -60,7 +60,7 @@ pub(super) fn contiguous_meta_address_to_address(
     let data_addr = (data_addr_intermediate << metadata_spec.log_bytes_in_region)
         + ((bit as usize) << data_addr_bit_shift);
 
-    unsafe { Address::from_usize(data_addr) }
+    Address::ZERO + data_addr
 }
 
 /// Align an pair of a metadata address and a metadata bit offset to the start of this metadata value.
@@ -252,8 +252,17 @@ pub enum FindMetaBitResult {
     UnmappedMetadata,
 }
 
-// Check and find the last bit that is set. We try load words where possible, and fall back to load bytes.
-pub fn find_last_non_zero_bit_in_metadata_bytes(
+/// Check `[meta_start, meta_end)` backwards and find the last non-zero bit.
+/// Loads aligned `usize` words where possible and falls back to individual bytes at unaligned ends.
+///
+/// # Safety
+/// * Every address in `[meta_start, meta_end)` for which `Address::is_mapped` returns `true`
+///   (and the remainder of its `MMAPPER.granularity()` region within `[meta_start, meta_end)`)
+///   must be mapped, readable, and initialized side-metadata memory.
+/// * No other thread may concurrently write to or atomically modify the mapped bytes in
+///   `[meta_start, meta_end)` for the duration of this call, and no live `&mut` reference may
+///   alias them.
+pub(super) unsafe fn find_last_non_zero_bit_in_metadata_bytes(
     meta_start: Address,
     meta_end: Address,
 ) -> FindMetaBitResult {
@@ -284,7 +293,7 @@ pub fn find_last_non_zero_bit_in_metadata_bytes(
             meta_end
         );
 
-        // If we are looking at an address that is not in a mapped chunk, we need to check if the chunk if mapped.
+        // If we are looking at an address that is not in a mapped chunk, we need to check if the chunk is mapped.
         if cur < mapped_grain {
             if cur.is_mapped() {
                 // This is mapped. No need to check for this chunk.
@@ -295,7 +304,12 @@ pub fn find_last_non_zero_bit_in_metadata_bytes(
         }
 
         if step == BYTES_IN_ADDRESS {
-            // Load and check a usize word
+            // Load and check a usize word.
+            // SAFETY: `cur` was aligned to `BYTES_IN_ADDRESS` before subtracting `BYTES_IN_ADDRESS`,
+            // so `cur` is `usize`-aligned and non-null (mapped grain verified above; `mmap_granularity`
+            // is a multiple of page/word size so `[cur, cur + BYTES_IN_ADDRESS)` lies within the same
+            // mapped grain). Caller guarantees the mapped metadata bytes are initialized with no
+            // concurrent writes, atomic modifications, or `&mut` aliases.
             let value = unsafe { cur.load::<usize>() };
             if value != 0 {
                 let bit = find_last_non_zero_bit::<usize>(value, 0, usize::BITS as u8).unwrap();
@@ -307,7 +321,10 @@ pub fn find_last_non_zero_bit_in_metadata_bytes(
                 };
             }
         } else {
-            // Load and check a byte
+            // Load and check a byte.
+            // SAFETY: `cur` lies in a grain verified to be mapped via `cur.is_mapped()` (`u8` has
+            // alignment 1), and caller guarantees initialized side-metadata memory with no racing
+            // writes, atomic modifications, or `&mut` aliases.
             let value = unsafe { cur.load::<u8>() };
             if let Some(bit) = find_last_non_zero_bit::<u8>(value, 0, 8) {
                 return FindMetaBitResult::Found { addr: cur, bit };
@@ -317,8 +334,12 @@ pub fn find_last_non_zero_bit_in_metadata_bytes(
     FindMetaBitResult::NotFound
 }
 
-// Check and find the last non-zero bit in the same byte.
-pub fn find_last_non_zero_bit_in_metadata_bits(
+/// Check `[start_bit, end_bit)` within the byte at `addr` and find the last non-zero bit.
+///
+/// # Safety
+/// * If `addr.is_mapped()` returns `true`, `addr` must point to a readable, initialized
+///   side-metadata byte with no concurrent writes, atomic modifications, or live `&mut` aliases.
+pub(super) unsafe fn find_last_non_zero_bit_in_metadata_bits(
     addr: Address,
     start_bit: u8,
     end_bit: u8,
@@ -326,6 +347,8 @@ pub fn find_last_non_zero_bit_in_metadata_bits(
     if !addr.is_mapped() {
         return FindMetaBitResult::UnmappedMetadata;
     }
+    // SAFETY: `addr.is_mapped()` succeeded above (`u8` has alignment 1), and caller guarantees the
+    // mapped metadata byte is initialized and free of concurrent writes or `&mut` aliases.
     let byte = unsafe { addr.load::<u8>() };
     if let Some(bit) = find_last_non_zero_bit::<u8>(byte, start_bit, end_bit) {
         return FindMetaBitResult::Found { addr, bit };
@@ -352,7 +375,16 @@ where
     }
 }
 
-pub fn find_first_non_zero_bit_in_metadata_bytes(
+/// Check `[meta_start, meta_end)` forwards and find the first non-zero bit.
+///
+/// # Safety
+/// * Every address in `[meta_start, meta_end)` for which `Address::is_mapped` returns `true`
+///   (and the remainder of its `MMAPPER.granularity()` region within `[meta_start, meta_end)`)
+///   must be mapped, readable, and initialized side-metadata memory.
+/// * No other thread may concurrently write to or atomically modify the mapped bytes in
+///   `[meta_start, meta_end)` for the duration of this call, and no live `&mut` reference may
+///   alias them.
+pub(super) unsafe fn find_first_non_zero_bit_in_metadata_bytes(
     meta_start: Address,
     meta_end: Address,
 ) -> FindMetaBitResult {
@@ -362,7 +394,7 @@ pub fn find_first_non_zero_bit_in_metadata_bytes(
 
     let mut cursor = meta_start;
     // We need to check if metadata address is mapped or not.  But we make use of the granularity of
-    // the `Mmapper` to reduce the number of checks.  This records the start of a grain that is
+    // the `Mmapper` to reduce the number of checks.  This records the end of a grain that is
     // tested to be mapped.
     let mut mapped_grain = Address::ZERO;
     while cursor < meta_end {
@@ -382,7 +414,7 @@ pub fn find_first_non_zero_bit_in_metadata_bytes(
             meta_end
         );
 
-        // If we are looking at an address that is not in a mapped chunk, we need to check if the chunk if mapped.
+        // If we are looking at an address that is not in a mapped chunk, we need to check if the chunk is mapped.
         if cursor > mapped_grain {
             if cursor.is_mapped() {
                 // This is mapped. No need to check for this chunk.
@@ -393,7 +425,11 @@ pub fn find_first_non_zero_bit_in_metadata_bytes(
         }
 
         if step == BYTES_IN_ADDRESS {
-            // Load and check a usize word
+            // Load and check a usize word.
+            // SAFETY: `cursor` is aligned to `BYTES_IN_ADDRESS`, non-null, and `[cursor, cursor + BYTES_IN_ADDRESS)`
+            // lies within a single `mmap_granularity` grain verified mapped above (`mmap_granularity` is a
+            // multiple of `BYTES_IN_ADDRESS`, so an aligned word never straddles a grain boundary).
+            // Caller guarantees initialized metadata memory with no racing writes or `&mut` aliases.
             let value = unsafe { cursor.load::<usize>() };
             if value != 0 {
                 let bit = find_first_non_zero_bit::<usize>(value, 0, usize::BITS as u8).unwrap();
@@ -405,7 +441,10 @@ pub fn find_first_non_zero_bit_in_metadata_bytes(
                 };
             }
         } else {
-            // Load and check a byte
+            // Load and check a byte.
+            // SAFETY: `cursor` lies in a grain verified mapped via `cursor.is_mapped()` (`u8` has
+            // alignment 1), and caller guarantees initialized metadata memory without racing writes
+            // or `&mut` aliases.
             let value = unsafe { cursor.load::<u8>() };
             if let Some(bit) = find_first_non_zero_bit::<u8>(value, 0, 8) {
                 return FindMetaBitResult::Found { addr: cursor, bit };
@@ -417,7 +456,12 @@ pub fn find_first_non_zero_bit_in_metadata_bytes(
     FindMetaBitResult::NotFound
 }
 
-pub fn find_first_non_zero_bit_in_metadata_bits(
+/// Check `[start_bit, end_bit)` within the byte at `addr` and find the first non-zero bit.
+///
+/// # Safety
+/// * If `addr.is_mapped()` returns `true`, `addr` must point to a readable, initialized
+///   side-metadata byte with no concurrent writes, atomic modifications, or live `&mut` aliases.
+pub(super) unsafe fn find_first_non_zero_bit_in_metadata_bits(
     addr: Address,
     start_bit: u8,
     end_bit: u8,
@@ -425,6 +469,8 @@ pub fn find_first_non_zero_bit_in_metadata_bits(
     if !addr.is_mapped() {
         return FindMetaBitResult::UnmappedMetadata;
     }
+    // SAFETY: `addr.is_mapped()` succeeded above (`u8` has alignment 1), and caller guarantees the
+    // mapped metadata byte is initialized and free of concurrent writes or `&mut` aliases.
     let byte = unsafe { addr.load::<u8>() };
     if let Some(bit) = find_first_non_zero_bit::<u8>(byte, start_bit, end_bit) {
         return FindMetaBitResult::Found { addr, bit };
@@ -458,18 +504,29 @@ pub fn scan_non_zero_bits_in_metadata_bytes(
 
     let mut cursor = meta_start;
     while cursor < meta_end && !cursor.is_aligned_to(BYTES_IN_ADDRESS) {
+        // SAFETY: `scan_non_zero_bits_in_metadata_bytes` (preserved with its cross-slice signature
+        // for `test_private`) requires `[meta_start, meta_end)` to be mapped, initialized metadata
+        // memory not concurrently mutated during scanning (and `visit_bit` only observes data
+        // addresses without mutating this bitmap). `cursor < meta_end` is in-bounds and `u8` has
+        // alignment 1.
         let byte = unsafe { cursor.load::<u8>() };
         scan_non_zero_bits_in_metadata_word(cursor, byte as usize, visit_bit);
         cursor += 1usize;
     }
 
     while cursor + BYTES_IN_ADDRESS < meta_end {
+        // SAFETY: Loop prefix established `cursor.is_aligned_to(BYTES_IN_ADDRESS)` (maintained by
+        // stepping `BYTES_IN_ADDRESS` each iteration), and `cursor + BYTES_IN_ADDRESS < meta_end`
+        // keeps all `BYTES_IN_ADDRESS` bytes in-bounds of the mapped, initialized, quiescent
+        // metadata range `[meta_start, meta_end)`.
         let word = unsafe { cursor.load::<usize>() };
         scan_non_zero_bits_in_metadata_word(cursor, word, visit_bit);
         cursor += BYTES_IN_ADDRESS;
     }
 
     while cursor < meta_end {
+        // SAFETY: `cursor < meta_end` is in-bounds of the mapped, initialized, quiescent metadata
+        // range `[meta_start, meta_end)`, and `u8` has alignment 1.
         let byte = unsafe { cursor.load::<u8>() };
         scan_non_zero_bits_in_metadata_word(cursor, byte as usize, visit_bit);
         cursor += 1usize;
@@ -488,12 +545,21 @@ fn scan_non_zero_bits_in_metadata_word(
     }
 }
 
-pub fn scan_non_zero_bits_in_metadata_bits(
+/// Scan `[bit_start, bit_end)` within the metadata byte at `meta_addr` and invoke `visit_bit` for
+/// each non-zero bit.
+///
+/// # Safety
+/// * `meta_addr` must be non-null and point to a mapped, readable, initialized side-metadata byte.
+/// * No other thread may concurrently write to or atomically modify `meta_addr` during the load,
+///   and no live `&mut` reference may alias `meta_addr` at the point of the load.
+pub(super) unsafe fn scan_non_zero_bits_in_metadata_bits(
     meta_addr: Address,
     bit_start: BitOffset,
     bit_end: BitOffset,
     visit_bit: &mut impl FnMut(Address, BitOffset),
 ) {
+    // SAFETY: Caller guarantees `meta_addr` is non-null, mapped, initialized (`u8` has alignment 1),
+    // and free of concurrent writes, atomic modifications, or live `&mut` aliases.
     let byte = unsafe { meta_addr.load::<u8>() };
     for bit in bit_start..bit_end {
         if byte & (1 << bit) != 0 {
@@ -551,14 +617,14 @@ mod tests {
     }
 
     const TEST_ADDRESS_8B_REGION: [Address; 8] = [
-        unsafe { Address::from_usize(0x8000_0000) },
-        unsafe { Address::from_usize(0x8000_0008) },
-        unsafe { Address::from_usize(0x8000_0010) },
-        unsafe { Address::from_usize(0x8000_0018) },
-        unsafe { Address::from_usize(0x8000_0020) },
-        unsafe { Address::from_usize(0x8001_0000) },
-        unsafe { Address::from_usize(0x8001_0008) },
-        unsafe { Address::from_usize(0xd000_0000) },
+        Address::ZERO.add(0x8000_0000),
+        Address::ZERO.add(0x8000_0008),
+        Address::ZERO.add(0x8000_0010),
+        Address::ZERO.add(0x8000_0018),
+        Address::ZERO.add(0x8000_0020),
+        Address::ZERO.add(0x8001_0000),
+        Address::ZERO.add(0x8001_0008),
+        Address::ZERO.add(0xd000_0000),
     ];
 
     #[test]
@@ -614,14 +680,14 @@ mod tests {
     }
 
     const TEST_ADDRESS_4KB_REGION: [Address; 8] = [
-        unsafe { Address::from_usize(0x8000_0000) },
-        unsafe { Address::from_usize(0x8000_1000) },
-        unsafe { Address::from_usize(0x8000_2000) },
-        unsafe { Address::from_usize(0x8000_3000) },
-        unsafe { Address::from_usize(0x8000_4000) },
-        unsafe { Address::from_usize(0x8001_0000) },
-        unsafe { Address::from_usize(0x8001_1000) },
-        unsafe { Address::from_usize(0xd000_0000) },
+        Address::ZERO.add(0x8000_0000),
+        Address::ZERO.add(0x8000_1000),
+        Address::ZERO.add(0x8000_2000),
+        Address::ZERO.add(0x8000_3000),
+        Address::ZERO.add(0x8000_4000),
+        Address::ZERO.add(0x8001_0000),
+        Address::ZERO.add(0x8001_1000),
+        Address::ZERO.add(0xd000_0000),
     ];
 
     #[test]
@@ -663,16 +729,8 @@ mod tests {
             log_bytes_in_region: 3,
         };
 
-        const ADDR_1000: Address = unsafe { Address::from_usize(0x1000) };
-        const ADDR_1001: Address = unsafe { Address::from_usize(0x1001) };
-        const ADDR_1002: Address = unsafe { Address::from_usize(0x1002) };
-        const ADDR_1003: Address = unsafe { Address::from_usize(0x1003) };
-        const ADDR_1004: Address = unsafe { Address::from_usize(0x1004) };
-        const ADDR_1005: Address = unsafe { Address::from_usize(0x1005) };
-        const ADDR_1006: Address = unsafe { Address::from_usize(0x1006) };
-        const ADDR_1007: Address = unsafe { Address::from_usize(0x1007) };
-        const ADDR_1008: Address = unsafe { Address::from_usize(0x1008) };
-        const ADDR_1009: Address = unsafe { Address::from_usize(0x1009) };
+        const ADDR_1000: Address = Address::ZERO.add(0x1000);
+        const ADDR_1001: Address = Address::ZERO.add(0x1001);
 
         let metadata_2bits = create_spec(1);
         assert_eq!(

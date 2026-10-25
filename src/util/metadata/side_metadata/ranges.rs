@@ -174,7 +174,7 @@ mod tests {
     use super::*;
 
     fn mk_addr(addr: usize) -> Address {
-        unsafe { Address::from_usize(addr) }
+        Address::ZERO + addr
     }
 
     fn break_bit_range_wrapped(

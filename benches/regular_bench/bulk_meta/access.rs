@@ -23,10 +23,13 @@ const BENCH_SPEC: SideMetadataSpec = SideMetadataSpec {
 
 const NUM_ADDRS: usize = 4096;
 const DATA_STRIDE: usize = 64;
+// Non-zero base ensures `address_to_meta_address` maps above page zero (`0x0040_0000` on 64-bit)
+// even when standalone benchmarks run without initializing `SIDE_METADATA_BASE_ADDRESS`.
+const BENCH_DATA_BASE: usize = 0x1000_0000;
 
 fn prepare_data_addrs() -> Vec<Address> {
     (0..NUM_ADDRS)
-        .map(|i| unsafe { Address::from_usize(i * DATA_STRIDE) })
+        .map(|i| Address::ZERO + (BENCH_DATA_BASE + i * DATA_STRIDE))
         .collect()
 }
 
@@ -81,6 +84,11 @@ pub fn bench(c: &mut Criterion) {
         b.iter(|| {
             let mut checksum = 0usize;
             for data_addr in &addrs {
+                // SAFETY: Every `data_addr` in `addrs` maps to a metadata byte inside
+                // `[map_start, map_start + map_size)`, which was mapped read-write via `OS::dzmmap`
+                // and initialized via `memory::set` above (`BENCH_SPEC.log_num_of_bits == 0` uses
+                // 1-byte `u8` loads), and this single-threaded benchmark performs no concurrent or
+                // atomic accesses during `b.iter`.
                 let val = unsafe { BENCH_SPEC.load::<u8>(*data_addr) };
                 checksum ^= val as usize;
             }

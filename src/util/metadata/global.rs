@@ -48,16 +48,30 @@ impl MetadataSpec {
     /// * `mask`: is an optional mask value for the metadata. This value is used in cases like the forwarding pointer metadata, where some of the bits are reused by other metadata such as the forwarding bits.
     ///
     /// # Safety
-    /// This is a non-atomic load, thus not thread-safe.
+    /// * `object` must refer to a live MMTk-managed object whose metadata storage for `self` is
+    ///   mapped and initialized (either mapped side-metadata pages for `OnSide` or valid in-object
+    ///   header memory for `InHeader` per [`ObjectModel::load_metadata`]), and `T` (plus `mask`, if
+    ///   `Some`) must match `self`'s configured bit-width and alignment requirements.
+    /// * This is a non-atomic load: no other thread may concurrently write to or atomically modify
+    ///   the underlying metadata storage unit (including adjacent objects/regions sharing the same
+    ///   metadata byte when `self` uses fewer than 8 bits).
     pub unsafe fn load<VM: VMBinding, T: MetadataValue>(
         &self,
         object: ObjectReference,
         mask: Option<T>,
     ) -> T {
         match self {
-            MetadataSpec::OnSide(metadata_spec) => metadata_spec.load(object.to_raw_address()),
+            MetadataSpec::OnSide(metadata_spec) => {
+                // SAFETY: Guaranteed by the caller: `object`'s side metadata for `metadata_spec` is
+                // mapped, `T` matches `metadata_spec`, and no concurrent write or atomic operation
+                // races on the underlying side-metadata byte/word.
+                unsafe { metadata_spec.load(object.to_raw_address()) }
+            }
             MetadataSpec::InHeader(metadata_spec) => {
-                VM::VMObjectModel::load_metadata::<T>(metadata_spec, object, mask)
+                // SAFETY: Guaranteed by the caller: `object` has valid initialized header metadata
+                // for `metadata_spec`, `T` and `mask` satisfy `metadata_spec`, and no concurrent
+                // write or atomic modification races on the header metadata field.
+                unsafe { VM::VMObjectModel::load_metadata::<T>(metadata_spec, object, mask) }
             }
         }
     }
@@ -96,7 +110,14 @@ impl MetadataSpec {
     /// * `mask`: is an optional mask value for the metadata. This value is used in cases like the forwarding pointer metadata, where some of the bits are reused by other metadata such as the forwarding bits.
     ///
     /// # Safety
-    /// This is a non-atomic store, thus not thread-safe.
+    /// * `object` must refer to a live MMTk-managed object whose metadata storage for `self` is
+    ///   mapped and writable (either mapped side-metadata pages for `OnSide` or valid in-object
+    ///   header memory for `InHeader` per [`ObjectModel::store_metadata`]), and `T`, `val`, and
+    ///   `mask` must satisfy `self`'s configured bit-width and alignment requirements.
+    /// * This is a non-atomic store (and a non-atomic read-modify-write for sub-byte or masked
+    ///   specs): the caller must have exclusive access to the underlying metadata storage unit
+    ///   (including adjacent objects/regions sharing the same metadata byte when `self` uses fewer
+    ///   than 8 bits), with no concurrent reads, writes, or atomic operations on that unit.
     pub unsafe fn store<VM: VMBinding, T: MetadataValue>(
         &self,
         object: ObjectReference,
@@ -105,10 +126,20 @@ impl MetadataSpec {
     ) {
         match self {
             MetadataSpec::OnSide(metadata_spec) => {
-                metadata_spec.store(object.to_raw_address(), val);
+                // SAFETY: Guaranteed by the caller: `object`'s side metadata for `metadata_spec` is
+                // mapped and writable, `T` and `val` match `metadata_spec`, and no other thread
+                // concurrently accesses or atomically modifies the underlying side-metadata unit.
+                unsafe {
+                    metadata_spec.store(object.to_raw_address(), val);
+                }
             }
             MetadataSpec::InHeader(metadata_spec) => {
-                VM::VMObjectModel::store_metadata::<T>(metadata_spec, object, val, mask)
+                // SAFETY: Guaranteed by the caller: `object` has valid writable header metadata for
+                // `metadata_spec`, `T`/`val`/`mask` satisfy `metadata_spec`, and no other thread
+                // concurrently accesses or atomically modifies the header metadata unit.
+                unsafe {
+                    VM::VMObjectModel::store_metadata::<T>(metadata_spec, object, val, mask);
+                }
             }
         }
     }
