@@ -4,28 +4,22 @@ use super::sft::*;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::Address;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::OnceLock;
 
-mod private {
-    pub trait Sealed {}
-}
-
-/// SFT initialization interface passed to [`crate::policy::space::Space::initialize_sft`].
+/// Legacy Wave-3A SFT initialization interface passed to
+/// [`crate::policy::space::Space::initialize_sft`].
 ///
-/// Sealed to [`SftMapInitHandle`] so only the one-shot `MMTK::new` -> `Plan::initialize_sft` boot
-/// path can invoke `Space::initialize_sft`. Runtime SFT lookups and chunk updates go directly
-/// through [`GlobalSftMap`] (`SFT_MAP`) using `'static` space references cached during boot.
-pub trait SFTMap: private::Sealed + Send + Sync {
+/// Actual `'static` space registration runs in
+/// [`crate::util::heap::gc_trigger::GCTrigger::set_plan`], and runtime SFT lookups and chunk
+/// updates go directly through [`GlobalSftMap`] (`SFT_MAP`).
+pub trait SFTMap: Send + Sync {
     /// Get SFT for `address`, returning an empty SFT if out of bounds.
     fn get_checked(&self, address: Address) -> &dyn SFT;
 
-    /// Notify the SFT map of space creation (`SFTDenseChunkMap` allocates a dense `u8` index).
+    /// Legacy Wave-3A space creation notification hook (no-op; registration runs via
+    /// [`GlobalSftMap::notify_space_creation_static`]).
     fn notify_space_creation(&mut self, space: SFTRawPointer);
-
-    /// Verify `space` was just registered via [`Self::notify_space_creation`] on the one-shot
-    /// `MMTK::new` -> `Plan::initialize_sft` handle.
-    fn verify_notified(&mut self, space: SFTRawPointer);
 }
 
 /// Concrete enum dispatch for the global SFT map, eliminating `Box<dyn SFTMap>` double
@@ -146,13 +140,19 @@ fn create_sft_map_impl() -> SFTMapImpl {
 }
 
 static EMPTY_SFT_MAP_FALLBACK: SFTMapImpl = SFTMapImpl::Empty;
-static SFT_MAP_OWNER: OnceLock<SFTMapImpl> = OnceLock::new();
+static SFT_MAP_OWNER: OnceLock<&'static SFTMapImpl> = OnceLock::new();
+static SFT_MAP_FAST_PTR: AtomicPtr<SFTMapImpl> = AtomicPtr::new(std::ptr::null_mut());
 
 /// Initialize the global SFT map once and return its `'static` reference.
 pub(crate) fn ensure_sft_map_initialized() -> &'static SFTMapImpl {
     SFT_MAP_OWNER.get_or_init(|| {
         SFTRefStorage::pre_use_check();
-        create_sft_map_impl()
+        let map: &'static SFTMapImpl = Box::leak(Box::new(create_sft_map_impl()));
+        SFT_MAP_FAST_PTR.store(
+            map as *const SFTMapImpl as *mut SFTMapImpl,
+            Ordering::Release,
+        );
+        map
     })
 }
 
@@ -162,7 +162,10 @@ pub struct GlobalSftMap;
 impl GlobalSftMap {
     #[inline(always)]
     fn map_acquire(&self) -> &'static SFTMapImpl {
-        SFT_MAP_OWNER.get().unwrap_or(&EMPTY_SFT_MAP_FALLBACK)
+        SFT_MAP_OWNER
+            .get()
+            .copied()
+            .unwrap_or(&EMPTY_SFT_MAP_FALLBACK)
     }
 
     #[allow(dead_code)]
@@ -185,17 +188,23 @@ impl GlobalSftMap {
         self.map_acquire().get_checked(address)
     }
 
-    /// Lookup `address` on the GC tracing hotpath without `OnceLock` fallback or bounds checks.
+    /// Lookup `address` on the GC tracing hotpath without `OnceLock` `Acquire` barriers or bounds checks.
     ///
     /// # Safety
-    /// - `ensure_sft_map_initialized` (run during `MMTK::new` -> `Plan::initialize_sft`) must have
-    ///   happened-before this call on the calling thread.
+    /// - `ensure_sft_map_initialized` (run during `MMTK::new`) must have happened-before this call
+    ///   on the calling thread.
     /// - `self.has_sft_entry(address)` must hold.
     #[inline(always)]
     pub unsafe fn get_unchecked(&self, address: Address) -> &'static dyn SFT {
-        // SAFETY: Caller guarantees `ensure_sft_map_initialized()` happened-before this call, so
-        // `SFT_MAP_OWNER` is initialized.
-        let map = unsafe { SFT_MAP_OWNER.get().unwrap_unchecked() };
+        let ptr = SFT_MAP_FAST_PTR.load(Ordering::Relaxed);
+        debug_assert!(
+            !ptr.is_null(),
+            "GlobalSftMap::get_unchecked called before ensure_sft_map_initialized"
+        );
+        // SAFETY: Caller guarantees `ensure_sft_map_initialized()` happened-before this call, which
+        // initialized `SFT_MAP_OWNER` and stored its `'static SFTMapImpl` address into
+        // `SFT_MAP_FAST_PTR` before returning.
+        let map = unsafe { &*ptr };
         match map {
             SFTMapImpl::Empty => {
                 debug_assert!(
@@ -223,7 +232,6 @@ impl GlobalSftMap {
     }
 
     /// Register a `'static` space in `SFT_MAP` safely (`0` `unsafe`).
-    #[allow(dead_code)]
     pub fn notify_space_creation_static(&self, space: &'static (dyn SFT + Sync + 'static)) {
         ensure_sft_map_initialized().notify_space_creation_raw(space);
     }
@@ -254,51 +262,25 @@ impl GlobalSftMap {
     }
 }
 
-static SFT_INIT_CLAIMED: AtomicBool = AtomicBool::new(false);
-
-/// Stack-local adapter passed as `&mut dyn SFTMap` to [`crate::policy::space::Space::initialize_sft`],
-/// delegating to `&'static SFTMapImpl` via `&self` without ever forming `&mut` to global state.
+/// Legacy Wave-3A adapter passed as `&mut dyn SFTMap` to `Plan::initialize_sft(&self)`.
+///
+/// Actual `'static` SFT registration runs in `GCTrigger::set_plan(&'static dyn Plan)`.
 pub(crate) struct SftMapInitHandle {
     map: &'static SFTMapImpl,
-    last_notified_space: Option<usize>,
 }
 
 impl SftMapInitHandle {
     pub(crate) fn new(map: &'static SFTMapImpl) -> Self {
-        assert!(
-            crate::mmtk::VM_MAP.is_finalized(),
-            "SftMapInitHandle::new requires VM_MAP to be finalized in MMTK::new"
-        );
-        assert!(
-            !SFT_INIT_CLAIMED.swap(true, Ordering::AcqRel),
-            "SftMapInitHandle::new may only be called once per process during MMTK::new"
-        );
-        Self {
-            map,
-            last_notified_space: None,
-        }
+        Self { map }
     }
 }
-
-impl private::Sealed for SftMapInitHandle {}
 
 impl SFTMap for SftMapInitHandle {
     fn get_checked(&self, address: Address) -> &dyn SFT {
         self.map.get_checked(address)
     }
 
-    fn notify_space_creation(&mut self, space: SFTRawPointer) {
-        self.map.notify_space_creation_raw(space);
-        self.last_notified_space = Some(space as *const () as usize);
-    }
-
-    fn verify_notified(&mut self, space: SFTRawPointer) {
-        assert_eq!(
-            self.last_notified_space.take(),
-            Some(space as *const () as usize),
-            "Space::initialize_sft called without matching Plan::initialize_sft notify_space_creation"
-        );
-    }
+    fn notify_space_creation(&mut self, _space: SFTRawPointer) {}
 }
 
 /// The raw pointer for SFT. We expect a space to provide this to SFT map.
@@ -519,10 +501,22 @@ mod space_map {
         }
 
         fn index_to_space_range_with(i: usize, log_space_extent: usize) -> (Address, Address) {
-            assert!(i != 0, "Invalid index: there is no space for index 0");
-            let start = Address::ZERO.add(i << log_space_extent);
+            use crate::util::heap::layout::heap_parameters::MAX_SPACES;
+            assert!(
+                i != 0 && i <= MAX_SPACES && log_space_extent <= usize::BITS as usize - 5,
+                "Invalid space index {i} or log_space_extent {log_space_extent}"
+            );
+            let start_raw = i << log_space_extent;
             let extent = 1usize << log_space_extent;
-            (start, start.add(extent))
+            // SAFETY: `i <= MAX_SPACES (16)` and `log_space_extent <= usize::BITS - 5` guarantee
+            // `start_raw + extent == (i + 1) << log_space_extent <= 17 << (BITS - 5) < usize::MAX`;
+            // neither virtual space boundary is dereferenced directly here.
+            unsafe {
+                (
+                    Address::from_usize(start_raw),
+                    Address::from_usize(start_raw + extent),
+                )
+            }
         }
     }
 
@@ -604,10 +598,15 @@ mod dense_chunk_map {
 
         #[inline(always)]
         fn is_index_mapped(addr: Address) -> bool {
-            crate::util::metadata::side_metadata::address_to_meta_address(
+            if crate::util::metadata::side_metadata::global_side_metadata_base_address().is_zero() {
+                return false;
+            }
+            let meta_addr = crate::util::metadata::side_metadata::address_to_meta_address(
                 &SFT_DENSE_CHUNK_MAP_INDEX,
                 addr,
-            ) < SFT_DENSE_CHUNK_MAP_INDEX.upper_bound_address_for_contiguous()
+            );
+            meta_addr >= SFT_DENSE_CHUNK_MAP_INDEX.get_starting_address()
+                && meta_addr < SFT_DENSE_CHUNK_MAP_INDEX.upper_bound_address_for_contiguous()
                 && SFT_DENSE_CHUNK_MAP_INDEX.is_mapped(addr)
         }
 
@@ -951,7 +950,8 @@ mod tests {
         map.update_static(&EMPTY_SPACE_SFT, Address::MAX, 0);
 
         let extent = 1usize << crate::util::heap::layout::vm_layout::vm_layout().log_space_extent;
-        let space1_start = Address::ZERO + extent;
+        let space1_start = crate::util::heap::layout::vm_layout::vm_layout().heap_start;
+        assert_eq!(space1_start.as_usize(), extent);
         assert!(map.has_sft_entry(space1_start));
         map.update_static(&EMPTY_SPACE_SFT, space1_start, BYTES_IN_CHUNK);
         assert_eq!(map.get_checked(space1_start).name(), EMPTY_SFT_NAME);

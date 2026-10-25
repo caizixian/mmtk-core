@@ -112,11 +112,6 @@ impl<VM: VMBinding> Space<VM> for VMSpace<VM> {
         &self.common
     }
 
-    fn initialize_sft(&self, sft_map: &mut dyn crate::policy::sft_map::SFTMap) {
-        self.common.bind_sft(self.as_sft(), sft_map);
-        self.initialize_vm_regions_sft();
-    }
-
     fn initialize_sft_static(&'static self) {
         let _ = self.common.sft_ref.set(self);
         SFT_MAP.notify_space_creation_static(self);

@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 pub mod heap_parameters;
 pub mod vm_layout;
 

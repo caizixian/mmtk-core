@@ -201,17 +201,6 @@ impl<VM: VMBinding> Space<VM> for MallocSpace<VM> {
         self.gc_trigger.as_ref()
     }
 
-    fn initialize_sft(&self, sft_map: &mut dyn crate::policy::sft_map::SFTMap) {
-        let raw_sft: *const (dyn SFT + Sync + 'static) = self.as_sft();
-        sft_map.verify_notified(raw_sft);
-        // SAFETY: `SFTMap` is sealed to the one-shot `SftMapInitHandle` created inside
-        // `MMTK::new` -> `Plan::initialize_sft` after `VM_MAP` is finalized and the owning `Plan`
-        // (and `self`) has been permanently leaked via `Box::into_raw` for `'static`, and
-        // `verify_notified` confirmed `raw_sft` is the exact space currently being initialized.
-        let static_sft = unsafe { &*raw_sft };
-        let _ = self.sft_ref.set(static_sft);
-    }
-
     fn initialize_sft_static(&'static self) {
         let _ = self.sft_ref.set(self);
         crate::mmtk::SFT_MAP.notify_space_creation_static(self);
@@ -631,6 +620,10 @@ impl<VM: VMBinding> MallocSpace<VM> {
 
     /// Project the mapped `VO_BIT` atomic bytes for an allocated `chunk` owned by `self`.
     fn chunk_vo_bytes(&self, chunk: Chunk) -> &[AtomicU8; VO_META_BYTES_PER_CHUNK] {
+        assert!(
+            !side_metadata::global_side_metadata_base_address().is_zero(),
+            "MallocSpace::chunk_vo_bytes called before side metadata initialization"
+        );
         let chunk_start = chunk.start();
         assert!(
             self.owns_chunk(chunk),
@@ -639,6 +632,18 @@ impl<VM: VMBinding> MallocSpace<VM> {
         );
         let vo_meta_start =
             side_metadata::address_to_meta_address(&VO_BIT_SIDE_METADATA_SPEC, chunk_start);
+        if VO_BIT_SIDE_METADATA_SPEC.uses_contiguous_side_metadata() {
+            let spec_start = VO_BIT_SIDE_METADATA_SPEC.get_starting_address();
+            let spec_end = VO_BIT_SIDE_METADATA_SPEC.upper_bound_address_for_contiguous();
+            assert!(
+                vo_meta_start >= spec_start
+                    && vo_meta_start
+                        .as_usize()
+                        .checked_add(VO_META_BYTES_PER_CHUNK)
+                        .is_some_and(|end| end <= spec_end.as_usize()),
+                "VO_BIT metadata [{vo_meta_start}, + {VO_META_BYTES_PER_CHUNK}) for MallocSpace chunk {chunk:?} falls outside contiguous spec window [{spec_start}, {spec_end})"
+            );
+        }
         let first_page = vo_meta_start.align_down(BYTES_IN_PAGE);
         let last_page = (vo_meta_start + (VO_META_BYTES_PER_CHUNK - 1)).align_down(BYTES_IN_PAGE);
         let mut page = first_page;

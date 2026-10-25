@@ -145,7 +145,8 @@ impl Block {
     pub(super) fn rc_array(&self) -> RCArray<'_> {
         const _: () = assert!(LINES_IN_BLOCK * BYTES_PER_LINE <= BYTES_IN_PAGE);
         assert!(
-            !self.is_zero()
+            !global_side_metadata_base_address().is_zero()
+                && !self.is_zero()
                 && self.start().is_aligned_to(Self::BYTES)
                 && self.start().as_usize() <= usize::MAX - Self::BYTES
                 && address_to_meta_address(&crate::util::rc::RC_TABLE, self.start())
@@ -160,13 +161,14 @@ impl Block {
             self
         );
         // SAFETY:
-        // 1. The assertion above unconditionally verifies `!self.is_zero()`, `self.start()` is
-        //    aligned to `Self::BYTES` (`<= 32 KiB << BYTES_IN_CHUNK`) without overflow, and global
-        //    contiguous `RC_TABLE` for `[self.start(), self.end())` falls strictly within
-        //    `[RC_TABLE.get_starting_address(), RC_TABLE.upper_bound_address_for_contiguous())` and
-        //    spans at most two adjacent `MMAPPER` pages (`LINES_IN_BLOCK * BYTES_PER_LINE <=
-        //    BYTES_IN_PAGE`), both verified mapped via `self.start()` and `self.end() - 1usize`
-        //    (zero-initialized and never unmapped for the process lifetime).
+        // 1. The assertion above unconditionally verifies side metadata is initialized,
+        //    `!self.is_zero()`, `self.start()` is aligned to `Self::BYTES` (`<= 32 KiB <<
+        //    BYTES_IN_CHUNK`) without overflow, and global contiguous `RC_TABLE` for
+        //    `[self.start(), self.end())` falls strictly within `[RC_TABLE.get_starting_address(),
+        //    RC_TABLE.upper_bound_address_for_contiguous())` and spans at most two adjacent
+        //    `MMAPPER` pages (`LINES_IN_BLOCK * BYTES_PER_LINE <= BYTES_IN_PAGE`), both verified
+        //    mapped via `self.start()` and `self.end() - 1usize` (zero-initialized and never
+        //    unmapped for the process lifetime).
         // 2. Every `RC_TABLE` operation across `mmtk-core` (`RefCountHelper`, `SideMetadataSpec`
         //    atomic ops, `RCArray`) accesses `RC_TABLE` exclusively via `AtomicU8`.
         let table = unsafe {
@@ -183,12 +185,20 @@ impl Block {
         const _: () = assert!(LINES_IN_BLOCK <= BYTES_IN_PAGE);
         assert!(
             !super::BLOCK_ONLY
+                && !global_side_metadata_base_address().is_zero()
                 && !self.is_zero()
                 && self.start().is_aligned_to(Self::BYTES)
                 && self.start().as_usize() <= usize::MAX - Self::BYTES
+                && (!Line::MARK_TABLE.uses_contiguous_side_metadata()
+                    || (address_to_meta_address(&Line::MARK_TABLE, self.start())
+                        >= Line::MARK_TABLE.get_starting_address()
+                        && address_to_meta_address(&Line::MARK_TABLE, self.end() - 1usize)
+                            >= Line::MARK_TABLE.get_starting_address()
+                        && address_to_meta_address(&Line::MARK_TABLE, self.end() - 1usize)
+                            < Line::MARK_TABLE.upper_bound_address_for_contiguous()))
                 && Line::MARK_TABLE.is_mapped(self.start())
                 && Line::MARK_TABLE.is_mapped(self.end() - 1usize),
-            "Block {:?} is not a non-zero aligned line-granularity Immix block with mapped Line::MARK_TABLE",
+            "Block {:?} is not a non-zero aligned line-granularity Immix block with in-bounds mapped Line::MARK_TABLE",
             self
         );
         // SAFETY:

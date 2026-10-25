@@ -289,10 +289,6 @@ impl<VM: VMBinding> Space<VM> for MarkSweepSpace<VM> {
         Some(&mut self.pr)
     }
 
-    fn initialize_sft(&self, sft_map: &mut dyn crate::policy::sft_map::SFTMap) {
-        self.common().initialize_sft(self.as_sft(), sft_map)
-    }
-
     fn common(&self) -> &CommonSpace<VM> {
         &self.common
     }
@@ -307,14 +303,14 @@ impl<VM: VMBinding> Space<VM> for MarkSweepSpace<VM> {
 
     fn clear_side_log_bits(&self) {
         let log_bit = VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec();
-        for chunk in self.chunk_map.all_chunks() {
+        for chunk in self.iter_allocated_chunks() {
             log_bit.bzero_metadata(chunk.start(), Chunk::BYTES);
         }
     }
 
     fn set_side_log_bits(&self) {
         let log_bit = VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec();
-        for chunk in self.chunk_map.all_chunks() {
+        for chunk in self.iter_allocated_chunks() {
             log_bit.bset_metadata(chunk.start(), Chunk::BYTES);
         }
     }
@@ -467,6 +463,15 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
         self.chunk_map.set_allocated(block.chunk(), true);
     }
 
+    /// Iterate all allocated chunks in `self.chunk_map` that genuinely belong to `self`
+    /// (`self.address_in_space(chunk.start())`), filtering out any foreign chunks whose 4-bit
+    /// `ChunkState` `space_index` collides with `self.common.descriptor.get_index()`.
+    fn iter_allocated_chunks(&self) -> impl Iterator<Item = Chunk> + '_ {
+        self.chunk_map
+            .all_chunks()
+            .filter(|chunk| self.address_in_space(chunk.start()))
+    }
+
     pub fn prepare(&mut self, full_heap: bool) {
         self.prepare_shared(full_heap);
     }
@@ -476,12 +481,15 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
         self.abandoned_in_gc.lock().unwrap().assert_empty();
 
         let space_descriptor = self.common.descriptor;
-        let work_packets = self.chunk_map.generate_tasks(|chunk| {
-            Box::new(PrepareChunkMap {
-                space_descriptor,
-                chunk,
+        let work_packets: Vec<Box<dyn GCWork<VM>>> = self
+            .iter_allocated_chunks()
+            .map(|chunk| -> Box<dyn GCWork<VM>> {
+                Box::new(PrepareChunkMap {
+                    space_descriptor,
+                    chunk,
+                })
             })
-        });
+            .collect();
         self.scheduler.work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
     }
 
@@ -638,13 +646,16 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
         let epilogue = Arc::new(SweepChunkEpilogue {
             counter: AtomicUsize::new(0),
         });
-        let tasks = self.chunk_map.generate_tasks(|chunk| {
-            Box::new(SweepChunk {
-                space_descriptor,
-                chunk,
-                epilogue: epilogue.clone(),
+        let tasks: Vec<Box<dyn GCWork<VM>>> = self
+            .iter_allocated_chunks()
+            .map(|chunk| -> Box<dyn GCWork<VM>> {
+                Box::new(SweepChunk {
+                    space_descriptor,
+                    chunk,
+                    epilogue: epilogue.clone(),
+                })
             })
-        });
+            .collect();
         epilogue.counter.store(tasks.len(), Ordering::SeqCst);
         tasks
     }

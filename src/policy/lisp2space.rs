@@ -65,6 +65,9 @@ impl<VM: VMBinding> SFT for Lisp2Space<VM> {
     }
 
     fn get_forwarded_object(&self, object: ObjectReference) -> Option<ObjectReference> {
+        if self.common.global_state.gc_status.load() != crate::global_state::GcStatus::InPause {
+            return None;
+        }
         let guard = self
             .compact_rwlock
             .try_read()
@@ -133,11 +136,17 @@ impl<VM: VMBinding> SFT for Lisp2Space<VM> {
     }
 
     fn debug_print_object_info(&self, object: ObjectReference) {
-        let guard = self
-            .compact_rwlock
-            .try_read()
-            .expect("Cannot inspect Lisp2Space forwarding pointer during compact");
-        let forwarded = self.load_forwarding_pointer(object, ForwardingAccess::shared(&guard));
+        let forwarded = if self.common.global_state.gc_status.load()
+            == crate::global_state::GcStatus::InPause
+        {
+            let guard = self
+                .compact_rwlock
+                .try_read()
+                .expect("Cannot inspect Lisp2Space forwarding pointer during compact");
+            self.load_forwarding_pointer(object, ForwardingAccess::shared(&guard))
+        } else {
+            None
+        };
         println!("marked = {}", Lisp2Space::<VM>::is_marked(object));
         println!("head forwarding pointer = {:?}", forwarded);
         self.common.debug_print_object_global_info(object);
@@ -163,10 +172,6 @@ impl<VM: VMBinding> Space<VM> for Lisp2Space<VM> {
 
     fn common(&self) -> &CommonSpace<VM> {
         &self.common
-    }
-
-    fn initialize_sft(&self, sft_map: &mut dyn crate::policy::sft_map::SFTMap) {
-        self.common().initialize_sft(self.as_sft(), sft_map)
     }
 
     fn release_multiple_pages(&mut self, _start: Address) {
@@ -239,6 +244,11 @@ impl<VM: VMBinding> Lisp2Space<VM> {
         require_vo_bit: bool,
         _access: ForwardingAccess<'a>,
     ) -> &'a AtomicUsize {
+        assert_eq!(
+            self.common.global_state.gc_status.load(),
+            crate::global_state::GcStatus::InPause,
+            "Lisp2Space::forwarding_slot requires an active STW GC pause"
+        );
         let raw = object.to_raw_address();
         let obj_start = object.to_object_start::<VM>();
         assert!(
@@ -257,9 +267,10 @@ impl<VM: VMBinding> Lisp2Space<VM> {
         );
         // SAFETY:
         // 1. `obj_start.as_usize() > GC_EXTRA_HEADER_BYTES` guarantees `!fwd_addr.is_zero()`, and
-        //    the assertions above verified `fwd_addr` is aligned to `AtomicUsize`, belongs to
-        //    `self`, and resides on a mapped OS page (`Lisp2Space` uses `MonotonePageResource` and
-        //    `MMAPPER` never unmaps zero-initialized pages).
+        //    the assertions above verified `GcStatus::InPause` (mutators stopped; no concurrent
+        //    non-atomic bump-page zeroing or alignment-gap fills), `fwd_addr` is aligned to
+        //    `AtomicUsize`, belongs to `self`, and resides on a mapped OS page (`Lisp2Space` uses
+        //    `MonotonePageResource` and `MMAPPER` never unmaps zero-initialized pages).
         // 2. `_access: ForwardingAccess<'a>` proves `self.compact_rwlock` is held either shared
         //    (preventing `compact`'s non-atomic `VMObjectModel::copy_to` across threads while all
         //    concurrent header-word accesses use `AtomicUsize` outside object payloads) or
@@ -494,6 +505,11 @@ impl<VM: VMBinding> Lisp2Space<VM> {
     }
 
     pub fn compact(&self) {
+        assert_eq!(
+            self.common.global_state.gc_status.load(),
+            crate::global_state::GcStatus::InPause,
+            "Lisp2Space::compact requires an active STW GC pause"
+        );
         let mut guard = self
             .compact_rwlock
             .try_write()

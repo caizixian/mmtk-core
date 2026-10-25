@@ -129,17 +129,6 @@ impl<VM: VMBinding> Space<VM> for LockFreeImmortalSpace<VM> {
         panic!("immortalspace only releases pages enmasse")
     }
 
-    fn initialize_sft(&self, sft_map: &mut dyn crate::policy::sft_map::SFTMap) {
-        let raw_sft: *const (dyn SFT + Sync + 'static) = self.as_sft();
-        sft_map.verify_notified(raw_sft);
-        // SAFETY: `SFTMap` is sealed to the one-shot `SftMapInitHandle` created inside
-        // `MMTK::new` -> `Plan::initialize_sft` after `VM_MAP` is finalized and the owning `Plan`
-        // (and `self`) has been permanently leaked via `Box::into_raw` for `'static`, and
-        // `verify_notified` confirmed `raw_sft` is the exact space currently being initialized.
-        let static_sft = unsafe { &*raw_sft };
-        crate::mmtk::SFT_MAP.eager_initialize_static(static_sft, self.start, self.total_bytes);
-    }
-
     fn initialize_sft_static(&'static self) {
         crate::mmtk::SFT_MAP.notify_space_creation_static(self);
         crate::mmtk::SFT_MAP.eager_initialize_static(self, self.start, self.total_bytes);

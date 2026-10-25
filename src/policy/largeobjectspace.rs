@@ -377,10 +377,6 @@ impl<VM: VMBinding> Space<VM> for LargeObjectSpace<VM> {
         Some(&mut self.pr)
     }
 
-    fn initialize_sft(&self, sft_map: &mut dyn crate::policy::sft_map::SFTMap) {
-        self.common().initialize_sft(self.as_sft(), sft_map)
-    }
-
     fn common(&self) -> &CommonSpace<VM> {
         &self.common
     }

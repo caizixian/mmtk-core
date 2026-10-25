@@ -130,10 +130,6 @@ impl<VM: VMBinding> Space<VM> for CopySpace<VM> {
         &self.common
     }
 
-    fn initialize_sft(&self, sft_map: &mut dyn crate::policy::sft_map::SFTMap) {
-        self.common().initialize_sft(self.as_sft(), sft_map)
-    }
-
     fn release_multiple_pages(&mut self, _start: Address) {
         panic!("copyspace only releases pages enmasse")
     }

@@ -99,6 +99,9 @@ impl MappedOVCRegion {
     /// every backing `MARK_SPEC` and `OFFSET_VECTOR_SPEC` page is mapped, then project its atomic
     /// side-metadata slices.
     pub(super) fn from_allocated_prefix(region: OVCRegion, cursor: Address) -> Self {
+        const _: () = assert!(
+            OVCRegion::LOG_BYTES <= crate::util::heap::layout::vm_layout::LOG_BYTES_IN_CHUNK
+        );
         let start = region.start();
         assert!(
             !start.is_zero()
@@ -119,6 +122,11 @@ impl MappedOVCRegion {
             };
         }
 
+        assert!(
+            !crate::util::metadata::side_metadata::global_side_metadata_base_address().is_zero(),
+            "MappedOVCRegion::from_allocated_prefix called before side metadata initialization"
+        );
+
         assert_eq!(
             start.align_down(BYTES_IN_CHUNK),
             (cursor - 1).align_down(BYTES_IN_CHUNK),
@@ -132,6 +140,30 @@ impl MappedOVCRegion {
 
         let mark_meta = address_to_meta_address(&MARK_SPEC, start);
         let offset_meta = address_to_meta_address(&OFFSET_VECTOR_SPEC, start);
+        if MARK_SPEC.uses_contiguous_side_metadata() {
+            let spec_start = MARK_SPEC.get_starting_address();
+            let spec_end = MARK_SPEC.upper_bound_address_for_contiguous();
+            assert!(
+                mark_meta >= spec_start
+                    && mark_meta
+                        .as_usize()
+                        .checked_add(num_mark_bytes)
+                        .is_some_and(|end| end <= spec_end.as_usize()),
+                "OVC_MARK metadata [{mark_meta}, + {num_mark_bytes}) for [{start}, {cursor}) falls outside contiguous spec window [{spec_start}, {spec_end})"
+            );
+        }
+        if OFFSET_VECTOR_SPEC.uses_contiguous_side_metadata() {
+            let spec_start = OFFSET_VECTOR_SPEC.get_starting_address();
+            let spec_end = OFFSET_VECTOR_SPEC.upper_bound_address_for_contiguous();
+            assert!(
+                offset_meta >= spec_start
+                    && offset_meta
+                        .as_usize()
+                        .checked_add(offset_byte_len)
+                        .is_some_and(|end| end <= spec_end.as_usize()),
+                "OVC_OFFSET_VECTOR metadata [{offset_meta}, + {offset_byte_len}) for [{start}, {cursor}) falls outside contiguous spec window [{spec_start}, {spec_end})"
+            );
+        }
         assert!(
             offset_meta.is_aligned_to(std::mem::align_of::<AtomicUsize>()),
             "Misaligned OVC_OFFSET_VECTOR address {offset_meta}"

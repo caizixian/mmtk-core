@@ -8,7 +8,6 @@ use crate::plan::Pause;
 use crate::policy::gc_work::{TraceKind, DEFAULT_TRACE, TRACE_KIND_TRANSITIVE_PIN};
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
-use crate::policy::sft_map::SFTMap;
 use crate::policy::space::{CommonSpace, Space};
 use crate::scheduler::gc_work::PrepareCollector;
 use crate::util::alloc::allocator::AllocationOptions;
@@ -277,9 +276,6 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
     }
     fn common(&self) -> &CommonSpace<VM> {
         &self.common
-    }
-    fn initialize_sft(&self, sft_map: &mut dyn SFTMap) {
-        self.common().initialize_sft(self.as_sft(), sft_map)
     }
     fn release_multiple_pages(&mut self, _start: Address) {
         panic!("immixspace only releases pages enmasse")
@@ -1495,11 +1491,10 @@ fn with_immix_space<VM: VMBinding, R>(
     let mut f = Some(f);
     let mut out = None;
     mmtk.get_plan().for_each_space(&mut |s| {
-        if s.common().descriptor == descriptor {
-            let space = s
-                .downcast_ref::<ImmixSpace<VM>>()
-                .expect("Space descriptor must resolve to ImmixSpace");
-            out = Some((f.take().unwrap())(space));
+        if let Some(space) = s.downcast_ref::<ImmixSpace<VM>>() {
+            if space.common.descriptor == descriptor {
+                out = Some((f.take().unwrap())(space));
+            }
         }
     });
     out.expect("ImmixSpace must be registered in Plan::for_each_space")

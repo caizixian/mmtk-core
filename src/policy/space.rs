@@ -52,13 +52,13 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
     /// have a page resource.
     fn maybe_get_page_resource_mut(&mut self) -> Option<&mut dyn PageResource<VM>>;
 
-    /// Initialize entries in SFT map for the space. This is called when the Space object
-    /// has a non-moving address, as we will use the address to set sft.
-    /// Currently after we create a boxed plan, spaces in the plan have a non-moving address.
-    fn initialize_sft(&self, sft_map: &mut dyn crate::policy::sft_map::SFTMap);
+    /// Wave-3A compatibility hook for `Plan::initialize_sft(&self)`.
+    ///
+    /// Actual `'static` SFT registration runs via [`Self::initialize_sft_static`] in
+    /// [`crate::util::heap::gc_trigger::GCTrigger::set_plan`].
+    fn initialize_sft(&self, _sft_map: &mut dyn crate::policy::sft_map::SFTMap) {}
 
     /// Initialize SFT entries directly from a `'static` space reference (`0` `unsafe`).
-    #[allow(dead_code)]
     fn initialize_sft_static(&'static self) {
         self.common().initialize_sft_static(self.as_sft());
     }
@@ -791,43 +791,24 @@ impl<VM: VMBinding> CommonSpace<VM> {
         estimate.max(vm_map.min_contiguous_extent())
     }
 
-    pub(crate) fn bind_sft(
-        &self,
-        sft: &(dyn SFT + Sync + 'static),
-        sft_map: &mut dyn crate::policy::sft_map::SFTMap,
-    ) -> &'static (dyn SFT + Sync + 'static) {
-        let raw_sft: *const (dyn SFT + Sync + 'static) = sft;
-        sft_map.verify_notified(raw_sft);
-        // SAFETY: `SFTMap` is sealed to the one-shot `SftMapInitHandle` created inside
-        // `MMTK::new` -> `Plan::initialize_sft` after `VM_MAP` is finalized and the owning `Plan`
-        // (and `sft`) has been permanently leaked via `Box::into_raw` for `'static`, and
-        // `verify_notified` confirmed `raw_sft` is the exact space currently being initialized.
-        let static_sft = unsafe { &*raw_sft };
-        let _ = self.sft_ref.set(static_sft);
-        static_sft
-    }
-
     pub fn initialize_sft(
         &self,
-        sft: &(dyn SFT + Sync + 'static),
-        sft_map: &mut dyn crate::policy::sft_map::SFTMap,
+        _sft: &(dyn SFT + Sync + 'static),
+        _sft_map: &mut dyn crate::policy::sft_map::SFTMap,
     ) {
-        let static_sft = self.bind_sft(sft, sft_map);
+        // Wave-3A compatibility hook for `Plan::initialize_sft(&self)`; `'static` SFT registration
+        // runs via `Self::initialize_sft_static` in `GCTrigger::set_plan`.
+    }
+
+    pub(crate) fn initialize_sft_static(&self, static_sft: &'static (dyn SFT + Sync + 'static)) {
+        let _ = self.sft_ref.set(static_sft);
+        SFT_MAP.notify_space_creation_static(static_sft);
         // We have to keep this for now: if a space is contiguous, our page resource will NOT consider newly allocated chunks
         // as new chunks (new_chunks = true). In that case, in grow_space(), we do not set SFT when new_chunks = false.
         // We can fix this by either of these:
         // * fix page resource, so it propelry returns new_chunk
         // * change grow_space() so it sets SFT no matter what the new_chunks value is.
         // FIXME: eagerly initializing SFT is not a good idea.
-        if self.contiguous {
-            SFT_MAP.eager_initialize_static(static_sft, self.start, self.extent);
-        }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn initialize_sft_static(&self, static_sft: &'static (dyn SFT + Sync + 'static)) {
-        let _ = self.sft_ref.set(static_sft);
-        SFT_MAP.notify_space_creation_static(static_sft);
         if self.contiguous {
             SFT_MAP.eager_initialize_static(static_sft, self.start, self.extent);
         }
