@@ -92,7 +92,7 @@ impl<VM: VMBinding> Plan for MyGC<VM> {
     // ANCHOR_END: collection_required()
 
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
-        &*ALLOCATOR_MAPPING
+        &ALLOCATOR_MAPPING
     }
 
     // Modify

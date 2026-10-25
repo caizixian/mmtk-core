@@ -65,7 +65,7 @@ pub struct GCWorkerCopyContext<VM: VMBinding> {
 
 impl<VM: VMBinding> GCWorkerCopyContext<VM> {
     /// Rebind the `CopySpace` copy allocator at `index` to `space` for the current GC pause.
-    pub fn rebind_copy_space(&mut self, index: usize, space: &'static CopySpace<VM>) {
+    pub(crate) fn rebind_copy_space(&mut self, index: usize, space: &'static CopySpace<VM>) {
         assert_eq!(
             index, 0,
             "CopySpaceCopyContext index out of bounds: {index}"

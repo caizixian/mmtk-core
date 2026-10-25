@@ -140,7 +140,9 @@ impl SFTMapImpl {
             }
             #[cfg(target_pointer_width = "64")]
             Self::Space(map) => map.get_unchecked_fast(address),
-            Self::Dense(map) => map.get_unchecked_fast(address),
+            // SAFETY: Caller guarantees `self.has_sft_entry(address)` holds, so
+            // `SFTDenseChunkMap::is_index_mapped(address)` holds for `address`.
+            Self::Dense(map) => unsafe { map.get_unchecked(address) },
             // SAFETY: Caller guarantees `self.has_sft_entry(address)` holds, so
             // `address.chunk_index()` is in bounds of `map`.
             Self::Sparse(map) => unsafe { map.get_unchecked(address) },
@@ -708,10 +710,20 @@ mod dense_chunk_map {
             }
         }
 
+        #[inline(always)]
+        fn is_index_mapped(addr: Address) -> bool {
+            crate::util::metadata::side_metadata::address_to_meta_address(
+                &SFT_DENSE_CHUNK_MAP_INDEX,
+                addr,
+            ) < SFT_DENSE_CHUNK_MAP_INDEX.upper_bound_address_for_contiguous()
+                && SFT_DENSE_CHUNK_MAP_INDEX.is_mapped(addr)
+        }
+
         #[inline]
         pub fn has_sft_entry(&self, addr: Address) -> bool {
-            if SFT_DENSE_CHUNK_MAP_INDEX.is_mapped(addr) {
-                let index = Self::addr_to_index(addr) as usize;
+            if Self::is_index_mapped(addr) {
+                // SAFETY: `Self::is_index_mapped(addr)` verified above.
+                let index = unsafe { Self::addr_to_index(addr) } as usize;
                 index < self.published_count.load(Ordering::Acquire)
             } else {
                 false
@@ -725,8 +737,9 @@ mod dense_chunk_map {
 
         #[inline(always)]
         pub fn get_checked(&self, address: Address) -> &'static dyn SFT {
-            if SFT_DENSE_CHUNK_MAP_INDEX.is_mapped(address) {
-                let index = Self::addr_to_index(address) as usize;
+            if Self::is_index_mapped(address) {
+                // SAFETY: `Self::is_index_mapped(address)` verified above.
+                let index = unsafe { Self::addr_to_index(address) } as usize;
                 if index < self.published_count.load(Ordering::Acquire) {
                     self.sft[index].load()
                 } else {
@@ -737,11 +750,16 @@ mod dense_chunk_map {
             }
         }
 
-        /// Fast-path lookup in `self.sft` (`u8 as usize < 256` elides bounds checks, and
-        /// `SFT_DENSE_CHUNK_MAP_INDEX` resides in the quarantined side-metadata range).
+        /// Fast-path lookup in `self.sft` (`u8 as usize < 256` elides bounds checks).
+        ///
+        /// # Safety
+        /// `Self::is_index_mapped(address)` must hold (which holds whenever
+        /// `self.has_sft_entry(address)` is true).
         #[inline(always)]
-        pub fn get_unchecked_fast(&self, address: Address) -> &'static dyn SFT {
-            self.sft[Self::addr_to_index(address) as usize].load()
+        pub unsafe fn get_unchecked(&self, address: Address) -> &'static dyn SFT {
+            // SAFETY: Caller guarantees `Self::is_index_mapped(address)` holds.
+            let index = unsafe { Self::addr_to_index(address) } as usize;
+            self.sft[index].load()
         }
 
         pub fn notify_space_creation(&self, space: SFTRawPointer) {
@@ -774,6 +792,14 @@ mod dense_chunk_map {
                 "SFTDenseChunkMap::eager_initialize start + bytes overflowed Address"
             );
             if bytes > 0 {
+                assert!(
+                    crate::util::metadata::side_metadata::address_to_meta_address(
+                        &SFT_DENSE_CHUNK_MAP_INDEX,
+                        start + (bytes - 1),
+                    ) < SFT_DENSE_CHUNK_MAP_INDEX.upper_bound_address_for_contiguous(),
+                    "SFTDenseChunkMap::eager_initialize range [{start}, {}) exceeds contiguous side-metadata bound",
+                    start + bytes,
+                );
                 let context = SideMetadataContext {
                     global: vec![SFT_DENSE_CHUNK_MAP_INDEX],
                     local: vec![],
@@ -819,8 +845,8 @@ mod dense_chunk_map {
                 for chunk_idx in first_chunk..=last_chunk {
                     let chunk = conversions::chunk_index_to_address(chunk_idx);
                     assert!(
-                        SFT_DENSE_CHUNK_MAP_INDEX.is_mapped(chunk),
-                        "SFTDenseChunkMap::update called on unmapped side-metadata chunk {chunk}"
+                        Self::is_index_mapped(chunk),
+                        "SFTDenseChunkMap::update called on unmapped or out-of-bounds side-metadata chunk {chunk}"
                     );
                     trace!("Update {} to index {}", chunk, index_u8);
                     SFT_DENSE_CHUNK_MAP_INDEX.store_atomic::<u8>(chunk, index_u8, Ordering::SeqCst);
@@ -830,7 +856,7 @@ mod dense_chunk_map {
         }
 
         pub fn clear_checked(&self, address: Address) {
-            if SFT_DENSE_CHUNK_MAP_INDEX.is_mapped(address) {
+            if Self::is_index_mapped(address) {
                 SFT_DENSE_CHUNK_MAP_INDEX.store_atomic::<u8>(
                     address,
                     Self::EMPTY_SFT_INDEX,
@@ -839,8 +865,13 @@ mod dense_chunk_map {
             }
         }
 
+        /// Read the 1-byte dense SFT index from `SFT_DENSE_CHUNK_MAP_INDEX` for `addr`.
+        ///
+        /// # Safety
+        /// `Self::is_index_mapped(addr)` must hold so `addr` maps within the contiguous bounds of
+        /// `SFT_DENSE_CHUNK_MAP_INDEX` and its side-metadata page is mapped.
         #[inline(always)]
-        fn addr_to_index(addr: Address) -> u8 {
+        unsafe fn addr_to_index(addr: Address) -> u8 {
             // `Acquire` pairs with the `SeqCst` store in `update_static()` so any thread observing
             // a newly published non-zero `index` also observes the preceding `store_static(space)`
             // write to `self.sft[index]` on weakly-ordered architectures.
@@ -1094,5 +1125,18 @@ mod tests {
     fn sparse_chunk_map_update_rejects_address_overflow() {
         let map = sparse_chunk_map::SFTSparseChunkMap::new();
         map.update_static(&EMPTY_SPACE_SFT, Address::MAX, BYTES_IN_CHUNK);
+    }
+
+    #[test]
+    fn dense_chunk_map_rejects_out_of_bounds_contiguous_lookup_and_zero_bytes() {
+        crate::util::test_util::serial_test(|| {
+            crate::util::metadata::side_metadata::core_test_initialize_side_metadata();
+            let map = dense_chunk_map::SFTDenseChunkMap::new();
+            map.notify_space_creation(&EMPTY_SPACE_SFT);
+            map.update_static(&EMPTY_SPACE_SFT, Address::MAX, 0);
+            assert!(!map.has_sft_entry(Address::MAX));
+            assert_eq!(map.get_checked(Address::MAX).name(), EMPTY_SFT_NAME);
+            map.clear_checked(Address::MAX);
+        });
     }
 }

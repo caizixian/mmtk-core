@@ -45,25 +45,29 @@ definitions.
 
 Layout changes (affecting native C/C++ mirrors or hardcoded JIT offsets):
 
-*   struct `util::alloc::Allocators<VM>` and struct `plan::Mutator<VM>`
+*   struct `util::alloc::allocators::Allocators<VM>` and struct `plan::Mutator<VM>`
     -   `Allocators<VM>`'s six `[MaybeUninit<...>; MAX_*]` arrays are now module-private and
         followed by a `#[repr(transparent)]` `u16` initialization bitmask (`InitSelectorSet(u16)`,
         `2` bytes plus `6` bytes of trailing pointer-alignment padding on 64-bit targets, or `+4`
         bytes on 32-bit targets).
-    -   Fast-path `BumpAllocator` offsets at the start of `Mutator<VM>` are unchanged, whereas
-        fields of `Mutator<VM>` placed after `allocators` (`barrier`, `mutator_tls`, `plan`,
-        `config`) shift by `+8` bytes on 64-bit targets (`+4` bytes on 32-bit targets), in addition
-        to any size change in `FreeListAllocator<VM>` below.
+    -   Every inline allocator slot offset inside `Allocators<VM>` (`0..648` on 64-bit, `0..324` on
+        32-bit) is unchanged (`Allocators<VM>` grows from `648 -> 656` bytes on 64-bit and
+        `324 -> 328` bytes on 32-bit), whereas fields of `Mutator<VM>` placed after `allocators`
+        (`barrier`, `mutator_tls`, `plan`, `config`) shift solely by `+8` bytes on 64-bit targets
+        (`+4` bytes on 32-bit targets).
     -   `Mutator::on_destroy(&mut self)` remains idempotent (invoking `on_mutator_destroy()` without
         dropping allocator slots in place); `Drop for Allocators<VM>` drops initialized allocator
         slots when the `Mutator<VM>` itself is dropped.
 *   struct `policy::marksweepspace::native_ms::BlockList` and struct `util::alloc::FreeListAllocator<VM>`
     -   `BlockList` removed its unused trailing lock field, shrinking each `BlockList` entry from
         `32` bytes to `24` bytes on 64-bit targets (`16` bytes to `12` bytes on 32-bit targets).
-    -   `FreeListAllocator<VM>` wraps `available_blocks` and `unswept_blocks` in
-        `#[repr(transparent)]` `BlockLists` / `UnsweptBlockLists` (preserving identical array layout
-        while preventing arbitrary cross-list mutation from safe code), with total array size
-        reduced proportionally to `size_of::<BlockList>()`.
+    -   `FreeListAllocator<VM>`'s four block-list fields (`available_blocks`,
+        `available_blocks_stress`, `unswept_blocks`, `consumed_blocks`) are now module-private and
+        wrapped in `#[repr(transparent)]` `BlockLists` / `UnsweptBlockLists` over thin heap pointers
+        (`Box<[BlockList<...>; 49]>`, `1` word each). Consequently, `FreeListAllocator<VM>`'s inline
+        size inside `Allocators<VM>` / `Mutator<VM>` is **unchanged** (`56` bytes on 64-bit, `28`
+        bytes on 32-bit), while the heap-allocated boxed bin arrays shrink (`-1,568` bytes per
+        mutator on 64-bit; `-784` bytes on 32-bit).
 
 Recommended migration for VM bindings:
 
@@ -71,10 +75,12 @@ Recommended migration for VM bindings:
     `memory_manager::get_allocator_mapping`, `AllocatorInfo::new::<VM>(selector)`,
     `Mutator::<VM>::get_allocator_base_offset(selector)`, or `std::mem::offset_of!(Mutator<VM>, ...)`
     instead of maintaining manual C/C++ struct replicas with hardcoded byte sizes.
-*   If your binding maintains a static C/C++ struct mirror of `Mutator<VM>`, update the `BlockList`
-    size (`32 -> 24` bytes on 64-bit) and append `uint16_t init_set` (plus alignment padding) at
-    the end of `Allocators`, and add a startup `static_assert(sizeof(...) == ...)` / offset check
-    against Rust's `size_of::<Mutator<VM>>()` and `offset_of!`.
+*   If your binding maintains a static C/C++ struct mirror of `Mutator<VM>`, append
+    `uint16_t init_set` (plus pointer-alignment padding: `+8` bytes on 64-bit, `+4` bytes on 32-bit)
+    at the end of `Allocators` (and update `BlockList` from `32 -> 24` bytes on 64-bit / `16 -> 12`
+    bytes on 32-bit if mirroring `BlockList` directly), and add a startup
+    `static_assert(sizeof(...) == ...)` / offset check against Rust's `size_of::<Mutator<VM>>()` and
+    `offset_of!`.
 
 ### Rename "Compressor" to "OVC", and "MarkCompact" to "Lisp2"
 

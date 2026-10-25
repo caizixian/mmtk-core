@@ -1,11 +1,11 @@
 // ANCHOR: imports
 use super::MyGC; // Add
 use crate::MMTK;
-use crate::plan::barriers::NoBarrier;
 use crate::plan::mutator_context::Mutator;
+use crate::plan::mutator_context::MutatorBuilder;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::AllocationSemantics;
-use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
+use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::alloc::BumpAllocator;
 use crate::util::opaque_pointer::*;
 use crate::vm::VMBinding;
@@ -31,24 +31,15 @@ pub fn mygc_mutator_release<VM: VMBinding>(
     mutator: &mut Mutator<VM>,
     _tls: VMWorkerThread,
 ) {
+    let tospace = mutator
+        .plan
+        .downcast_ref::<MyGC<VM>>()
+        .unwrap()
+        .tospace();
     // rebind the allocation bump pointer to the appropriate semispace
-    // SAFETY: `ALLOCATOR_MAPPING` maps `AllocationSemantics::Default` to
-    // `AllocatorSelector::BumpPointer(0)`, which `create_mygc_mutator` initialized in
-    // `mutator.allocators` as a `BumpAllocator<VM>`.
-    let bump_allocator = unsafe {
-        mutator
-            .allocators
-            .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
-    }
-    .downcast_mut::<BumpAllocator<VM>>()
-    .unwrap();
-    bump_allocator.rebind(
-        mutator
-            .plan
-            .downcast_ref::<MyGC<VM>>()
-            .unwrap()
-            .tospace(),
-    );
+    let bump_allocator = mutator
+        .allocator_downcast_mut_for_semantic::<BumpAllocator<VM>>(AllocationSemantics::Default);
+    bump_allocator.rebind(tospace);
 }
 // ANCHOR_END: release
 
@@ -76,7 +67,7 @@ pub fn create_mygc_mutator<VM: VMBinding>(
     let mygc = mmtk.get_plan().downcast_ref::<MyGC<VM>>().unwrap();
     // ANCHOR_END: plan_downcast
     let config = MutatorConfig {
-        allocator_mapping: &*ALLOCATOR_MAPPING,
+        allocator_mapping: &ALLOCATOR_MAPPING,
         // Modify
         // ANCHOR: space_mapping
         space_mapping: Box::new({
@@ -89,11 +80,6 @@ pub fn create_mygc_mutator<VM: VMBinding>(
         release_func: &mygc_mutator_release, // Modify
     };
 
-    Mutator {
-        allocators: Allocators::<VM>::new(mutator_tls, mmtk, &config.space_mapping),
-        barrier: Box::new(NoBarrier),
-        mutator_tls,
-        config,
-        plan: mygc,
-    }
+    let builder = MutatorBuilder::new(mutator_tls, mmtk, config);
+    builder.build()
 }
