@@ -20,6 +20,10 @@ pub struct NullableObjectReference(usize);
 
 impl From<NullableObjectReference> for Option<ObjectReference> {
     fn from(value: NullableObjectReference) -> Self {
+        // SAFETY: `Address::from_usize` simply wraps `value.0` in `#[repr(transparent)] Address`
+        // without dereferencing it, and `ObjectReference::from_raw_address` handles `0` (`None`)
+        // vs non-zero (`Some`) safely. (`NullableObjectReference`'s inner field is private to this
+        // module; FFI callers must pass either `0` or the raw address of a valid `ObjectReference`.)
         ObjectReference::from_raw_address(unsafe { Address::from_usize(value.0) })
     }
 }

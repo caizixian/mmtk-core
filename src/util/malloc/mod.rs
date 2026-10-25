@@ -21,6 +21,8 @@ use crate::MMTK;
 
 /// Manually allocate memory. Similar to libc's malloc.
 pub fn malloc(size: usize) -> Address {
+    // SAFETY: The underlying allocator's `malloc` (`libc`/`jemalloc`/`mimalloc`) is thread-safe
+    // and well-defined for all `usize` values, returning either a valid allocation or null on OOM.
     Address::from_mut_ptr(unsafe { self::library::malloc(size) })
 }
 
@@ -37,6 +39,9 @@ pub fn counted_malloc<VM: VMBinding>(mmtk: &MMTK<VM>, size: usize) -> Address {
 
 /// Manually allocate memory and initialize the bytes in the allocated memory to zero. Similar to libc's calloc.
 pub fn calloc(num: usize, size: usize) -> Address {
+    // SAFETY: The underlying allocator's `calloc` (`libc`/`jemalloc`/`mimalloc`) is thread-safe
+    // and well-defined for all `(num, size)` pairs (checking multiplication overflow internally
+    // and returning null on overflow or OOM).
     Address::from_mut_ptr(unsafe { self::library::calloc(num, size) })
 }
 
@@ -53,6 +58,9 @@ pub fn counted_calloc<VM: VMBinding>(mmtk: &MMTK<VM>, num: usize, size: usize) -
 
 /// Reallocate the given area of memory. Similar to libc's realloc.
 pub fn realloc(addr: Address, size: usize) -> Address {
+    // SAFETY: Public API preserved for VM bindings (`pub mod malloc`). Callers must pass either
+    // `Address::ZERO` (equivalent to `malloc(size)`) or a live base address previously returned
+    // by `malloc`/`calloc`/`realloc` from this module and not yet freed.
     Address::from_mut_ptr(unsafe { self::library::realloc(addr.to_mut_ptr(), size) })
 }
 
@@ -80,6 +88,9 @@ pub fn realloc_with_old_size<VM: VMBinding>(
 
 /// Manually free the memory that is returned from other manual allocation functions in this module.
 pub fn free(addr: Address) {
+    // SAFETY: Public API preserved for VM bindings (`pub mod malloc`). Callers must pass either
+    // `Address::ZERO` (a no-op in C `free`) or a live base address previously returned by
+    // `malloc`/`calloc`/`realloc` from this module and not yet freed.
     unsafe { self::library::free(addr.to_mut_ptr()) }
 }
 

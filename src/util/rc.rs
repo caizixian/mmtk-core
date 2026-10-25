@@ -157,15 +157,32 @@ impl<VM: VMBinding> RefCountHelper<VM> {
         RC_TABLE.store_atomic(o.to_raw_address(), count, Ordering::Relaxed)
     }
 
-    /// Sets object `o`'s reference count to `count` using a non-atomic store, for use where the
-    /// caller can guarantee there is no concurrent access.
-    pub fn set_relaxed(&self, o: ObjectReference, count: u8) {
+    /// Sets object `o`'s reference count to `count` using a non-atomic store.
+    ///
+    /// # Safety
+    ///
+    /// - `o` must lie within a region whose `RC_TABLE` side metadata is mapped.
+    /// - Because `RC_TABLE` packs multiple 2-bit entries into each metadata byte (`MIN_OBJECT_SIZE`
+    ///   = 4 bytes, 4 entries per byte), no other thread may concurrently read or write (atomically
+    ///   or non-atomically) any `RC_TABLE` entry sharing the metadata byte containing `o`.
+    pub unsafe fn set_relaxed(&self, o: ObjectReference, count: u8) {
+        // SAFETY: Upheld by the caller: `RC_TABLE` metadata for `o` is mapped and no concurrent
+        // atomic or non-atomic access occurs to the metadata byte containing `o`.
         unsafe { RC_TABLE.store(o.to_raw_address(), count) }
     }
 
-    /// Sets the reference count for the line containing object `o` to `count` using a non-atomic store,
-    /// for use where the caller can guarantee there is no concurrent access.
-    pub fn set_line_relaxed(&self, line: Line, count: u8) {
+    /// Sets the reference count entry at `line.start()` to `count` using a non-atomic store.
+    ///
+    /// # Safety
+    ///
+    /// - `line` must lie within a region whose `RC_TABLE` side metadata is mapped.
+    /// - Because `RC_TABLE` packs multiple 2-bit entries into each metadata byte, no other thread
+    ///   may concurrently read or write (atomically or non-atomically) any `RC_TABLE` entry sharing
+    ///   the metadata byte containing `line.start()`.
+    pub unsafe fn set_line_relaxed(&self, line: Line, count: u8) {
+        // SAFETY: Upheld by the caller: `RC_TABLE` metadata for `line.start()` is mapped and no
+        // concurrent atomic or non-atomic access occurs to the metadata byte containing
+        // `line.start()`.
         unsafe { RC_TABLE.store(line.start(), count) }
     }
 
@@ -189,17 +206,38 @@ impl<VM: VMBinding> RefCountHelper<VM> {
 
     /// Returns a slice view over the raw RC table memory covering block `b`, reinterpreted as an
     /// array of `UInt`, allowing the block's reference counts to be scanned in bulk.
-    pub fn rc_table_range<UInt: Sized>(&self, b: Block) -> &'static [UInt] {
+    ///
+    /// # Safety
+    ///
+    /// - `b` must be a valid allocated Immix block whose `RC_TABLE` side metadata range is
+    ///   contiguously mapped, initialized, and aligned to `std::mem::align_of::<UInt>()`, with
+    ///   total metadata byte length divisible by `std::mem::size_of::<UInt>()` (`size_of::<UInt>() > 0`).
+    /// - For the entire lifetime of the returned slice, the `RC_TABLE` side metadata covering `b`
+    ///   must remain mapped and no thread may concurrently mutate (atomically or non-atomically)
+    ///   any byte in that metadata range.
+    pub unsafe fn rc_table_range<UInt: bytemuck::AnyBitPattern>(&self, b: Block) -> &[UInt] {
+        assert!(std::mem::size_of::<UInt>() > 0);
         debug_assert!({
             let log_bits_in_uint: usize =
                 (std::mem::size_of::<UInt>() << 3).trailing_zeros() as usize;
             Block::LOG_BYTES - super::rc::LOG_MIN_OBJECT_SIZE + super::rc::LOG_REF_COUNT_BITS
                 >= log_bits_in_uint
         });
-        let start = address_to_meta_address(&super::rc::RC_TABLE, b.start()).to_ptr::<UInt>();
-        let limit = address_to_meta_address(&super::rc::RC_TABLE, b.end()).to_ptr::<UInt>();
-        let rc_table = unsafe { std::slice::from_raw_parts(start, limit.offset_from(start) as _) };
-        rc_table
+        let start_addr = address_to_meta_address(&super::rc::RC_TABLE, b.start());
+        let limit_addr = address_to_meta_address(&super::rc::RC_TABLE, b.end());
+        let byte_len = limit_addr - start_addr;
+        debug_assert!(start_addr.is_aligned_to(std::mem::align_of::<UInt>()));
+        debug_assert_eq!(byte_len % std::mem::size_of::<UInt>(), 0);
+        let len = byte_len / std::mem::size_of::<UInt>();
+        // SAFETY:
+        // - `start_addr` is non-zero and aligned to `align_of::<UInt>()` as required by the caller
+        //   (verified via `debug_assert!` above).
+        // - By caller precondition, the contiguous `RC_TABLE` metadata range `[start_addr, limit_addr)`
+        //   (`len * size_of::<UInt>()` bytes, `<= isize::MAX`) is mapped, initialized, and stays
+        //   mapped without any concurrent atomic or non-atomic writes for the returned slice's
+        //   lifetime.
+        // - `UInt: bytemuck::AnyBitPattern` guarantees every initialized byte pattern is a valid `UInt`.
+        unsafe { std::slice::from_raw_parts(start_addr.to_ptr::<UInt>(), len) }
     }
 
     /// Returns `true` if object `o`'s reference count is zero.
@@ -218,16 +256,17 @@ impl<VM: VMBinding> RefCountHelper<VM> {
 
     /// Returns `true` if object `o` is in a straddle line. The function does not check rc table.
     pub fn object_is_in_straddle_line_no_rc_check(&self, o: ObjectReference) -> bool {
-        // This directly reads line-granularity straddle line metadata with an unaligned address.
-        // It is still correct, but may break side metadata assertions.
-        unsafe { RC_STRADDLE_LINES.load::<u8>(o.to_raw_address()) != 0 }
+        // Directly reads line-granularity straddle line metadata atomically; `SideMetadataSpec`
+        // shifts `o.to_raw_address()` by `Line::LOG_BYTES` to index the containing line's byte.
+        RC_STRADDLE_LINES.load_atomic::<u8>(o.to_raw_address(), Ordering::Relaxed) != 0
     }
 
     /// Returns `true` if address `a` falls within a live object whose containing line is marked
     /// as a straddle line.
     pub fn object_is_in_straddle_line(&self, o: ObjectReference) -> bool {
         let line = Line::from_unaligned_address(o.to_raw_address());
-        self.count(o) != 0 && unsafe { RC_STRADDLE_LINES.load::<u8>(line.start()) != 0 }
+        self.count(o) != 0
+            && RC_STRADDLE_LINES.load_atomic::<u8>(line.start(), Ordering::Relaxed) != 0
     }
 
     fn mark_straddle_object_with_size(&self, o: ObjectReference, size: usize) {
@@ -247,8 +286,8 @@ impl<VM: VMBinding> RefCountHelper<VM> {
         // it always skips the first line in a hole.
         let mut line = start_line;
         while line < end_line {
-            unsafe { RC_STRADDLE_LINES.store(line.start(), 1u8) };
-            self.set_line_relaxed(line, 1);
+            RC_STRADDLE_LINES.store_atomic(line.start(), 1u8, Ordering::Relaxed);
+            RC_TABLE.store_atomic(line.start(), 1u8, Ordering::Relaxed);
             line = line.next();
         }
     }
@@ -277,8 +316,8 @@ impl<VM: VMBinding> RefCountHelper<VM> {
             // it always skips the first line in a hole.
             let mut line = start_line;
             while line < end_line {
-                self.set_line_relaxed(line, 0);
-                unsafe { RC_STRADDLE_LINES.store(line.start(), 0u8) };
+                RC_TABLE.store_atomic(line.start(), 0u8, Ordering::Relaxed);
+                RC_STRADDLE_LINES.store_atomic(line.start(), 0u8, Ordering::Relaxed);
                 line = line.next();
             }
         }

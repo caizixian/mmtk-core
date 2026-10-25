@@ -101,8 +101,16 @@ impl RawMemoryFreeList {
         usize::min(Self::size_in_pages(units, heads) as _, 16) as _
     }
     pub fn size_in_pages(units: i32, heads: i32) -> i32 {
-        let map_size = ((units + heads + 1) as usize) << LOG_BYTES_IN_UNIT;
-        conversions::bytes_to_pages_up(map_size as _) as _
+        assert!(
+            (0..=MAX_UNITS).contains(&units) && (0..=MAX_HEADS).contains(&heads),
+            "RawMemoryFreeList units ({units}) or heads ({heads}) out of range"
+        );
+        let total_units = (units as usize) + (heads as usize) + 1;
+        let map_size = total_units
+            .checked_shl(LOG_BYTES_IN_UNIT as u32)
+            .expect("RawMemoryFreeList byte size overflow");
+        i32::try_from(conversions::bytes_to_pages_up(map_size))
+            .expect("RawMemoryFreeList page count overflow")
     }
 
     pub fn new(
@@ -114,9 +122,40 @@ impl RawMemoryFreeList {
         heads: i32,
         strategy: MmapStrategy,
     ) -> Self {
-        debug_assert!(units <= MAX_UNITS && heads <= MAX_HEADS);
-        debug_assert!(
-            base + conversions::pages_to_bytes(Self::size_in_pages(units, heads) as _) <= limit
+        assert!(
+            !base.is_zero() && base.is_aligned_to(BYTES_IN_PAGE),
+            "RawMemoryFreeList base ({base}) must be non-zero and page-aligned"
+        );
+        assert!(
+            limit >= base && limit.is_aligned_to(BYTES_IN_PAGE),
+            "RawMemoryFreeList limit ({limit}) must be >= base ({base}) and page-aligned"
+        );
+        assert!(
+            matches!(
+                strategy.prot,
+                MmapProtection::ReadWrite | MmapProtection::ReadWriteExec
+            ),
+            "RawMemoryFreeList requires readable and writable MmapProtection, got {:?}",
+            strategy.prot
+        );
+        assert!(
+            pages_per_block > 0,
+            "RawMemoryFreeList pages_per_block ({pages_per_block}) must be > 0"
+        );
+        assert!(
+            (0..=MAX_UNITS).contains(&units),
+            "RawMemoryFreeList units ({units}) must be in 0..={MAX_UNITS}"
+        );
+        assert!(grain > 0, "RawMemoryFreeList grain ({grain}) must be > 0");
+        assert!(
+            (0..=MAX_HEADS).contains(&heads),
+            "RawMemoryFreeList heads ({heads}) must be in 0..={MAX_HEADS}"
+        );
+        let required_bytes =
+            conversions::pages_to_bytes(Self::size_in_pages(units, heads) as usize);
+        assert!(
+            limit - base >= required_bytes,
+            "RawMemoryFreeList region [{base}, {limit}) is smaller than required {required_bytes} bytes"
         );
         Self {
             head: -1,
@@ -129,9 +168,7 @@ impl RawMemoryFreeList {
             current_units: 0,
             pages_per_block,
             strategy,
-            // SAFETY: when a RawMemoryFreelist is created, its address range is
-            // base..base, a zero-sized slice starting at base
-            slice: unsafe { std::slice::from_raw_parts_mut(base.to_mut_ptr::<i32>(), 0) },
+            slice: &mut [],
         }
     }
 
@@ -142,7 +179,13 @@ impl RawMemoryFreeList {
     }
 
     pub fn grow_freelist(&mut self, units: i32) -> bool {
-        let required_units = units + self.current_units;
+        assert!(
+            units >= 0,
+            "RawMemoryFreeList::grow_freelist units ({units}) must be >= 0"
+        );
+        let Some(required_units) = self.current_units.checked_add(units) else {
+            return false;
+        };
         if required_units > self.max_units {
             return false;
         }
@@ -160,13 +203,38 @@ impl RawMemoryFreeList {
             (new_max <= self.grain) || (((new_max / self.grain) * self.grain) == new_max)
         );
 
+        // Drop the old slice reference before growing the mapping and recreating the slice.
+        self.slice = &mut [];
+
         if blocks > 0 {
             // Allocate more VM from the OS
             self.raise_high_water(blocks);
         }
 
-        let len = (self.high_water - self.base) >> LOG_BYTES_IN_ENTRY;
-        // SAFETY: The memory is mapped and valid after `raise_high_water`.
+        let byte_len = self.high_water - self.base;
+        assert!(
+            byte_len <= isize::MAX as usize,
+            "RawMemoryFreeList mapping exceeds isize::MAX bytes"
+        );
+        let len = byte_len >> LOG_BYTES_IN_ENTRY;
+        // SAFETY:
+        // - `self.base` was asserted non-zero and page-aligned (`BYTES_IN_PAGE >= 4096`) in
+        //   `RawMemoryFreeList::new`, so `self.base.to_mut_ptr::<i32>()` is non-null and aligned
+        //   to `align_of::<i32>()` (4 bytes).
+        // - Every page in `self.base..self.high_water` has been demand-zero mapped via
+        //   `OS::dzmmap` in `raise_high_water` with readable and writable protection (verified in
+        //   `new`), so `len` contiguous `i32` elements (`byte_len` bytes) are mapped, readable,
+        //   writable, and zero-initialized (valid bit pattern for `i32`).
+        // - `byte_len <= isize::MAX as usize` is asserted above.
+        // - `self.slice` was reset to `&mut []` above (and in `#[cfg(test)] Drop` before
+        //   `OS::munmap`). When `!self.strategy.replace` on Linux/Android, `OS::dzmmap` uses
+        //   `MAP_FIXED_NOREPLACE` so `self.mmap` panics rather than aliasing any pre-existing
+        //   mapping; when `self.strategy.replace` is `true` (`MmapStrategy::RAW_MEMORY_FREELIST` /
+        //   `MmapStrategy::TEST`) or on macOS (`MAP_FIXED`), unaliased exclusivity of
+        //   `[self.base, self.limit)` relies on the Stage-1 cross-slice caller invariant
+        //   (`Map64::create_parent_freelist` quarantined space-start displacement region or
+        //   `RAW_MEMORY_FREELIST_TEST_REGION` under `MUTEX`; flagged for Stage-2 `unsafe fn new` /
+        //   region-capability tightening).
         self.slice = unsafe { std::slice::from_raw_parts_mut(self.base.to_mut_ptr::<i32>(), len) };
 
         let old_max = self.current_units;
@@ -210,13 +278,22 @@ impl RawMemoryFreeList {
     }
 
     fn raise_high_water(&mut self, blocks: i32) {
-        let mut grow_extent = conversions::pages_to_bytes((self.pages_per_block * blocks) as _);
+        assert!(
+            blocks > 0,
+            "RawMemoryFreeList::raise_high_water blocks ({blocks}) must be > 0"
+        );
+        let block_pages = (self.pages_per_block as usize)
+            .checked_mul(blocks as usize)
+            .expect("RawMemoryFreeList block page count overflow");
+        let mut grow_extent = block_pages
+            .checked_mul(BYTES_IN_PAGE)
+            .expect("RawMemoryFreeList grow_extent byte overflow");
         assert_ne!(
             self.high_water, self.limit,
             "Attempt to grow FreeList beyond limit"
         );
-        if self.high_water + grow_extent > self.limit {
-            grow_extent = self.high_water - self.limit;
+        if grow_extent > self.limit - self.high_water {
+            grow_extent = self.limit - self.high_water;
         }
         self.mmap(self.high_water, grow_extent);
         self.high_water += grow_extent;
@@ -248,6 +325,7 @@ impl RawMemoryFreeList {
 #[cfg(test)]
 impl Drop for RawMemoryFreeList {
     fn drop(&mut self) {
+        self.slice = &mut [];
         let len = self.high_water - self.base;
         if len != 0 {
             let _ = OS::munmap(self.base, len);

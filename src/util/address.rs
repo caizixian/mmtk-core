@@ -237,40 +237,86 @@ impl Address {
     }
 
     /// loads a value of type T from the address
+    ///
     /// # Safety
-    /// This could throw a segment fault if the address is invalid
+    ///
+    /// - `self` must be non-zero, aligned to `mem::align_of::<T>()`, and point to `mem::size_of::<T>()`
+    ///   bytes of mapped, readable memory containing a valid initialized value of `T`.
+    /// - No concurrent non-atomic write (or atomic write) may race with this read, and no active
+    ///   exclusive reference (`&mut T`) may alias this memory location.
     pub unsafe fn load<T: Copy>(self) -> T {
-        *(self.0 as *mut T)
+        debug_assert!(!self.is_zero());
+        debug_assert!(self.is_aligned_to(mem::align_of::<T>()));
+        // SAFETY: Upheld by the caller: `self` is non-null, properly aligned, dereferenceable,
+        // initialized for `T: Copy`, and free of conflicting mutable aliases or data races.
+        unsafe { *self.to_ptr::<T>() }
     }
 
     /// stores a value of type T to the address
+    ///
     /// # Safety
-    /// This could throw a segment fault if the address is invalid
+    ///
+    /// - `self` must be non-zero, aligned to `mem::align_of::<T>()`, and point to `mem::size_of::<T>()`
+    ///   bytes of mapped, writable memory.
+    /// - No other thread may concurrently read or write this memory location, and no Rust
+    ///   reference (`&T` or `&mut T`) may alias it during the write.
     pub unsafe fn store<T>(self, value: T) {
-        // We use a ptr.write() operation as directly setting the pointer would drop the old value
-        // which may result in unexpected behaviour
-        (self.0 as *mut T).write(value);
+        debug_assert!(!self.is_zero());
+        debug_assert!(self.is_aligned_to(mem::align_of::<T>()));
+        // We use `ptr::write` as dereference-assigning would drop the old (potentially
+        // uninitialized) value at `self`.
+        // SAFETY: Upheld by the caller: `self` is non-null, properly aligned, valid for writes of
+        // `T`, and unaliased during the store.
+        unsafe {
+            self.to_mut_ptr::<T>().write(value);
+        }
     }
 
     /// atomic operation: load
+    ///
     /// # Safety
-    /// This could throw a segment fault if the address is invalid
+    ///
+    /// - `self` must be non-zero, aligned to `mem::align_of::<T>()`, and point to `mem::size_of::<T>()`
+    ///   bytes of mapped, readable memory containing a valid initialized instance of `T`.
+    /// - No concurrent non-atomic write or active `&mut` reference may alias this memory location
+    ///   for the duration of the atomic load, and `order` must be valid for atomic loads (not
+    ///   `Ordering::Release` or `Ordering::AcqRel`).
     pub unsafe fn atomic_load<T: Atomic>(self, order: Ordering) -> T::Type {
-        let loc = &*(self.0 as *const T);
+        debug_assert!(!self.is_zero());
+        debug_assert!(self.is_aligned_to(mem::align_of::<T>()));
+        // SAFETY: Upheld by the caller: `self` is aligned and valid for a shared reference `&T` to
+        // an initialized atomic value with no conflicting `&mut` or non-atomic writes.
+        let loc = unsafe { &*self.to_ptr::<T>() };
         loc.load(order)
     }
 
     /// atomic operation: store
+    ///
     /// # Safety
-    /// This could throw a segment fault if the address is invalid
+    ///
+    /// - `self` must be non-zero, aligned to `mem::align_of::<T>()`, and point to `mem::size_of::<T>()`
+    ///   bytes of mapped, readable and writable memory containing a valid initialized instance of `T`.
+    /// - No concurrent non-atomic access or active `&mut` reference may alias this memory location
+    ///   for the duration of the atomic store, and `order` must be valid for atomic stores (not
+    ///   `Ordering::Acquire` or `Ordering::AcqRel`).
     pub unsafe fn atomic_store<T: Atomic>(self, val: T::Type, order: Ordering) {
-        let loc = &*(self.0 as *const T);
+        debug_assert!(!self.is_zero());
+        debug_assert!(self.is_aligned_to(mem::align_of::<T>()));
+        // SAFETY: Upheld by the caller: `self` is aligned and valid for a shared reference `&T` to
+        // an initialized atomic value with no conflicting `&mut` or non-atomic accesses.
+        let loc = unsafe { &*self.to_ptr::<T>() };
         loc.store(val, order)
     }
 
     /// atomic operation: compare and exchange usize
+    ///
     /// # Safety
-    /// This could throw a segment fault if the address is invalid
+    ///
+    /// - `self` must be non-zero, aligned to `mem::align_of::<T>()`, and point to `mem::size_of::<T>()`
+    ///   bytes of mapped, readable and writable memory containing a valid initialized instance of `T`.
+    /// - No concurrent non-atomic access or active `&mut` reference may alias this memory location
+    ///   for the duration of the atomic compare-exchange, and `failure` must be valid for failed
+    ///   compare-exchange loads (not `Ordering::Release` or `Ordering::AcqRel`).
     pub unsafe fn compare_exchange<T: Atomic>(
         self,
         old: T::Type,
@@ -278,7 +324,11 @@ impl Address {
         success: Ordering,
         failure: Ordering,
     ) -> Result<T::Type, T::Type> {
-        let loc = &*(self.0 as *const T);
+        debug_assert!(!self.is_zero());
+        debug_assert!(self.is_aligned_to(mem::align_of::<T>()));
+        // SAFETY: Upheld by the caller: `self` is aligned and valid for a shared reference `&T` to
+        // an initialized atomic value with no conflicting `&mut` or non-atomic accesses.
+        let loc = unsafe { &*self.to_ptr::<T>() };
         loc.compare_exchange(old, new, success, failure)
     }
 
@@ -318,17 +368,32 @@ impl Address {
     /// converts the Address to a Rust reference
     ///
     /// # Safety
-    /// The caller must guarantee the address actually points to a Rust object.
+    ///
+    /// - `self` must be non-zero, aligned to `mem::align_of::<T>()`, and point to a valid,
+    ///   initialized instance of `T` that remains alive and immutable (except inside `UnsafeCell`)
+    ///   for the entire lifetime `'a`.
+    /// - No active `&mut T` may alias the referent during `'a`.
     pub unsafe fn as_ref<'a, T>(self) -> &'a T {
-        &*self.to_mut_ptr()
+        debug_assert!(!self.is_zero());
+        debug_assert!(self.is_aligned_to(mem::align_of::<T>()));
+        // SAFETY: Upheld by the caller: `self` is non-null, aligned, initialized for `T`, and
+        // satisfies Rust's shared borrowing rules for lifetime `'a`.
+        unsafe { &*self.to_ptr::<T>() }
     }
 
     /// converts the Address to a mutable Rust reference
     ///
     /// # Safety
-    /// The caller must guarantee the address actually points to a Rust object.
+    ///
+    /// - `self` must be non-zero, aligned to `mem::align_of::<T>()`, and point to a valid,
+    ///   initialized instance of `T` that remains alive and writable for the entire lifetime `'a`.
+    /// - No other `&T`, `&mut T`, or concurrent pointer access to the referent may exist during `'a`.
     pub unsafe fn as_mut_ref<'a, T>(self) -> &'a mut T {
-        &mut *self.to_mut_ptr()
+        debug_assert!(!self.is_zero());
+        debug_assert!(self.is_aligned_to(mem::align_of::<T>()));
+        // SAFETY: Upheld by the caller: `self` is non-null, aligned, initialized for `T`, and
+        // exclusively borrowed with no aliasing references or concurrent accesses for `'a`.
+        unsafe { &mut *self.to_mut_ptr::<T>() }
     }
 
     /// converts the Address to a pointer-sized integer
@@ -355,6 +420,9 @@ impl Address {
     /// barrier has already recorded a write to it and can skip its slow path.
     pub fn is_field_logged<VM: VMBinding>(self) -> bool {
         debug_assert!(!self.is_zero());
+        // SAFETY: Public API preserved on `Address` for VM bindings. Callers must pass a valid
+        // heap slot address whose `GLOBAL_FIELD_UNLOG_BIT_SPEC` side metadata is mapped and free
+        // of conflicting concurrent non-atomic writes.
         unsafe {
             VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
                 .as_spec()
@@ -371,6 +439,9 @@ impl Address {
         let heap_bytes_per_unlog_byte =
             VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC.heap_bytes_per_unlog_byte();
         let a = self.align_down(heap_bytes_per_unlog_byte);
+        // SAFETY: Public API preserved on `Address` (called during LXR stop-the-world promotion /
+        // remembered-set re-arming). Callers must ensure `GLOBAL_FIELD_UNLOG_BIT_SPEC` side
+        // metadata for `a` is mapped and that no concurrent thread accesses the same metadata byte.
         unsafe {
             VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
                 .as_spec()
@@ -425,80 +496,49 @@ impl std::str::FromStr for Address {
 
 #[cfg(test)]
 mod tests {
-    use crate::util::Address;
+    use super::Address;
 
     #[test]
     fn align_up() {
-        unsafe {
-            assert_eq!(
-                Address::from_usize(0x10).align_up(0x10),
-                Address::from_usize(0x10)
-            );
-            assert_eq!(
-                Address::from_usize(0x11).align_up(0x10),
-                Address::from_usize(0x20)
-            );
-            assert_eq!(
-                Address::from_usize(0x20).align_up(0x10),
-                Address::from_usize(0x20)
-            );
-        }
+        assert_eq!(Address(0x10).align_up(0x10), Address(0x10));
+        assert_eq!(Address(0x11).align_up(0x10), Address(0x20));
+        assert_eq!(Address(0x20).align_up(0x10), Address(0x20));
     }
 
     #[test]
     fn align_down() {
-        unsafe {
-            assert_eq!(
-                Address::from_usize(0x10).align_down(0x10),
-                Address::from_usize(0x10)
-            );
-            assert_eq!(
-                Address::from_usize(0x11).align_down(0x10),
-                Address::from_usize(0x10)
-            );
-            assert_eq!(
-                Address::from_usize(0x20).align_down(0x10),
-                Address::from_usize(0x20)
-            );
-        }
+        assert_eq!(Address(0x10).align_down(0x10), Address(0x10));
+        assert_eq!(Address(0x11).align_down(0x10), Address(0x10));
+        assert_eq!(Address(0x20).align_down(0x10), Address(0x20));
     }
 
     #[test]
     fn is_aligned_to() {
-        unsafe {
-            assert!(Address::from_usize(0x10).is_aligned_to(0x10));
-            assert!(!Address::from_usize(0x11).is_aligned_to(0x10));
-            assert!(Address::from_usize(0x10).is_aligned_to(0x8));
-            assert!(!Address::from_usize(0x10).is_aligned_to(0x20));
-        }
+        assert!(Address(0x10).is_aligned_to(0x10));
+        assert!(!Address(0x11).is_aligned_to(0x10));
+        assert!(Address(0x10).is_aligned_to(0x8));
+        assert!(!Address(0x10).is_aligned_to(0x20));
     }
 
     #[test]
     fn bit_and() {
-        unsafe {
-            assert_eq!(
-                Address::from_usize(0b1111_1111_1100usize) & 0b1010u8,
-                0b1000u8
-            );
-            assert_eq!(
-                Address::from_usize(0b1111_1111_1100usize) & 0b1000_0000_1010usize,
-                0b1000_0000_1000usize
-            );
-        }
+        assert_eq!(Address(0b1111_1111_1100usize) & 0b1010u8, 0b1000u8);
+        assert_eq!(
+            Address(0b1111_1111_1100usize) & 0b1000_0000_1010usize,
+            0b1000_0000_1000usize
+        );
     }
 
     #[test]
     fn bit_or() {
-        unsafe {
-            assert_eq!(
-                Address::from_usize(0b1111_1111_1100usize) | 0b1010u8,
-                0b1111_1111_1110usize
-            );
-            assert_eq!(
-                Address::from_usize(0b1111_1111_1100usize) | 0b1000_0000_1010usize,
-                0b1111_1111_1110usize
-            );
-        }
+        assert_eq!(
+            Address(0b1111_1111_1100usize) | 0b1010u8,
+            0b1111_1111_1110usize
+        );
+        assert_eq!(
+            Address(0b1111_1111_1100usize) | 0b1000_0000_1010usize,
+            0b1111_1111_1110usize
+        );
     }
 }
 
@@ -636,16 +676,18 @@ impl ObjectReference {
     ///
     /// # Safety
     ///
-    /// This method assumes `addr` is not zero.  It should only be used in cases where we know at
-    /// compile time that the input cannot be zero.  For example, if we compute the address by
-    /// adding a positive offset to a non-zero address, we know the result must not be zero.
+    /// - `addr` must not be zero (`!addr.is_zero()`, i.e. `addr.as_usize() != 0`), as required by
+    ///   [`NonZeroUsize::new_unchecked`].
+    /// - To uphold [`ObjectReference`]'s type invariant when passed to MMTk APIs, `addr` must also
+    ///   be aligned to [`ObjectReference::ALIGNMENT`] and uniquely identify a valid object.
     pub unsafe fn from_raw_address_unchecked(addr: Address) -> ObjectReference {
         debug_assert!(!addr.is_zero());
         debug_assert!(
             addr.is_aligned_to(Self::ALIGNMENT),
             "ObjectReference is required to be word aligned.  addr: {addr}"
         );
-        ObjectReference(NonZeroUsize::new_unchecked(addr.0))
+        // SAFETY: Upheld by the caller: `addr.0 != 0` (checked in debug builds above).
+        ObjectReference(unsafe { NonZeroUsize::new_unchecked(addr.0) })
     }
 
     /// Get the header base address from an object reference. This method is used by MMTk to get a base address for the
@@ -709,33 +751,41 @@ impl ObjectReference {
     ///
     /// Note: Objects in ImmortalSpace may have `is_live = true` but are actually unreachable.
     pub fn is_reachable(self) -> bool {
-        unsafe { SFT_MAP.get_unchecked(self.to_raw_address()) }.is_reachable(self)
+        let addr = self.to_raw_address();
+        debug_assert!(SFT_MAP.has_sft_entry(addr));
+        SFT_MAP.get_checked(addr).is_reachable(self)
     }
 
     /// Is the object live, determined by the policy?
     pub fn is_live(self) -> bool {
-        unsafe { SFT_MAP.get_unchecked(self.to_raw_address()) }.is_live(self)
+        let addr = self.to_raw_address();
+        debug_assert!(SFT_MAP.has_sft_entry(addr));
+        SFT_MAP.get_checked(addr).is_live(self)
     }
 
     /// Can the object be moved?
     pub fn is_movable(self) -> bool {
-        unsafe { SFT_MAP.get_unchecked(self.to_raw_address()) }.is_movable()
+        let addr = self.to_raw_address();
+        debug_assert!(SFT_MAP.has_sft_entry(addr));
+        SFT_MAP.get_checked(addr).is_movable()
     }
 
     /// Get forwarding pointer if the object is forwarded.
     pub fn get_forwarded_object(self) -> Option<Self> {
-        unsafe { SFT_MAP.get_unchecked(self.to_raw_address()) }.get_forwarded_object(self)
+        let addr = self.to_raw_address();
+        debug_assert!(SFT_MAP.has_sft_entry(addr));
+        SFT_MAP.get_checked(addr).get_forwarded_object(self)
     }
 
     /// Is the object in any MMTk spaces?
     pub fn is_in_any_space(self) -> bool {
-        unsafe { SFT_MAP.get_unchecked(self.to_raw_address()) }.is_in_space(self)
+        SFT_MAP.get_checked(self.to_raw_address()).is_in_space(self)
     }
 
     /// Is the object sane?
     #[cfg(feature = "sanity")]
     pub fn is_sane(self) -> bool {
-        unsafe { SFT_MAP.get_unchecked(self.to_raw_address()) }.is_sane()
+        SFT_MAP.get_checked(self.to_raw_address()).is_sane()
     }
 
     /// Get the current size (in bytes) of the object, as determined by the VM's object model.

@@ -403,6 +403,8 @@ mod tests {
 
     #[test]
     fn os_page_size_matches_system() {
+        // SAFETY: `libc::sysconf(libc::_SC_PAGESIZE)` is a pure POSIX query with no pointer
+        // arguments or memory safety preconditions.
         let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
         assert_eq!(OS::BYTES_IN_PAGE, page_size as usize);
     }
