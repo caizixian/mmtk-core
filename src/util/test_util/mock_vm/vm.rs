@@ -58,17 +58,6 @@ macro_rules! mock_hrtb {
     };
 }
 
-/// Call `MockAny`.
-#[allow(unused_macros)] // This macro is unused for now.
-macro_rules! mock_any {
-    ($fn: ident($($arg:expr),*)) => {
-        {
-            let arg_tuple = ($($arg),*);
-            *Self::read_mockvm(|mock| mock.$fn.call_any(Box::new(arg_tuple))).downcast().unwrap()
-        }
-    };
-}
-
 /// Initialize the static MockVM instance.
 pub fn init_mockvm(mockvm: MockVM) {
     MockVM::<DefaultMockVMConfig>::init_mockvm(mockvm)
@@ -333,30 +322,11 @@ define_mock_vm! {
 ///
 /// ## Methods with generic type parameters
 ///
-/// As we cannot have extra type parameters on `MockVM`, there are two ways
-/// to mock methods with generic type parameters.
-///
-/// ### Use trait objects
-///
-/// We can use trait objects if the trait is object safe. For example,
+/// We use trait objects when the parameter trait is object safe. For example,
 /// [`crate::vm::ActivePlan::vm_trace_object`] has a signature of
 /// `fn<Q: ObjectQueue>(&mut Q, ObjectReference, &mut GCWorker<VM>) -> ObjectReference`,
 /// so we mock `&mut Q` as `&mut dyn ObjectQueue` using
 /// `MockMethodFn<dyn Fn(&mut dyn ObjectQueue, ObjectReference, &mut GCWorker<MockVM>) -> ObjectReference + Send + Sync>`.
-///
-/// ### Use `MockAny`
-///
-/// For cases where we cannot use trait objects, we can use `MockAny`.
-/// We simply use `Box<MockAny>` and initiate it with a `MockMethod` of
-/// concrete types. For example, [`crate::vm::Scanning::process_weak_refs`]
-/// has a signature of `fn(&mut GCWorker<VM>, impl ObjectTracerContext<VM>`.
-/// `ObjectTracerContext` is not object safe. So we just use `Box<MockAny>`
-/// in `MockVM`, and initiate it with a concrete type of `ObjectTracerContext`, such as
-/// `Box::new((MockMethod::<(&'static mut GCWorker<Self>,DefaultObjectTracerContext<UnsupportedTrace<Self>>,),bool>::new_unimplemented())`.
-///
-/// Note that when `MockAny` is used, one needs to make sure that the types of the actual arguments match the argument types used for creating the `MockMethod`.
-/// We provide a default implementation for those `MockAny` methods, and it is very possible that the types in the default implementation do not
-/// match the arguments you would like to test with. You should overwrite the default `MockMethod` during the MockVM setup.
 ///
 /// # Mock constants and associated types
 ///
@@ -509,16 +479,16 @@ impl MutatorHandleRef {
     /// Obtain a mutable reference to the underlying `Mutator<VM>` without raw pointer casting.
     ///
     /// # Safety
-    /// The caller must have exclusive access to the underlying `Mutator<VM>` for the duration of
-    /// the returned reference's use (e.g. via `&mut GenericMutatorFixture` after
-    /// `verify_unparked_for_current_thread`, or on a GC worker thread while all mutators are
-    /// parked at a safepoint).
+    /// The caller must hold exclusive access to the underlying `Mutator<VM>` for the returned
+    /// reference's lifetime: either via `&mut GenericMutatorFixture` after
+    /// `verify_unparked_for_current_thread`, or on an MMTk GC worker (`GC_THREADS.contains(...)`)
+    /// iterating distinct `MUTATOR_PARK.all_parked_handles()` entries while all mutators are
+    /// parked at a safepoint under MMTk's non-aliasing pause-stage contract.
     #[inline]
     pub(crate) unsafe fn as_mutator<VM: VMBinding>(self) -> &'static mut Mutator<VM> {
         let cell = self.0.mutator.get().expect("The mutator is not bound yet");
-        // SAFETY: `cell` was initialized once by `MutatorHandle::bind` before registration,
-        // `Mutator<VM>: Send` holds (enforced by `Box<dyn Any + Send>`), and the caller guarantees
-        // exclusive access to this `Mutator<VM>` for the duration of the returned reference's use.
+        // SAFETY: `cell` was initialized once by `MutatorHandle::bind` (`Mutator<VM>: Send`), and
+        // caller guarantees exclusive access for the returned reference's lifetime.
         unsafe { &mut *cell.get() }
             .downcast_mut::<Mutator<VM>>()
             .unwrap_or_else(|| {
@@ -566,24 +536,13 @@ impl<C: MockVMConfig> Default for MockVM<C> {
                     GC_THREADS.contains(current_thread_tls()),
                     "ActivePlan::mutators() may only be called from a GC worker during a pause"
                 );
-                // `all_parked_handles()` asserts that every registered mutator thread is currently
-                // parked in `MUTATOR_PARK.park(...)` (at a GC safepoint) and yields each unique
-                // `'static` `MutatorHandle` from the `HashMap` at most once.
                 let mutators: Vec<&'static mut Mutator<Self>> = MUTATOR_PARK
                     .all_parked_handles()
                     .into_iter()
                     .map(|handle| {
-                        // SAFETY: `MUTATOR_PARK` is module-private and populated solely by
-                        // `MutatorHandle::bind`, which inserts each freshly leaked `'static`
-                        // `MutatorHandle` under its unique `VMThread` key (`assert!(prev.is_none())`),
-                        // so every `handle` is distinct. `GC_THREADS.contains(current_thread_tls())`
-                        // verifies the caller is an MMTk GC worker, and `all_parked_handles()`
-                        // verifies every registered mutator is parked at its safepoint on its
-                        // owning host thread. Non-aliasing across GC pause stages
-                        // (`on_pause_start`, `Prepare`, `Release`) relies on MMTk's frozen safe
-                        // `ActivePlan::mutators` / `Collection::stop_all_mutators` scheduler
-                        // contract (and `<MockVM as Scanning>::scan_roots_in_mutator_thread` does
-                        // not access `_mutator`).
+                        // SAFETY: `GC_THREADS` verified a GC worker, `all_parked_handles()`
+                        // verified all mutators are parked and yields each unique `MutatorHandle`
+                        // once, and MMTk's pause-stage contract guarantees non-aliasing.
                         unsafe { handle.as_mutator() }
                     })
                     .collect();
@@ -606,18 +565,9 @@ impl<C: MockVMConfig> Default for MockVM<C> {
                     .all_parked_handles()
                     .into_iter()
                     .for_each(|handle| {
-                        // SAFETY: `MUTATOR_PARK` is module-private and populated solely by
-                        // `MutatorHandle::bind`, which inserts each freshly leaked `'static`
-                        // `MutatorHandle` under its unique `VMThread` key (`assert!(prev.is_none())`),
-                        // so every `handle` is distinct. `GC_THREADS.contains(current_thread_tls())`
-                        // verifies the caller is an MMTk GC worker, and `all_parked_handles()`
-                        // verifies every registered mutator is parked at its safepoint on its
-                        // owning host thread. Each `Mutator<Self>` is visited sequentially in
-                        // `for_each`, and non-aliasing of any `'static` reference retained by
-                        // `mutator_visitor` across GC pause stages relies on MMTk's frozen safe
-                        // `Collection::stop_all_mutators` / `ActivePlan::mutators` scheduler
-                        // contract (with `<MockVM as Scanning>::scan_roots_in_mutator_thread` not
-                        // accessing `_mutator`).
+                        // SAFETY: `GC_THREADS` verified a GC worker, `all_parked_handles()`
+                        // verified all mutators are parked and yields each unique `MutatorHandle`
+                        // sequentially once, and MMTk's pause-stage contract guarantees non-aliasing.
                         let mutator = unsafe { handle.as_mutator() };
                         mutator_visitor(mutator);
                     });
@@ -682,14 +632,7 @@ impl<C: MockVMConfig> Default for MockVM<C> {
             scan_object_and_trace_edges: MockMethodFn::new_fixed(Box::new(
                 |_, _, _| unimplemented!(),
             )),
-            // We instantiate a `MockMethod` with the arguments as `DefaultRootsWorkFactory<..., UnsupportedTrace<MockVM>, ...>`,
-            // thus the mock method expects the actual call arguments to match the type.
-            // In most cases, this won't work and this `MockMethod` is just a place holder. It is
-            // fine as long as the method is not actually called.
-            // If the user will need this method, and would like to mock the method in their particular test,
-            // they are expected to provide their own
-            // `MockMethod` that matches the argument types they will pass for the test case.
-            // See the documents on the section about `MockAny` on the `MockVM` type.
+            // Placeholder `MockMethod`s for `impl Trait` methods not yet mocked.
             scan_roots_in_mutator_thread: Box::new(MockMethod::<
                 (
                     VMWorkerThread,
@@ -698,7 +641,6 @@ impl<C: MockVMConfig> Default for MockVM<C> {
                 ),
                 (),
             >::new_unimplemented()),
-            // Same here: the `MockMethod` is just a place holder. See the above comments.
             scan_vm_specific_roots: Box::new(MockMethod::<
                 (
                     VMWorkerThread,
@@ -711,7 +653,6 @@ impl<C: MockVMConfig> Default for MockVM<C> {
             prepare_for_roots_re_scanning: MockMethod::new_fixed(Box::new(|_| {
                 warn!("prepare_for_roots_re_scanning called on MockVM, it is empty at the moment.");
             })),
-            // Same here: the `MockMethod` is just a place holder. See the above comments.
             process_weak_refs: Box::new(MockMethod::<
                 (
                     &'static mut GCWorker<Self>,
@@ -719,7 +660,6 @@ impl<C: MockVMConfig> Default for MockVM<C> {
                 ),
                 bool,
             >::new_unimplemented()),
-            // Same here: the `MockMethod` is just a place holder. See the above comments.
             forward_weak_refs: Box::new(MockMethod::<
                 (
                     &'static mut GCWorker<Self>,
@@ -934,15 +874,9 @@ impl<C: MockVMConfig> crate::vm::Scanning<MockVM<C>> for MockVM<C> {
         _mutator: &'static mut Mutator<Self>,
         _factory: impl RootsWorkFactory<C::VMSlot>,
     ) {
-        // mock_any!(scan_roots_in_mutator_thread(
-        //     tls,
-        //     mutator,
-        //     Box::new(factory)
-        // ))
         warn!("scan_roots_in_mutator_thread is not properly mocked. The default implementation does nothing.");
     }
     fn scan_vm_specific_roots(_tls: VMWorkerThread, _factory: impl RootsWorkFactory<C::VMSlot>) {
-        // mock_any!(scan_vm_specific_roots(tls, Box::new(factory)))
         warn!("scan_vm_specific_roots is not properly mocked. The default implementation does nothing.");
     }
     fn notify_initial_thread_scan_complete(partial_scan: bool, tls: VMWorkerThread) {

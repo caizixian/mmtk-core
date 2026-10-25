@@ -11,7 +11,7 @@ use crate::util::{
     conversions::raw_align_up,
 };
 use crate::MMAPPER;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
 /// Minimum byte alignment for side-metadata spec base offsets, ensuring every spec base (including
@@ -35,6 +35,7 @@ pub(crate) const GLOBAL_SIDE_METADATA_BASE_OFFSET: usize = 0;
 /// for hot-path queries without `OnceLock` state-check overhead or `unwrap_unchecked` UB.
 static SIDE_METADATA_BASE_ADDRESS: OnceLock<Address> = OnceLock::new();
 static SIDE_METADATA_BASE_PTR: AtomicPtr<u8> = AtomicPtr::new(std::ptr::null_mut());
+static SIDE_METADATA_RESERVED_BYTES: AtomicUsize = AtomicUsize::new(0);
 
 /// The upper bound for VM side metadata layout. We need to list all the VM side metadata specs, compute the upper bound, and store it here.
 static VM_SIDE_METADATA_UPPER_BOUND_OFFSET: OnceLock<usize> = OnceLock::new();
@@ -115,17 +116,38 @@ pub(super) fn initialize_side_metadata_base(
         base + total_bytes
     );
     assert!(
+        !base.is_zero(),
+        "side metadata base address must be non-zero"
+    );
+    assert!(
         SIDE_METADATA_BASE_ADDRESS.get().is_none(),
         "side metadata base address is already initialized"
     );
+    SIDE_METADATA_RESERVED_BYTES.store(total_bytes, Ordering::Relaxed);
     SIDE_METADATA_BASE_PTR.store(base.to_mut_ptr::<u8>(), Ordering::Release);
     SIDE_METADATA_BASE_ADDRESS.set(base).unwrap();
 }
 
 /// Check whether side metadata layout and base address have been initialized.
+#[inline(always)]
 pub(crate) fn is_side_metadata_initialized() -> bool {
-    VM_SIDE_METADATA_UPPER_BOUND_OFFSET.get().is_some()
-        && SIDE_METADATA_BASE_ADDRESS.get().is_some()
+    !SIDE_METADATA_BASE_PTR.load(Ordering::Acquire).is_null()
+}
+
+/// Fast-path lookup of the initialized side-metadata reservation `[reserved_start, reserved_end)`.
+///
+/// Pairs an `Ordering::Acquire` load of `SIDE_METADATA_BASE_PTR` with the `Ordering::Release` store
+/// in `initialize_side_metadata_base`, ensuring `SIDE_METADATA_RESERVED_BYTES` is visible with zero
+/// `OnceLock`, `log::debug!`, or `MMAPPER` vtable overhead on hot metadata bounds checks.
+#[inline(always)]
+pub(crate) fn try_side_metadata_reserved_range() -> Option<(Address, Address)> {
+    let base_ptr = SIDE_METADATA_BASE_PTR.load(Ordering::Acquire);
+    if base_ptr.is_null() {
+        return None;
+    }
+    let start = Address::from_mut_ptr(base_ptr);
+    let bytes = SIDE_METADATA_RESERVED_BYTES.load(Ordering::Relaxed);
+    Some((start, start + bytes))
 }
 
 // With the above functions called, side metadata is initialized, and the following functions can be used to query side metadata layout and addresses.

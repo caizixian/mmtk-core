@@ -60,16 +60,17 @@ fn make_standard_bitmap() -> PreparedBitmap {
         .iter()
         .map(|total_bit_offset| {
             let word_offset = total_bit_offset >> LOG_BITS_IN_WORD;
-            let bit_offset = total_bit_offset & ((1 << LOG_BITS_IN_WORD) - 1);
-            (word_offset << LOG_BITS_IN_WORD, bit_offset as u8)
+            let bit_in_word = total_bit_offset & ((1 << LOG_BITS_IN_WORD) - 1);
+            let byte_offset = (word_offset << LOG_BITS_IN_WORD) + (bit_in_word >> 3);
+            (byte_offset, (bit_in_word & 7) as u8)
         })
         .collect::<Vec<_>>();
 
     set_bit_offsets.sort();
 
+    let bytes: &mut [u8] = bytemuck::cast_slice_mut(&mut words.0);
     for &(byte_offset, bit) in &set_bit_offsets {
-        let word_idx = byte_offset / std::mem::size_of::<usize>();
-        words.0[word_idx] |= 1usize << bit;
+        bytes[byte_offset] |= 1u8 << bit;
     }
 
     PreparedBitmap {

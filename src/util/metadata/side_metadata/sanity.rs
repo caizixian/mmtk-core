@@ -412,6 +412,33 @@ fn verify_metadata_address_bound(spec: &SideMetadataSpec, data_addr: Address) {
     );
 }
 
+#[cfg(feature = "extreme_assertions")]
+fn bulk_region_bounds(
+    metadata_spec: &SideMetadataSpec,
+    start: Address,
+    size: usize,
+) -> Option<(Address, Address)> {
+    if size == 0 {
+        return None;
+    }
+    let step = 1usize << metadata_spec.log_bytes_in_region;
+    let first = align_to_region_start(metadata_spec, start);
+    match start.as_usize().checked_add(size) {
+        Some(_) => {
+            let end = align_to_region_start(metadata_spec, start + size);
+            (first < end).then(|| (first, end - step))
+        }
+        None => {
+            assert_eq!(
+                start.as_usize().checked_add(size - 1),
+                Some(usize::MAX),
+                "Side-metadata sanity range overflowed Address: start={start}, size={size:#x}"
+            );
+            Some((first, Address::MAX.align_down(step)))
+        }
+    }
+}
+
 /// Commits a side metadata bulk zero operation.
 /// Panics if the metadata spec is not valid.
 ///
@@ -423,20 +450,15 @@ fn verify_metadata_address_bound(spec: &SideMetadataSpec, data_addr: Address) {
 #[cfg(feature = "extreme_assertions")]
 pub fn verify_bzero(metadata_spec: &SideMetadataSpec, start: Address, size: usize) {
     let sanity_map = &mut CONTENT_SANITY_MAP.write().unwrap();
-    let start = align_to_region_start(metadata_spec, start);
-    let end = align_to_region_start(metadata_spec, start + size);
-    match sanity_map.get_mut(metadata_spec) {
-        Some(spec_sanity_map) => {
-            // zero entries where the key (data_addr) is in the range (start, start+size)
-            for (k, v) in spec_sanity_map.iter_mut() {
-                // If the source address is in the bzero's range
-                if *k >= start && *k < end {
-                    *v = 0;
-                }
-            }
-        }
-        None => {
-            panic!("Invalid Metadata Spec: {}", metadata_spec.name);
+    let spec_sanity_map = sanity_map
+        .get_mut(metadata_spec)
+        .unwrap_or_else(|| panic!("Invalid Metadata Spec: {}", metadata_spec.name));
+    let Some((first, last)) = bulk_region_bounds(metadata_spec, start, size) else {
+        return;
+    };
+    for (k, v) in spec_sanity_map.iter_mut() {
+        if *k >= first && *k <= last {
+            *v = 0;
         }
     }
 }
@@ -451,21 +473,21 @@ pub fn verify_bzero(metadata_spec: &SideMetadataSpec, start: Address, size: usiz
 #[cfg(feature = "extreme_assertions")]
 pub fn verify_bset(metadata_spec: &SideMetadataSpec, start: Address, size: usize) {
     let sanity_map = &mut CONTENT_SANITY_MAP.write().unwrap();
-    let start = align_to_region_start(metadata_spec, start);
-    let end = align_to_region_start(metadata_spec, start + size);
+    let spec_sanity_map = sanity_map
+        .get_mut(metadata_spec)
+        .expect("Invalid Metadata Spec!");
+    let Some((first, last)) = bulk_region_bounds(metadata_spec, start, size) else {
+        return;
+    };
     let max_value = (1 << (1 << metadata_spec.log_num_of_bits)) - 1;
-    match sanity_map.get_mut(metadata_spec) {
-        Some(spec_sanity_map) => {
-            let mut cursor = start;
-            let step: usize = 1 << metadata_spec.log_bytes_in_region;
-            while cursor < end {
-                spec_sanity_map.insert(cursor, max_value);
-                cursor += step;
-            }
+    let step: usize = 1 << metadata_spec.log_bytes_in_region;
+    let mut cursor = first;
+    loop {
+        spec_sanity_map.insert(cursor, max_value);
+        if cursor == last {
+            break;
         }
-        None => {
-            panic!("Invalid Metadata Spec!");
-        }
+        cursor += step;
     }
 }
 
@@ -491,38 +513,43 @@ pub fn verify_bcopy(
     assert_eq!(src_spec.log_bytes_in_region, dst_spec.log_bytes_in_region);
 
     let sanity_map = &mut CONTENT_SANITY_MAP.write().unwrap();
-    let start = align_to_region_start(dst_spec, start);
-    let end = align_to_region_start(dst_spec, start + size);
+    assert!(
+        sanity_map.contains_key(src_spec),
+        "Invalid source Metadata Spec!"
+    );
+    assert!(
+        sanity_map.contains_key(dst_spec),
+        "Invalid destination Metadata Spec!"
+    );
+    let Some((first, last)) = bulk_region_bounds(dst_spec, start, size) else {
+        return;
+    };
 
     // Rust doesn't like mutably borrowing two entries from `sanity_map` at the same time.
     // So we load all values from `sanity_map[src_spec]` into an intermediate HashMap,
     // and then store them to `sanity_map[dst_spec]`.
-
     let mut tmp_map = HashMap::new();
-
+    let step: usize = 1 << src_spec.log_bytes_in_region;
     {
-        let src_map = sanity_map
-            .get_mut(src_spec)
-            .expect("Invalid source Metadata Spec!");
-
-        let mut cursor = start;
-        let step: usize = 1 << src_spec.log_bytes_in_region;
-        while cursor < end {
+        let src_map = sanity_map.get(src_spec).unwrap();
+        let mut cursor = first;
+        loop {
             let src_value = src_map.get(&cursor).copied().unwrap_or(0u64);
             tmp_map.insert(cursor, src_value);
+            if cursor == last {
+                break;
+            }
             cursor += step;
         }
     }
     {
-        let dst_map = sanity_map
-            .get_mut(dst_spec)
-            .expect("Invalid destination Metadata Spec!");
-
-        let mut cursor = start;
-        let step: usize = 1 << dst_spec.log_bytes_in_region;
-        while cursor < end {
-            let src_value = tmp_map.get(&cursor).copied().unwrap();
-            dst_map.insert(cursor, src_value);
+        let dst_map = sanity_map.get_mut(dst_spec).unwrap();
+        let mut cursor = first;
+        loop {
+            dst_map.insert(cursor, tmp_map[&cursor]);
+            if cursor == last {
+                break;
+            }
             cursor += step;
         }
     }

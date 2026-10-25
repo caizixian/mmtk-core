@@ -103,7 +103,7 @@ pub(crate) fn assert_atomic_align<T: MetadataValue>(addr: Address) {
 pub mod sealed {
     use atomic_traits::{Atomic, Bitwise, NumOps};
 
-    pub trait MetadataAtomic: Copy + bytemuck::Pod {
+    pub trait MetadataAtomic: Copy {
         /// Associated atomic storage cell for `Self` (`AtomicU8`..`AtomicUsize`).
         type Atomic: Atomic<Type = Self> + NumOps + Bitwise + Send + Sync + 'static;
 
@@ -119,6 +119,11 @@ pub mod sealed {
 /// The number type for accessing metadata.
 /// It requires a few traits from num-traits and a few traits we defined above.
 /// The methods in this trait are mostly about atomically accessing such types.
+///
+/// For all `*_atomic`, `compare_exchange`, and `fetch_*` methods, callers must ensure `addr`
+/// points to `size_of::<Self::Atomic>()` bytes of mapped, initialized (and writable for stores/RMW)
+/// memory accessed solely via `Self::Atomic` without aliasing non-atomic references, and that any
+/// `Ordering` arguments are valid for the underlying atomic operation.
 pub trait MetadataValue:
     Unsigned
     + Zero
@@ -136,10 +141,8 @@ pub trait MetadataValue:
     /// Non-atomic load from `addr`.
     ///
     /// # Safety
-    /// * `addr` must be non-null, aligned to `align_of::<Self>()`, and point to `size_of::<Self>()`
-    ///   bytes of mapped, readable, initialized memory.
-    /// * No other thread may concurrently write to or atomically modify the memory at `addr`, and
-    ///   no live Rust `&mut` reference may alias `[addr, addr + size_of::<Self>())`.
+    /// `addr` must be non-null, aligned to `Self::ALIGN`, and point to mapped, initialized memory
+    /// with no racing writes or live `&mut` aliases.
     #[inline(always)]
     unsafe fn load(addr: Address) -> Self {
         assert!(
@@ -148,33 +151,26 @@ pub trait MetadataValue:
             addr,
             Self::ALIGN
         );
-        // SAFETY: Non-null and `Self::ALIGN` alignment were unconditionally verified above; caller
-        // guarantees `addr` points to mapped, initialized memory without racing writes or `&mut` aliases.
+        // SAFETY: Non-null and `Self::ALIGN` checked above; caller guarantees mapped, unaliased read.
         unsafe { addr.load::<Self>() }
     }
 
     /// Atomic load from `addr` with memory ordering `order`.
     ///
     /// # Safety
-    /// * `addr` must point to `size_of::<Self::Atomic>()` bytes of mapped, initialized memory
-    ///   accessed solely via `Self::Atomic` without aliasing non-atomic references, and `order`
-    ///   must be a valid load ordering (`Relaxed`, `Acquire`, or `SeqCst`).
+    /// `addr` must satisfy [`MetadataValue`]'s atomic read contract with a valid load `order`.
     #[inline(always)]
     unsafe fn load_atomic(addr: Address, order: Ordering) -> Self {
         assert_atomic_align::<Self>(addr);
-        // SAFETY: Non-null and `ATOMIC_ALIGN` were verified above; caller upholds mapped,
-        // initialized, same-width atomic access for the duration of this load.
+        // SAFETY: `assert_atomic_align` checked non-null + `ATOMIC_ALIGN`; caller upholds atomic contract.
         Atomic::load(unsafe { addr.as_ref::<Self::Atomic>() }, order)
     }
 
     /// Non-atomic store of `value` to `addr`.
     ///
     /// # Safety
-    /// * `addr` must be non-null, aligned to `align_of::<Self>()`, and point to `size_of::<Self>()`
-    ///   bytes of mapped, writable memory.
-    /// * The caller must have exclusive access to `[addr, addr + size_of::<Self>())`: no other
-    ///   thread may concurrently read, write, or atomically access this memory, and no live Rust
-    ///   reference (`&` or `&mut`) may alias it.
+    /// `addr` must be non-null, aligned to `Self::ALIGN`, and exclusively point to mapped writable
+    /// memory with no concurrent accesses or live `&`/`&mut` aliases.
     #[inline(always)]
     unsafe fn store(addr: Address, value: Self) {
         assert!(
@@ -183,31 +179,25 @@ pub trait MetadataValue:
             addr,
             Self::ALIGN
         );
-        // SAFETY: Non-null and `Self::ALIGN` alignment were unconditionally verified above; caller
-        // guarantees `addr` points to mapped writable memory with exclusive access and no aliases.
+        // SAFETY: Non-null and `Self::ALIGN` checked above; caller guarantees exclusive writable access.
         unsafe { addr.store::<Self>(value) }
     }
 
     /// Atomic store of `value` to `addr` with memory ordering `order`.
     ///
     /// # Safety
-    /// * `addr` must point to `size_of::<Self::Atomic>()` bytes of mapped, initialized, writable
-    ///   memory accessed solely via `Self::Atomic` without aliasing non-atomic references, and
-    ///   `order` must be a valid store ordering (`Relaxed`, `Release`, or `SeqCst`).
+    /// `addr` must satisfy [`MetadataValue`]'s atomic write contract with a valid store `order`.
     #[inline(always)]
     unsafe fn store_atomic(addr: Address, value: Self, order: Ordering) {
         assert_atomic_align::<Self>(addr);
-        // SAFETY: Non-null and `ATOMIC_ALIGN` were verified above; caller upholds mapped,
-        // initialized, same-width atomic access for the duration of this store.
+        // SAFETY: `assert_atomic_align` checked non-null + `ATOMIC_ALIGN`; caller upholds atomic contract.
         Atomic::store(unsafe { addr.as_ref::<Self::Atomic>() }, value, order);
     }
 
     /// Atomic compare-and-exchange at `addr`.
     ///
     /// # Safety
-    /// * `addr` must point to `size_of::<Self::Atomic>()` bytes of mapped, initialized, writable
-    ///   memory accessed solely via `Self::Atomic` without aliasing non-atomic references, and
-    ///   `success` / `failure` must be valid `compare_exchange` orderings.
+    /// `addr` must satisfy [`MetadataValue`]'s atomic RMW contract with valid CAS orderings.
     #[inline(always)]
     unsafe fn compare_exchange(
         addr: Address,
@@ -217,8 +207,7 @@ pub trait MetadataValue:
         failure: Ordering,
     ) -> Result<Self, Self> {
         assert_atomic_align::<Self>(addr);
-        // SAFETY: Non-null and `ATOMIC_ALIGN` were verified above; caller upholds mapped,
-        // initialized, same-width atomic access for the duration of this CAS.
+        // SAFETY: `assert_atomic_align` checked non-null + `ATOMIC_ALIGN`; caller upholds atomic contract.
         Atomic::compare_exchange(
             unsafe { addr.as_ref::<Self::Atomic>() },
             current,
@@ -231,62 +220,52 @@ pub trait MetadataValue:
     /// Atomic fetch-and-add at `addr`.
     ///
     /// # Safety
-    /// * `addr` must point to `size_of::<Self::Atomic>()` bytes of mapped, initialized, writable
-    ///   memory accessed solely via `Self::Atomic` without aliasing non-atomic references.
+    /// `addr` must satisfy [`MetadataValue`]'s atomic RMW contract.
     #[inline(always)]
     unsafe fn fetch_add(addr: Address, value: Self, order: Ordering) -> Self {
         assert_atomic_align::<Self>(addr);
-        // SAFETY: Non-null and `ATOMIC_ALIGN` were verified above; caller upholds mapped,
-        // initialized, same-width atomic access for the duration of this RMW.
+        // SAFETY: `assert_atomic_align` checked non-null + `ATOMIC_ALIGN`; caller upholds atomic contract.
         fetch::Add::fetch_add(unsafe { addr.as_ref::<Self::Atomic>() }, value, order)
     }
 
     /// Atomic fetch-and-subtract at `addr`.
     ///
     /// # Safety
-    /// * `addr` must point to `size_of::<Self::Atomic>()` bytes of mapped, initialized, writable
-    ///   memory accessed solely via `Self::Atomic` without aliasing non-atomic references.
+    /// `addr` must satisfy [`MetadataValue`]'s atomic RMW contract.
     #[inline(always)]
     unsafe fn fetch_sub(addr: Address, value: Self, order: Ordering) -> Self {
         assert_atomic_align::<Self>(addr);
-        // SAFETY: Non-null and `ATOMIC_ALIGN` were verified above; caller upholds mapped,
-        // initialized, same-width atomic access for the duration of this RMW.
+        // SAFETY: `assert_atomic_align` checked non-null + `ATOMIC_ALIGN`; caller upholds atomic contract.
         fetch::Sub::fetch_sub(unsafe { addr.as_ref::<Self::Atomic>() }, value, order)
     }
 
     /// Atomic fetch-and-bitwise-and at `addr`.
     ///
     /// # Safety
-    /// * `addr` must point to `size_of::<Self::Atomic>()` bytes of mapped, initialized, writable
-    ///   memory accessed solely via `Self::Atomic` without aliasing non-atomic references.
+    /// `addr` must satisfy [`MetadataValue`]'s atomic RMW contract.
     #[inline(always)]
     unsafe fn fetch_and(addr: Address, value: Self, order: Ordering) -> Self {
         assert_atomic_align::<Self>(addr);
-        // SAFETY: Non-null and `ATOMIC_ALIGN` were verified above; caller upholds mapped,
-        // initialized, same-width atomic access for the duration of this RMW.
+        // SAFETY: `assert_atomic_align` checked non-null + `ATOMIC_ALIGN`; caller upholds atomic contract.
         fetch::And::fetch_and(unsafe { addr.as_ref::<Self::Atomic>() }, value, order)
     }
 
     /// Atomic fetch-and-bitwise-or at `addr`.
     ///
     /// # Safety
-    /// * `addr` must point to `size_of::<Self::Atomic>()` bytes of mapped, initialized, writable
-    ///   memory accessed solely via `Self::Atomic` without aliasing non-atomic references.
+    /// `addr` must satisfy [`MetadataValue`]'s atomic RMW contract.
     #[inline(always)]
     unsafe fn fetch_or(addr: Address, value: Self, order: Ordering) -> Self {
         assert_atomic_align::<Self>(addr);
-        // SAFETY: Non-null and `ATOMIC_ALIGN` were verified above; caller upholds mapped,
-        // initialized, same-width atomic access for the duration of this RMW.
+        // SAFETY: `assert_atomic_align` checked non-null + `ATOMIC_ALIGN`; caller upholds atomic contract.
         fetch::Or::fetch_or(unsafe { addr.as_ref::<Self::Atomic>() }, value, order)
     }
 
     /// Atomic fetch-and-update loop at `addr`.
     ///
     /// # Safety
-    /// * `addr` must point to `size_of::<Self::Atomic>()` bytes of mapped, initialized, writable
-    ///   memory accessed solely via `Self::Atomic` without aliasing non-atomic references across
-    ///   the entire `fetch_update` loop (including invocations of `f`), and `set_order` /
-    ///   `fetch_order` must be valid `fetch_update` orderings.
+    /// `addr` must satisfy [`MetadataValue`]'s atomic RMW contract across the entire `fetch_update`
+    /// loop (including calls to `f`), with valid `set_order` and `fetch_order`.
     #[inline(always)]
     unsafe fn fetch_update<F>(
         addr: Address,
@@ -298,11 +277,8 @@ pub trait MetadataValue:
         F: FnMut(Self) -> Option<Self>,
     {
         assert_atomic_align::<Self>(addr);
-        // SAFETY: Non-null and `ATOMIC_ALIGN` were verified above; caller upholds mapped,
-        // initialized, same-width atomic access across the `fetch_update` loop.
-        // Note: `atomic-traits 0.4` names its parameters `(fetch_order, set_order)` in the trait
-        // declaration but forwards them positionally as `Self::fetch_update(self, arg0, arg1, f)`
-        // to `core::sync::atomic::Atomic*::fetch_update(set_order, fetch_order, f)`.
+        // SAFETY: `assert_atomic_align` checked non-null + `ATOMIC_ALIGN`; caller upholds atomic contract.
+        // `atomic-traits 0.4` forwards `(arg0, arg1)` positionally to `Atomic*::fetch_update(set, fetch)`.
         fetch::Update::fetch_update(
             unsafe { addr.as_ref::<Self::Atomic>() },
             set_order,
@@ -343,18 +319,24 @@ pub(crate) enum AtomicMetaRef<'a, T: MetadataValue> {
 
 impl<'a, T: MetadataValue> AtomicMetaRef<'a, T> {
     #[inline(always)]
+    fn extract_sub_byte(raw: u8, shift: u8, mask: u8) -> T {
+        FromPrimitive::from_u8((raw & mask) >> shift).unwrap()
+    }
+
+    #[inline(always)]
+    fn splice_sub_byte(raw: u8, val: u8, shift: u8, mask: u8) -> u8 {
+        (raw & !mask) | ((val << shift) & mask)
+    }
+
+    #[inline(always)]
     pub(crate) fn load(self, optional_mask: Option<T>, order: Ordering) -> T {
         let res = match self {
             Self::SubByte { byte, shift, mask } => {
-                FromPrimitive::from_u8((byte.load(order) & mask) >> shift).unwrap()
+                Self::extract_sub_byte(byte.load(order), shift, mask)
             }
             Self::Full(atomic) => Atomic::load(atomic, order),
         };
-        if let Some(mask) = optional_mask {
-            res.bitand(mask)
-        } else {
-            res
-        }
+        optional_mask.map_or(res, |mask| res.bitand(mask))
     }
 
     #[inline(always)]
@@ -366,7 +348,7 @@ impl<'a, T: MetadataValue> AtomicMetaRef<'a, T> {
                 let fetch_order = load_order_for_rmw(order);
                 #[allow(deprecated)]
                 let _ = byte.fetch_update(order, fetch_order, |raw| {
-                    Some((raw & !mask) | ((val_u8 << shift) & mask))
+                    Some(Self::splice_sub_byte(raw, val_u8, shift, mask))
                 });
             }
             Self::Full(atomic) => {
@@ -397,18 +379,19 @@ impl<'a, T: MetadataValue> AtomicMetaRef<'a, T> {
                 let new_u8 = new_val.to_u8().unwrap();
                 debug_assert!(old_u8 <= (mask >> shift) && new_u8 <= (mask >> shift));
                 let real_old = byte.load(load_order_for_rmw(success_order));
-                let expected_old = (real_old & !mask) | ((old_u8 << shift) & mask);
-                let expected_new = (expected_old & !mask) | ((new_u8 << shift) & mask);
+                let expected_old = Self::splice_sub_byte(real_old, old_u8, shift, mask);
+                let expected_new = Self::splice_sub_byte(expected_old, new_u8, shift, mask);
                 byte.compare_exchange(expected_old, expected_new, success_order, failure_order)
-                    .map(|x| FromPrimitive::from_u8((x & mask) >> shift).unwrap())
-                    .map_err(|x| FromPrimitive::from_u8((x & mask) >> shift).unwrap())
+                    .map(|x| Self::extract_sub_byte(x, shift, mask))
+                    .map_err(|x| Self::extract_sub_byte(x, shift, mask))
             }
             Self::Full(atomic) => {
                 let (expected_old, expected_new) = if let Some(mask) = optional_mask {
                     let cur = Atomic::load(atomic, load_order_for_rmw(success_order));
+                    let preserved = cur.bitand(mask.inv());
                     (
-                        cur.bitand(mask.inv()).bitor(old_val),
-                        cur.bitand(mask.inv()).bitor(new_val),
+                        preserved.bitor(old_val.bitand(mask)),
+                        preserved.bitor(new_val.bitand(mask)),
                     )
                 } else {
                     (old_val, new_val)
@@ -436,11 +419,15 @@ impl<'a, T: MetadataValue> AtomicMetaRef<'a, T> {
         #[allow(deprecated)]
         let prev_raw = byte
             .fetch_update(order, fetch_order, |raw| {
-                let next = f((raw & mask) >> shift);
-                Some((raw & !mask) | ((next << shift) & mask))
+                Some(Self::splice_sub_byte(
+                    raw,
+                    f((raw & mask) >> shift),
+                    shift,
+                    mask,
+                ))
             })
             .unwrap();
-        FromPrimitive::from_u8((prev_raw & mask) >> shift).unwrap()
+        Self::extract_sub_byte(prev_raw, shift, mask)
     }
 
     #[inline(always)]
@@ -470,8 +457,7 @@ impl<'a, T: MetadataValue> AtomicMetaRef<'a, T> {
         match self {
             Self::SubByte { byte, shift, mask } => {
                 let rhs = (val.to_u8().unwrap() << shift) | !mask;
-                let prev_raw = byte.fetch_and(rhs, order);
-                FromPrimitive::from_u8((prev_raw & mask) >> shift).unwrap()
+                Self::extract_sub_byte(byte.fetch_and(rhs, order), shift, mask)
             }
             Self::Full(atomic) => fetch::And::fetch_and(atomic, val, order),
         }
@@ -482,8 +468,7 @@ impl<'a, T: MetadataValue> AtomicMetaRef<'a, T> {
         match self {
             Self::SubByte { byte, shift, mask } => {
                 let rhs = (val.to_u8().unwrap() << shift) & mask;
-                let prev_raw = byte.fetch_or(rhs, order);
-                FromPrimitive::from_u8((prev_raw & mask) >> shift).unwrap()
+                Self::extract_sub_byte(byte.fetch_or(rhs, order), shift, mask)
             }
             Self::Full(atomic) => fetch::Or::fetch_or(atomic, val, order),
         }
@@ -501,11 +486,11 @@ impl<'a, T: MetadataValue> AtomicMetaRef<'a, T> {
             {
                 #[allow(deprecated)]
                 byte.fetch_update(set_order, fetch_order, |raw| {
-                    let cur = FromPrimitive::from_u8((raw & mask) >> shift).unwrap();
-                    f(cur).map(|next| (raw & !mask) | ((next.to_u8().unwrap() << shift) & mask))
+                    f(Self::extract_sub_byte(raw, shift, mask))
+                        .map(|next| Self::splice_sub_byte(raw, next.to_u8().unwrap(), shift, mask))
                 })
-                .map(|raw| FromPrimitive::from_u8((raw & mask) >> shift).unwrap())
-                .map_err(|raw| FromPrimitive::from_u8((raw & mask) >> shift).unwrap())
+                .map(|raw| Self::extract_sub_byte(raw, shift, mask))
+                .map_err(|raw| Self::extract_sub_byte(raw, shift, mask))
             }
             Self::Full(atomic) => fetch::Update::fetch_update(atomic, set_order, fetch_order, f),
         }

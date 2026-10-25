@@ -1,5 +1,5 @@
 use super::defrag::Histogram;
-use super::line::{iter_line_indices, Line, RCArray, BYTES_PER_LINE, LINES_IN_BLOCK};
+use super::line::{iter_line_indices, Line, RCArray, LINES_IN_BLOCK, RC_BYTES_IN_BLOCK};
 use super::ImmixSpace;
 use crate::util::constants::*;
 use crate::util::heap::blockpageresource::BlockPool;
@@ -141,37 +141,18 @@ impl Block {
     /// Checked projection of `RC_TABLE` covering `[self.start(), self.end())`, bounded to `&self`.
     #[inline(always)]
     pub(super) fn rc_array(&self) -> RCArray<'_> {
-        const _: () = assert!(LINES_IN_BLOCK * BYTES_PER_LINE <= BYTES_IN_PAGE);
         assert!(
-            !global_side_metadata_base_address().is_zero()
-                && !self.is_zero()
-                && self.start().is_aligned_to(Self::BYTES)
-                && self.start().as_usize() <= usize::MAX - Self::BYTES
-                && address_to_meta_address(&crate::util::rc::RC_TABLE, self.start())
-                    >= crate::util::rc::RC_TABLE.get_starting_address()
-                && address_to_meta_address(&crate::util::rc::RC_TABLE, self.end() - 1usize)
-                    >= crate::util::rc::RC_TABLE.get_starting_address()
-                && address_to_meta_address(&crate::util::rc::RC_TABLE, self.end() - 1usize)
-                    < crate::util::rc::RC_TABLE.upper_bound_address_for_contiguous()
-                && crate::util::rc::RC_TABLE.is_mapped(self.start())
-                && crate::util::rc::RC_TABLE.is_mapped(self.end() - 1usize),
-            "Block {:?} is not a non-zero aligned Immix block with in-bounds mapped RC_TABLE",
+            !self.is_zero() && self.start().is_aligned_to(Self::BYTES),
+            "Block {:?} is not a non-zero aligned Immix block",
             self
         );
-        // SAFETY:
-        // 1. The assertion above unconditionally verifies side metadata is initialized,
-        //    `!self.is_zero()`, `self.start()` is aligned to `Self::BYTES` (`<= 32 KiB <<
-        //    BYTES_IN_CHUNK`) without overflow, and global contiguous `RC_TABLE` for
-        //    `[self.start(), self.end())` falls strictly within `[RC_TABLE.get_starting_address(),
-        //    RC_TABLE.upper_bound_address_for_contiguous())` and spans at most two adjacent
-        //    `MMAPPER` pages (`LINES_IN_BLOCK * BYTES_PER_LINE <= BYTES_IN_PAGE`), both verified
-        //    mapped via `self.start()` and `self.end() - 1usize` (zero-initialized and never
-        //    unmapped for the process lifetime).
-        // 2. Every `RC_TABLE` operation across `mmtk-core` (`RefCountHelper`, `SideMetadataSpec`
-        //    atomic ops, `RCArray`) accesses `RC_TABLE` exclusively via `AtomicU8`.
+        // SAFETY: `mapped_atomic_bytes_unchecked` verifies initialization, block/byte alignment,
+        // `RC_TABLE` window bounds, and `MMAPPER` mapping across `[self.start(), self.end())`
+        // (zero-initialized and never unmapped); all `RC_TABLE` accesses across `mmtk-core` use
+        // `AtomicU8` exclusively.
         let table = unsafe {
             crate::util::rc::RC_TABLE
-                .mapped_atomic_byte_chunks_unchecked::<LINES_IN_BLOCK, BYTES_PER_LINE>(self.start())
+                .mapped_atomic_bytes_unchecked::<RC_BYTES_IN_BLOCK>(self.start())
         };
         RCArray::from_table(*self, table)
     }
@@ -180,37 +161,15 @@ impl Block {
     /// bounded to `&self`.
     #[inline(always)]
     pub(super) fn line_mark_table(&self) -> &[AtomicU8; LINES_IN_BLOCK] {
-        const _: () = assert!(LINES_IN_BLOCK <= BYTES_IN_PAGE);
         assert!(
-            !super::BLOCK_ONLY
-                && !global_side_metadata_base_address().is_zero()
-                && !self.is_zero()
-                && self.start().is_aligned_to(Self::BYTES)
-                && self.start().as_usize() <= usize::MAX - Self::BYTES
-                && (!Line::MARK_TABLE.uses_contiguous_side_metadata()
-                    || (address_to_meta_address(&Line::MARK_TABLE, self.start())
-                        >= Line::MARK_TABLE.get_starting_address()
-                        && address_to_meta_address(&Line::MARK_TABLE, self.end() - 1usize)
-                            >= Line::MARK_TABLE.get_starting_address()
-                        && address_to_meta_address(&Line::MARK_TABLE, self.end() - 1usize)
-                            < Line::MARK_TABLE.upper_bound_address_for_contiguous()))
-                && Line::MARK_TABLE.is_mapped(self.start())
-                && Line::MARK_TABLE.is_mapped(self.end() - 1usize),
-            "Block {:?} is not a non-zero aligned line-granularity Immix block with in-bounds mapped Line::MARK_TABLE",
+            !super::BLOCK_ONLY && !self.is_zero() && self.start().is_aligned_to(Self::BYTES),
+            "Block {:?} is not a non-zero aligned line-granularity Immix block",
             self
         );
-        // SAFETY:
-        // 1. The assertion above plus `mapped_atomic_bytes_unchecked`'s internal
-        //    `checked_mapped_byte_range` unconditionally verify `!self.is_zero()`, `self.start()`
-        //    is aligned to `Self::BYTES` (`<= 32 KiB << BYTES_IN_CHUNK`, contained within a single
-        //    chunk) without overflow, and `Line::MARK_TABLE` for `[self.start(), self.end())`
-        //    (`LINES_IN_BLOCK <= BYTES_IN_PAGE`, at most two adjacent `MMAPPER` pages) is mapped
-        //    and never unmapped for the process lifetime.
-        // 2. Every `Line::MARK_TABLE` (`IX_LINE_MARK`) access across the entire crate (`Line::mark`,
-        //    `Line::get_mark_state`, `Block::clear_line_mark_table`, `Block::sweep_allocated`,
-        //    `Block::clear_unmarked_vo_bits`, `ImmixSpace::get_next_available_lines`) operates
-        //    exclusively through `AtomicU8` (`u8`) with zero non-atomic `bzero_metadata` or
-        //    mixed-width atomic accesses.
+        // SAFETY: `mapped_atomic_bytes_unchecked` verifies initialization, block/byte alignment,
+        // single-chunk containment, `Line::MARK_TABLE` window bounds, and `MMAPPER` mapping across
+        // `[self.start(), self.end())` (never unmapped); all `IX_LINE_MARK` accesses across
+        // `mmtk-core` use `AtomicU8` exclusively.
         unsafe { Line::MARK_TABLE.mapped_atomic_bytes_unchecked::<LINES_IN_BLOCK>(self.start()) }
     }
 

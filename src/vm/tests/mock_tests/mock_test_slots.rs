@@ -1,7 +1,5 @@
 // GITHUB-CI: MMTK_PLAN=NoGC
 
-#![allow(unused)]
-
 use super::mock_test_prelude::*;
 use crate::{
     util::{Address, ObjectReference},
@@ -120,22 +118,28 @@ mod compressed_oop {
     }
 
     // Two 35-bit addresses aligned to 8 bytes (3 zeros in the lowest bits).
-    const COMPRESSABLE_ADDR1: usize = 0b101_10111011_11011111_01111110_11111000usize;
-    const COMPRESSABLE_ADDR2: usize = 0b110_11110111_01101010_11011101_11101000usize;
+    pub(super) const COMPRESSABLE_ADDR1: usize = 0b101_10111011_11011111_01111110_11111000usize;
+    pub(super) const COMPRESSABLE_ADDR2: usize = 0b110_11110111_01101010_11011101_11101000usize;
+    // SAFETY: `COMPRESSABLE_ADDR{1,2}` are non-zero, 8-byte-aligned synthetic addresses used
+    // solely to test 3-bit shift encoding/decoding without dereferencing either referent.
+    pub(super) const TEST_ADDRS: (Address, Address) = unsafe {
+        (
+            Address::from_usize(COMPRESSABLE_ADDR1),
+            Address::from_usize(COMPRESSABLE_ADDR2),
+        )
+    };
 
     #[test]
     pub fn load_compressed() {
         // Note: We cannot guarantee GC will allocate an object in the low address region.
         // So we make up addresses just for testing the bit operations of compressed OOP slots.
         let compressed1 = (COMPRESSABLE_ADDR1 >> 3) as u32;
-        // SAFETY: `COMPRESSABLE_ADDR1` is a non-zero, 8-byte-aligned synthetic address used solely
-        // to test 3-bit shift encoding/decoding without dereferencing the referent.
-        let addr1 = unsafe { Address::from_usize(COMPRESSABLE_ADDR1) };
-        let objref1 = ObjectReference::from_raw_address(addr1);
+        let objref1 = ObjectReference::from_raw_address(TEST_ADDRS.0);
 
         let rust_slot: Atomic<u32> = Atomic::new(compressed1);
 
         let slot = CompressedOopSlot::from_atomic(&rust_slot);
+        assert_eq!(slot.as_address(), Address::from_ref(&rust_slot));
         let objref = slot.load();
 
         assert_eq!(objref, objref1);
@@ -147,10 +151,7 @@ mod compressed_oop {
         // So we make up addresses just for testing the bit operations of compressed OOP slots.
         let compressed1 = (COMPRESSABLE_ADDR1 >> 3) as u32;
         let compressed2 = (COMPRESSABLE_ADDR2 >> 3) as u32;
-        // SAFETY: `COMPRESSABLE_ADDR2` is a non-zero, 8-byte-aligned synthetic address used solely
-        // to test 3-bit shift encoding/decoding without dereferencing the referent.
-        let addr2 = unsafe { Address::from_usize(COMPRESSABLE_ADDR2) };
-        let objref2 = ObjectReference::from_raw_address(addr2).unwrap();
+        let objref2 = ObjectReference::from_raw_address(TEST_ADDRS.1).unwrap();
 
         let rust_slot: Atomic<u32> = Atomic::new(compressed1);
 
@@ -248,8 +249,11 @@ mod offset_slot {
                 FIXTURE.with_fixture(|fixture| {
                     let addr1 = fixture.objref1.to_raw_address();
                     let rust_slot: Atomic<Address> = Atomic::new(addr1 + OFFSET);
+                    assert_eq!(OffsetSlot::new_no_offset(&rust_slot).offset(), 0);
 
                     let slot = OffsetSlot::new_with_offset(&rust_slot, OFFSET);
+                    assert_eq!(slot.slot_address(), Address::from_ref(&rust_slot));
+                    assert_eq!(slot.offset(), OFFSET);
                     let objref = slot.load();
 
                     assert_eq!(objref, Some(fixture.objref1));
@@ -472,7 +476,16 @@ mod mixed {
         with_mockvm(
             default_setup,
             || {
-                const OFFSET: usize = 48;
+                #[cfg(target_pointer_width = "64")]
+                {
+                    let c_slot =
+                        Atomic::new((super::compressed_oop::COMPRESSABLE_ADDR1 >> 3) as u32);
+                    let ds2 = DummyVMSlot::Compressed(CompressedOopSlot::from_atomic(&c_slot));
+                    assert_eq!(
+                        ds2.load(),
+                        ObjectReference::from_raw_address(super::compressed_oop::TEST_ADDRS.0)
+                    );
+                }
 
                 FIXTURE.with_fixture(|fixture| {
                     let addr1 = fixture.objref1.to_raw_address();

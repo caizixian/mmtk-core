@@ -20,12 +20,14 @@ pub fn bench(c: &mut Criterion) {
 
     let large = memory_manager::alloc(fixture.mutator(), 40, 0, 0, mmtk::AllocationSemantics::Los);
 
-    // SAFETY: `42` and `usize::MAX - 1024` are synthetic unmapped raw virtual addresses used only
-    // to benchmark `Address::is_mapped()` metadata lookups; they are never dereferenced.
-    let low = unsafe { Address::from_usize(42usize) };
-    // SAFETY: See above; `usize::MAX - 1024` is only queried via `Address::is_mapped()` and never
-    // dereferenced.
-    let high = unsafe { Address::from_usize(usize::MAX - 1024usize) };
+    // SAFETY: `42` and `usize::MAX - 1024` are synthetic unmapped virtual addresses used solely to
+    // benchmark `Address::is_mapped()` metadata lookups without dereferencing.
+    let (low, high) = unsafe {
+        (
+            Address::from_usize(42usize),
+            Address::from_usize(usize::MAX - 1024usize),
+        )
+    };
 
     c.bench_function("is_mapped_regular", |b| {
         b.iter(|| {
