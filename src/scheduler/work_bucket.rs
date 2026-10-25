@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use super::worker_monitor::WorkerMonitor;
 use super::*;
 use crate::vm::VMBinding;
@@ -340,13 +342,19 @@ impl<VM: VMBinding> WorkBucket<VM> {
         sentinel.is_some()
     }
 
-    pub fn update(&self, scheduler: &GCWorkScheduler<VM>) -> bool {
+    pub(crate) fn can_open(&self, scheduler: &GCWorkScheduler<VM>) -> bool {
         if let Some(can_open) = self.can_open.as_ref() {
-            if !self.is_open() && can_open(scheduler) {
-                debug!("Opening work bucket: {:?}", self.stage);
-                self.open();
-                return true;
-            }
+            !self.is_open() && can_open(scheduler)
+        } else {
+            false
+        }
+    }
+
+    pub fn update(&self, scheduler: &GCWorkScheduler<VM>) -> bool {
+        if self.can_open(scheduler) {
+            debug!("Opening work bucket: {:?}", self.stage);
+            self.open();
+            return true;
         }
         false
     }

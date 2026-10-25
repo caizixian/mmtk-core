@@ -102,45 +102,73 @@ impl<VM: VMBinding> GCWork<VM> for ScheduleCollection {
     }
 }
 
-/// The global GC Preparation Work
-/// This work packet invokes prepare() for the plan (which will invoke prepare() for each space), and
-/// pushes work packets for preparing mutators and collectors.
-/// We should only have one such work packet per GC, before any actual GC work starts.
-/// We assume this work packet is the only running work packet that accesses plan, and there should
-/// be no other concurrent work packet that accesses plan (read or write). Otherwise, there may
-/// be a race condition.
+/// The global GC Preparation Work.
+///
+/// Constructing `Prepare::<C>::new(plan)` registers [`PrepareSolo`] as solo stage work for
+/// [`WorkBucketStage::Prepare`] so `Plan::prepare` executes exclusively on a single worker before
+/// `WorkBucketStage::Prepare` opens for parallel root/mutator packets. The `Prepare` struct added
+/// to `work_buckets[WorkBucketStage::Prepare]` serves as a stage marker.
 pub struct Prepare<C: GCWorkContext> {
-    plan_addr: usize,
     _p: PhantomData<fn() -> C>,
 }
 
 impl<C: GCWorkContext> Prepare<C> {
-    pub fn new(plan: *const C::PlanType) -> Self {
-        Self {
-            plan_addr: plan as usize,
-            _p: PhantomData,
-        }
+    pub fn new(plan: &C::PlanType) -> Self {
+        plan.base().scheduler.set_solo_stage_work(
+            WorkBucketStage::Prepare,
+            PrepareSolo::<C> {
+                plan_addr: plan as *const C::PlanType as usize,
+                _p: PhantomData,
+            },
+        );
+        Self { _p: PhantomData }
     }
 }
 
 impl<C: GCWorkContext> GCWork<C::VM> for Prepare<C> {
-    fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
+    fn do_work(&mut self, _worker: &mut GCWorker<C::VM>, _mmtk: &'static MMTK<C::VM>) {}
+}
+
+struct PrepareSolo<C: GCWorkContext> {
+    plan_addr: usize,
+    _p: PhantomData<fn() -> C>,
+}
+
+impl<C: GCWorkContext> SoloStageWork<C::VM> for PrepareSolo<C> {
+    fn do_solo_work(
+        &mut self,
+        worker: &mut GCWorker<C::VM>,
+        mmtk: &'static MMTK<C::VM>,
+        solo: SoloWorkerToken<'_>,
+    ) {
         trace!("Prepare Global");
-        // We assume this is the only running work packet that accesses plan at the point of execution
-        let needs_prepare_mutator = {
-            // SAFETY: `Prepare` is scheduled as the sole initial packet in `WorkBucketStage::Prepare`
-            // after all mutators have stopped and before `PrepareMutator`/`PrepareCollector` packets
-            // are added below, while all other GC workers are parked. No concurrent or re-entrant
-            // read/write access to `mmtk.plan` occurs during this block, and `mmtk.get_plan_mut()`
-            // derives `&mut` from `MMTK::plan`'s `NonNull<UnsafeCell<dyn Plan>>`.
+        assert_eq!(solo.instance_id(), mmtk.id);
+        {
+            let _plan_lease = mmtk.enter_plan_mut_lease();
+            // SAFETY:
+            // 1. `solo: SoloWorkerToken<'_>` (`solo.instance_id() == mmtk.id`) is minted solely by
+            //    `WorkerMonitor::enter_solo_packet` after `all_parked` locked all other
+            //    `worker_count - 1` `WorkerPerm`s of `mmtk.id` inside `WorkerMonitor::park_and_wait`
+            //    (gated across spurious Condvar wakeups, with `notify_work_available` and
+            //    `make_request` deferred until `SoloExecutionGuard` drops after `do_solo_work`
+            //    returns), and `WorkBucketStage::Prepare` remains closed so no pre-populated
+            //    packets have started.
+            // 2. `WorkBucketStage::Prepare` is sequentially opened only after `FIRST_STW_STAGE` was
+            //    opened by `notify_mutators_paused`, so every mutator is paused at a GC safepoint.
+            // 3. `_plan_lease` enforces non-reentrancy on this thread, `Plan::prepare` performs
+            //    only internal plan/space preparation without calling `mmtk.get_plan()` or VM
+            //    callbacks, and `plan_mut` is dropped immediately at the end of this block before
+            //    `mmtk.get_plan().constraints()` is read below (preserving Stacked/Tree Borrows for
+            //    any `'static` space references queued into packets during `prepare`).
             let plan_mut: &mut C::PlanType = unsafe { mmtk.get_plan_mut() }
                 .downcast_mut::<C::PlanType>()
                 .unwrap();
             debug_assert_eq!(self.plan_addr, plan_mut as *const C::PlanType as usize);
             plan_mut.prepare(worker.tls);
-            plan_mut.constraints().needs_prepare_mutator
-        };
+            let _ = &solo;
+        }
 
+        let needs_prepare_mutator = mmtk.get_plan().constraints().needs_prepare_mutator;
         if needs_prepare_mutator && !mmtk.state.mutators_prepared_in_scan.load(Ordering::Acquire) {
             let tickets = <C::VM as VMBinding>::VMActivePlan::mutators()
                 .map(MutatorTicket::from_mut)
@@ -204,46 +232,76 @@ impl<VM: VMBinding> GCWork<VM> for PrepareCollector {
     }
 }
 
-/// The global GC release Work
-/// This work packet invokes release() for the plan (which will invoke release() for each space), and
-/// pushes work packets for releasing mutators and collectors.
-/// We should only have one such work packet per GC, after all actual GC work ends.
-/// We assume this work packet is the only running work packet that accesses plan, and there should
-/// be no other concurrent work packet that accesses plan (read or write). Otherwise, there may
-/// be a race condition.
+/// The global GC release Work.
+///
+/// Constructing `Release::<C>::new(plan)` registers [`ReleaseSolo`] as solo stage work for
+/// [`WorkBucketStage::Release`] so `Plan::release` executes exclusively on a single worker before
+/// `WorkBucketStage::Release` opens for parallel `ReleaseMutator` / weak-ref / unlog-bit packets.
 pub struct Release<C: GCWorkContext> {
-    plan_addr: usize,
     _p: PhantomData<fn() -> C>,
 }
 
 impl<C: GCWorkContext> Release<C> {
-    pub fn new(plan: *const C::PlanType) -> Self {
-        Self {
-            plan_addr: plan as usize,
-            _p: PhantomData,
-        }
+    pub fn new(plan: &C::PlanType) -> Self {
+        plan.base().scheduler.set_solo_stage_work(
+            WorkBucketStage::Release,
+            ReleaseSolo::<C> {
+                plan_addr: plan as *const C::PlanType as usize,
+                _p: PhantomData,
+            },
+        );
+        Self { _p: PhantomData }
     }
 }
 
 impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
-    fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
+    fn do_work(&mut self, _worker: &mut GCWorker<C::VM>, _mmtk: &'static MMTK<C::VM>) {}
+}
+
+struct ReleaseSolo<C: GCWorkContext> {
+    plan_addr: usize,
+    _p: PhantomData<fn() -> C>,
+}
+
+impl<C: GCWorkContext> SoloStageWork<C::VM> for ReleaseSolo<C> {
+    fn do_solo_work(
+        &mut self,
+        worker: &mut GCWorker<C::VM>,
+        mmtk: &'static MMTK<C::VM>,
+        solo: SoloWorkerToken<'_>,
+    ) {
         trace!("Release Global");
+        assert_eq!(solo.instance_id(), mmtk.id);
 
         mmtk.gc_trigger.policy.on_gc_release(mmtk);
-        // We assume this is the only running work packet that accesses plan at the point of execution
+        crate::plan::release_before_plan_mut(mmtk.get_plan());
         {
-            // SAFETY: `WorkBucketStage::Release` opens only after all prior STW buckets are drained
-            // and all workers have parked, with `Release` as the sole initial packet in the bucket
-            // before `ReleaseMutator`/`ReleaseCollector` packets are enqueued below. `on_gc_release`
-            // above has already returned, so no concurrent or re-entrant read/write access to
-            // `mmtk.plan` occurs during this block, and `mmtk.get_plan_mut()` derives `&mut` from
-            // `MMTK::plan`'s `NonNull<UnsafeCell<dyn Plan>>`.
+            let _plan_lease = mmtk.enter_plan_mut_lease();
+            // SAFETY:
+            // 1. `solo: SoloWorkerToken<'_>` (`solo.instance_id() == mmtk.id`) is minted solely by
+            //    `WorkerMonitor::enter_solo_packet` after `all_parked` locked all other
+            //    `worker_count - 1` `WorkerPerm`s of `mmtk.id` inside `WorkerMonitor::park_and_wait`
+            //    (gated across spurious Condvar wakeups, with `notify_work_available` and
+            //    `make_request` deferred until `SoloExecutionGuard` drops after `do_solo_work`
+            //    returns), and `WorkBucketStage::Release` remains closed so no pre-populated
+            //    packets (`RefEnqueue`, `VMPostForwarding`, `ClearCommonPlanUnlogBits`) have
+            //    started.
+            // 2. `WorkBucketStage::Release` is sequentially opened after all prior STW stages have
+            //    drained while mutators remain paused at GC safepoints.
+            // 3. `on_gc_release` and `release_before_plan_mut` (`LXR` VM callbacks) ran above
+            //    before acquiring `plan_mut`, `_plan_lease` enforces non-reentrancy on this thread,
+            //    `release_plan_local` performs only internal plan/space release updates, and
+            //    `plan_mut` is dropped immediately at the end of this block before
+            //    `release_after_plan_mut` runs (preserving Stacked/Tree Borrows for any `'static`
+            //    space references queued into packets during `release`).
             let plan_mut: &mut C::PlanType = unsafe { mmtk.get_plan_mut() }
                 .downcast_mut::<C::PlanType>()
                 .unwrap();
             debug_assert_eq!(self.plan_addr, plan_mut as *const C::PlanType as usize);
-            plan_mut.release(worker.tls);
+            crate::plan::release_plan_local::<C::PlanType>(plan_mut, worker.tls);
+            let _ = &solo;
         }
+        crate::plan::release_after_plan_mut(mmtk.get_plan());
 
         let tickets = <C::VM as VMBinding>::VMActivePlan::mutators()
             .map(MutatorTicket::from_mut)

@@ -185,6 +185,33 @@ pub(crate) fn compute_next_gc_full_heap<VM: VMBinding>(plan: &dyn Plan<VM = VM>)
     })
 }
 
+/// Run plan-specific pre-release VM callbacks (`LXR::release_before_plan_mut`) on `&dyn Plan`
+/// strictly before acquiring `&mut dyn Plan` in `Release`.
+pub(crate) fn release_before_plan_mut<VM: VMBinding>(plan: &dyn Plan<VM = VM>) {
+    if let Some(lxr) = plan.downcast_ref::<crate::plan::lxr::LXR<VM>>() {
+        lxr.release_before_plan_mut();
+    }
+}
+
+/// Run plan-local `&mut` release state updates without invoking external VM callbacks while `&mut`
+/// is live.
+pub(crate) fn release_plan_local<P: Plan>(plan_mut: &mut P, tls: VMWorkerThread) {
+    let plan_any: &mut dyn Plan<VM = P::VM> = plan_mut;
+    if let Some(lxr) = plan_any.downcast_mut::<crate::plan::lxr::LXR<P::VM>>() {
+        lxr.release_plan_local(tls);
+    } else {
+        plan_mut.release(tls);
+    }
+}
+
+/// Run plan-specific post-release shared tasks (`LXR::release_after_plan_mut`) strictly after
+/// `&mut dyn Plan` has been dropped in `Release`.
+pub(crate) fn release_after_plan_mut<VM: VMBinding>(plan: &dyn Plan<VM = VM>) {
+    if let Some(lxr) = plan.downcast_ref::<crate::plan::lxr::LXR<VM>>() {
+        lxr.release_after_plan_mut();
+    }
+}
+
 /// Create thread local GC worker.
 pub fn create_gc_worker_context<VM: VMBinding>(
     tls: VMWorkerThread,

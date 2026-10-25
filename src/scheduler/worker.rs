@@ -224,7 +224,12 @@ impl<VM: VMBinding> GCWorker<VM> {
             return Ok(work);
         }
 
-        self.scheduler().poll(self)
+        if let Some(work) = self.scheduler.poll_schedulable_work(self) {
+            return Ok(work);
+        }
+
+        let scheduler = self.scheduler.clone();
+        scheduler.poll_slow(self)
     }
 
     /// Entry point of the worker thread.
@@ -348,12 +353,28 @@ const _: () = {
 };
 
 impl<VM: VMBinding> WorkerGroup<VM> {
-    /// Create a WorkerGroup with pre-minted `WorkerPerm` capabilities for `instance_id`.
-    pub fn new(instance_id: MmtkId, num_workers: usize) -> Arc<Self> {
+    /// Create a WorkerGroup with the pre-minted `WorkerPerm` capabilities from `WorkerMonitor::new`.
+    pub fn new(instance_id: MmtkId, num_workers: usize, perms: Vec<WorkerPerm>) -> Arc<Self> {
+        assert_eq!(
+            perms.len(),
+            num_workers,
+            "WorkerGroup::new WorkerPerm count mismatch"
+        );
+        for (ordinal, perm) in perms.iter().enumerate() {
+            assert_eq!(
+                perm.instance_id(),
+                instance_id,
+                "WorkerGroup::new WorkerPerm MmtkId mismatch"
+            );
+            assert_eq!(
+                perm.ordinal(),
+                ordinal,
+                "WorkerGroup::new WorkerPerm ordinal mismatch"
+            );
+        }
         let local_work_queues = (0..num_workers)
             .map(|_| deque::Worker::new_fifo())
             .collect::<Vec<_>>();
-        let perms = WorkerPerm::mint_for_instance(instance_id, num_workers);
 
         let workers_shared = (0..num_workers)
             .map(|i| {

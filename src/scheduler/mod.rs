@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 //! A general scheduler implementation. MMTk uses it to schedule GC-related work.
 
 /// This constant used to be the default capacity of work packets that process slots, such as
@@ -12,7 +14,7 @@ pub(crate) mod affinity;
 
 #[allow(clippy::module_inception)]
 mod scheduler;
-pub(crate) use scheduler::GCWorkScheduler;
+pub(crate) use scheduler::{GCWorkScheduler, SoloStageWork};
 
 mod stat;
 mod work_counter;
@@ -32,6 +34,7 @@ mod worker_monitor;
 pub(crate) use worker::current_worker_ordinal;
 pub use worker::GCWorker;
 pub(crate) use worker::GCWorkerShared;
+pub(crate) use worker_monitor::SoloWorkerToken;
 
 pub(crate) mod gc_work;
 pub use gc_work::RootKind;

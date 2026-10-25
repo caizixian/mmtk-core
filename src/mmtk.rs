@@ -33,9 +33,7 @@ use crate::vm::VMBinding;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::default::Default;
-#[cfg(feature = "sanity")]
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -112,11 +110,24 @@ impl Default for MMTKBuilder {
     }
 }
 
+/// RAII guard tracking an active `MMTK::get_plan_mut` exclusive borrow so non-reentrancy is
+/// enforced in all builds and concurrent/re-entrant `MMTK::get_plan` reads are caught in debug
+/// builds.
+pub(crate) struct PlanMutLeaseGuard<'a>(&'a AtomicBool);
+
+impl Drop for PlanMutLeaseGuard<'_> {
+    #[inline]
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
 /// An MMTk instance. MMTk allows multiple instances to run independently, and each instance gives users a separate heap.
 /// *Note that multi-instances is not fully supported yet*
 pub struct MMTK<VM: VMBinding> {
     pub(crate) id: MmtkId,
     pub(crate) phase_auth: PlanPhaseAuth,
+    pub(crate) plan_mut_leased: AtomicBool,
     pub(crate) options: Arc<Options>,
     pub(crate) state: Arc<GlobalState>,
     pub(crate) plan: std::ptr::NonNull<UnsafeCell<dyn Plan<VM = VM>>>,
@@ -261,6 +272,7 @@ impl<VM: VMBinding> MMTK<VM> {
         MMTK {
             id,
             phase_auth,
+            plan_mut_leased: AtomicBool::new(false),
             options,
             state,
             plan,
@@ -524,8 +536,23 @@ impl<VM: VMBinding> MMTK<VM> {
         self.gc_trigger.trigger_internal_collection_request();
     }
 
+    /// Acquire a non-reentrant runtime guard witnessing an active internal `get_plan_mut` borrow.
+    #[inline]
+    pub(crate) fn enter_plan_mut_lease(&self) -> PlanMutLeaseGuard<'_> {
+        assert!(
+            !self.plan_mut_leased.swap(true, Ordering::Acquire),
+            "Reentrant or concurrent MMTK::get_plan_mut() lease for {:?}",
+            self.id
+        );
+        PlanMutLeaseGuard(&self.plan_mut_leased)
+    }
+
     /// Get a reference to the plan.
     pub fn get_plan(&self) -> &dyn Plan<VM = VM> {
+        debug_assert!(
+            !self.plan_mut_leased.load(Ordering::Acquire),
+            "MMTK::get_plan() called while an exclusive get_plan_mut() borrow is live"
+        );
         // SAFETY: `self.plan` is a valid, aligned `NonNull<UnsafeCell<dyn Plan<VM = VM>>>` leaked
         // via `Box::into_raw` in `MMTK::new` and never freed or borrowed as `&mut UnsafeCell<...>`.
         // By the safety contract of `get_plan_mut` (and single-threaded `&mut MMTK` exclusivity on

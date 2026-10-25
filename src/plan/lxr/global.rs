@@ -245,36 +245,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
-        super::SURVIVAL_RATIO_PREDICTOR.update_ratios();
-        let pause = self.current_pause().unwrap();
-        if pause == Pause::FinalMark || pause == Pause::Full {
-            VM::VMCollection::update_weak_processor(false);
-        }
-        <VM as VMBinding>::VMCollection::vm_release();
-        self.common.los.is_end_of_satb_or_full_gc = false;
-        self.common
-            .release(tls, pause == Pause::Full || pause == Pause::FinalMark);
-        let block_allocation = self.block_allocation;
-        let max_stw_sweep_blocks = *self.base().options.lxr_max_stw_sweep_nursery_blocks;
-        block_allocation.sweep_nursery_blocks(&self.immix_space, max_stw_sweep_blocks, pause);
-        block_allocation.sweep_mutator_reused_blocks(pause, |block| {
-            self.add_to_possibly_dead_mature_blocks(block, false);
-        });
-        // Check if we want to do all decs and sweeping in the pause
-        if super::disable_lasy_dec_for_current_gc() {
-            self.immix_space
-                .scheduler()
-                .process_concurrent_packets_in_pause();
-        } else {
-            debug_assert_ne!(pause, Pause::Full);
-        }
-        self.immix_space.release_rc();
-        self.schedule_mature_sweeping(pause);
-        // swap roots
-        let mut prev_roots = self.prev_roots.write().unwrap();
-        let mut curr_roots = self.curr_roots.write().unwrap();
-        std::mem::swap::<SegQueue<_>>(&mut prev_roots, &mut curr_roots);
-        debug_assert!(curr_roots.is_empty());
+        self.release_before_plan_mut();
+        self.release_plan_local(tls);
+        self.release_after_plan_mut();
     }
 
     fn get_collection_reserved_pages(&self) -> usize {
@@ -507,6 +480,47 @@ impl<VM: VMBinding> LXR<VM> {
         pause == Pause::RefCount && !self.concurrent_work_in_progress()
             || pause == Pause::FinalMark
             || pause == Pause::Full
+    }
+
+    pub(in crate::plan) fn release_before_plan_mut(&self) {
+        super::SURVIVAL_RATIO_PREDICTOR.update_ratios();
+        let pause = self.current_pause().unwrap();
+        if pause == Pause::FinalMark || pause == Pause::Full {
+            VM::VMCollection::update_weak_processor(false);
+        }
+        <VM as VMBinding>::VMCollection::vm_release();
+    }
+
+    pub(in crate::plan) fn release_plan_local(&mut self, tls: VMWorkerThread) {
+        let pause = self.current_pause().unwrap();
+        self.common.los.is_end_of_satb_or_full_gc = false;
+        self.common
+            .release(tls, pause == Pause::Full || pause == Pause::FinalMark);
+        let block_allocation = self.block_allocation;
+        let max_stw_sweep_blocks = *self.base().options.lxr_max_stw_sweep_nursery_blocks;
+        block_allocation.sweep_nursery_blocks(&self.immix_space, max_stw_sweep_blocks, pause);
+        block_allocation.sweep_mutator_reused_blocks(pause, |block| {
+            self.add_to_possibly_dead_mature_blocks(block, false);
+        });
+        // Check if we want to do all decs and sweeping in the pause
+        if super::disable_lasy_dec_for_current_gc() {
+            self.immix_space
+                .scheduler()
+                .process_concurrent_packets_in_pause();
+        } else {
+            debug_assert_ne!(pause, Pause::Full);
+        }
+        self.immix_space.release_rc();
+    }
+
+    pub(in crate::plan) fn release_after_plan_mut(&self) {
+        let pause = self.current_pause().unwrap();
+        self.schedule_mature_sweeping(pause);
+        // swap roots
+        let mut prev_roots = self.prev_roots.write().unwrap();
+        let mut curr_roots = self.curr_roots.write().unwrap();
+        std::mem::swap::<SegQueue<_>>(&mut prev_roots, &mut curr_roots);
+        debug_assert!(curr_roots.is_empty());
     }
 
     pub fn cm_enabled(&self) -> bool {
