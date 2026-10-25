@@ -1,4 +1,3 @@
-use std::mem::MaybeUninit;
 use std::sync::Arc;
 
 use crate::plan::PlanConstraints;
@@ -49,15 +48,59 @@ impl<VM: VMBinding> Default for CopyConfig<VM> {
     }
 }
 
+/// Wrapper slot for a worker-local [`CopySpaceCopyContext`].
+///
+/// Uses niche-optimized `Option` (`CopySpaceCopyContext` contains `&'static dyn Space` and `Arc`)
+/// so safe field-swapping cannot cause uninitialized-memory UB, while preserving the
+/// `copy[0].assume_init_mut()` interface used by copying plans during `Plan::prepare_worker`.
+pub struct CopySpaceCopySlot<VM: VMBinding>(Option<CopySpaceCopyContext<VM>>);
+
+impl<VM: VMBinding> CopySpaceCopySlot<VM> {
+    /// Return a mutable reference to the initialized [`CopySpaceCopyContext`].
+    ///
+    /// # Safety
+    /// This slot must have been initialized by [`GCWorkerCopyContext::new`].
+    pub unsafe fn assume_init_mut(&mut self) -> &mut CopySpaceCopyContext<VM> {
+        self.0
+            .as_mut()
+            .expect("CopySpaceCopyContext slot is not initialized")
+    }
+
+    fn as_mut(&mut self) -> &mut CopySpaceCopyContext<VM> {
+        self.0
+            .as_mut()
+            .expect("CopySpaceCopyContext slot is not initialized")
+    }
+}
+
+/// Fixed-size array of [`CopySpaceCopySlot`]s owned by a [`GCWorkerCopyContext`].
+pub struct CopySpaceCopyAllocators<VM: VMBinding>(
+    [CopySpaceCopySlot<VM>; MAX_COPYSPACE_COPY_ALLOCATORS],
+);
+
+impl<VM: VMBinding> std::ops::Index<usize> for CopySpaceCopyAllocators<VM> {
+    type Output = CopySpaceCopySlot<VM>;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.0[index]
+    }
+}
+
+impl<VM: VMBinding> std::ops::IndexMut<usize> for CopySpaceCopyAllocators<VM> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.0[index]
+    }
+}
+
 /// The thread local struct for each GC worker for copying. Each GC worker should include
 /// one instance of this struct for copying operations.
 pub struct GCWorkerCopyContext<VM: VMBinding> {
     /// Copy allocators for CopySpace
-    pub copy: [MaybeUninit<CopySpaceCopyContext<VM>>; MAX_COPYSPACE_COPY_ALLOCATORS],
-    /// Copy allocators for ImmixSpace
-    pub immix: [MaybeUninit<ImmixCopyContext<VM>>; MAX_IMMIX_COPY_ALLOCATORS],
-    /// Copy allocators for ImmixSpace
-    pub immix_hybrid: [MaybeUninit<ImmixHybridCopyContext<VM>>; MAX_IMMIX_HYBRID_COPY_ALLOCATORS],
+    pub copy: CopySpaceCopyAllocators<VM>,
+    /// Copy allocator for ImmixSpace (niche-optimized `Option` via `Arc<AllocatorContext>`)
+    immix: Option<ImmixCopyContext<VM>>,
+    /// Hybrid copy allocator for ImmixSpace (niche-optimized `Option` via `Arc<AllocatorContext>`)
+    immix_hybrid: Option<ImmixHybridCopyContext<VM>>,
     /// The config for the plan
     config: CopyConfig<VM>,
 }
@@ -88,16 +131,19 @@ impl<VM: VMBinding> GCWorkerCopyContext<VM> {
             );
         }
         match self.config.copy_mapping[semantics] {
-            CopySelector::CopySpace(index) => {
-                unsafe { self.copy[index as usize].assume_init_mut() }
-                    .alloc_copy(original, bytes, align, offset)
-            }
-            CopySelector::Immix(index) => unsafe { self.immix[index as usize].assume_init_mut() }
+            CopySelector::CopySpace(index) => self.copy[index as usize]
+                .as_mut()
                 .alloc_copy(original, bytes, align, offset),
-            CopySelector::ImmixHybrid(index) => {
-                unsafe { self.immix_hybrid[index as usize].assume_init_mut() }
-                    .alloc_copy(original, bytes, align, offset)
-            }
+            CopySelector::Immix(_) => self
+                .immix
+                .as_mut()
+                .expect("ImmixCopyContext slot is not initialized")
+                .alloc_copy(original, bytes, align, offset),
+            CopySelector::ImmixHybrid(_) => self
+                .immix_hybrid
+                .as_mut()
+                .expect("ImmixHybridCopyContext slot is not initialized")
+                .alloc_copy(original, bytes, align, offset),
             CopySelector::Unused => unreachable!(),
         }
     }
@@ -121,15 +167,18 @@ impl<VM: VMBinding> GCWorkerCopyContext<VM> {
         // Policy specific post copy.
         match self.config.copy_mapping[semantics] {
             CopySelector::CopySpace(index) => {
-                unsafe { self.copy[index as usize].assume_init_mut() }.post_copy(object, bytes)
+                self.copy[index as usize].as_mut().post_copy(object, bytes)
             }
-            CopySelector::Immix(index) => {
-                unsafe { self.immix[index as usize].assume_init_mut() }.post_copy(object, bytes)
-            }
-            CopySelector::ImmixHybrid(index) => {
-                unsafe { self.immix_hybrid[index as usize].assume_init_mut() }
-                    .post_copy(object, bytes)
-            }
+            CopySelector::Immix(_) => self
+                .immix
+                .as_mut()
+                .expect("ImmixCopyContext slot is not initialized")
+                .post_copy(object, bytes),
+            CopySelector::ImmixHybrid(_) => self
+                .immix_hybrid
+                .as_mut()
+                .expect("ImmixHybridCopyContext slot is not initialized")
+                .post_copy(object, bytes),
             CopySelector::Unused => unreachable!(),
         }
     }
@@ -139,15 +188,17 @@ impl<VM: VMBinding> GCWorkerCopyContext<VM> {
         // Delegate to prepare() for each policy copy context
         for (_, selector) in self.config.copy_mapping.iter() {
             match selector {
-                CopySelector::CopySpace(index) => {
-                    unsafe { self.copy[*index as usize].assume_init_mut() }.prepare()
-                }
-                CopySelector::Immix(index) => {
-                    unsafe { self.immix[*index as usize].assume_init_mut() }.prepare()
-                }
-                CopySelector::ImmixHybrid(index) => {
-                    unsafe { self.immix_hybrid[*index as usize].assume_init_mut() }.prepare()
-                }
+                CopySelector::CopySpace(index) => self.copy[*index as usize].as_mut().prepare(),
+                CopySelector::Immix(_) => self
+                    .immix
+                    .as_mut()
+                    .expect("ImmixCopyContext slot is not initialized")
+                    .prepare(),
+                CopySelector::ImmixHybrid(_) => self
+                    .immix_hybrid
+                    .as_mut()
+                    .expect("ImmixHybridCopyContext slot is not initialized")
+                    .prepare(),
                 CopySelector::Unused => {}
             }
         }
@@ -158,15 +209,17 @@ impl<VM: VMBinding> GCWorkerCopyContext<VM> {
         // Delegate to release() for each policy copy context
         for (_, selector) in self.config.copy_mapping.iter() {
             match selector {
-                CopySelector::CopySpace(index) => {
-                    unsafe { self.copy[*index as usize].assume_init_mut() }.release()
-                }
-                CopySelector::Immix(index) => {
-                    unsafe { self.immix[*index as usize].assume_init_mut() }.release()
-                }
-                CopySelector::ImmixHybrid(index) => {
-                    unsafe { self.immix_hybrid[*index as usize].assume_init_mut() }.release()
-                }
+                CopySelector::CopySpace(index) => self.copy[*index as usize].as_mut().release(),
+                CopySelector::Immix(_) => self
+                    .immix
+                    .as_mut()
+                    .expect("ImmixCopyContext slot is not initialized")
+                    .release(),
+                CopySelector::ImmixHybrid(_) => self
+                    .immix_hybrid
+                    .as_mut()
+                    .expect("ImmixHybridCopyContext slot is not initialized")
+                    .release(),
                 CopySelector::Unused => {}
             }
         }
@@ -179,40 +232,77 @@ impl<VM: VMBinding> GCWorkerCopyContext<VM> {
     /// * `plan`: A reference to the current plan.
     /// * `config`: The configuration for the copy context.
     pub fn new(worker_tls: VMWorkerThread, mmtk: &MMTK<VM>, config: CopyConfig<VM>) -> Self {
+        const _: () = assert!(MAX_IMMIX_COPY_ALLOCATORS == 1);
+        const _: () = assert!(MAX_IMMIX_HYBRID_COPY_ALLOCATORS == 1);
         let mut ret = GCWorkerCopyContext {
-            copy: unsafe { MaybeUninit::uninit().assume_init() },
-            immix: unsafe { MaybeUninit::uninit().assume_init() },
-            immix_hybrid: unsafe { MaybeUninit::uninit().assume_init() },
+            copy: CopySpaceCopyAllocators(std::array::from_fn(|_| CopySpaceCopySlot(None))),
+            immix: None,
+            immix_hybrid: None,
             config,
         };
         let context = Arc::new(AllocatorContext::new(mmtk));
+        let mut copy_init = [false; MAX_COPYSPACE_COPY_ALLOCATORS];
+        let mut immix_init = [false; MAX_IMMIX_COPY_ALLOCATORS];
+        let mut immix_hybrid_init = [false; MAX_IMMIX_HYBRID_COPY_ALLOCATORS];
 
         // Initiate the copy context for each policy based on the space mapping.
         for &(selector, space) in ret.config.space_mapping.iter() {
             match selector {
                 CopySelector::CopySpace(index) => {
-                    ret.copy[index as usize].write(CopySpaceCopyContext::new(
+                    let idx = index as usize;
+                    assert!(!copy_init[idx], "Duplicate selector {selector:?}");
+                    ret.copy.0[idx] = CopySpaceCopySlot(Some(CopySpaceCopyContext::new(
                         worker_tls,
                         context.clone(),
                         space.downcast_ref::<CopySpace<VM>>().unwrap(),
-                    ));
+                    )));
+                    copy_init[idx] = true;
                 }
                 CopySelector::Immix(index) => {
-                    ret.immix[index as usize].write(ImmixCopyContext::new(
+                    let idx = index as usize;
+                    assert_eq!(idx, 0, "ImmixCopyContext index out of bounds: {idx}");
+                    assert!(!immix_init[idx], "Duplicate selector {selector:?}");
+                    ret.immix = Some(ImmixCopyContext::new(
                         worker_tls,
                         context.clone(),
                         space.downcast_ref::<ImmixSpace<VM>>().unwrap(),
                     ));
+                    immix_init[idx] = true;
                 }
                 CopySelector::ImmixHybrid(index) => {
-                    ret.immix_hybrid[index as usize].write(ImmixHybridCopyContext::new(
+                    let idx = index as usize;
+                    assert_eq!(idx, 0, "ImmixHybridCopyContext index out of bounds: {idx}");
+                    assert!(!immix_hybrid_init[idx], "Duplicate selector {selector:?}");
+                    ret.immix_hybrid = Some(ImmixHybridCopyContext::new(
                         worker_tls,
                         context.clone(),
                         space.downcast_ref::<ImmixSpace<VM>>().unwrap(),
                     ));
+                    immix_hybrid_init[idx] = true;
                 }
                 CopySelector::Unused => unreachable!(),
             }
+        }
+
+        // Enforce that every active selector in `copy_mapping` refers to an initialized slot.
+        for (_, &selector) in ret.config.copy_mapping.iter() {
+            let initialized = match selector {
+                CopySelector::CopySpace(index) => {
+                    copy_init.get(index as usize).copied().unwrap_or(false)
+                }
+                CopySelector::Immix(index) => {
+                    immix_init.get(index as usize).copied().unwrap_or(false)
+                }
+                CopySelector::ImmixHybrid(index) => immix_hybrid_init
+                    .get(index as usize)
+                    .copied()
+                    .unwrap_or(false),
+                CopySelector::Unused => true,
+            };
+            assert!(
+                initialized,
+                "CopyConfig::copy_mapping references uninitialized selector {selector:?}"
+            );
         }
 
         ret
@@ -221,9 +311,9 @@ impl<VM: VMBinding> GCWorkerCopyContext<VM> {
     /// Create a stub GCWorkerCopyContext for non copying plans.
     pub fn new_non_copy() -> Self {
         GCWorkerCopyContext {
-            copy: unsafe { MaybeUninit::uninit().assume_init() },
-            immix: unsafe { MaybeUninit::uninit().assume_init() },
-            immix_hybrid: unsafe { MaybeUninit::uninit().assume_init() },
+            copy: CopySpaceCopyAllocators(std::array::from_fn(|_| CopySpaceCopySlot(None))),
+            immix: None,
+            immix_hybrid: None,
             config: CopyConfig::default(),
         }
     }

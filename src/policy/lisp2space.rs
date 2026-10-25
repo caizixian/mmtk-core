@@ -38,7 +38,12 @@ impl<VM: VMBinding> SFT for Lisp2Space<VM> {
     }
 
     fn get_forwarded_object(&self, object: ObjectReference) -> Option<ObjectReference> {
-        Self::get_header_forwarding_pointer(object)
+        self.assert_valid_object_in_space(object);
+        // SAFETY: `assert_valid_object_in_space` verified `object` is an allocated `Lisp2Space`
+        // object in `self` (via mapped `VO_BIT`) with a mapped, initialized, word-aligned
+        // `HEADER_RESERVED_IN_BYTES` prefix, and `get_forwarded_object` is only called outside the
+        // single-threaded `CalculateForwarding` / `Compact` mutation passes.
+        unsafe { Self::get_header_forwarding_pointer(object) }
     }
 
     fn is_live(&self, object: ObjectReference) -> bool {
@@ -102,10 +107,14 @@ impl<VM: VMBinding> SFT for Lisp2Space<VM> {
     }
 
     fn debug_print_object_info(&self, object: ObjectReference) {
+        self.assert_valid_object_in_space(object);
         println!("marked = {}", Lisp2Space::<VM>::is_marked(object));
         println!(
             "head forwarding pointer = {:?}",
-            Lisp2Space::<VM>::get_header_forwarding_pointer(object)
+            // SAFETY: `assert_valid_object_in_space` verified `object` is an allocated `Lisp2Space`
+            // object in `self` with a mapped, initialized, word-aligned forwarding header word, and
+            // `debug_print_object_info` is invoked without concurrent forwarding-word mutation.
+            unsafe { Lisp2Space::<VM>::get_header_forwarding_pointer(object) }
         );
         self.common.debug_print_object_global_info(object);
     }
@@ -201,30 +210,66 @@ impl<VM: VMBinding> Lisp2Space<VM> {
     // the cell address, and ensures the cell address is properly aligned.
     // From the cell address, `cell - GC_EXTRA_HEADER_WORD` is where we store the header forwarding pointer.
 
+    fn assert_valid_object_in_space(&self, object: ObjectReference) {
+        let raw = object.to_raw_address();
+        assert!(
+            self.in_space(object)
+                && raw.is_aligned_to(ObjectReference::ALIGNMENT)
+                && vo_bit::is_vo_bit_set_for_addr(raw).is_some()
+                && Self::header_forwarding_pointer_address(object)
+                    .is_aligned_to(std::mem::align_of::<Address>()),
+            "Object {object} is not a valid allocated object in Lisp2Space",
+        );
+    }
+
     /// Get the address for header forwarding pointer
     fn header_forwarding_pointer_address(object: ObjectReference) -> Address {
         object.to_object_start::<VM>() - GC_EXTRA_HEADER_BYTES
     }
 
-    /// Get header forwarding pointer for an object
-    fn get_header_forwarding_pointer(object: ObjectReference) -> Option<ObjectReference> {
-        let addr = unsafe { Self::header_forwarding_pointer_address(object).load::<Address>() };
+    /// Get header forwarding pointer for an object in `Lisp2Space`.
+    ///
+    /// # Safety
+    /// - `object` must reside in mapped `Lisp2Space` memory allocated with `HEADER_RESERVED_IN_BYTES`
+    ///   before `object.to_object_start::<VM>()`, so `object.to_object_start::<VM>() - GC_EXTRA_HEADER_BYTES`
+    ///   is mapped, initialized, and aligned to `align_of::<Address>()`.
+    /// - No other thread may concurrently write to `object`'s header forwarding pointer word.
+    unsafe fn get_header_forwarding_pointer(object: ObjectReference) -> Option<ObjectReference> {
+        let fwd_addr = Self::header_forwarding_pointer_address(object);
+        debug_assert!(fwd_addr.is_aligned_to(std::mem::align_of::<Address>()));
+        // SAFETY: Caller guarantees `fwd_addr` is mapped, initialized, aligned for `Address`, and
+        // not concurrently mutated.
+        let addr = unsafe { fwd_addr.load::<Address>() };
         ObjectReference::from_raw_address(addr)
     }
 
-    /// Store header forwarding pointer for an object
-    fn store_header_forwarding_pointer(
+    /// Store header forwarding pointer for an object in `Lisp2Space`.
+    ///
+    /// # Safety
+    /// - `object` must reside in mapped `Lisp2Space` memory allocated with `HEADER_RESERVED_IN_BYTES`
+    ///   before `object.to_object_start::<VM>()`, so `object.to_object_start::<VM>() - GC_EXTRA_HEADER_BYTES`
+    ///   is mapped and aligned to `align_of::<ObjectReference>()`.
+    /// - The calling thread must have exclusive access to `object`'s header forwarding pointer word.
+    unsafe fn store_header_forwarding_pointer(
         object: ObjectReference,
         forwarding_pointer: ObjectReference,
     ) {
+        let fwd_addr = Self::header_forwarding_pointer_address(object);
+        debug_assert!(fwd_addr.is_aligned_to(std::mem::align_of::<ObjectReference>()));
+        // SAFETY: Caller guarantees `fwd_addr` is mapped, aligned for `ObjectReference`, and
+        // exclusively accessed by this thread.
         unsafe {
-            Self::header_forwarding_pointer_address(object)
-                .store::<ObjectReference>(forwarding_pointer);
+            fwd_addr.store::<ObjectReference>(forwarding_pointer);
         }
     }
 
-    // Clear header forwarding pointer for an object
-    fn clear_header_forwarding_pointer(object: ObjectReference) {
+    /// Clear header forwarding pointer word for a destination object in `Lisp2Space`.
+    ///
+    /// # Safety
+    /// - `object` must reside in mapped `Lisp2Space` memory with `GC_EXTRA_HEADER_BYTES` reserved
+    ///   before `object.to_object_start::<VM>()`.
+    /// - The calling thread must have exclusive write access to `[object.to_object_start::<VM>() - GC_EXTRA_HEADER_BYTES, object.to_object_start::<VM>())`.
+    unsafe fn clear_header_forwarding_pointer(object: ObjectReference) {
         crate::util::memory::zero(
             Self::header_forwarding_pointer_address(object),
             GC_EXTRA_HEADER_BYTES,
@@ -271,18 +316,18 @@ impl<VM: VMBinding> Lisp2Space<VM> {
         queue: &mut Q,
         object: ObjectReference,
     ) -> ObjectReference {
-        debug_assert!(
-            crate::util::metadata::vo_bit::is_vo_bit_set(object),
-            "{:x}: VO bit not set",
-            object
-        );
+        self.assert_valid_object_in_space(object);
         // from this stage and onwards, mark bit is no longer needed
         // therefore, it can be reused to save one extra bit in metadata
         if Lisp2Space::<VM>::test_and_clear_mark(object) {
             queue.enqueue(object);
         }
 
-        Self::get_header_forwarding_pointer(object)
+        // SAFETY: `assert_valid_object_in_space` verified `object` is an allocated `Lisp2Space`
+        // object in `self` with a mapped, initialized, word-aligned forwarding header word, which
+        // was written during the preceding single-threaded `CalculateForwarding` stage (separated
+        // by a scheduler stage barrier) and is read-only throughout the `Forward` tracing stage.
+        unsafe { Self::get_header_forwarding_pointer(object) }
             .unwrap_or_else(|| panic!("Object {object} does not have a forwarding pointer"))
     }
 
@@ -396,8 +441,11 @@ impl<VM: VMBinding> Lisp2Space<VM> {
                     obj,
                     to_cursor + Self::HEADER_RESERVED_IN_BYTES,
                 );
-                // update forwarding pointer
-                Self::store_header_forwarding_pointer(obj, new_obj);
+                // SAFETY: `obj` was discovered in an allocated region of `self.pr` (so its
+                // `HEADER_RESERVED_IN_BYTES` prefix is mapped and word-aligned), and
+                // `calculate_forwarding_pointer` runs in a single `CalculateForwardingAddress`
+                // work packet during the STW `CalculateForwarding` stage.
+                unsafe { Self::store_header_forwarding_pointer(obj, new_obj) };
                 trace!(
                     "Calculate forward: {} (size when copied = {}) ~> {} (size = {})",
                     obj,
@@ -420,11 +468,18 @@ impl<VM: VMBinding> Lisp2Space<VM> {
                 // clear the VO bit
                 vo_bit::unset_vo_bit(obj);
 
-                let maybe_forwarding_pointer = Self::get_header_forwarding_pointer(obj);
+                // SAFETY: `obj` is in an allocated region of `self.pr` with a mapped, initialized,
+                // word-aligned forwarding header word, and `compact` runs in a single STW `Compact`
+                // work packet.
+                let maybe_forwarding_pointer = unsafe { Self::get_header_forwarding_pointer(obj) };
                 if let Some(forwarding_pointer) = maybe_forwarding_pointer {
                     trace!("Compact {} to {}", obj, forwarding_pointer);
                     let new_object = forwarding_pointer;
-                    Self::clear_header_forwarding_pointer(new_object);
+                    // SAFETY: `new_object` was placed inside an allocated region of `self.pr` at
+                    // `to_cursor + Self::HEADER_RESERVED_IN_BYTES <= obj.to_object_start::<VM>() + Self::HEADER_RESERVED_IN_BYTES`,
+                    // and `obj`'s forwarding pointer has already been read above, so this single
+                    // `Compact` worker has exclusive write access to `new_object`'s header prefix.
+                    unsafe { Self::clear_header_forwarding_pointer(new_object) };
 
                     // copy object
                     trace!(" copy from {} to {}", obj, new_object);

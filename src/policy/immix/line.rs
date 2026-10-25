@@ -1,4 +1,5 @@
 use std::ops::Range;
+use std::sync::atomic::AtomicU8;
 
 use super::block::Block;
 use crate::util::constants::LOG_BITS_IN_BYTE;
@@ -56,15 +57,18 @@ impl Line {
     /// Mark the line. This will update the side line mark table.
     pub fn mark(&self, state: u8) {
         debug_assert!(!super::BLOCK_ONLY);
-        unsafe {
-            Self::MARK_TABLE.store::<u8>(self.start(), state);
-        }
+        Self::MARK_TABLE.store_atomic::<u8>(self.start(), state, Ordering::Relaxed);
+    }
+
+    /// Atomically load the current line mark state.
+    pub fn get_mark_state(&self) -> u8 {
+        debug_assert!(!super::BLOCK_ONLY);
+        Self::MARK_TABLE.load_atomic::<u8>(self.start(), Ordering::Relaxed)
     }
 
     /// Test line mark state.
     pub fn is_marked(&self, state: u8) -> bool {
-        debug_assert!(!super::BLOCK_ONLY);
-        unsafe { Self::MARK_TABLE.load::<u8>(self.start()) == state }
+        self.get_mark_state() == state
     }
 
     /// Mark all lines the object is spanned to.
@@ -94,12 +98,11 @@ impl Line {
     /// conservatively consider all objects allocated in the line range as live, and the mutator
     /// doesn't need to explicitly mark bump-allocated objects in the fast path.
     pub fn initialize_mark_table_as_marked<VM: VMBinding>(lines: Range<Line>) {
-        let meta = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec();
-        let start: *mut u8 = address_to_meta_address(meta, lines.start.start()).to_mut_ptr();
-        let limit: *mut u8 = address_to_meta_address(meta, lines.end.start()).to_mut_ptr();
-        unsafe {
-            let bytes = limit.offset_from(start) as usize;
-            std::ptr::write_bytes(start, 0xffu8, bytes);
+        if lines.start < lines.end {
+            let bytes = lines.end.start() - lines.start.start();
+            VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
+                .extract_side_spec()
+                .bset_metadata(lines.start.start(), bytes);
         }
     }
 
@@ -130,150 +133,61 @@ impl Line {
     }
 
     pub fn clear_field_unlog_table<VM: VMBinding>(lines: Range<Line>) {
-        let unlog_bit = *VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
-            .as_spec()
-            .extract_side_spec();
-        let log_meta_bits_per_line = const {
-            Line::LOG_BYTES + LOG_BITS_IN_BYTE as usize
-                - VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC.log_heap_bytes_per_unlog_byte()
-        };
-        debug_assert!((1 << log_meta_bits_per_line) >= 8);
-        let log_meta_bytes_per_line = log_meta_bits_per_line - LOG_BITS_IN_BYTE as usize;
-        // FIXME: Performance
-        let start = lines.start.start();
-        let meta_start = address_to_meta_address(&unlog_bit, start);
-        let meta_bytes =
-            Line::steps_between(&lines.start, &lines.end).unwrap() << log_meta_bytes_per_line;
-        crate::util::memory::zero(meta_start, meta_bytes)
+        if lines.start < lines.end {
+            let bytes = lines.end.start() - lines.start.start();
+            VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
+                .as_spec()
+                .extract_side_spec()
+                .bzero_metadata(lines.start.start(), bytes);
+        }
     }
 
     pub fn initialize_field_unlog_table_as_unlogged<VM: VMBinding>(lines: Range<Line>) {
-        let unlog_bit = *VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
-            .as_spec()
-            .extract_side_spec();
-        let log_meta_bits_per_line = const {
-            Line::LOG_BYTES + LOG_BITS_IN_BYTE as usize
-                - VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC.log_heap_bytes_per_unlog_byte()
-        };
-        debug_assert!((1 << log_meta_bits_per_line) >= 8);
-        let log_meta_bytes_per_line = log_meta_bits_per_line - LOG_BITS_IN_BYTE as usize;
-        // FIXME: Performance
-        let start = lines.start.start();
-        let meta_start = address_to_meta_address(&unlog_bit, start);
-        let meta_bytes =
-            Line::steps_between(&lines.start, &lines.end).unwrap() << log_meta_bytes_per_line;
-        unsafe {
-            std::ptr::write_bytes::<u8>(meta_start.to_mut_ptr(), 0xffu8, meta_bytes);
+        if lines.start < lines.end {
+            let bytes = lines.end.start() - lines.start.start();
+            VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
+                .as_spec()
+                .extract_side_spec()
+                .bset_metadata(lines.start.start(), bytes);
         }
-    }
-}
-
-// type UInt<const BITS: usize> =
-
-pub trait UintType: 'static + Sized {
-    type Type: 'static + Sized + Copy + Eq + PartialEq;
-    fn is_zero(v: Self::Type) -> bool;
-}
-
-pub struct Uint<const BITS: usize> {}
-
-impl UintType for Uint<8> {
-    type Type = u8;
-    fn is_zero(v: Self::Type) -> bool {
-        v == 0
-    }
-}
-
-impl UintType for Uint<16> {
-    type Type = u16;
-    fn is_zero(v: Self::Type) -> bool {
-        v == 0
-    }
-}
-
-impl UintType for Uint<32> {
-    type Type = u32;
-    fn is_zero(v: Self::Type) -> bool {
-        v == 0
-    }
-}
-
-impl UintType for Uint<64> {
-    type Type = u64;
-    fn is_zero(v: Self::Type) -> bool {
-        v == 0
-    }
-}
-
-impl UintType for Uint<128> {
-    type Type = u128;
-    fn is_zero(v: Self::Type) -> bool {
-        v == 0
-    }
-}
-
-#[repr(transparent)]
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub struct UInt256([u8; 256 / 8]);
-
-impl UintType for Uint<256> {
-    type Type = UInt256;
-    fn is_zero(v: Self::Type) -> bool {
-        v == UInt256([0; 256 / 8])
-    }
-}
-
-#[repr(transparent)]
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub struct UInt512([u8; 512 / 8]);
-
-impl UintType for Uint<512> {
-    type Type = UInt512;
-    fn is_zero(v: Self::Type) -> bool {
-        v == UInt512([0; 512 / 8])
-    }
-}
-
-#[repr(transparent)]
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub struct UInt1024([u8; 1024 / 8]);
-
-impl UintType for Uint<1024> {
-    type Type = UInt1024;
-    fn is_zero(v: Self::Type) -> bool {
-        v == UInt1024([0; 1024 / 8])
-    }
-}
-
-#[repr(transparent)]
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub struct UInt2048([u8; 2048 / 8]);
-
-impl UintType for Uint<2048> {
-    type Type = UInt2048;
-    fn is_zero(v: Self::Type) -> bool {
-        v == UInt2048([0; 2048 / 8])
     }
 }
 
 const LOG_BITS_PER_LINE: usize = Line::LOG_BYTES - rc::LOG_MIN_OBJECT_SIZE + rc::LOG_REF_COUNT_BITS;
 const BITS_PER_LINE: usize = 1 << LOG_BITS_PER_LINE;
-const LOG_BITS_PER_BLOCK: usize =
-    Block::LOG_BYTES - rc::LOG_MIN_OBJECT_SIZE + rc::LOG_REF_COUNT_BITS;
-const BITS_PER_BLOCK: usize = 1 << LOG_BITS_PER_BLOCK;
+const BYTES_PER_LINE: usize = BITS_PER_LINE >> LOG_BITS_IN_BYTE as usize;
+const _: () = assert!(BITS_PER_LINE >= 8 && BITS_PER_LINE % 8 == 0);
 
-pub struct RCArray {
-    table: &'static [<Uint<{ BITS_PER_LINE }> as UintType>::Type; BITS_PER_BLOCK / BITS_PER_LINE],
+pub(super) struct RCArray<'a> {
+    table: &'a [[AtomicU8; BYTES_PER_LINE]; Block::LINES],
 }
 
-impl RCArray {
-    pub fn of(block: Block) -> Self {
+impl RCArray<'_> {
+    /// Borrow the `RC_TABLE` metadata bytes for `block` as an array of `AtomicU8` per line.
+    ///
+    /// # Safety
+    /// - `crate::util::rc::RC_TABLE` side metadata must be mapped for `[block.start(), block.end())`.
+    /// - No thread may perform non-atomic writes (`store`, `store_byte_relaxed`, `bzero_metadata`,
+    ///   `bset_metadata`) to `RC_TABLE` for `block` for the lifetime `'a` of the returned `RCArray`
+    ///   (concurrent atomic `RC_TABLE` updates via `AtomicU8` are sound).
+    pub(super) unsafe fn of(block: Block) -> Self {
+        debug_assert!(crate::util::rc::RC_TABLE.is_mapped(block.start()));
+        let ptr = block
+            .rc_table_start()
+            .to_ptr::<[[AtomicU8; BYTES_PER_LINE]; Block::LINES]>();
         Self {
-            table: unsafe { &*block.rc_table_start().to_ptr() },
+            // SAFETY: `ptr` has alignment 1 (`align_of::<AtomicU8>() == 1`), `RC_TABLE` is global
+            // contiguous side metadata whose `[block.start(), block.end())` bytes are mapped and
+            // zero-initialized by `MMAPPER`, and caller guarantees no concurrent non-atomic writes
+            // for lifetime `'a`.
+            table: unsafe { &*ptr },
         }
     }
 
-    pub fn is_dead(&self, i: usize) -> bool {
-        <Uint<{ BITS_PER_LINE }> as UintType>::is_zero(self.table[i])
+    pub(super) fn is_dead(&self, i: usize) -> bool {
+        self.table[i]
+            .iter()
+            .fold(0u8, |acc, byte| acc | byte.load(Ordering::Relaxed))
+            == 0
     }
 }

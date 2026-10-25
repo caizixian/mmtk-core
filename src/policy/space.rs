@@ -338,6 +338,20 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         }
 
         if new_chunk {
+            assert!(start.as_usize().checked_add(bytes).is_some());
+            if bytes > 0 {
+                let first_chunk = start.chunk_index();
+                let last_chunk = (start + (bytes - 1)).chunk_index();
+                for chunk_idx in first_chunk..=last_chunk {
+                    assert!(SFT_MAP.has_sft_entry(conversions::chunk_index_to_address(chunk_idx)));
+                }
+            }
+            // SAFETY: `self` is a heap-pinned `Space` inside `'static MMTK<VM>` registered via
+            // `notify_space_creation` during `Plan::initialize_sft` (Stage-1 cross-slice `Space`
+            // lifecycle contract), side metadata (if required by `SFT_MAP`) was mapped before
+            // `grow_space()` in `get_new_pages_and_initialize`, `start + bytes` was checked not to
+            // overflow, and every chunk in `[start, start + bytes)` was asserted above to satisfy
+            // `has_sft_entry`.
             unsafe { SFT_MAP.update(self.as_sft(), start, bytes) };
         }
     }
@@ -603,7 +617,7 @@ impl<VM: VMBinding> CommonSpace<VM> {
             contiguous: true,
             permission_exec: args.plan_args.permission_exec,
             zeroed: args.plan_args.zeroed,
-            start: unsafe { Address::zero() },
+            start: Address::ZERO,
             extent: 0,
             vm_map: args.plan_args.vm_map,
             mmapper: args.plan_args.mmapper,
@@ -786,6 +800,11 @@ impl<VM: VMBinding> CommonSpace<VM> {
         // * change grow_space() so it sets SFT no matter what the new_chunks value is.
         // FIXME: eagerly initializing SFT is not a good idea.
         if self.contiguous {
+            // SAFETY: `CommonSpace::initialize_sft` is called from `Space::initialize_sft` during
+            // `MMTK::new` -> `Plan::initialize_sft`, after `Plan` (and `sft`) is permanently boxed
+            // on the heap for the `'static` lifetime of `MMTK` and registered via
+            // `sft_map.notify_space_creation`, and `[self.start, self.start + self.extent)` was
+            // quarantined within MMTk's contiguous heap virtual address range.
             unsafe { sft_map.eager_initialize(sft, self.start, self.extent) };
         }
     }

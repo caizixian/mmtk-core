@@ -2,8 +2,6 @@
 
 use atomic::Ordering;
 
-use super::BlockList;
-use super::MarkSweepSpace;
 use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::heap::chunk_map::*;
 use crate::util::linear_scan::Region;
@@ -41,11 +39,15 @@ impl Region for Block {
 
     fn from_aligned_address(address: Address) -> Self {
         debug_assert!(address.is_aligned_to(Self::BYTES));
-        debug_assert!(!address.is_zero());
-        Self(unsafe { NonZeroUsize::new_unchecked(address.as_usize()) })
+        Self(
+            NonZeroUsize::new(address.as_usize())
+                .expect("native_ms::Block address must be non-zero"),
+        )
     }
 
     fn start(&self) -> Address {
+        // SAFETY: `Address::from_usize` wraps the raw integer address without Rust-level UB;
+        // `self.0` holds the non-zero aligned block start address stored at construction.
         unsafe { Address::from_usize(self.0.get()) }
     }
 }
@@ -104,35 +106,80 @@ impl Block {
     pub const TLS_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::MS_BLOCK_TLS;
 
-    pub fn load_free_list(&self) -> Address {
+    /// Load the head cell address of this block's free list.
+    ///
+    /// # Safety
+    /// `self` must belong to an allocated `MarkSweepSpace` chunk with mapped `FREE_LIST_TABLE`
+    /// side metadata, and no other thread may concurrently write to `self`'s `FREE_LIST_TABLE`
+    /// entry.
+    pub unsafe fn load_free_list(&self) -> Address {
+        // SAFETY: Caller guarantees `FREE_LIST_TABLE` is mapped for `self.start()` with no
+        // concurrent writes; `Address::from_usize` wraps the raw free-list address value.
         unsafe { Address::from_usize(Block::FREE_LIST_TABLE.load::<usize>(self.start())) }
     }
 
-    pub fn store_free_list(&self, free_list: Address) {
+    /// Store the head cell address of this block's free list.
+    ///
+    /// # Safety
+    /// `self` must belong to an allocated `MarkSweepSpace` chunk with mapped `FREE_LIST_TABLE`
+    /// side metadata, and the caller must have exclusive access to `self`'s `FREE_LIST_TABLE`
+    /// entry.
+    pub unsafe fn store_free_list(&self, free_list: Address) {
+        // SAFETY: Caller guarantees `FREE_LIST_TABLE` is mapped for `self.start()` and
+        // exclusively accessed by this thread.
         unsafe { Block::FREE_LIST_TABLE.store::<usize>(self.start(), free_list.as_usize()) }
     }
 
+    /// Load the head cell address of this block's thread-local free list.
+    ///
+    /// # Safety
+    /// `self` must belong to an allocated `MarkSweepSpace` chunk with mapped
+    /// `LOCAL_FREE_LIST_TABLE` side metadata, and no other thread may concurrently write to
+    /// `self`'s `LOCAL_FREE_LIST_TABLE` entry.
     #[cfg(feature = "malloc_native_mimalloc")]
-    pub fn load_local_free_list(&self) -> Address {
+    pub unsafe fn load_local_free_list(&self) -> Address {
+        // SAFETY: Caller guarantees `LOCAL_FREE_LIST_TABLE` is mapped for `self.start()` with no
+        // concurrent writes; `Address::from_usize` wraps the raw free-list address value.
         unsafe { Address::from_usize(Block::LOCAL_FREE_LIST_TABLE.load::<usize>(self.start())) }
     }
 
+    /// Store the head cell address of this block's thread-local free list.
+    ///
+    /// # Safety
+    /// `self` must belong to an allocated `MarkSweepSpace` chunk with mapped
+    /// `LOCAL_FREE_LIST_TABLE` side metadata, and the caller must have exclusive access to
+    /// `self`'s `LOCAL_FREE_LIST_TABLE` entry.
     #[cfg(feature = "malloc_native_mimalloc")]
-    pub fn store_local_free_list(&self, local_free: Address) {
+    pub unsafe fn store_local_free_list(&self, local_free: Address) {
+        // SAFETY: Caller guarantees `LOCAL_FREE_LIST_TABLE` is mapped for `self.start()` and
+        // exclusively accessed by this thread.
         unsafe { Block::LOCAL_FREE_LIST_TABLE.store::<usize>(self.start(), local_free.as_usize()) }
     }
 
+    /// Atomically load the head cell address of this block's cross-thread free list.
+    ///
+    /// # Safety
+    /// `self` must belong to an allocated `MarkSweepSpace` chunk with mapped
+    /// `THREAD_FREE_LIST_TABLE` side metadata, and any concurrent accesses to `self`'s
+    /// `THREAD_FREE_LIST_TABLE` entry must also be atomic.
     #[cfg(feature = "malloc_native_mimalloc")]
-    pub fn load_thread_free_list(&self) -> Address {
-        unsafe {
-            Address::from_usize(
-                Block::THREAD_FREE_LIST_TABLE.load_atomic::<usize>(self.start(), Ordering::SeqCst),
-            )
-        }
+    pub unsafe fn load_thread_free_list(&self) -> Address {
+        let raw =
+            Block::THREAD_FREE_LIST_TABLE.load_atomic::<usize>(self.start(), Ordering::SeqCst);
+        // SAFETY: `Address::from_usize` wraps the loaded raw free-list address value.
+        unsafe { Address::from_usize(raw) }
     }
 
+    /// Non-atomically initialize or store the head cell address of this block's cross-thread free list.
+    ///
+    /// # Safety
+    /// `self` must belong to an allocated `MarkSweepSpace` chunk with mapped
+    /// `THREAD_FREE_LIST_TABLE` side metadata, and the caller must have exclusive access to
+    /// `self`'s `THREAD_FREE_LIST_TABLE` entry (no concurrent reads or writes).
     #[cfg(feature = "malloc_native_mimalloc")]
-    pub fn store_thread_free_list(&self, thread_free: Address) {
+    pub unsafe fn store_thread_free_list(&self, thread_free: Address) {
+        // SAFETY: Caller guarantees `THREAD_FREE_LIST_TABLE` is mapped for `self.start()` and
+        // exclusively accessed by this thread.
         unsafe {
             Block::THREAD_FREE_LIST_TABLE.store::<usize>(self.start(), thread_free.as_usize())
         }
@@ -151,76 +198,140 @@ impl Block {
             .is_ok()
     }
 
-    pub fn load_prev_block(&self) -> Option<Block> {
+    /// Load the previous `Block` link from `PREV_BLOCK_TABLE`.
+    ///
+    /// # Safety
+    /// `self` must belong to an allocated `MarkSweepSpace` chunk with mapped `PREV_BLOCK_TABLE`
+    /// side metadata, and no other thread may concurrently write to `self`'s `PREV_BLOCK_TABLE`
+    /// entry.
+    pub unsafe fn load_prev_block(&self) -> Option<Block> {
+        // SAFETY: Caller guarantees `PREV_BLOCK_TABLE` is mapped for `self.start()` with no
+        // concurrent writes.
         let prev = unsafe { Block::PREV_BLOCK_TABLE.load::<usize>(self.start()) };
         NonZeroUsize::new(prev).map(Block)
     }
 
-    pub fn load_next_block(&self) -> Option<Block> {
+    /// Load the next `Block` link from `NEXT_BLOCK_TABLE`.
+    ///
+    /// # Safety
+    /// `self` must belong to an allocated `MarkSweepSpace` chunk with mapped `NEXT_BLOCK_TABLE`
+    /// side metadata, and no other thread may concurrently write to `self`'s `NEXT_BLOCK_TABLE`
+    /// entry.
+    pub unsafe fn load_next_block(&self) -> Option<Block> {
+        // SAFETY: Caller guarantees `NEXT_BLOCK_TABLE` is mapped for `self.start()` with no
+        // concurrent writes.
         let next = unsafe { Block::NEXT_BLOCK_TABLE.load::<usize>(self.start()) };
         NonZeroUsize::new(next).map(Block)
     }
 
-    pub fn store_next_block(&self, next: Block) {
+    /// Store `next` into `self`'s `NEXT_BLOCK_TABLE` link.
+    ///
+    /// # Safety
+    /// `self` must belong to an allocated `MarkSweepSpace` chunk with mapped `NEXT_BLOCK_TABLE`
+    /// side metadata, and the caller must have exclusive access to `self`'s `NEXT_BLOCK_TABLE`
+    /// entry.
+    pub unsafe fn store_next_block(&self, next: Block) {
+        // SAFETY: Caller guarantees `NEXT_BLOCK_TABLE` is mapped for `self.start()` and
+        // exclusively accessed by this thread.
         unsafe {
             Block::NEXT_BLOCK_TABLE.store::<usize>(self.start(), next.start().as_usize());
         }
     }
 
-    pub fn clear_next_block(&self) {
+    /// Clear `self`'s `NEXT_BLOCK_TABLE` link to `None` (`0`).
+    ///
+    /// # Safety
+    /// `self` must belong to an allocated `MarkSweepSpace` chunk with mapped `NEXT_BLOCK_TABLE`
+    /// side metadata, and the caller must have exclusive access to `self`'s `NEXT_BLOCK_TABLE`
+    /// entry.
+    pub unsafe fn clear_next_block(&self) {
+        // SAFETY: Caller guarantees `NEXT_BLOCK_TABLE` is mapped for `self.start()` and
+        // exclusively accessed by this thread.
         unsafe {
             Block::NEXT_BLOCK_TABLE.store::<usize>(self.start(), 0);
         }
     }
 
-    pub fn store_prev_block(&self, prev: Block) {
+    /// Store `prev` into `self`'s `PREV_BLOCK_TABLE` link.
+    ///
+    /// # Safety
+    /// `self` must belong to an allocated `MarkSweepSpace` chunk with mapped `PREV_BLOCK_TABLE`
+    /// side metadata, and the caller must have exclusive access to `self`'s `PREV_BLOCK_TABLE`
+    /// entry.
+    pub unsafe fn store_prev_block(&self, prev: Block) {
+        // SAFETY: Caller guarantees `PREV_BLOCK_TABLE` is mapped for `self.start()` and
+        // exclusively accessed by this thread.
         unsafe {
             Block::PREV_BLOCK_TABLE.store::<usize>(self.start(), prev.start().as_usize());
         }
     }
 
-    pub fn clear_prev_block(&self) {
+    /// Clear `self`'s `PREV_BLOCK_TABLE` link to `None` (`0`).
+    ///
+    /// # Safety
+    /// `self` must belong to an allocated `MarkSweepSpace` chunk with mapped `PREV_BLOCK_TABLE`
+    /// side metadata, and the caller must have exclusive access to `self`'s `PREV_BLOCK_TABLE`
+    /// entry.
+    pub unsafe fn clear_prev_block(&self) {
+        // SAFETY: Caller guarantees `PREV_BLOCK_TABLE` is mapped for `self.start()` and
+        // exclusively accessed by this thread.
         unsafe {
             Block::PREV_BLOCK_TABLE.store::<usize>(self.start(), 0);
         }
-    }
-
-    pub fn store_block_list(&self, block_list: &BlockList) {
-        let block_list_usize: usize = block_list as *const BlockList as usize;
-        unsafe {
-            Block::BLOCK_LIST_TABLE.store::<usize>(self.start(), block_list_usize);
-        }
-    }
-
-    pub fn load_block_list(&self) -> *mut BlockList {
-        let block_list =
-            Block::BLOCK_LIST_TABLE.load_atomic::<usize>(self.start(), Ordering::SeqCst);
-        block_list as *mut BlockList
     }
 
     pub fn load_block_cell_size(&self) -> usize {
         Block::SIZE_TABLE.load_atomic::<usize>(self.start(), Ordering::SeqCst)
     }
 
-    pub fn store_block_cell_size(&self, size: usize) {
+    /// Store the cell size (in bytes) for this block.
+    ///
+    /// # Safety
+    /// `self` must belong to an allocated `MarkSweepSpace` chunk with mapped `SIZE_TABLE` side
+    /// metadata, and the caller must have exclusive access to `self`'s `SIZE_TABLE` entry.
+    pub unsafe fn store_block_cell_size(&self, size: usize) {
         debug_assert_ne!(size, 0);
+        // SAFETY: Caller guarantees `SIZE_TABLE` is mapped for `self.start()` and exclusively
+        // accessed by this thread.
         unsafe { Block::SIZE_TABLE.store::<usize>(self.start(), size) }
     }
 
-    pub fn store_tls(&self, tls: VMThread) {
+    /// Store the owning mutator `VMThread` into `TLS_TABLE`.
+    ///
+    /// # Safety
+    /// `self` must belong to an allocated `MarkSweepSpace` chunk with mapped `TLS_TABLE` side
+    /// metadata, and the caller must have exclusive access to `self`'s `TLS_TABLE` entry.
+    pub unsafe fn store_tls(&self, tls: VMThread) {
         let tls_usize: usize = tls.0.to_address().as_usize();
+        // SAFETY: Caller guarantees `TLS_TABLE` is mapped for `self.start()` and exclusively
+        // accessed by this thread.
         unsafe { Block::TLS_TABLE.store(self.start(), tls_usize) }
     }
 
-    pub fn load_tls(&self) -> VMThread {
+    /// Load the owning mutator `VMThread` from `TLS_TABLE`.
+    ///
+    /// # Safety
+    /// `self` must belong to an allocated `MarkSweepSpace` chunk with mapped `TLS_TABLE` side
+    /// metadata, and any concurrent accesses to `self`'s `TLS_TABLE` entry must be atomic.
+    pub unsafe fn load_tls(&self) -> VMThread {
         let tls = Block::TLS_TABLE.load_atomic::<usize>(self.start(), Ordering::SeqCst);
+        // SAFETY: `Address::from_usize` wraps the raw `VMThread` opaque pointer value previously
+        // stored via `store_tls`.
         VMThread(OpaquePointer::from_address(unsafe {
             Address::from_usize(tls)
         }))
     }
 
-    pub fn has_free_cells(&self) -> bool {
-        !self.load_free_list().is_zero()
+    /// Return `true` if this block's free list is non-empty.
+    ///
+    /// # Safety
+    /// `self` must belong to an allocated `MarkSweepSpace` chunk with mapped `FREE_LIST_TABLE`
+    /// side metadata, and no other thread may concurrently write to `self`'s `FREE_LIST_TABLE`
+    /// entry.
+    pub unsafe fn has_free_cells(&self) -> bool {
+        // SAFETY: Caller guarantees `FREE_LIST_TABLE` is mapped for `self` with no concurrent
+        // writes.
+        !unsafe { self.load_free_list() }.is_zero()
     }
 
     /// Get block mark state.
@@ -235,26 +346,16 @@ impl Block {
         Self::MARK_TABLE.store_atomic::<u8>(self.start(), state, Ordering::SeqCst);
     }
 
-    /// Release this block if it is unmarked. Return true if the block is released.
-    pub fn attempt_release<VM: VMBinding>(self, space: &MarkSweepSpace<VM>) -> bool {
-        match self.get_state() {
-            // We should not have unallocated blocks in a block list
-            BlockState::Unallocated => unreachable!(),
-            BlockState::Unmarked => {
-                let block_list = self.load_block_list();
-                unsafe { &mut *block_list }.remove(self);
-                space.release_block(self);
-                true
-            }
-            BlockState::Marked => {
-                // The block is live.
-                false
-            }
-        }
-    }
-
     /// Sweep the block. This is done either lazily in the allocation phase, or eagerly at the end of a GC.
-    pub fn sweep<VM: VMBinding>(&self) {
+    ///
+    /// # Safety
+    /// - `self` must be an initialized `MarkSweepSpace` block whose data pages `[self.start(), self.end())`
+    ///   and local metadata (`SIZE_TABLE`, `FREE_LIST_TABLE`, `LOCAL_MARK_BIT_SPEC`, and `VO_BIT` if
+    ///   enabled) are mapped, with a valid word-aligned non-zero cell size stored in `SIZE_TABLE`.
+    /// - The caller must have exclusive access to `self`'s free-list metadata and unmarked cells
+    ///   (no mutator or other GC worker may concurrently allocate from, sweep, or access unmarked
+    ///   cells in `self`).
+    pub unsafe fn sweep<VM: VMBinding>(&self) {
         // The important point here is that we need to distinguish cell address, allocation address, and object reference.
         // We only know cell addresses here. We do not know the allocation address, and we also do not know the object reference.
         // The mark bit is set for object references, and we need to use the mark bit to decide whether a cell is live or not.
@@ -277,25 +378,35 @@ impl Block {
             && VM::VMObjectModel::UNIFIED_OBJECT_REFERENCE_ADDRESS
         {
             // In this case, we can use the simplest and the most efficicent sweep.
-            self.simple_sweep::<VM>()
+            // SAFETY: Caller upholds all `sweep` preconditions, and the `if` condition proves
+            // cell start addresses equal object reference addresses for `VM`.
+            unsafe { self.simple_sweep::<VM>() }
         } else {
             // Otherwise we fallback to a generic but slow sweep. This roughly has ~10% mutator overhead for lazy sweeping.
-            self.naive_brute_force_sweep::<VM>()
+            // SAFETY: Caller upholds all `sweep` preconditions for `self`.
+            unsafe { self.naive_brute_force_sweep::<VM>() }
         }
     }
 
     /// This implementation uses object reference and cell address interchangably. This is not correct for most cases.
     /// However, in certain cases, such as OpenJDK, this is correct, and efficient. See the sweep method for the invariants
     /// that we need to use this method correctly.
-    fn simple_sweep<VM: VMBinding>(&self) {
+    ///
+    /// # Safety
+    /// Same preconditions as [`Self::sweep`], plus `VM` must satisfy cell-address === object-reference
+    /// (`!VM::USE_ALLOCATION_OFFSET`, `VM::MAX_ALIGNMENT == VM::MIN_ALIGNMENT`, cell size aligned to
+    /// `VM::MAX_ALIGNMENT`, and `VM::VMObjectModel::UNIFIED_OBJECT_REFERENCE_ADDRESS`).
+    unsafe fn simple_sweep<VM: VMBinding>(&self) {
         let cell_size = self.load_block_cell_size();
         debug_assert_ne!(cell_size, 0);
         let mut cell = self.start();
-        let mut last = unsafe { Address::zero() };
+        let mut last = Address::ZERO;
         while cell + cell_size <= self.start() + Block::BYTES {
             // The invariants we checked earlier ensures that we can use cell and object reference interchangably
             // We may not really have an object in this cell, but if we do, this object reference is correct.
-            // About unsafe: We know `cell` is non-zero here.
+            // SAFETY: `self.start()` is non-zero (`Block(NonZeroUsize)`) and `cell >= self.start()`
+            // without wrapping (`cell + cell_size <= self.end()`), so `cell` is non-zero and lies
+            // within this allocated `MarkSweepSpace` block with mapped mark-bit metadata.
             let potential_object = unsafe { ObjectReference::from_raw_address_unchecked(cell) };
 
             if !VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
@@ -305,6 +416,10 @@ impl Block {
                 // we unset the bit anyway.
                 #[cfg(feature = "vo_bit")]
                 crate::util::metadata::vo_bit::unset_vo_bit_nocheck(potential_object);
+                // SAFETY: `cell` is word-aligned (`self.start()` is 64KB-aligned and `cell_size` is a
+                // multiple of `BYTES_IN_ADDRESS`), within mapped block memory `[self.start(), self.end())`,
+                // `cell_size >= BYTES_IN_ADDRESS`, and this unmarked cell is dead and exclusively
+                // owned by the sweeping thread.
                 unsafe {
                     cell.store::<Address>(last);
                 }
@@ -313,14 +428,18 @@ impl Block {
             cell += cell_size;
         }
 
-        self.store_free_list(last);
+        // SAFETY: Caller guarantees exclusive access to `self`'s mapped `FREE_LIST_TABLE` entry.
+        unsafe { self.store_free_list(last) };
     }
 
     /// This is a naive implementation that is inefficient but should be correct.
     /// In this implementation, we simply go through each possible object
     /// reference and see if it has the mark bit set. If we find mark bit, that means the cell is alive. If we didn't find
     /// the mark bit in the entire cell, it means the cell is dead.
-    fn naive_brute_force_sweep<VM: VMBinding>(&self) {
+    ///
+    /// # Safety
+    /// Same preconditions as [`Self::sweep`].
+    unsafe fn naive_brute_force_sweep<VM: VMBinding>(&self) {
         use crate::util::constants::MIN_OBJECT_SIZE;
 
         // Cell size for this block.
@@ -336,8 +455,9 @@ impl Block {
 
         while cell + cell_size <= self.end() {
             // possible object ref
+            // SAFETY: `cursor >= self.start() > 0` and adding `OBJECT_REF_OFFSET_LOWER_BOUND` stays
+            // non-zero within the allocated block/chunk whose mark-bit metadata is mapped.
             let potential_object_ref = unsafe {
-                // We know cursor plus an offset cannot be 0.
                 ObjectReference::from_raw_address_unchecked(
                     cursor + VM::VMObjectModel::OBJECT_REF_OFFSET_LOWER_BOUND,
                 )
@@ -376,6 +496,11 @@ impl Block {
 
                     // store the previous cell to make the free list
                     debug_assert!(last.is_zero() || (last >= self.start() && last < self.end()));
+                    // SAFETY: `cell` is word-aligned (`self.start()` is 64KB-aligned and `cell_size`
+                    // is a multiple of `BYTES_IN_ADDRESS`), within mapped block memory
+                    // `[self.start(), self.end())`, `cell_size >= BYTES_IN_ADDRESS`, and no mark bit
+                    // was set anywhere in `[cell, cell + cell_size)`, so the cell is dead and
+                    // exclusively owned by the sweeping thread.
                     unsafe {
                         cell.store::<Address>(last);
                     }
@@ -386,7 +511,8 @@ impl Block {
             }
         }
 
-        self.store_free_list(last);
+        // SAFETY: Caller guarantees exclusive access to `self`'s mapped `FREE_LIST_TABLE` entry.
+        unsafe { self.store_free_list(last) };
     }
 
     /// Get the chunk containing the block.

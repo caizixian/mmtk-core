@@ -6,8 +6,7 @@ use crate::util::heap::gc_trigger::GCTrigger;
 use crate::util::options::Options;
 use crate::MMTK;
 
-use std::cell::RefCell;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 
 use crate::policy::space::Space;
@@ -80,53 +79,61 @@ impl AllocationOptions {
     }
 }
 
-/// A wrapper for [`AllocatorContext`] to hold a [`AllocationOptions`] that can be modified by the
-/// same mutator thread.
+/// A wrapper for [`AllocatorContext`] to hold an [`AllocationOptions`] that can be modified by the
+/// same mutator or GC worker thread.
 ///
-/// All [`Allocator`] instances in `Allocators` share one `AllocationOptions` instance, and it will
-/// only be accessed by the mutator (via `Mutator::allocators`) or the GC worker (via
-/// `GCWorker::copy`) that owns it.  Rust doesn't like multiple mutable references pointing to a
-/// shared data structure.  We cannot use [`atomic::Atomic`] because `AllocationOptions` has
-/// multiple fields. We wrap it in a `RefCell` to make it internally mutable.
-///
-/// Note: The allocation option is called every time [`Allocator::alloc_with_options`] is called.
-/// Because API functions should only be called on allocation slow paths, we believe that `RefCell`
-/// should be good enough for performance.  If this is too slow, we may consider `UnsafeCell`.  If
-/// that's still too slow, we should consider changing the API to make the allocation options a
-/// persistent per-mutator value, and allow the VM binding set its value via a new API function.
+/// All [`Allocator`] instances in `Allocators` share one `AllocationOptions` instance via
+/// `Arc<AllocatorContext>`, which requires `AllocationOptionsHolder` to be `Sync` so `Mutator` and
+/// `GCWorker` remain `Send`. Because `AllocationOptions` consists solely of three `bool` flags,
+/// packing them into an `AtomicU8` provides lock-free interior mutability and unconditional `Sync`
+/// without `RefCell` borrow checks or `unsafe impl Sync`.
 struct AllocationOptionsHolder {
-    alloc_options: RefCell<AllocationOptions>,
+    bits: AtomicU8,
 }
 
-/// Strictly speaking, `AllocationOptionsHolder` isn't `Sync`.  Two threads cannot set or clear the
-/// same `AllocationOptionsHolder` at the same time.  However, both `Mutator` and `GCWorker` are
-/// `Send`, and both of which own `Allocators` and require its field `Arc<AllocationContext>` to be
-/// `Send`, which requires `AllocationContext` to be `Sync`, which requires
-/// `AllocationOptionsHolder` to be `Sync`.  (Note that `Arc<T>` can be cloned and given to another
-/// thread, and Rust expects `T` to be `Sync`, too.  But we never share `AllocationContext` between
-/// threads, but only between multiple `Allocator` instances within the same `Allocators` instance.
-/// Rust can't figure this out.)
-unsafe impl Sync for AllocationOptionsHolder {}
-
 impl AllocationOptionsHolder {
-    pub fn new(alloc_options: AllocationOptions) -> Self {
-        Self {
-            alloc_options: RefCell::new(alloc_options),
+    const ALLOW_OVERCOMMIT: u8 = 1 << 0;
+    const AT_SAFEPOINT: u8 = 1 << 1;
+    const ALLOW_OOM_CALL: u8 = 1 << 2;
+
+    const fn pack(options: AllocationOptions) -> u8 {
+        let mut bits = 0;
+        if options.allow_overcommit {
+            bits |= Self::ALLOW_OVERCOMMIT;
+        }
+        if options.at_safepoint {
+            bits |= Self::AT_SAFEPOINT;
+        }
+        if options.allow_oom_call {
+            bits |= Self::ALLOW_OOM_CALL;
+        }
+        bits
+    }
+
+    const fn unpack(bits: u8) -> AllocationOptions {
+        AllocationOptions {
+            allow_overcommit: (bits & Self::ALLOW_OVERCOMMIT) != 0,
+            at_safepoint: (bits & Self::AT_SAFEPOINT) != 0,
+            allow_oom_call: (bits & Self::ALLOW_OOM_CALL) != 0,
         }
     }
+
+    pub fn new(alloc_options: AllocationOptions) -> Self {
+        Self {
+            bits: AtomicU8::new(Self::pack(alloc_options)),
+        }
+    }
+
     pub fn set_alloc_options(&self, options: AllocationOptions) {
-        let mut alloc_options = self.alloc_options.borrow_mut();
-        *alloc_options = options;
+        self.bits.store(Self::pack(options), Ordering::Relaxed);
     }
 
     pub fn clear_alloc_options(&self) {
-        let mut alloc_options = self.alloc_options.borrow_mut();
-        *alloc_options = AllocationOptions::default();
+        self.set_alloc_options(AllocationOptions::default());
     }
 
     pub fn get_alloc_options(&self) -> AllocationOptions {
-        let alloc_options = self.alloc_options.borrow();
-        *alloc_options
+        Self::unpack(self.bits.load(Ordering::Relaxed))
     }
 }
 
@@ -190,8 +197,13 @@ pub fn align_allocation_inner<VM: VMBinding>(
 
 /// Fill the specified region with the alignment value.
 pub fn fill_alignment_gap<VM: VMBinding>(start: Address, end: Address) {
-    if VM::ALIGNMENT_VALUE != 0 {
+    if VM::ALIGNMENT_VALUE != 0 && end > start {
         let start_ptr = start.to_mut_ptr::<u8>();
+        // SAFETY: Public API signature preserved for VM binding fastpaths (`pub fn` cannot be
+        // changed to `pub unsafe fn` without breaking crate API). All MMTk allocators and VM
+        // fastpath callers pass `[start, end)` (`start <= end`, checked `end > start` above) as the
+        // freshly carved alignment gap within the calling mutator/worker's exclusively owned mapped
+        // allocation region (`u8` requires alignment 1 and has no drop/validity invariants).
         unsafe {
             std::ptr::write_bytes(start_ptr, VM::ALIGNMENT_VALUE, end - start);
         }
@@ -248,7 +260,7 @@ pub(crate) fn assert_allocation_args<VM: VMBinding>(size: usize, align: usize, o
 /// used as `Arc<AllocatorContext>` inside all allocator implementations since
 /// we need the entire struct to be `Send`.
 ///
-/// See doc comment on `impl Sync` for `AllocationOptionsHolder` above.
+/// See doc comment on `AllocationOptionsHolder` above.
 /// See here for more information: <https://github.com/mmtk/mmtk-core/issues/1474>
 pub struct AllocatorContext<VM: VMBinding> {
     alloc_options: AllocationOptionsHolder,

@@ -128,6 +128,10 @@ impl<VM: VMBinding> Space<VM> for LockFreeImmortalSpace<VM> {
     }
 
     fn initialize_sft(&self, sft_map: &mut dyn crate::policy::sft_map::SFTMap) {
+        // SAFETY: `Space::initialize_sft` is called in `MMTK::new` -> `Plan::initialize_sft` after
+        // the `Plan` (and `self`) is boxed at a permanent heap address for the lifetime of `MMTK`
+        // and registered via `sft_map.notify_space_creation`, and `[self.start, self.start + self.total_bytes)`
+        // was reserved from `HeapMeta` in `LockFreeImmortalSpace::new`.
         unsafe { sft_map.eager_initialize(self.as_sft(), self.start, self.total_bytes) };
     }
 

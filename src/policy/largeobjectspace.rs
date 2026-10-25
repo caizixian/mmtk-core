@@ -304,10 +304,11 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
             // However, if the raw address of ObjectReference is not in the first 512 bytes, this won't work.
             // We assert this when we set VO bit for LOS.
             if vo_bit::get_raw_vo_bit_word(cur_page) != 0 {
-                // Find the exact address that has vo bit set
-                for offset in 0..vo_bit::VO_BIT_WORD_TO_REGION {
+                // Find the exact word-aligned address that has VO bit set
+                for offset in (0..vo_bit::VO_BIT_WORD_TO_REGION).step_by(ObjectReference::ALIGNMENT)
+                {
                     let addr = cur_page + offset;
-                    if unsafe { vo_bit::is_vo_addr(addr) } {
+                    if vo_bit::is_vo_bit_set_for_addr(addr).is_some() {
                         return vo_bit::is_internal_ptr_from_vo_bit::<VM>(addr, ptr);
                     }
                 }
