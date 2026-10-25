@@ -2,6 +2,7 @@
 //! designed to work well on 64-bit machines.  Currently it supports 48-bit address spaces, and many
 //! constants and data structures (such as [`Slab`]) are larger than `i32::MAX`.  For this reason,
 //! this module is only available on 64-bit machines.
+#![deny(unsafe_op_in_unsafe_fn)]
 
 use super::MapState;
 use crate::util::heap::layout::mmapper::csm::{ChunkRange, MapStateStorage};

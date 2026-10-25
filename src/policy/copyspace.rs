@@ -222,13 +222,7 @@ impl<VM: VMBinding> CopySpace<VM> {
             crate::util::metadata::vo_bit::bzero_vo_bit(start, size);
         }
 
-        // SAFETY: Called during the STW `Release` pause after all live objects in from-space
-        // have been evacuated to to-space and mutator/copy bump allocators are reset or rebound
-        // before further allocation, so no live object references or active allocators point into
-        // `self.pr`'s pages.
-        unsafe {
-            self.pr.reset();
-        }
+        self.pr.reset();
         self.from_space.store(false, Ordering::SeqCst);
     }
 

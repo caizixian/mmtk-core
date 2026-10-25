@@ -113,23 +113,14 @@ impl<VM: VMBinding> Space<VM> for VMSpace<VM> {
     }
 
     fn initialize_sft(&self, sft_map: &mut dyn crate::policy::sft_map::SFTMap) {
-        // Initialize sft for current external pages. This method is called at the end of plan creation.
-        // So we only set SFT for VM regions that are set by options (we skipped sft initialization for them earlier).
-        let vm_regions = self.pr.get_external_pages();
-        // We should have at most one region at this point (set by the option). If we allow setting multiple VM spaces through options,
-        // we can remove this assertion.
-        assert!(vm_regions.len() <= 1);
-        for external_pages in vm_regions.iter() {
-            // Chunk align things.
-            let start = external_pages.start.align_down(BYTES_IN_CHUNK);
-            let size = external_pages.end.align_up(BYTES_IN_CHUNK) - start;
-            // The region should be empty in SFT map -- if they were set before this point, there could be invalid SFT pointers.
-            debug_assert_eq!(
-                sft_map.get_checked(start).name(),
-                crate::policy::sft::EMPTY_SFT_NAME
-            );
-            self.set_sft(start, size);
-        }
+        self.common.bind_sft(self.as_sft(), sft_map);
+        self.initialize_vm_regions_sft();
+    }
+
+    fn initialize_sft_static(&'static self) {
+        let _ = self.common.sft_ref.set(self);
+        SFT_MAP.notify_space_creation_static(self);
+        self.initialize_vm_regions_sft();
     }
 
     fn initialize_side_metadata(&self) {
@@ -283,6 +274,26 @@ impl<VM: VMBinding> VMSpace<VM> {
         });
     }
 
+    fn initialize_vm_regions_sft(&self) {
+        // Initialize sft for current external pages. This method is called at the end of plan creation.
+        // So we only set SFT for VM regions that are set by options (we skipped sft initialization for them earlier).
+        let vm_regions = self.pr.get_external_pages();
+        // We should have at most one region at this point (set by the option). If we allow setting multiple VM spaces through options,
+        // we can remove this assertion.
+        assert!(vm_regions.len() <= 1);
+        for external_pages in vm_regions.iter() {
+            // Chunk align things.
+            let start = external_pages.start.align_down(BYTES_IN_CHUNK);
+            let size = external_pages.end.align_up(BYTES_IN_CHUNK) - start;
+            // The region should be empty in SFT map -- if they were set before this point, there could be invalid SFT pointers.
+            debug_assert_eq!(
+                SFT_MAP.get_checked(start).name(),
+                crate::policy::sft::EMPTY_SFT_NAME
+            );
+            self.set_sft(start, size);
+        }
+    }
+
     fn set_sft(&self, chunk_start: Address, chunk_size: usize) {
         debug_assert!(chunk_start.is_aligned_to(BYTES_IN_CHUNK));
         debug_assert!(chunk_size % BYTES_IN_CHUNK == 0);
@@ -301,14 +312,12 @@ impl<VM: VMBinding> VMSpace<VM> {
                 );
             }
         }
-        // SAFETY: `set_sft` is only called during or after `Space::initialize_sft` (when `self`
-        // resides in the heap-pinned `'static` `Plan` and `notify_space_creation` has run) and
-        // after `set_side_metadata` mapped side metadata for `[chunk_start, chunk_start + chunk_size)`,
-        // `chunk_start + chunk_size` was checked not to overflow, and every chunk in the range was
-        // asserted above to satisfy `SFT_MAP.has_sft_entry`.
-        unsafe {
-            SFT_MAP.update(self.as_sft(), chunk_start, chunk_size);
-        }
+        let sft = *self
+            .common
+            .sft_ref
+            .get()
+            .expect("Space::initialize_sft must be called before VMSpace::set_sft");
+        SFT_MAP.update_static(sft, chunk_start, chunk_size);
     }
 
     fn set_side_metadata(

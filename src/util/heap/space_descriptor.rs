@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use bytemuck::Zeroable;
 
 use crate::util::heap::layout::vm_layout::{self, vm_layout};
@@ -141,9 +143,18 @@ impl SpaceDescriptor {
             "SpaceDescriptor::get_start requires a contiguous space descriptor"
         );
         let layout = vm_layout();
-        if !layout.force_use_contiguous_spaces {
+        let raw_addr = if !layout.force_use_contiguous_spaces {
             // For 32-bit or 64-bit discontiguous/compressed space, decode mantissa/exponent start address
-            self.get_start_32()
+            let descriptor = self.0;
+            let mantissa = descriptor >> MANTISSA_SHIFT;
+            let exponent = (descriptor & EXPONENT_MASK) >> EXPONENT_SHIFT;
+            let shift = BASE_EXPONENT + exponent;
+            assert!(
+                shift < usize::BITS as usize,
+                "SpaceDescriptor shift ({shift}) overflows usize::BITS ({})",
+                usize::BITS
+            );
+            mantissa << shift
         } else {
             let log_space_extent = layout.log_space_extent;
             assert!(
@@ -151,34 +162,12 @@ impl SpaceDescriptor {
                 "log_space_extent ({log_space_extent}) overflows usize::BITS ({})",
                 usize::BITS
             );
-            // SAFETY: The `assert!`s above verified that `self` has the contiguous tag bit set and
-            // `log_space_extent < usize::BITS as usize`, so `self.get_index() << log_space_extent`
-            // is well-defined without shift overflow. `Address::from_usize` only wraps the raw
-            // integer address without dereferencing memory.
-            unsafe { Address::from_usize(self.get_index() << log_space_extent) }
-        }
-    }
-
-    fn get_start_32(self) -> Address {
-        assert!(
-            self.is_contiguous(),
-            "SpaceDescriptor::get_start_32 requires a contiguous space descriptor"
-        );
-
-        let descriptor = self.0;
-        let mantissa = descriptor >> MANTISSA_SHIFT;
-        let exponent = (descriptor & EXPONENT_MASK) >> EXPONENT_SHIFT;
-        let shift = BASE_EXPONENT + exponent;
-        assert!(
-            shift < usize::BITS as usize,
-            "SpaceDescriptor shift ({shift}) overflows usize::BITS ({})",
-            usize::BITS
-        );
+            self.get_index() << log_space_extent
+        };
         // SAFETY: The `assert!`s above verified that `self` has the contiguous tag bit set and
-        // `shift < usize::BITS as usize`, so `mantissa << shift` is well-defined without shift
-        // overflow. `Address::from_usize` only wraps the reconstructed raw address without
-        // dereferencing memory.
-        unsafe { Address::from_usize(mantissa << shift) }
+        // the bit-shift is `< usize::BITS`. `Address::from_usize` wraps the reconstructed raw
+        // address integer without dereferencing memory.
+        unsafe { Address::from_usize(raw_addr) }
     }
 
     #[cfg(target_pointer_width = "64")]

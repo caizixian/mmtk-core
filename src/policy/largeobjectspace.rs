@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use atomic::Ordering;
 
 use crate::plan::tracing::{ObjectQueue, OptionObjectQueue};
@@ -10,7 +12,6 @@ use crate::util::heap::{FreeListPageResource, PageResource};
 use crate::util::metadata;
 use crate::util::metadata::side_metadata::spec_defs::LOS_PAGE_REUSE_COUNT;
 use crate::util::metadata::MetadataSpec;
-use crate::util::object_enum::ClosureObjectEnumerator;
 use crate::util::object_enum::ObjectEnumerator;
 use crate::util::opaque_pointer::*;
 use crate::util::rc::RefCountHelper;
@@ -18,8 +19,8 @@ use crate::util::treadmill::TreadMill;
 use crate::util::{Address, ObjectReference};
 use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize};
+use std::sync::RwLock;
 
 #[allow(unused)]
 const PAGE_MASK: usize = !(BYTES_IN_PAGE - 1);
@@ -28,6 +29,18 @@ const MARK_BIT: u8 = 0b01;
 const NURSERY_BIT: u8 = 0b10;
 #[allow(unused)]
 const LOS_BIT_MASK: u8 = 0b11;
+
+struct TreadMillObjectVisitor<F: FnMut(ObjectReference)>(F);
+
+impl<F: FnMut(ObjectReference)> ObjectEnumerator for TreadMillObjectVisitor<F> {
+    fn visit_object(&mut self, object: ObjectReference) {
+        (self.0)(object);
+    }
+
+    unsafe fn visit_address_range(&mut self, _start: Address, _end: Address) {
+        unreachable!("TreadMill::enumerate_objects only visits individual objects")
+    }
+}
 
 /// The states of the [`ObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC`] metadata in tracing-based GC.
 ///
@@ -121,9 +134,9 @@ mod mark_nursery_bits_states {
 pub struct LargeObjectSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
     pr: FreeListPageResource<VM>,
-    mark_state: u8,
-    in_nursery_gc: bool,
-    treadmill: TreadMill,
+    mark_state: AtomicU8,
+    in_nursery_gc: AtomicBool,
+    treadmill: RwLock<TreadMill>,
     clear_log_bit_on_sweep: bool,
     pub num_pages_released_lazy: AtomicUsize,
     pub rc_enabled: bool,
@@ -151,7 +164,8 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
     }
     fn is_reachable(&self, object: ObjectReference) -> bool {
         if self.rc_enabled {
-            self.test_mark_bit(object, self.mark_state) && self.rc.count(object) > 0
+            self.test_mark_bit(object, self.mark_state.load(Ordering::Relaxed))
+                && self.rc.count(object) > 0
         } else {
             self.is_live(object)
         }
@@ -177,6 +191,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
     }
 
     fn initialize_object_metadata(&self, object: ObjectReference, bytes: usize) {
+        let mark_state = self.mark_state.load(Ordering::Relaxed);
         // VO bit: Set for all objects.
         #[cfg(feature = "vo_bit")]
         crate::util::metadata::vo_bit::set_vo_bit(object);
@@ -193,11 +208,14 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
 
         if self.rc_enabled {
             // Add to treadmill nursery
-            self.treadmill.add_to_treadmill(object, true);
+            self.treadmill
+                .read()
+                .unwrap()
+                .add_to_treadmill(object, true);
             // Initialize the object to the MatureMarked state.
             VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC.store_atomic::<VM, u8>(
                 object,
-                self.mark_state,
+                mark_state,
                 None,
                 Ordering::SeqCst,
             );
@@ -228,7 +246,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
                 // the initial state will be MatureMarked.
                 // The NURSERY_BIT bit is not set,
                 // and the mark bit is equal to `self.mark_state`.
-                self.mark_state
+                mark_state
             };
 
             VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC.store_atomic::<VM, u8>(
@@ -263,7 +281,10 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         }
 
         // Add to the treadmill.  Nursery and mature objects need to be added to different sets.
-        self.treadmill.add_to_treadmill(object, into_nursery);
+        self.treadmill
+            .read()
+            .unwrap()
+            .add_to_treadmill(object, into_nursery);
     }
 
     #[cfg(feature = "vo_bit")]
@@ -290,7 +311,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         let low_page = ptr
             .saturating_sub(max_search_bytes)
             .align_down(BYTES_IN_PAGE);
-        while cur_page >= low_page {
+        loop {
             if cur_page < mapped_grain {
                 if !cur_page.is_mapped() || !vo_bit::VO_BIT_SIDE_METADATA_SPEC.is_mapped(cur_page) {
                     // If the page start or its VO-bit side metadata is not mapped, there can't be an object in it.
@@ -299,29 +320,18 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
                 // This is mapped. No need to check for this chunk.
                 mapped_grain = cur_page.align_down(mmap_granularity);
             }
-            // For performance, we only check the first word which maps to the first 512 bytes in the page.
-            // In almost all the cases, it should be sufficient.
-            // However, if the raw address of ObjectReference is not in the first 512 bytes, this won't work.
-            // We assert this when we set VO bit for LOS.
-            // SAFETY: Both `cur_page.is_mapped()` and `VO_BIT_SIDE_METADATA_SPEC.is_mapped(cur_page)`
-            // were verified for the current `mmap_granularity` grain above (and `VO_BIT` is mapped
-            // at chunk granularity >= page/word size, so the aligned metadata word for `cur_page`
-            // is fully mapped and initialized). Per MMTk's VO-bit availability contract during
-            // stack/internal-pointer scanning, VO-bit metadata is quiescent with no racing writes.
-            if unsafe { vo_bit::get_raw_vo_bit_word(cur_page) } != 0 {
-                // Find the exact word-aligned address that has VO bit set
-                for offset in (0..vo_bit::VO_BIT_WORD_TO_REGION).step_by(ObjectReference::ALIGNMENT)
-                {
-                    let addr = cur_page + offset;
-                    if vo_bit::is_vo_bit_set_for_addr(addr).is_some() {
-                        return vo_bit::is_internal_ptr_from_vo_bit::<VM>(addr, ptr);
-                    }
+            // We only check the first VO-bit word window (first 512 bytes on 64-bit / 128 bytes on
+            // 32-bit) in the page; `initialize_object_metadata` asserts that every LOS
+            // `ObjectReference` raw address falls in this prefix of its superpage.
+            for offset in (0..vo_bit::VO_BIT_WORD_TO_REGION).step_by(ObjectReference::ALIGNMENT) {
+                let addr = cur_page + offset;
+                if vo_bit::is_vo_bit_set_for_addr(addr).is_some() {
+                    return vo_bit::is_internal_ptr_from_vo_bit::<VM>(addr, ptr);
                 }
-                unreachable!(
-                    "We found vo bit in the raw word, but we cannot find the exact address"
-                );
             }
-
+            if cur_page <= low_page {
+                break;
+            }
             cur_page -= BYTES_IN_PAGE;
         }
         None
@@ -338,7 +348,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
     fn debug_print_object_info(&self, object: ObjectReference) {
         let mark_nursery_state = VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC
             .load_atomic::<VM, u8>(object, None, Ordering::SeqCst);
-        let mark_state = self.mark_state;
+        let mark_state = self.mark_state.load(Ordering::Relaxed);
         println!("mark_nursery_state = 0b{:02b}", mark_nursery_state);
         println!("LOS mark state = {}", mark_state);
         println!("marked = {}", self.is_marked(object));
@@ -384,44 +394,39 @@ impl<VM: VMBinding> Space<VM> for LargeObjectSpace<VM> {
         // from space must be empty.  In `ConcurrentImmix`, mutators may run during GC and call
         // `MMTK::enumerate_objects`.  It has undefined behavior according to the current API, so
         // the assertion failure is expected.
+        let treadmill = self.treadmill.read().unwrap();
         assert!(
-            self.treadmill.is_collect_nursery_empty(),
+            treadmill.is_collect_nursery_empty(),
             "Collection nursery is not empty"
         );
-        assert!(
-            self.treadmill.is_from_space_empty(),
-            "From-space is not empty"
-        );
+        assert!(treadmill.is_from_space_empty(), "From-space is not empty");
 
         // Visit objects in the allocation nursery and the to-space, which contain young and old
         // objects, respectively, during mutator time.
-        self.treadmill.enumerate_objects(enumerator, false);
+        treadmill.enumerate_objects(enumerator, false);
     }
 
     fn clear_side_log_bits(&self) {
-        // SAFETY: `Treadmill::enumerate_objects` only invokes `ObjectEnumerator::visit_object` on
-        // explicit treadmill cells and never invokes `visit_address_range`.
-        let mut enumerator = unsafe {
-            ClosureObjectEnumerator::<_, VM>::new(|object| {
-                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.clear::<VM>(object, Ordering::SeqCst);
-            })
-        };
+        let mut enumerator = TreadMillObjectVisitor(|object| {
+            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.clear::<VM>(object, Ordering::SeqCst);
+        });
         // Visit all objects.  It can be ordered arbitrarily with `Self::Release` which sweeps dead
         // objects (removing them from the treadmill) and clears their unlog bits, too.
-        self.treadmill.enumerate_objects(&mut enumerator, true);
+        self.treadmill
+            .read()
+            .unwrap()
+            .enumerate_objects(&mut enumerator, true);
     }
 
     fn set_side_log_bits(&self) {
-        // SAFETY: `Treadmill::enumerate_objects` only invokes `ObjectEnumerator::visit_object` on
-        // explicit treadmill cells and never invokes `visit_address_range`.
-        let mut enumerator = unsafe {
-            ClosureObjectEnumerator::<_, VM>::new(|object| {
-                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-                    .mark_as_unlogged::<VM>(object, Ordering::SeqCst);
-            })
-        };
+        let mut enumerator = TreadMillObjectVisitor(|object| {
+            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
+        });
         // Visit all objects.
-        self.treadmill.enumerate_objects(&mut enumerator, true);
+        self.treadmill
+            .read()
+            .unwrap()
+            .enumerate_objects(&mut enumerator, true);
     }
 }
 
@@ -476,9 +481,9 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         LargeObjectSpace {
             pr,
             common,
-            mark_state: 0,
-            in_nursery_gc: false,
-            treadmill: TreadMill::new(),
+            mark_state: AtomicU8::new(0),
+            in_nursery_gc: AtomicBool::new(false),
+            treadmill: RwLock::new(TreadMill::new()),
             clear_log_bit_on_sweep,
             num_pages_released_lazy: Default::default(),
             rc_enabled: false,
@@ -508,29 +513,37 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
 
     pub fn release_rc_nursery_objects(&self) {
         debug_assert!(self.rc_enabled);
+        let nursery = self.treadmill.read().unwrap().collect_alloc_nursery();
         // promote nursery objects or release dead nursery
-        for o in self.treadmill.collect_alloc_nursery() {
+        for o in nursery {
             if self.rc.count(o) == 0 {
                 self.release_object(o);
             } else {
-                self.treadmill.add_to_treadmill(o, false);
+                self.treadmill.read().unwrap().add_to_treadmill(o, false);
             }
         }
     }
 
-    pub fn prepare(&mut self, full_heap: bool) {
+    #[allow(dead_code)]
+    pub(crate) fn prepare_shared(&self, full_heap: bool) {
         if full_heap {
-            self.mark_state = MARK_BIT - self.mark_state;
+            let old = self.mark_state.load(Ordering::Relaxed);
+            self.mark_state.store(MARK_BIT - old, Ordering::Relaxed);
         }
         self.num_pages_released_lazy.store(0, Ordering::Relaxed);
         if self.rc_enabled {
             return;
         }
-        self.treadmill.flip(full_heap);
-        self.in_nursery_gc = !full_heap;
+        self.treadmill.write().unwrap().flip(full_heap);
+        self.in_nursery_gc.store(!full_heap, Ordering::Relaxed);
     }
 
-    pub fn release(&mut self, full_heap: bool) {
+    pub fn prepare(&mut self, full_heap: bool) {
+        self.prepare_shared(full_heap);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn release_shared(&self, full_heap: bool) {
         if self.rc_enabled {
             self.release_rc_nursery_objects();
             return;
@@ -538,14 +551,18 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         // We swapped the allocation nursery and the collection nursery when GC starts, and we don't
         // add objects to the allocation nursery during GC.  It should have remained empty during
         // the whole GC.
-        debug_assert!(self.treadmill.is_alloc_nursery_empty());
+        debug_assert!(self.treadmill.read().unwrap().is_alloc_nursery_empty());
 
         self.sweep_large_pages(true);
-        debug_assert!(self.treadmill.is_collect_nursery_empty());
+        debug_assert!(self.treadmill.read().unwrap().is_collect_nursery_empty());
         if full_heap {
             self.sweep_large_pages(false);
-            debug_assert!(self.treadmill.is_from_space_empty());
+            debug_assert!(self.treadmill.read().unwrap().is_from_space_empty());
         }
+    }
+
+    pub fn release(&mut self, full_heap: bool) {
+        self.release_shared(full_heap);
     }
 
     // Allow nested-if for this function to make it clear that test_and_mark() is only executed
@@ -582,7 +599,10 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 if was_nursery_object { "was" } else { "was not" }
             );
             // If the object was a nursery object, we move it to `to_space` in the treadmill.
-            self.treadmill.copy(object, was_nursery_object);
+            self.treadmill
+                .read()
+                .unwrap()
+                .copy(object, was_nursery_object);
             // We just moved the object out of the logical nursery, mark it as unlogged.
             // We also unlog mature objects as their unlog bit may have been unset before the
             // full-heap GC
@@ -598,7 +618,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         object
     }
 
-    fn sweep_large_pages(&mut self, sweep_nursery: bool) {
+    fn sweep_large_pages(&self, sweep_nursery: bool) {
         let sweep = |object: ObjectReference| {
             // Clear log bits for dead objects to prevent a new nursery object having the unlog bit set
             // TODO: This code path assumes the log bit is object log bit instead of field log bit.
@@ -610,12 +630,14 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             self.release_object(object);
         };
         if sweep_nursery {
-            for object in self.treadmill.collect_nursery() {
+            let objects = self.treadmill.read().unwrap().collect_nursery();
+            for object in objects {
                 sweep(object);
             }
         } else {
-            for object in self.treadmill.collect_mature() {
-                sweep(object)
+            let objects = self.treadmill.read().unwrap().collect_mature();
+            for object in objects {
+                sweep(object);
             }
         }
     }
@@ -623,11 +645,12 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     /// Enumerate objects in the to-space.  It is a workaround for OVC which currently needs
     /// to enumerate reachable objects for during reference forwarding.
     pub(crate) fn enumerate_to_space_objects(&self, enumerator: &mut dyn ObjectEnumerator) {
+        let treadmill = self.treadmill.read().unwrap();
         // This function is intended to enumerate objects in the to-space.
         // The alloc nursery should have remained empty during the GC.
-        debug_assert!(self.treadmill.is_alloc_nursery_empty());
+        debug_assert!(treadmill.is_alloc_nursery_empty());
         // We only need to visit the to_space, which contains all objects determined to be live.
-        self.treadmill.enumerate_objects(enumerator, false);
+        treadmill.enumerate_objects(enumerator, false);
     }
 
     /// Allocate an object
@@ -646,7 +669,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     pub fn rc_free(&self, o: ObjectReference) {
-        if self.treadmill.remove_mature(o) {
+        if self.treadmill.read().unwrap().remove_mature(o) {
             let pages = self.release_object(o);
             self.num_pages_released_lazy
                 .fetch_add(pages, Ordering::Relaxed);
@@ -659,7 +682,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     /// already in the marked state.  In either case, `old_state` is the old state before the atomic
     /// operation.
     fn test_and_mark(&self, object: ObjectReference) -> Result<u8, u8> {
-        let mark_state = self.mark_state;
+        let mark_state = self.mark_state.load(Ordering::Relaxed);
         VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC.fetch_update_metadata::<VM, u8, _>(
             object,
             Ordering::SeqCst,
@@ -681,7 +704,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     pub fn sweep_rc_mature_objects_after_satb(&self, is_live: &impl Fn(ObjectReference) -> bool) {
-        self.treadmill.retain_mature(|o| {
+        self.treadmill.read().unwrap().retain_mature(|o| {
             if !is_live(*o) {
                 self.rc.set(*o, 0);
                 let pages = self.release_object(*o);
@@ -699,7 +722,10 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         let mark_nursery_state = VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC
             .load_atomic::<VM, u8>(object, None, Ordering::SeqCst);
 
-        mark_nursery_bits_states::is_marked(mark_nursery_state, self.mark_state)
+        mark_nursery_bits_states::is_marked(
+            mark_nursery_state,
+            self.mark_state.load(Ordering::Relaxed),
+        )
     }
 }
 

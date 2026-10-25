@@ -13,7 +13,6 @@ use crate::util::conversions;
 use crate::util::freelist;
 use crate::util::freelist::FreeList;
 use crate::util::heap::layout::vm_layout::*;
-use crate::util::heap::layout::CreateFreeListResult;
 use crate::util::heap::pageresource::CommonPageResource;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::opaque_pointer::*;
@@ -59,15 +58,11 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
             // We bypass the mutex lock by calling `get_mut`.
             let sync = self.sync.get_mut().unwrap();
             sync.start = start.align_up(BYTES_IN_REGION);
-            let CreateFreeListResult {
-                free_list,
-                space_displacement,
-            } = self.common.vm_map.create_freelist(sync.start);
+            let free_list = self.common.vm_map.create_freelist(sync.start);
             debug_assert!(
                 free_list.downcast_ref::<RawMemoryFreeList>().is_none(),
                 "We can't allocate RawMemoryFreeList for discontiguous spaces."
             );
-            debug_assert_eq!(space_displacement, 0);
             sync.free_list = free_list;
         }
     }
@@ -159,18 +154,7 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
 impl<VM: VMBinding> FreeListPageResource<VM> {
     pub fn new_contiguous(start: Address, bytes: usize, vm_map: &'static dyn VMMap) -> Self {
         let pages = conversions::bytes_to_pages_up(bytes);
-        let CreateFreeListResult {
-            free_list,
-            space_displacement,
-        } = vm_map.create_parent_freelist(start, pages, PAGES_IN_REGION as _);
-
-        // If it is RawMemoryFreeList, it will occupy `space_displacement` bytes at the start of
-        // the space.  We add it to the start address.
-        let actual_start = start + space_displacement;
-        debug!(
-            "  in new_contiguous: space_displacement = {:?}, actual_start = {}",
-            space_displacement, actual_start
-        );
+        let free_list = vm_map.create_parent_freelist(start, pages, PAGES_IN_REGION as _);
 
         let growable = cfg!(target_pointer_width = "64");
         FreeListPageResource {
@@ -178,7 +162,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
             sync: Mutex::new(FreeListPageResourceSync {
                 free_list,
                 pages_currently_on_freelist: if growable { 0 } else { pages },
-                start: actual_start,
+                start,
                 highwater_mark: UNINITIALIZED_WATER_MARK,
             }),
             _p: PhantomData,
@@ -305,23 +289,22 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
     }
 
     fn free_contiguous_chunk(&self, chunk: Address, sync: &mut FreeListPageResourceSync) {
-        let num_chunks = self.vm_map().get_contiguous_region_chunks(chunk);
-        /* nail down all pages associated with the chunk, so it is no longer on our free list */
-        let mut chunk_start = conversions::bytes_to_pages_up(chunk - sync.start);
-        let chunk_end = chunk_start + (num_chunks * PAGES_IN_CHUNK);
-        while chunk_start < chunk_end {
-            sync.free_list.set_uncoalescable(chunk_start as _);
-            let tmp = sync
-                .free_list
-                .alloc_from_unit(PAGES_IN_CHUNK as _, chunk_start as _)
-                as usize; // then alloc the entire chunk
-            debug_assert!(tmp == chunk_start);
-            chunk_start += PAGES_IN_CHUNK;
-            sync.pages_currently_on_freelist -= PAGES_IN_CHUNK;
-        }
-        /* now return the address space associated with the chunk for global reuse */
-
-        self.common.release_discontiguous_chunks(chunk);
+        self.common
+            .release_discontiguous_chunks_with(chunk, |num_chunks| {
+                /* nail down all pages associated with the chunk, so it is no longer on our free list */
+                let mut chunk_start = conversions::bytes_to_pages_up(chunk - sync.start);
+                let chunk_end = chunk_start + (num_chunks * PAGES_IN_CHUNK);
+                while chunk_start < chunk_end {
+                    sync.free_list.set_uncoalescable(chunk_start as _);
+                    let tmp = sync
+                        .free_list
+                        .alloc_from_unit(PAGES_IN_CHUNK as _, chunk_start as _)
+                        as usize;
+                    debug_assert!(tmp == chunk_start);
+                    chunk_start += PAGES_IN_CHUNK;
+                    sync.pages_currently_on_freelist -= PAGES_IN_CHUNK;
+                }
+            });
     }
 
     pub fn get_pages(&self, start: Address) -> usize {

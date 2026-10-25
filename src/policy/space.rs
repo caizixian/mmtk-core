@@ -39,6 +39,7 @@ use std::marker::PhantomData;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use downcast_rs::Downcast;
 
@@ -51,10 +52,16 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
     /// have a page resource.
     fn maybe_get_page_resource_mut(&mut self) -> Option<&mut dyn PageResource<VM>>;
 
-    /// Initialize entires in SFT map for the space. This is called when the Space object
+    /// Initialize entries in SFT map for the space. This is called when the Space object
     /// has a non-moving address, as we will use the address to set sft.
     /// Currently after we create a boxed plan, spaces in the plan have a non-moving address.
     fn initialize_sft(&self, sft_map: &mut dyn crate::policy::sft_map::SFTMap);
+
+    /// Initialize SFT entries directly from a `'static` space reference (`0` `unsafe`).
+    #[allow(dead_code)]
+    fn initialize_sft_static(&'static self) {
+        self.common().initialize_sft_static(self.as_sft());
+    }
 
     /// Initialize side metadata for the space. This is called after spaces and the plan are contructued
     /// and the side metadata has been initialized. If a space needs to access side metadata during its
@@ -348,13 +355,11 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                     assert!(SFT_MAP.has_sft_entry(conversions::chunk_index_to_address(chunk_idx)));
                 }
             }
-            // SAFETY: `self` is a heap-pinned `Space` inside `'static MMTK<VM>` registered via
-            // `notify_space_creation` during `Plan::initialize_sft` (Stage-1 cross-slice `Space`
-            // lifecycle contract), side metadata (if required by `SFT_MAP`) was mapped before
-            // `grow_space()` in `get_new_pages_and_initialize`, `start + bytes` was checked not to
-            // overflow, and every chunk in `[start, start + bytes)` was asserted above to satisfy
-            // `has_sft_entry`.
-            unsafe { SFT_MAP.update(self.as_sft(), start, bytes) };
+            let sft =
+                *self.common().sft_ref.get().expect(
+                    "Space::initialize_sft must be called before mapping chunks into SFT_MAP",
+                );
+            SFT_MAP.update_static(sft, start, bytes);
         }
     }
 
@@ -496,21 +501,15 @@ pub(crate) fn print_vm_map<VM: VMBinding>(
             _ => {}
         }
     } else {
-        let mut a = space
+        let ranges = space
             .get_page_resource()
             .common()
-            .get_head_discontiguous_region();
-        while !a.is_zero() {
-            write!(
-                out,
-                "{}->{}",
-                a,
-                a + space.common().vm_map().get_contiguous_region_size(a) - 1
-            )?;
-            a = space.common().vm_map().get_next_contiguous_region(a);
-            if !a.is_zero() {
+            .discontiguous_region_ranges();
+        for (i, (a, size)) in ranges.into_iter().enumerate() {
+            if i > 0 {
                 write!(out, " ")?;
             }
+            write!(out, "{}->{}", a, a + size - 1)?;
         }
     }
     writeln!(out)?;
@@ -559,6 +558,7 @@ pub struct CommonSpace<VM: VMBinding> {
     pub options: Arc<Options>,
 
     pub allocate_as_live: AtomicBool,
+    pub(crate) sft_ref: OnceLock<&'static (dyn SFT + Sync + 'static)>,
 
     p: PhantomData<VM>,
 }
@@ -636,6 +636,7 @@ impl<VM: VMBinding> CommonSpace<VM> {
             global_state: args.plan_args.global_state,
             options: args.plan_args.options.clone(),
             allocate_as_live: AtomicBool::new(false),
+            sft_ref: OnceLock::new(),
             p: PhantomData,
         };
 
@@ -790,11 +791,28 @@ impl<VM: VMBinding> CommonSpace<VM> {
         estimate.max(vm_map.min_contiguous_extent())
     }
 
+    pub(crate) fn bind_sft(
+        &self,
+        sft: &(dyn SFT + Sync + 'static),
+        sft_map: &mut dyn crate::policy::sft_map::SFTMap,
+    ) -> &'static (dyn SFT + Sync + 'static) {
+        let raw_sft: *const (dyn SFT + Sync + 'static) = sft;
+        sft_map.verify_notified(raw_sft);
+        // SAFETY: `SFTMap` is sealed to the one-shot `SftMapInitHandle` created inside
+        // `MMTK::new` -> `Plan::initialize_sft` after `VM_MAP` is finalized and the owning `Plan`
+        // (and `sft`) has been permanently leaked via `Box::into_raw` for `'static`, and
+        // `verify_notified` confirmed `raw_sft` is the exact space currently being initialized.
+        let static_sft = unsafe { &*raw_sft };
+        let _ = self.sft_ref.set(static_sft);
+        static_sft
+    }
+
     pub fn initialize_sft(
         &self,
         sft: &(dyn SFT + Sync + 'static),
         sft_map: &mut dyn crate::policy::sft_map::SFTMap,
     ) {
+        let static_sft = self.bind_sft(sft, sft_map);
         // We have to keep this for now: if a space is contiguous, our page resource will NOT consider newly allocated chunks
         // as new chunks (new_chunks = true). In that case, in grow_space(), we do not set SFT when new_chunks = false.
         // We can fix this by either of these:
@@ -802,12 +820,16 @@ impl<VM: VMBinding> CommonSpace<VM> {
         // * change grow_space() so it sets SFT no matter what the new_chunks value is.
         // FIXME: eagerly initializing SFT is not a good idea.
         if self.contiguous {
-            // SAFETY: `CommonSpace::initialize_sft` is called from `Space::initialize_sft` during
-            // `MMTK::new` -> `Plan::initialize_sft`, after `Plan` (and `sft`) is permanently boxed
-            // on the heap for the `'static` lifetime of `MMTK` and registered via
-            // `sft_map.notify_space_creation`, and `[self.start, self.start + self.extent)` was
-            // quarantined within MMTk's contiguous heap virtual address range.
-            unsafe { sft_map.eager_initialize(sft, self.start, self.extent) };
+            SFT_MAP.eager_initialize_static(static_sft, self.start, self.extent);
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn initialize_sft_static(&self, static_sft: &'static (dyn SFT + Sync + 'static)) {
+        let _ = self.sft_ref.set(static_sft);
+        SFT_MAP.notify_space_creation_static(static_sft);
+        if self.contiguous {
+            SFT_MAP.eager_initialize_static(static_sft, self.start, self.extent);
         }
     }
 

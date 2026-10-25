@@ -1,22 +1,18 @@
-use super::layout::vm_layout::{BYTES_IN_CHUNK, PAGES_IN_CHUNK};
+#![deny(unsafe_op_in_unsafe_fn)]
+
+use super::layout::vm_layout::{BYTES_IN_CHUNK, LOG_BYTES_IN_CHUNK, PAGES_IN_CHUNK};
+use super::layout::VMMap;
+use super::pageresource::{CommonPageResource, PRAllocFail, PRAllocResult};
+use super::PageResource;
 use crate::policy::space::required_chunks;
 use crate::util::address::Address;
 use crate::util::constants::BYTES_IN_PAGE;
 use crate::util::conversions::*;
-use std::ops::Range;
-use std::sync::{Mutex, MutexGuard};
-
-use crate::util::alloc::embedded_meta_data::*;
-use crate::util::heap::layout::vm_layout::LOG_BYTES_IN_CHUNK;
-use crate::util::heap::pageresource::CommonPageResource;
-use crate::util::opaque_pointer::*;
-
-use super::layout::VMMap;
-use super::pageresource::{PRAllocFail, PRAllocResult};
-use super::PageResource;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
+use crate::util::opaque_pointer::*;
 use crate::vm::VMBinding;
 use std::marker::PhantomData;
+use std::sync::{Mutex, MutexGuard};
 
 pub struct MonotonePageResource<VM: VMBinding> {
     common: CommonPageResource,
@@ -25,11 +21,11 @@ pub struct MonotonePageResource<VM: VMBinding> {
 }
 
 struct MonotonePageResourceSync {
-    /** Pointer to the next block to be allocated. */
+    /// Pointer to the next block to be allocated.
     cursor: Address,
-    /** The limit of the currently allocated address space. */
+    /// The limit of the currently allocated address space.
     sentinel: Address,
-    /** Base address of the current chunk of addresses */
+    /// Base address of the current chunk of addresses.
     current_chunk: Address,
     conditional: MonotonePageResourceConditional,
 }
@@ -37,13 +33,14 @@ struct MonotonePageResourceSync {
 pub enum MonotonePageResourceConditional {
     Contiguous {
         start: Address,
-        /** Current frontier of zeroing, in a separate zeroing thread */
+        /// Current frontier of zeroing, in a separate zeroing thread.
         zeroing_cursor: Address,
-        /** Current limit of zeroing.  If zeroingCursor < zeroingSentinel, zeroing is still happening. */
+        /// Current limit of zeroing. If zeroingCursor < zeroingSentinel, zeroing is still happening.
         zeroing_sentinel: Address,
     },
     Discontiguous,
 }
+
 impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
     fn common(&self) -> &CommonPageResource {
         &self.common
@@ -86,16 +83,15 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
         );
 
         if cfg!(debug_assertions) {
-            /*
-             * Cursor should always be zero, or somewhere in the current chunk.  If we have just
-             * allocated exactly enough pages to exhaust the current chunk, then cursor can point
-             * to the next chunk.
-             */
             if sync.current_chunk > sync.cursor
                 || (chunk_align_down(sync.cursor) != sync.current_chunk
                     && chunk_align_down(sync.cursor) != sync.current_chunk + BYTES_IN_CHUNK)
             {
-                self.log_chunk_fields(space_descriptor, "MonotonePageResource.alloc_pages:fail");
+                self.log_chunk_fields(
+                    &sync,
+                    space_descriptor,
+                    "MonotonePageResource.alloc_pages:fail",
+                );
             }
             assert!(sync.current_chunk <= sync.cursor);
             assert!(
@@ -106,16 +102,14 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
         }
 
         let bytes = pages_to_bytes(required_pages);
-        debug!("bytes={}", bytes);
         let mut tmp = sync.cursor + bytes;
-        debug!("tmp={:?}", tmp);
 
         if !self.common().contiguous && tmp > sync.sentinel {
             /* we're out of virtual memory within our discontiguous region, so ask for more */
             let required_chunks = required_chunks(required_pages);
             sync.current_chunk =
                 self.common
-                    .grow_discontiguous_space(space_descriptor, required_chunks, None); // Returns zero on failure
+                    .grow_discontiguous_space(space_descriptor, required_chunks, None);
             sync.cursor = sync.current_chunk;
             sync.sentinel = sync.cursor
                 + if sync.current_chunk.is_zero() {
@@ -123,7 +117,6 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
                 } else {
                     required_chunks << LOG_BYTES_IN_CHUNK
                 };
-            //println!("{} {}->{}", self.common.space.unwrap().get_name(), sync.cursor, sync.sentinel);
             rtn = sync.cursor;
             tmp = sync.cursor + bytes;
             new_chunk = true;
@@ -131,10 +124,8 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
 
         debug_assert!(rtn >= sync.cursor && rtn < sync.cursor + bytes);
         if tmp > sync.sentinel {
-            //debug!("tmp={:?} > sync.sentinel={:?}", tmp, sync.sentinel);
             Result::Err(PRAllocFail)
         } else {
-            //debug!("tmp={:?} <= sync.sentinel={:?}", tmp, sync.sentinel);
             sync.cursor = tmp;
             debug!("update cursor = {}", tmp);
 
@@ -197,8 +188,12 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
         self.sync.lock().unwrap().cursor
     }
 
-    fn log_chunk_fields(&self, space_descriptor: SpaceDescriptor, site: &str) {
-        let sync = self.sync.lock().unwrap();
+    fn log_chunk_fields(
+        &self,
+        sync: &MonotonePageResourceSync,
+        space_descriptor: SpaceDescriptor,
+        site: &str,
+    ) {
         debug!(
             "[{:?}]{}: cursor={}, current_chunk={}, delta={}",
             space_descriptor,
@@ -209,70 +204,21 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
         );
     }
 
-    fn get_region_start(addr: Address) -> Address {
-        addr.align_down(BYTES_IN_REGION)
-    }
-
     /// Reset this page resource, reclaiming all pages and discontiguous chunks back to the global pool.
-    ///
-    /// # Safety
-    /// The caller must ensure that no live objects or active allocator cursors still reference any
-    /// pages or chunks managed by this page resource, because resetting releases all discontiguous
-    /// chunks and clears their global chunk-descriptor and SFT mappings.
-    pub unsafe fn reset(&self) {
+    pub fn reset(&self) {
         let mut guard = self.sync.lock().unwrap();
         self.common().accounting.reset();
-        // SAFETY: The caller of `reset` guarantees that no live objects or active allocator cursors
-        // reference any pages or discontiguous chunks owned by `self`, and `guard` holds `self.sync`.
-        unsafe {
-            self.release_pages(&mut guard);
-        }
-        drop(guard);
+        self.release_pages(&mut guard);
     }
 
     pub fn get_current_chunk(&self) -> Address {
-        let guard = self.sync.lock().unwrap();
-        guard.current_chunk
+        self.sync.lock().unwrap().current_chunk
     }
-
-    /*/**
-    * Release all pages associated with this page resource, optionally
-    * zeroing on release and optionally memory protecting on release.
-    */
-     @Inline
-     private void releasePages() {
-     if (contiguous) {
-     // TODO: We will perform unnecessary zeroing if the nursery size has decreased.
-     if (zeroConcurrent) {
-     // Wait for current zeroing to finish.
-     while (zeroingCursor.LT(zeroingSentinel)) { }
-     }
-     // Reset zeroing region.
-     if (cursor.GT(zeroingSentinel)) {
-     zeroingSentinel = cursor;
-     }
-     zeroingCursor = start;
-     cursor = start;
-     currentChunk = Conversions.chunkAlign(start, true);
-     } else { /* Not contiguous */
-     if (!cursor.isZero()) {
-     do {
-     Extent bytes = cursor.diff(currentChunk).toWord().toExtent();
-     releasePages(currentChunk, bytes);
-     } while (moveToNextChunk());
-
-     currentChunk = Address.zero();
-     sentinel = Address.zero();
-     cursor = Address.zero();
-     space.releaseAllChunks();
-     }
-     }
-     }*/
 
     // top might be Address::ZERO
     pub fn reset_cursor(&self, mut top: Address) {
+        let mut guard = self.sync.lock().unwrap();
         if self.common.contiguous {
-            let mut guard = self.sync.lock().unwrap();
             let space_start = match guard.conditional {
                 MonotonePageResourceConditional::Contiguous { start, .. } => start,
                 _ => unreachable!(),
@@ -280,7 +226,7 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
             if top.is_zero() {
                 top = space_start;
             }
-            let cursor = top.align_up(crate::util::constants::BYTES_IN_PAGE);
+            let cursor = top.align_up(BYTES_IN_PAGE);
             let chunk = chunk_align_down(top);
             let pages = bytes_to_pages_up(top - space_start);
             self.common.accounting.reset();
@@ -288,151 +234,66 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
             guard.current_chunk = chunk;
             guard.cursor = cursor;
         } else {
-            let mut chunk_start = self.common.get_head_discontiguous_region();
-            let mut release_regions = false;
-            let mut live_size = 0;
-            while !chunk_start.is_zero() {
-                let chunk_end = chunk_start
-                    + (self.common.vm_map.get_contiguous_region_chunks(chunk_start)
-                        << LOG_BYTES_IN_CHUNK);
-                let next_chunk_start = self.common.vm_map.get_next_contiguous_region(chunk_start);
-                if top.is_zero() {
-                    top = chunk_start;
-                }
-                if top >= chunk_start && top < chunk_end {
-                    // This is the last live chunk
-                    debug_assert!(!release_regions);
-                    let mut guard = self.sync.lock().unwrap();
+            let live_size = if let Some((chunk_start, chunk_end, live_bytes)) =
+                self.common.truncate_discontiguous_regions_at(top)
+            {
+                if !chunk_start.is_zero() {
+                    let effective_top = if top.is_zero() { chunk_start } else { top };
                     guard.current_chunk = chunk_start;
                     guard.sentinel = chunk_end;
-                    guard.cursor = top.align_up(BYTES_IN_PAGE);
-                    live_size += top - chunk_start;
-                    // Release all the remaining regions
-                    release_regions = true;
-                } else if release_regions {
-                    // release this region
-                    self.common.release_discontiguous_chunks(chunk_start);
-                } else {
-                    // keep this live region
-                    live_size += chunk_end - chunk_start;
+                    guard.cursor = effective_top.align_up(BYTES_IN_PAGE);
                 }
-                chunk_start = next_chunk_start;
-            }
+                live_bytes
+            } else {
+                0
+            };
             let pages = bytes_to_pages_up(live_size);
             self.common.accounting.reset();
             self.common.accounting.reserve_and_commit(pages);
         }
     }
 
-    /// Release all pages and discontiguous chunks associated with this page resource.
-    ///
-    /// # Safety
-    /// The caller must ensure that no live objects or active allocator cursors still reference any
-    /// pages or discontiguous chunks managed by this page resource.
-    unsafe fn release_pages(&self, guard: &mut MutexGuard<MonotonePageResourceSync>) {
-        // TODO: concurrent zeroing
+    fn release_pages(&self, guard: &mut MutexGuard<MonotonePageResourceSync>) {
         if self.common().contiguous {
             guard.cursor = match guard.conditional {
-                MonotonePageResourceConditional::Contiguous { start: _start, .. } => _start,
+                MonotonePageResourceConditional::Contiguous { start, .. } => start,
                 _ => unreachable!(),
             };
             guard.current_chunk = guard.cursor;
         } else if !guard.cursor.is_zero() {
             let bytes = guard.cursor - guard.current_chunk;
-            self.release_pages_extent(guard.current_chunk, bytes);
-            while self.move_to_next_chunk(guard) {
-                let bytes = guard.cursor - guard.current_chunk;
-                self.release_pages_extent(guard.current_chunk, bytes);
-            }
-
+            debug_assert_eq!(bytes, pages_to_bytes(bytes_to_pages_up(bytes)));
             guard.current_chunk = Address::ZERO;
             guard.sentinel = Address::ZERO;
             guard.cursor = Address::ZERO;
-            // SAFETY: All cursors for `self` have been cleared under `guard`, and the caller of
-            // `release_pages` guarantees no live objects or active allocator cursors reference any
-            // discontiguous chunks owned by `self.common`.
-            unsafe {
-                self.common.release_all_chunks();
-            }
+            self.common.release_all_chunks();
         }
     }
 
     /// Iterate over all contiguous memory regions in this space.
-    /// For contiguous space, this iterator should yield only once, and returning a contiguous memory region covering the whole space.
+    /// For contiguous space, this iterator yields a single region covering the allocated range.
     pub fn iterate_allocated_regions(&self) -> impl Iterator<Item = (Address, usize)> + '_ {
-        struct Iter<'a, VM: VMBinding> {
-            pr: &'a MonotonePageResource<VM>,
-            contiguous_space: Option<Range<Address>>,
-            discontiguous_start: Address,
-        }
-        impl<VM: VMBinding> Iterator for Iter<'_, VM> {
-            type Item = (Address, usize);
-            fn next(&mut self) -> Option<Self::Item> {
-                if let Some(range) = self.contiguous_space.take() {
-                    Some((range.start, range.end - range.start))
-                } else if self.discontiguous_start.is_zero() {
-                    None
-                } else {
-                    let start = self.discontiguous_start;
-                    self.discontiguous_start = self.pr.vm_map().get_next_contiguous_region(start);
-
-                    let contiguous_region_size = self.pr.vm_map().get_contiguous_region_size(start);
-                    let cursor = self.pr.cursor();
-                    let size = if start < cursor && cursor < start + contiguous_region_size {
-                        // If the current cursor is within the current discontiguous region,
-                        // then return the size till the cursor.
-                        // This is sufficient for sweeping the memory and clearing side metadata.
-                        // Note that if cursor == start,
-                        // it means the cursor is at the end of the previous chunk.
+        let sync = self.sync.lock().unwrap();
+        let cursor = sync.cursor;
+        let regions: Vec<(Address, usize)> = match sync.conditional {
+            MonotonePageResourceConditional::Contiguous { start, .. } => {
+                let end = cursor.align_up(BYTES_IN_CHUNK);
+                vec![(start, end - start)]
+            }
+            MonotonePageResourceConditional::Discontiguous => self
+                .common
+                .discontiguous_region_ranges()
+                .into_iter()
+                .map(|(start, region_size)| {
+                    let size = if start < cursor && cursor < start + region_size {
                         cursor - start
                     } else {
-                        contiguous_region_size
+                        region_size
                     };
-                    Some((start, size))
-                }
-            }
-        }
-        let sync = self.sync.lock().unwrap();
-        match sync.conditional {
-            MonotonePageResourceConditional::Contiguous { start, .. } => {
-                let cursor = sync.cursor.align_up(BYTES_IN_CHUNK);
-                Iter {
-                    pr: self,
-                    contiguous_space: Some(start..cursor),
-                    discontiguous_start: Address::ZERO,
-                }
-            }
-            MonotonePageResourceConditional::Discontiguous => {
-                let discontiguous_start = self.common.get_head_discontiguous_region();
-                Iter {
-                    pr: self,
-                    contiguous_space: None,
-                    discontiguous_start,
-                }
-            }
-        }
-    }
-
-    fn release_pages_extent(&self, _first: Address, bytes: usize) {
-        let pages = crate::util::conversions::bytes_to_pages_up(bytes);
-        debug_assert!(bytes == crate::util::conversions::pages_to_bytes(pages));
-        // FIXME ZERO_PAGES_ON_RELEASE
-        // FIXME Options.protectOnRelease
-        // FIXME VM.events.tracePageReleased
-    }
-
-    fn move_to_next_chunk(&self, guard: &mut MutexGuard<MonotonePageResourceSync>) -> bool {
-        guard.current_chunk = self
-            .vm_map()
-            .get_next_contiguous_region(guard.current_chunk);
-        if guard.current_chunk.is_zero() {
-            false
-        } else {
-            guard.cursor = guard.current_chunk
-                + self
-                    .vm_map()
-                    .get_contiguous_region_size(guard.current_chunk);
-            true
-        }
+                    (start, size)
+                })
+                .collect(),
+        };
+        regions.into_iter()
     }
 }

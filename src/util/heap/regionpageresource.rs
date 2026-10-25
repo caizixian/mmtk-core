@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use crate::util::constants::BYTES_IN_PAGE;
 use crate::util::heap::layout::VMMap;
 use crate::util::heap::pageresource::{CommonPageResource, PRAllocFail, PRAllocResult};

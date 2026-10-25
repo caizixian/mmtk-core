@@ -15,6 +15,7 @@ use crate::util::alloc::allocator::AllocationOptions;
 use crate::util::alloc::allocator::AllocatorContext;
 use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::heap::chunk_map::*;
+use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::heap::BlockPageResource;
 use crate::util::heap::PageResource;
 use crate::util::linear_scan::{Region, RegionIterator, UnstraddlableRegion};
@@ -38,9 +39,8 @@ use crate::{
     MMTK,
 };
 use atomic::Ordering;
-use std::sync::atomic::AtomicUsize;
-use std::sync::OnceLock;
-use std::sync::{atomic::AtomicU8, Arc};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize};
+use std::sync::{Arc, OnceLock};
 
 pub(crate) const TRACE_KIND_FAST: TraceKind = 0;
 pub(crate) const TRACE_KIND_DEFRAG: TraceKind = 1;
@@ -81,14 +81,14 @@ pub struct ImmixSpace<VM: VMBinding> {
     lines_consumed: AtomicUsize,
     reused_lines_consumed: AtomicUsize,
     /// Object mark state
-    mark_state: u8,
+    mark_state: AtomicU8,
     /// Work packet scheduler
     scheduler: Arc<GCWorkScheduler<VM>>,
     /// Some settings for this space
     space_args: ImmixSpaceArgs,
     hooks: OnceLock<&'static dyn ImmixHooks<VM>>,
     pub rc_enabled: bool,
-    pub is_end_of_satb_or_full_gc: bool,
+    pub(crate) is_end_of_satb_or_full_gc: AtomicBool,
     pub rc: RefCountHelper<VM>,
 }
 
@@ -130,7 +130,7 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
 
     fn is_live(&self, object: ObjectReference) -> bool {
         if self.rc_enabled {
-            if self.is_end_of_satb_or_full_gc {
+            if self.is_end_of_satb_or_full_gc.load(Ordering::Acquire) {
                 if self.is_marked(object) {
                     let block = Block::containing(object);
                     if block.is_defrag_source() {
@@ -249,7 +249,8 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
         if !self.rc_enabled {
             println!(
                 "line marked = {}",
-                Line::from_unaligned_address(object.to_raw_address()).is_marked(self.mark_state)
+                Line::from_unaligned_address(object.to_raw_address())
+                    .is_marked(self.mark_state.load(Ordering::Relaxed))
             );
         }
         println!(
@@ -498,12 +499,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             reusable_blocks: ReusableBlockPool::new(scheduler.num_workers()),
             defrag: Defrag::default(),
             // Set to the correct mark state when inititialized. We cannot rely on prepare to set it (prepare may get skipped in nursery GCs).
-            mark_state: Self::MARKED_STATE,
+            mark_state: AtomicU8::new(Self::MARKED_STATE),
             scheduler,
             space_args,
             hooks: OnceLock::new(),
             rc_enabled,
-            is_end_of_satb_or_full_gc: false,
+            is_end_of_satb_or_full_gc: AtomicBool::new(false),
             rc: RefCountHelper::NEW,
         }
     }
@@ -567,12 +568,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.hooks.get().copied()
     }
 
-    pub fn prepare_rc(&mut self, pause: Pause) {
+    pub(crate) fn prepare_rc_shared(&self, pause: Pause) {
         // Initialize mark state for tracing
         if pause == Pause::Full || pause == Pause::InitialMark {
             // Update mark_state
             if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
-                self.mark_state = Self::MARKED_STATE;
+                self.mark_state.store(Self::MARKED_STATE, Ordering::Release);
             } else {
                 // For header metadata, we use cyclic mark bits.
                 unimplemented!("cyclic mark bits is not supported at the moment");
@@ -591,19 +592,29 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.flush_page_resource();
         }
         if pause == Pause::FinalMark || pause == Pause::Full {
-            self.is_end_of_satb_or_full_gc = true;
+            self.is_end_of_satb_or_full_gc
+                .store(true, Ordering::Release);
         }
     }
 
-    pub fn release_rc(&mut self) {
+    pub fn prepare_rc(&mut self, pause: Pause) {
+        self.prepare_rc_shared(pause);
+    }
+
+    pub(crate) fn release_rc_shared(&self) {
         self.flush_page_resource();
         self.rc.reset_inc_buffer_size();
-        self.is_end_of_satb_or_full_gc = false;
+        self.is_end_of_satb_or_full_gc
+            .store(false, Ordering::Release);
         self.reused_lines_consumed.store(0, Ordering::Relaxed);
     }
 
-    pub(crate) fn prepare(
-        &mut self,
+    pub fn release_rc(&mut self) {
+        self.release_rc_shared();
+    }
+
+    pub(crate) fn prepare_shared(
+        &self,
         major_gc: bool,
         plan_stats: Option<StatsForDefrag>,
         unlog_bits_op: UnlogBitsOperation,
@@ -615,7 +626,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if major_gc {
             // Update mark_state
             if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
-                self.mark_state = Self::MARKED_STATE;
+                self.mark_state.store(Self::MARKED_STATE, Ordering::Release);
             } else {
                 // For header metadata, we use cyclic mark bits.
                 unimplemented!("cyclic mark bits is not supported at the moment");
@@ -633,36 +644,24 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                         .store(Line::RESET_MARK_STATE, Ordering::Release);
                 }
             }
-        }
 
-        // All `&mut self` mutations are complete; bind `shared_self` so `self` is never used
-        // mutably after extending `space`'s lifetime for `PrepareBlockState` and
-        // `ClearVOBitsAfterPrepare` packets (preserving Stacked Borrows).
-        let shared_self: &Self = self;
-        // SAFETY: `ImmixSpace` lives inside the `'static` `MMTK<VM>` plan instance and outlives
-        // all `PrepareBlockState` and `ClearVOBitsAfterPrepare` work packets executed during this
-        // STW collection. `shared_self` is a shared borrow and `self` is not accessed mutably below.
-        let space = unsafe { &*(shared_self as *const Self) };
-
-        if major_gc {
             // Prepare each block for GC
-            let threshold = shared_self
-                .defrag
-                .defrag_spill_threshold
-                .load(Ordering::Acquire);
-            let work_packets = space.generate_chunk_tasks(|chunk| {
+            let threshold = self.defrag.defrag_spill_threshold.load(Ordering::Acquire);
+            let space_descriptor = self.common.descriptor;
+            let defrag_threshold = if self.in_defrag() {
+                Some(threshold)
+            } else {
+                None
+            };
+            let work_packets = self.generate_chunk_tasks(|chunk| {
                 Box::new(PrepareBlockState {
-                    space,
+                    space_descriptor,
                     chunk,
-                    defrag_threshold: if space.in_defrag() {
-                        Some(threshold)
-                    } else {
-                        None
-                    },
+                    defrag_threshold,
                     unlog_bits_op,
                 })
             });
-            space.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
+            self.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
         }
 
         #[cfg(feature = "vo_bit")]
@@ -671,7 +670,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 // If it is major GC, we always clear all VO bits because we are doing full-heap
                 // tracing.
                 Some(VOBitsClearingScope::FullGC)
-            } else if shared_self.space_args.mixed_age {
+            } else if self.space_args.mixed_age {
                 // StickyImmix nursery GC.
                 // Some lines (or blocks) contain only young objects,
                 // while other lines (or blocks) contain only old objects.
@@ -682,7 +681,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 } else {
                     // Young objects are allocated into empty lines.
                     // Only clear unmarked lines.
-                    let line_mark_state = shared_self.line_mark_state.load(Ordering::SeqCst);
+                    let line_mark_state = self.line_mark_state.load(Ordering::SeqCst);
                     Some(VOBitsClearingScope::Line {
                         state: line_mark_state,
                     })
@@ -694,30 +693,37 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             };
 
             if let Some(scope) = maybe_scope {
-                let work_packets = shared_self.generate_chunk_tasks(|chunk| {
+                let space_descriptor = self.common.descriptor;
+                let work_packets = self.generate_chunk_tasks(|chunk| {
                     Box::new(ClearVOBitsAfterPrepare {
-                        space,
+                        space_descriptor,
                         chunk,
                         scope,
                     })
                 });
-                shared_self.scheduler.work_buckets[WorkBucketStage::ClearVOBits]
-                    .bulk_add(work_packets);
+                self.scheduler.work_buckets[WorkBucketStage::ClearVOBits].bulk_add(work_packets);
             }
         }
     }
 
-    /// Release for the immix space.
-    pub(crate) fn release(&mut self, major_gc: bool, unlog_bits_op: UnlogBitsOperation) {
+    pub(crate) fn prepare(
+        &mut self,
+        major_gc: bool,
+        plan_stats: Option<StatsForDefrag>,
+        unlog_bits_op: UnlogBitsOperation,
+    ) {
+        self.prepare_shared(major_gc, plan_stats, unlog_bits_op);
+    }
+
+    /// Release for the immix space using shared `&self` access.
+    pub(crate) fn release_shared(&self, major_gc: bool, unlog_bits_op: UnlogBitsOperation) {
         debug_assert!(!self.rc_enabled);
-        if major_gc {
+        if major_gc && !super::BLOCK_ONLY {
             // Update line_unavail_state for hole searching after this GC.
-            if !super::BLOCK_ONLY {
-                self.line_unavail_state.store(
-                    self.line_mark_state.load(Ordering::Acquire),
-                    Ordering::Release,
-                );
-            }
+            self.line_unavail_state.store(
+                self.line_mark_state.load(Ordering::Acquire),
+                Ordering::Release,
+            );
         }
         // Clear reusable blocks list
         if !super::BLOCK_ONLY {
@@ -725,16 +731,18 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         self.lines_consumed.store(0, Ordering::Relaxed);
 
-        // Sweep chunks and blocks via `shared_self` so `self` (`&mut Self`) is not touched after
-        // `generate_sweep_tasks` forms `space: &'static Self`.
-        let shared_self: &Self = self;
-        let work_packets = shared_self.generate_sweep_tasks(unlog_bits_op);
-        shared_self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
+        let work_packets = self.generate_sweep_tasks(unlog_bits_op);
+        self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
+    }
+
+    /// Release for the immix space.
+    pub(crate) fn release(&mut self, major_gc: bool, unlog_bits_op: UnlogBitsOperation) {
+        self.release_shared(major_gc, unlog_bits_op);
     }
 
     /// This is called when a GC finished.
     /// Return whether this GC was a defrag GC, as a plan may want to know this.
-    pub fn end_of_gc(&mut self) -> bool {
+    pub fn end_of_gc(&self) -> bool {
         let did_defrag = self.defrag.in_defrag();
         if self.is_defrag_enabled() {
             self.defrag.reset_in_defrag();
@@ -762,16 +770,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Generate chunk sweep tasks
     fn generate_sweep_tasks(&self, unlog_bits_op: UnlogBitsOperation) -> Vec<Box<dyn GCWork<VM>>> {
         self.defrag.mark_histograms.lock().clear();
-        // SAFETY: `ImmixSpace` lives inside the `'static` `MMTK<VM>` plan instance and outlives
-        // all `SweepChunk` and `FlushPageResource` tasks executed during this STW `Release` stage.
-        let space = unsafe { &*(self as *const Self) };
+        let space_descriptor = self.common.descriptor;
         let epilogue = Arc::new(FlushPageResource {
-            space,
             counter: AtomicUsize::new(0),
         });
         let tasks = self.generate_chunk_tasks(|chunk| {
             Box::new(SweepChunk {
-                space,
+                space_descriptor,
                 chunk,
                 unlog_bits_op,
                 epilogue: epilogue.clone(),
@@ -781,57 +786,34 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         tasks
     }
 
-    /// Validate that `block` belongs to an allocated chunk owned by `self` and mint a
-    /// space-sealed [`MappedBlock`].
+    /// Check whether `block` is a non-zero aligned block belonging to an allocated chunk owned by `self`.
     #[inline]
-    pub(super) fn mapped_block(&self, block: Block) -> Option<MappedBlock<'_>> {
-        if !block.is_zero()
+    pub(super) fn has_allocated_block(&self, block: Block) -> bool {
+        !block.is_zero()
             && block.start().is_aligned_to(Block::BYTES)
             && self.address_in_space(block.start())
             && self.chunk_map.is_allocated_checked(block.chunk())
-        {
-            // SAFETY: `!block.is_zero()`, `block.start()` is aligned to `Block::BYTES`,
-            // `self.address_in_space(block.start())` proves `block.chunk()` belongs to `self`
-            // (eliminating any 4-bit `ChunkState` `space_index` collision with foreign spaces), and
-            // `is_allocated_checked` (`Acquire` load pairing with `set_allocated`'s `Release` store)
-            // verified `block.chunk()` is allocated in `self.chunk_map` after `self.acquire` mapped
-            // `self.common.metadata` (including global `RC_TABLE` when `self.rc_enabled`, asserted
-            // in `ImmixSpace::new`).
-            Some(unsafe { MappedBlock::new_unchecked(block, self.rc_enabled) })
-        } else {
-            None
-        }
     }
 
-    /// Iterate all blocks of an allocated `chunk` owned by `self` as space-sealed
-    /// [`MappedBlock`]s.
-    pub(super) fn iter_chunk_blocks(
-        &self,
-        chunk: Chunk,
-    ) -> impl Iterator<Item = MappedBlock<'_>> + '_ {
+    /// Iterate all blocks of an allocated `chunk` owned by `self`.
+    pub(super) fn iter_chunk_blocks(&self, chunk: Chunk) -> impl Iterator<Item = Block> {
         assert!(
             self.address_in_space(chunk.start()) && self.chunk_map.is_allocated_checked(chunk),
             "iter_chunk_blocks requires an allocated chunk owned by ImmixSpace: {:?}",
             chunk
         );
-        let rc_enabled = self.rc_enabled;
-        chunk.iter_region::<Block>().map(move |block| {
-            // SAFETY: `chunk` was verified non-zero, in `self` (`self.address_in_space(chunk.start())`,
-            // ruling out any 4-bit `ChunkState` `space_index` collision), and allocated in
-            // `self.chunk_map` above, so every `Block` in `chunk.iter_region::<Block>()` is
-            // non-zero, aligned to `Block::BYTES`, and in `self` for `'self`.
-            unsafe { MappedBlock::new_unchecked(block, rc_enabled) }
-        })
+        chunk.iter_region::<Block>()
     }
 
-    /// Visit every block currently recorded in `self.reusable_blocks` as a validated
-    /// [`MappedBlock`].
-    pub(super) fn iter_reusable_blocks(&self, mut f: impl FnMut(MappedBlock<'_>)) {
+    /// Visit every block currently recorded in `self.reusable_blocks`, asserting space ownership.
+    pub(super) fn iter_reusable_blocks(&self, mut f: impl FnMut(Block)) {
         self.reusable_blocks.iterate_blocks(|block| {
-            let mapped = self
-                .mapped_block(block)
-                .expect("Reusable block in ImmixSpace must belong to an allocated chunk");
-            f(mapped);
+            assert!(
+                self.has_allocated_block(block),
+                "Reusable block in ImmixSpace must belong to an allocated chunk: {:?}",
+                block
+            );
+            f(block);
         });
     }
 
@@ -864,14 +846,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         block.init(copy, false, self);
         self.chunk_map.set_allocated(block.chunk(), true);
-        let mapped = self
-            .mapped_block(block)
-            .expect("Newly acquired clean block must belong to an allocated chunk in ImmixSpace");
+        assert!(
+            self.has_allocated_block(block),
+            "Newly acquired clean block must belong to an allocated chunk in ImmixSpace: {:?}",
+            block
+        );
         if !self.rc_enabled {
             self.lines_consumed
                 .fetch_add(Block::LINES, Ordering::SeqCst);
         }
-        Some(mapped.block())
+        Some(block)
     }
 
     /// Pop a reusable block from the reusable block list.
@@ -880,11 +864,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             return None;
         }
         loop {
-            let popped = self.reusable_blocks.pop()?;
-            let mapped = self
-                .mapped_block(popped)
-                .expect("Reusable block popped from ImmixSpace must belong to an allocated chunk");
-            let block = mapped.block();
+            let block = self.reusable_blocks.pop()?;
+            assert!(
+                self.has_allocated_block(block),
+                "Reusable block popped from ImmixSpace must belong to an allocated chunk: {:?}",
+                block
+            );
             // Skip blocks that should be evacuated.
             if copy && block.is_defrag_source() {
                 continue;
@@ -1224,13 +1209,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Atomically mark an object.
     pub fn attempt_mark(&self, object: ObjectReference) -> bool {
+        let mark_state = self.mark_state.load(Ordering::Relaxed);
         loop {
             let old_value = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(
                 object,
                 None,
                 Ordering::SeqCst,
             );
-            if old_value == self.mark_state {
+            if old_value == mark_state {
                 return false;
             }
 
@@ -1238,7 +1224,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 .compare_exchange_metadata::<VM, u8>(
                     object,
                     old_value,
-                    self.mark_state,
+                    mark_state,
                     None,
                     Ordering::SeqCst,
                     Ordering::SeqCst,
@@ -1277,7 +1263,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub(crate) fn is_marked(&self, object: ObjectReference) -> bool {
-        self.is_marked_with(object, self.mark_state)
+        self.is_marked_with(object, self.mark_state.load(Ordering::Relaxed))
     }
 
     /// Check if an object is pinned.
@@ -1296,48 +1282,38 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// return a tuple of the start line and the end line (non-inclusive).
     ///
     /// Returns None if the search could not find any more holes.
-    ///
-    /// # Safety
-    /// - `search_start` must lie within an allocated block of `self` whose line/RC metadata is
-    ///   mapped.
-    /// - When `self.rc_enabled` is true, no thread may perform concurrent non-atomic writes to
-    ///   `RC_TABLE` for `search_start.block()`.
-    /// - When `!self.rc_enabled`, the caller must hold exclusive allocator ownership of
-    ///   `search_start.block()` (or run during STW) so no thread concurrently executes non-atomic
-    ///   `Line::MARK_TABLE.bzero_metadata` (`ImmixAllocator::acquire_clean_block`) on
-    ///   `search_start.block()`.
     #[allow(clippy::assertions_on_constants)]
-    pub(crate) unsafe fn get_next_available_lines(
+    pub(crate) fn get_next_available_lines(
         &self,
         copy: bool,
         search_start: Line,
     ) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
-        let mapped = self
-            .mapped_block(search_start.block())
-            .expect("get_next_available_lines requires search_start in an allocated Immix block");
+        let block = search_start.block();
+        assert!(
+            self.has_allocated_block(block),
+            "get_next_available_lines requires search_start in an allocated Immix block: {:?}",
+            block
+        );
         let start_cursor = search_start.index_within_block();
         if self.rc_enabled {
-            self.rc_get_next_available_lines(copy, mapped, start_cursor)
+            self.rc_get_next_available_lines(copy, block, start_cursor)
         } else {
-            // SAFETY: Caller guarantees `!self.rc_enabled` block exclusivity (no concurrent
-            // `ImmixAllocator::acquire_clean_block` `Line::MARK_TABLE.bzero_metadata` on `mapped`).
-            unsafe { self.normal_get_next_available_lines_mapped(mapped, start_cursor) }
+            self.normal_get_next_available_lines_in_block(block, start_cursor)
         }
     }
 
-    /// Search holes by ref-counts instead of line marks using a space-sealed [`MappedBlock`].
+    /// Search holes by ref-counts instead of line marks.
     #[allow(clippy::assertions_on_constants)]
     fn rc_get_next_available_lines(
         &self,
         copy: bool,
-        mapped: MappedBlock<'_>,
+        block: Block,
         mut search_cursor: Fin<LINES_IN_BLOCK>,
     ) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
         debug_assert!(self.rc_enabled);
-        let block = mapped.block();
-        let rc_array = mapped.rc_array();
+        let rc_array = block.rc_array();
         loop {
             // Find start
             let mut first_free_cursor = None;
@@ -1415,47 +1391,17 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
-    /// Scan `Line::MARK_TABLE` in `search_start.block()` for the next unmarked line hole.
-    ///
-    /// # Safety
-    /// - `!self.rc_enabled` and `search_start` must lie within an allocated block of `self`.
-    /// - The caller must hold exclusive allocator ownership of `search_start.block()` (or run
-    ///   during STW) so no thread concurrently executes non-atomic
-    ///   `Line::MARK_TABLE.bzero_metadata` (`ImmixAllocator::acquire_clean_block`) on that block.
+    /// Scan `block`'s `Line::MARK_TABLE` starting at `start_cursor` for the next available hole.
     #[allow(clippy::assertions_on_constants)]
-    pub unsafe fn normal_get_next_available_lines(
+    fn normal_get_next_available_lines_in_block(
         &self,
-        search_start: Line,
-    ) -> Option<(Line, Line)> {
-        debug_assert!(!self.rc_enabled);
-        let mapped = self.mapped_block(search_start.block()).expect(
-            "normal_get_next_available_lines requires search_start in an allocated Immix block",
-        );
-        // SAFETY: Caller guarantees exclusive ownership / STW absence of concurrent non-atomic
-        // `Line::MARK_TABLE.bzero_metadata` on `mapped`.
-        unsafe {
-            self.normal_get_next_available_lines_mapped(mapped, search_start.index_within_block())
-        }
-    }
-
-    /// Scan `mapped`'s `Line::MARK_TABLE` starting at `start_cursor` for the next available hole.
-    ///
-    /// # Safety
-    /// No thread may concurrently execute non-atomic writes (`Line::MARK_TABLE.bzero_metadata`) or
-    /// hold `&[u8]`/`&mut [u8]` aliases on `mapped`'s `Line::MARK_TABLE` bytes during this call.
-    #[allow(clippy::assertions_on_constants)]
-    unsafe fn normal_get_next_available_lines_mapped(
-        &self,
-        mapped: MappedBlock<'_>,
+        block: Block,
         start_cursor: Fin<LINES_IN_BLOCK>,
     ) -> Option<(Line, Line)> {
         debug_assert!(!self.rc_enabled);
         let unavail_state = self.line_unavail_state.load(Ordering::Acquire);
         let current_state = self.line_mark_state.load(Ordering::Acquire);
-        let block = mapped.block();
-        // SAFETY: Upheld by the caller: no concurrent non-atomic `Line::MARK_TABLE.bzero_metadata`
-        // or byte-slice alias touches `mapped`'s `Line::MARK_TABLE` bytes during this call.
-        let line_marks = unsafe { mapped.line_mark_table() };
+        let line_marks = block.line_mark_table();
 
         // Find start
         let mut start_idx = None;
@@ -1514,7 +1460,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         // Mark the object
         VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.store_atomic::<VM, u8>(
             object,
-            self.mark_state,
+            self.mark_state.load(Ordering::Relaxed),
             None,
             Ordering::SeqCst,
         );
@@ -1541,19 +1487,36 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 }
 
+fn with_immix_space<VM: VMBinding, R>(
+    mmtk: &'static MMTK<VM>,
+    descriptor: SpaceDescriptor,
+    f: impl FnOnce(&ImmixSpace<VM>) -> R,
+) -> R {
+    let mut f = Some(f);
+    let mut out = None;
+    mmtk.get_plan().for_each_space(&mut |s| {
+        if s.common().descriptor == descriptor {
+            let space = s
+                .downcast_ref::<ImmixSpace<VM>>()
+                .expect("Space descriptor must resolve to ImmixSpace");
+            out = Some((f.take().unwrap())(space));
+        }
+    });
+    out.expect("ImmixSpace must be registered in Plan::for_each_space")
+}
+
 /// A work packet to prepare each block for a major GC.
 /// Performs the action on a range of chunks.
-pub struct PrepareBlockState<VM: VMBinding> {
-    #[allow(dead_code)]
-    pub space: &'static ImmixSpace<VM>,
+pub struct PrepareBlockState {
+    pub space_descriptor: SpaceDescriptor,
     pub chunk: Chunk,
     pub defrag_threshold: Option<usize>,
     pub unlog_bits_op: UnlogBitsOperation,
 }
 
-impl<VM: VMBinding> PrepareBlockState<VM> {
+impl PrepareBlockState {
     /// Clear object mark table
-    fn reset_object_mark(&self) {
+    fn reset_object_mark<VM: VMBinding>(&self) {
         // NOTE: We reset the mark bits because cyclic mark bit is currently not supported, yet.
         // See `ImmixSpace::prepare`.
         if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC {
@@ -1562,46 +1525,47 @@ impl<VM: VMBinding> PrepareBlockState<VM> {
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
+impl<VM: VMBinding> GCWork<VM> for PrepareBlockState {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         // Clear object mark table for this chunk
-        self.reset_object_mark();
+        self.reset_object_mark::<VM>();
         // The number of defrag source blocks.  For debugging.
         let mut num_defrag_source_blocks = 0;
         let mut num_blocks_prepared = 0;
         // Iterate over all blocks in this chunk
-        let space: &ImmixSpace<VM> = self.space;
-        for mapped in space.iter_chunk_blocks(self.chunk) {
-            let block = mapped.block();
-            let state = block.get_state();
-            // Skip unallocated blocks.
-            if state == BlockState::Unallocated {
-                continue;
+        with_immix_space(mmtk, self.space_descriptor, |space| {
+            let defrag_enabled = space.is_defrag_enabled();
+            for block in space.iter_chunk_blocks(self.chunk) {
+                let state = block.get_state();
+                // Skip unallocated blocks.
+                if state == BlockState::Unallocated {
+                    continue;
+                }
+                num_blocks_prepared += 1;
+                // Check if this block needs to be defragmented.
+                let is_defrag_source = if !defrag_enabled {
+                    // Do not set any block as defrag source if defrag is disabled.
+                    false
+                } else if *mmtk.options.immix_defrag_every_block {
+                    // Set every block as defrag source if so desired.
+                    true
+                } else if let Some(defrag_threshold) = self.defrag_threshold {
+                    // This GC is a defrag GC.
+                    block.get_holes() > defrag_threshold
+                } else {
+                    // Not a defrag GC.
+                    false
+                };
+                if is_defrag_source {
+                    num_defrag_source_blocks += 1;
+                }
+                block.set_as_defrag_source(is_defrag_source);
+                // Clear block mark data.
+                block.set_state(BlockState::Unmarked);
+                debug_assert!(!block.get_state().is_reusable());
+                debug_assert_ne!(block.get_state(), BlockState::Marked);
             }
-            num_blocks_prepared += 1;
-            // Check if this block needs to be defragmented.
-            let is_defrag_source = if !self.space.is_defrag_enabled() {
-                // Do not set any block as defrag source if defrag is disabled.
-                false
-            } else if *mmtk.options.immix_defrag_every_block {
-                // Set every block as defrag source if so desired.
-                true
-            } else if let Some(defrag_threshold) = self.defrag_threshold {
-                // This GC is a defrag GC.
-                block.get_holes() > defrag_threshold
-            } else {
-                // Not a defrag GC.
-                false
-            };
-            if is_defrag_source {
-                num_defrag_source_blocks += 1;
-            }
-            block.set_as_defrag_source(is_defrag_source);
-            // Clear block mark data.
-            block.set_state(BlockState::Unmarked);
-            debug_assert!(!block.get_state().is_reusable());
-            debug_assert_ne!(block.get_state(), BlockState::Marked);
-        }
+        });
 
         probe!(
             mmtk,
@@ -1616,31 +1580,18 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
 }
 
 /// Chunk sweeping work packet.
-struct SweepChunk<VM: VMBinding> {
-    space: &'static ImmixSpace<VM>,
+struct SweepChunk {
+    space_descriptor: SpaceDescriptor,
     chunk: Chunk,
     unlog_bits_op: UnlogBitsOperation,
     /// A destructor invoked when all `SweepChunk` packets are finished.
-    epilogue: Arc<FlushPageResource<VM>>,
+    epilogue: Arc<FlushPageResource>,
 }
 
-impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
+impl<VM: VMBinding> GCWork<VM> for SweepChunk {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        assert!(
-            self.space.address_in_space(self.chunk.start())
-                && self.space.chunk_map.is_allocated_checked(self.chunk)
-        );
-
-        let mut histogram = self.space.defrag.new_histogram();
-        let line_mark_state = if super::BLOCK_ONLY {
-            None
-        } else {
-            Some(self.space.line_mark_state.load(Ordering::Acquire))
-        };
         // Hints for clearing side forwarding bits.
         let is_moving_gc = mmtk.get_plan().current_gc_may_move_object();
-        let is_defrag_gc = self.space.defrag.in_defrag();
-
         // number of swept (completely free) blocks.
         let mut swept_blocks = 0;
         // number of reused blocks.
@@ -1648,47 +1599,70 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
         // number of non-free blocks that cannot be reused (e.g. full, or non-empty when block-only).
         let mut unreused_blocks = 0;
 
-        // Iterate over all allocated blocks in this chunk.
-        let space: &ImmixSpace<VM> = self.space;
-        for mapped in space
-            .iter_chunk_blocks(self.chunk)
-            .filter(|mapped| mapped.block().get_state() != BlockState::Unallocated)
-        {
-            let block = mapped.block();
-            // Clear side forwarding bits.
-            // In the beginning of the next GC, no side forwarding bits shall be set.
-            // In this way, we can omit clearing forwarding bits when copying object.
-            // See `GCWorkerCopyContext::post_copy`.
-            // Note, `mapped.sweep()` overwrites `DEFRAG_STATE_TABLE` with the number of holes,
-            // but we need it to know if a block is a defrag source.
-            // We clear forwarding bits before `mapped.sweep()`.
-            if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC {
-                if is_moving_gc {
-                    let objects_may_move = if is_defrag_gc {
-                        // If it is a defrag GC, we only clear forwarding bits for defrag sources.
-                        block.is_defrag_source()
-                    } else {
-                        // Otherwise, it must be a nursery GC of StickyImmix with copying nursery.
-                        // We don't have information about which block contains moved objects,
-                        // so we have to clear forwarding bits for all blocks.
-                        true
-                    };
-                    if objects_may_move {
-                        side.bzero_metadata(block.start(), Block::BYTES);
+        with_immix_space(mmtk, self.space_descriptor, |space| {
+            assert!(
+                space.address_in_space(self.chunk.start())
+                    && space.chunk_map.is_allocated_checked(self.chunk)
+            );
+
+            let mut histogram = space.defrag.new_histogram();
+            let line_mark_state = if super::BLOCK_ONLY {
+                None
+            } else {
+                Some(space.line_mark_state.load(Ordering::Acquire))
+            };
+            let is_defrag_gc = space.defrag.in_defrag();
+
+            // Iterate over all allocated blocks in this chunk.
+            for block in space
+                .iter_chunk_blocks(self.chunk)
+                .filter(|block| block.get_state() != BlockState::Unallocated)
+            {
+                // Clear side forwarding bits.
+                // In the beginning of the next GC, no side forwarding bits shall be set.
+                // In this way, we can omit clearing forwarding bits when copying object.
+                // See `GCWorkerCopyContext::post_copy`.
+                // Note, `block.sweep_allocated()` overwrites `DEFRAG_STATE_TABLE` with the number of holes,
+                // but we need it to know if a block is a defrag source.
+                // We clear forwarding bits before `block.sweep_allocated()`.
+                if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC {
+                    if is_moving_gc {
+                        let objects_may_move = if is_defrag_gc {
+                            // If it is a defrag GC, we only clear forwarding bits for defrag sources.
+                            block.is_defrag_source()
+                        } else {
+                            // Otherwise, it must be a nursery GC of StickyImmix with copying nursery.
+                            // We don't have information about which block contains moved objects,
+                            // so we have to clear forwarding bits for all blocks.
+                            true
+                        };
+                        if objects_may_move {
+                            side.bzero_metadata(block.start(), Block::BYTES);
+                        }
                     }
+                }
+
+                match block.sweep_allocated(space, &mut histogram, line_mark_state) {
+                    BlockSweepResult::Swept => swept_blocks += 1,
+                    BlockSweepResult::Reused => reused_blocks += 1,
+                    BlockSweepResult::NoReuse => unreused_blocks += 1,
                 }
             }
 
-            // SAFETY: `SweepChunk` runs during the STW `Release` stage with all mutators parked
-            // (so no `ImmixAllocator::acquire_clean_block` `bzero_metadata` can run), `mapped` was
-            // filtered to `get_state() != BlockState::Unallocated`, and this `SweepChunk` packet
-            // has exclusive sweep ownership of `self.chunk`'s blocks.
-            match unsafe { mapped.sweep(space, &mut histogram, line_mark_state) } {
-                BlockSweepResult::Swept => swept_blocks += 1,
-                BlockSweepResult::Reused => reused_blocks += 1,
-                BlockSweepResult::NoReuse => unreused_blocks += 1,
+            // number of allocated blocks.
+            let allocated_blocks = reused_blocks + unreused_blocks;
+
+            // Set this chunk as free if there is not live blocks.
+            if allocated_blocks == 0 {
+                space.chunk_map.set_allocated(self.chunk, false)
             }
-        }
+            space.defrag.add_completed_mark_histogram(histogram);
+
+            self.unlog_bits_op
+                .execute::<VM>(self.chunk.start(), Chunk::BYTES);
+
+            self.epilogue.finish_one_work_packet(space);
+        });
 
         probe!(
             mmtk,
@@ -1697,41 +1671,26 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
             reused_blocks,
             unreused_blocks
         );
-
-        // number of allocated blocks.
-        let allocated_blocks = reused_blocks + unreused_blocks;
-
-        // Set this chunk as free if there is not live blocks.
-        if allocated_blocks == 0 {
-            self.space.chunk_map.set_allocated(self.chunk, false)
-        }
-        self.space.defrag.add_completed_mark_histogram(histogram);
-
-        self.unlog_bits_op
-            .execute::<VM>(self.chunk.start(), Chunk::BYTES);
-
-        self.epilogue.finish_one_work_packet();
     }
 }
 
 /// Count number of remaining work pacets, and flush page resource if all packets are finished.
-struct FlushPageResource<VM: VMBinding> {
-    space: &'static ImmixSpace<VM>,
+struct FlushPageResource {
     counter: AtomicUsize,
 }
 
-impl<VM: VMBinding> FlushPageResource<VM> {
+impl FlushPageResource {
     /// Called after a related work packet is finished.
-    fn finish_one_work_packet(&self) {
+    fn finish_one_work_packet<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
         if 1 == self.counter.fetch_sub(1, Ordering::SeqCst) {
             // We've finished releasing all the dead blocks to the BlockPageResource's thread-local queues.
             // Now flush the BlockPageResource.
-            self.space.flush_page_resource()
+            space.flush_page_resource()
         }
     }
 }
 
-impl<VM: VMBinding> Drop for FlushPageResource<VM> {
+impl Drop for FlushPageResource {
     fn drop(&mut self) {
         epilogue::debug_assert_counter_zero(&self.counter, "FlushPageResource::counter");
     }
@@ -1859,43 +1818,43 @@ enum VOBitsClearingScope {
 
 /// A work packet to clear VO bit metadata after Prepare.
 #[cfg(feature = "vo_bit")]
-struct ClearVOBitsAfterPrepare<VM: VMBinding> {
-    space: &'static ImmixSpace<VM>,
+struct ClearVOBitsAfterPrepare {
+    space_descriptor: SpaceDescriptor,
     chunk: Chunk,
     scope: VOBitsClearingScope,
 }
 
 #[cfg(feature = "vo_bit")]
-impl<VM: VMBinding> GCWork<VM> for ClearVOBitsAfterPrepare<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+impl<VM: VMBinding> GCWork<VM> for ClearVOBitsAfterPrepare {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         match self.scope {
             VOBitsClearingScope::FullGC => {
                 vo_bit::bzero_vo_bit(self.chunk.start(), Chunk::BYTES);
             }
             VOBitsClearingScope::BlockOnly => {
-                self.clear_blocks(None);
+                self.clear_blocks(mmtk, None);
             }
             VOBitsClearingScope::Line { state } => {
-                self.clear_blocks(Some(state));
+                self.clear_blocks(mmtk, Some(state));
             }
         }
     }
 }
 
 #[cfg(feature = "vo_bit")]
-impl<VM: VMBinding> ClearVOBitsAfterPrepare<VM> {
-    fn clear_blocks(&mut self, line_mark_state: Option<u8>) {
-        let space: &ImmixSpace<VM> = self.space;
-        for mapped in space
-            .iter_chunk_blocks(self.chunk)
-            .filter(|mapped| mapped.block().get_state() != BlockState::Unallocated)
-        {
-            // SAFETY: `ClearVOBitsAfterPrepare` runs during STW immediately after `Prepare` with
-            // all mutators parked (no concurrent `Line::MARK_TABLE.bzero_metadata`), `mapped` is
-            // allocated, and this packet exclusively owns `self.chunk`'s `VO_BIT` range.
-            unsafe {
-                mapped.clear_vo_bits_for_unmarked_regions(line_mark_state);
+impl ClearVOBitsAfterPrepare {
+    fn clear_blocks<VM: VMBinding>(
+        &mut self,
+        mmtk: &'static MMTK<VM>,
+        line_mark_state: Option<u8>,
+    ) {
+        with_immix_space(mmtk, self.space_descriptor, |space| {
+            for block in space
+                .iter_chunk_blocks(self.chunk)
+                .filter(|block| block.get_state() != BlockState::Unallocated)
+            {
+                block.clear_unmarked_vo_bits(line_mark_state);
             }
-        }
+        });
     }
 }

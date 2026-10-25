@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use crate::global_state::GlobalState;
 use crate::util::address::Address;
 #[cfg(feature = "analysis")]

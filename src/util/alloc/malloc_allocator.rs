@@ -18,13 +18,13 @@ pub struct MallocAllocator<VM: VMBinding> {
     /// [`VMThread`] associated with this allocator instance
     pub tls: VMThread,
     /// [`Space`](src/policy/space/Space) instance associated with this allocator instance.
-    space: &'static MallocSpace<VM>,
+    space: Option<&'static MallocSpace<VM>>,
     context: Arc<AllocatorContext<VM>>,
 }
 
 impl<VM: VMBinding> Allocator<VM> for MallocAllocator<VM> {
     fn get_space(&self) -> &'static dyn Space<VM> {
-        self.space as &'static dyn Space<VM>
+        self.malloc_space() as &'static dyn Space<VM>
     }
 
     fn get_context(&self) -> &AllocatorContext<VM> {
@@ -44,11 +44,32 @@ impl<VM: VMBinding> Allocator<VM> for MallocAllocator<VM> {
     }
 
     fn alloc_slow_once(&mut self, size: usize, align: usize, offset: usize) -> Address {
-        self.space.alloc(self.tls, size, align, offset)
+        self.malloc_space().alloc(self.tls, size, align, offset)
     }
 }
 
 impl<VM: VMBinding> MallocAllocator<VM> {
+    pub(in crate::util::alloc) fn new_uninit(
+        tls: VMThread,
+        context: Arc<AllocatorContext<VM>>,
+    ) -> Self {
+        MallocAllocator {
+            tls,
+            space: None,
+            context,
+        }
+    }
+
+    #[inline(always)]
+    pub(in crate::util::alloc) fn is_initialized(&self) -> bool {
+        self.space.is_some()
+    }
+
+    #[inline(always)]
+    fn malloc_space(&self) -> &'static MallocSpace<VM> {
+        self.space.expect("MallocAllocator slot is not initialized")
+    }
+
     pub(crate) fn new(
         tls: VMThread,
         space: &'static MallocSpace<VM>,
@@ -56,7 +77,7 @@ impl<VM: VMBinding> MallocAllocator<VM> {
     ) -> Self {
         MallocAllocator {
             tls,
-            space,
+            space: Some(space),
             context,
         }
     }

@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use std::sync::Arc;
 
 use crate::policy::largeobjectspace::LargeObjectSpace;
@@ -16,7 +18,7 @@ pub struct LargeObjectAllocator<VM: VMBinding> {
     /// [`VMThread`] associated with this allocator instance
     pub tls: VMThread,
     /// [`Space`](src/policy/space/Space) instance associated with this allocator instance.
-    space: &'static LargeObjectSpace<VM>,
+    space: Option<&'static LargeObjectSpace<VM>>,
     context: Arc<AllocatorContext<VM>>,
 }
 
@@ -30,8 +32,7 @@ impl<VM: VMBinding> Allocator<VM> for LargeObjectAllocator<VM> {
     }
 
     fn get_space(&self) -> &'static dyn Space<VM> {
-        // Casting the interior of the Option: from &LargeObjectSpace to &dyn Space
-        self.space as &'static dyn Space<VM>
+        self.los_space() as &'static dyn Space<VM>
     }
 
     fn does_thread_local_allocation(&self) -> bool {
@@ -40,7 +41,6 @@ impl<VM: VMBinding> Allocator<VM> for LargeObjectAllocator<VM> {
 
     fn alloc(&mut self, size: usize, align: usize, offset: usize) -> Address {
         let cell: Address = self.alloc_slow(size, align, offset);
-        // We may get a null ptr from alloc due to the VM being OOM
         if !cell.is_zero() {
             allocator::align_allocation::<VM>(cell, align, offset)
         } else {
@@ -59,12 +59,34 @@ impl<VM: VMBinding> Allocator<VM> for LargeObjectAllocator<VM> {
             return Address::ZERO;
         }
 
-        self.space
+        self.los_space()
             .allocate_pages(self.tls, pages, self.get_context().get_alloc_options())
     }
 }
 
 impl<VM: VMBinding> LargeObjectAllocator<VM> {
+    pub(in crate::util::alloc) fn new_uninit(
+        tls: VMThread,
+        context: Arc<AllocatorContext<VM>>,
+    ) -> Self {
+        LargeObjectAllocator {
+            tls,
+            space: None,
+            context,
+        }
+    }
+
+    #[inline(always)]
+    pub(in crate::util::alloc) fn is_initialized(&self) -> bool {
+        self.space.is_some()
+    }
+
+    #[inline(always)]
+    fn los_space(&self) -> &'static LargeObjectSpace<VM> {
+        self.space
+            .expect("LargeObjectAllocator slot is not initialized")
+    }
+
     pub(crate) fn new(
         tls: VMThread,
         space: &'static LargeObjectSpace<VM>,
@@ -72,7 +94,7 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
     ) -> Self {
         LargeObjectAllocator {
             tls,
-            space,
+            space: Some(space),
             context,
         }
     }

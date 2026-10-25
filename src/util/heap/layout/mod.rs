@@ -5,7 +5,7 @@ mod mmapper;
 pub use self::mmapper::Mmapper;
 
 mod map;
-pub(crate) use self::map::CreateFreeListResult;
+pub(crate) use self::map::AllocatedChunkRegion;
 pub use self::map::VMMap;
 use self::vm_layout::vm_layout;
 mod map32;
