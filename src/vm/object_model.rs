@@ -173,18 +173,24 @@ pub trait ObjectModel<VM: VMBinding> {
     ///
     /// # Safety
     ///
-    /// * `object` must refer to a live allocated object whose header range for `metadata_spec` is
-    ///   mapped, initialized, and properly aligned for `T`.
-    /// * This is a non-atomic load, so the caller must ensure no concurrent writes race with this
-    ///   access to the same metadata byte/word.
+    /// * `object` must refer to a live allocated object, and the computed metadata address
+    ///   `object.to_header::<VM>() + (metadata_spec.bit_offset >> 3)` must be non-null, mapped,
+    ///   initialized, and aligned to `u8` (when `metadata_spec.num_of_bits < 8`, reading 1 byte)
+    ///   or `T` (when `metadata_spec.num_of_bits >= 8`, reading `size_of::<T>()` bytes).
+    /// * `metadata_spec` must be valid for `T`: either `0 < metadata_spec.num_of_bits < 8`
+    ///   (fitting within a single byte with `mask.is_none()`) or
+    ///   `metadata_spec.num_of_bits == size_of::<T>() * 8` (and bit-aligned to `T`).
+    /// * No live `&mut` reference may alias the accessed header byte/word for the duration of this
+    ///   call, and no concurrent writes may race with this non-atomic load.
     unsafe fn load_metadata<T: MetadataValue>(
         metadata_spec: &HeaderMetadataSpec,
         object: ObjectReference,
         mask: Option<T>,
     ) -> T {
         let header = object.to_header::<VM>();
-        // SAFETY: The caller upholds that `object`'s header metadata at `metadata_spec` is mapped,
-        // initialized, aligned for `T`, and free of concurrent conflicting writes.
+        // SAFETY: By caller contract, `header + (metadata_spec.bit_offset >> 3)` is non-null,
+        // mapped, initialized, and aligned for the `u8`/`T` access specified by the valid
+        // `metadata_spec`, with no aliasing `&mut` reference and no concurrent writes.
         unsafe { metadata_spec.load::<T>(header, mask) }
     }
 
@@ -219,11 +225,17 @@ pub trait ObjectModel<VM: VMBinding> {
     ///
     /// # Safety
     ///
-    /// * `object` must refer to a live allocated object whose header range for `metadata_spec` is
-    ///   mapped, initialized, writable, and properly aligned for `T`.
-    /// * This is a non-atomic store (and a non-atomic read-modify-write for sub-byte or masked
-    ///   specs), so the caller must ensure exclusive access to the underlying byte/word with no
-    ///   concurrent reads or writes.
+    /// * `object` must refer to a live allocated object, and the computed metadata address
+    ///   `object.to_header::<VM>() + (metadata_spec.bit_offset >> 3)` must be non-null, mapped,
+    ///   initialized, writable, and aligned to `u8` (when `metadata_spec.num_of_bits < 8`,
+    ///   accessing 1 byte) or `T` (when `metadata_spec.num_of_bits >= 8`, accessing
+    ///   `size_of::<T>()` bytes).
+    /// * `metadata_spec` must be valid for `T` (`0 < metadata_spec.num_of_bits < 8` within a
+    ///   single byte with `mask.is_none()`, or `metadata_spec.num_of_bits == size_of::<T>() * 8`
+    ///   bit-aligned to `T`), and `val` must fit within `metadata_spec.num_of_bits`.
+    /// * No live `&` or `&mut` reference may alias the accessed header byte/word for the duration
+    ///   of this call, and no concurrent reads or writes may race with this non-atomic store (or
+    ///   read-modify-write for sub-byte / masked specs).
     unsafe fn store_metadata<T: MetadataValue>(
         metadata_spec: &HeaderMetadataSpec,
         object: ObjectReference,
@@ -231,8 +243,10 @@ pub trait ObjectModel<VM: VMBinding> {
         mask: Option<T>,
     ) {
         let header = object.to_header::<VM>();
-        // SAFETY: The caller upholds that `object`'s header metadata at `metadata_spec` is mapped,
-        // initialized, aligned for `T`, and exclusively accessed without concurrent reads/writes.
+        // SAFETY: By caller contract, `header + (metadata_spec.bit_offset >> 3)` is non-null,
+        // mapped, initialized, writable, and aligned for the `u8`/`T` access of valid
+        // `metadata_spec`, `val` fits in `metadata_spec.num_of_bits`, and no `&`/`&mut` alias or
+        // concurrent read/write races with this non-atomic access.
         unsafe { metadata_spec.store::<T>(header, val, mask) }
     }
 

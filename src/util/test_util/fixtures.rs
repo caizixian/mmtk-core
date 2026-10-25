@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 use std::sync::{Mutex, OnceLock};
 
 use crate::memory_manager;
-use crate::util::test_util::mock_vm::{MockVM, MutatorHandle, MUTATOR_PARK};
+use crate::util::test_util::mock_vm::{current_thread_tls, MockVM, MutatorHandle, MUTATOR_PARK};
 use crate::util::{ObjectReference, VMMutatorThread, VMThread};
 use crate::vm::VMBinding;
 use crate::AllocationSemantics;
@@ -253,14 +253,13 @@ impl<VM: VMBinding> GenericMutatorFixture<VM> {
     }
 
     pub fn mutator(&mut self) -> &mut Mutator<VM> {
-        assert!(
-            MUTATOR_PARK.is_not_parked(self.mutator.0),
-            "Cannot borrow fixture mutator while it is parked in a GC safepoint"
-        );
+        MUTATOR_PARK.claim_unparked(self.mutator.0, current_thread_tls());
         // SAFETY: `self.mutator` was uniquely allocated and registered by `MutatorHandle::bind`
         // when constructing this `GenericMutatorFixture` (`GenericMutatorFixture` is neither
         // `Clone` nor `Copy`). Holding `&mut self` guarantees no other fixture reference exists,
-        // and `is_not_parked` guarantees no GC worker can access this mutator via `MUTATOR_PARK`.
+        // and `claim_unparked` atomically verifies `self.mutator` is not parked at a GC safepoint
+        // and records `current_thread_tls()` as the sole host thread allowed to park `self.mutator`
+        // in `MUTATOR_PARK`, preventing cross-thread spoof-parking while this borrow is live.
         unsafe { self.mutator.as_mock_mutator() }
     }
 

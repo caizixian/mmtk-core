@@ -74,13 +74,15 @@ pub unsafe extern "C" fn mmtk_set_fixed_heap_size(
 /// Initialize the global MMTk singleton by consuming `builder`.
 ///
 /// # Safety
-/// `builder` must be a non-null pointer originally returned by [`mmtk_create_builder`]
-/// (`Box::into_raw`), must not have been freed or previously passed to `mmtk_init`, and must have
-/// no remaining aliases or uses after ownership is transferred to this function.
+/// `builder` must be a non-null, properly aligned pointer originally returned by
+/// [`mmtk_create_builder`] (`Box::into_raw`), must not have been freed or previously passed to
+/// `mmtk_init`, and must have no concurrent or subsequent aliases or uses once ownership is
+/// transferred to this function.
 #[no_mangle]
 pub unsafe extern "C" fn mmtk_init(builder: *mut MMTKBuilder) {
     // SAFETY: By caller contract, `builder` was allocated via `Box::into_raw` in
-    // `mmtk_create_builder` and exclusive ownership is transferred here without prior free.
+    // `mmtk_create_builder`, has not been freed, and has no concurrent or subsequent aliases as
+    // exclusive ownership is transferred here.
     let builder = unsafe { Box::from_raw(builder) };
 
     // Create MMTK instance.
@@ -100,13 +102,15 @@ pub extern "C" fn mmtk_bind_mutator(tls: VMMutatorThread) -> *mut Mutator<DummyV
 /// Destroy and reclaim a mutator previously created by [`mmtk_bind_mutator`].
 ///
 /// # Safety
-/// `mutator` must be a non-null pointer originally returned by [`mmtk_bind_mutator`]
-/// (`Box::into_raw`), must not have been previously destroyed, must not be destroyed during a GC
-/// pause, and must have no remaining aliases or uses after ownership is transferred to this call.
+/// `mutator` must be a non-null, properly aligned pointer originally returned by
+/// [`mmtk_bind_mutator`] (`Box::into_raw`), must not have been previously destroyed, must not be
+/// destroyed during a GC pause, and must have no concurrent or subsequent aliases or uses once
+/// ownership is transferred to this call.
 #[no_mangle]
 pub unsafe extern "C" fn mmtk_destroy_mutator(mutator: *mut Mutator<DummyVM>) {
     // SAFETY: By caller contract, `mutator` was allocated via `Box::into_raw` in
-    // `mmtk_bind_mutator` and exclusive ownership is transferred here without prior destruction.
+    // `mmtk_bind_mutator`, has not been previously destroyed, and has no concurrent or subsequent
+    // aliases as exclusive ownership is transferred here.
     let mut mutator = unsafe { Box::from_raw(mutator) };
     // notify mmtk-core about destroyed mutator, then let `mutator` drop to reclaim memory
     memory_manager::destroy_mutator(&mut mutator);
@@ -180,14 +184,15 @@ pub unsafe extern "C" fn mmtk_post_alloc(
 /// Start the main execution loop for a GC worker thread.
 ///
 /// # Safety
-/// `worker` must be a non-null pointer to a `GCWorker<DummyVM>` originally allocated via
-/// `Box::into_raw` by MMTk for worker thread `tls`, must not have been freed or previously passed
-/// to `mmtk_start_worker`, and exclusive ownership is transferred to this call after
-/// [`mmtk_init`].
+/// `worker` must be a non-null, properly aligned pointer to a `GCWorker<DummyVM>` originally
+/// allocated via `Box::into_raw` by MMTk for worker thread `tls` after [`mmtk_init`], must not
+/// have been freed or previously passed to `mmtk_start_worker`, and must have no concurrent or
+/// subsequent aliases or uses once exclusive ownership is transferred to this call.
 #[no_mangle]
 pub unsafe extern "C" fn mmtk_start_worker(tls: VMWorkerThread, worker: *mut GCWorker<DummyVM>) {
     // SAFETY: By caller contract, `worker` was allocated via `Box::into_raw` for
-    // `GCWorker<DummyVM>` and exclusive ownership is transferred here without prior free.
+    // `GCWorker<DummyVM>`, has not been freed, and has no concurrent or subsequent aliases as
+    // exclusive ownership is transferred here.
     let worker = unsafe { Box::from_raw(worker) };
     memory_manager::start_worker::<DummyVM>(mmtk(), tls, worker)
 }
@@ -359,7 +364,8 @@ mod tests {
 
         // Init MMTk
         // SAFETY: `builder` was created by `mmtk_create_builder`, has not yet been consumed, and
-        // is not used again after transferring ownership to `mmtk_init`.
+        // has no concurrent or subsequent aliases or uses once ownership is transferred to
+        // `mmtk_init`.
         unsafe { mmtk_init(builder) };
 
         // Create an MMTk mutator
@@ -381,8 +387,9 @@ mod tests {
         unsafe { mmtk_post_alloc(mutator, obj, 16, mmtk::AllocationSemantics::Default) };
 
         // If the thread quits, destroy the mutator.
-        // SAFETY: `mutator` was returned by `mmtk_bind_mutator`, is not in a GC pause, and is not
-        // accessed after transferring ownership to `mmtk_destroy_mutator`.
+        // SAFETY: `mutator` was returned by `mmtk_bind_mutator`, is not in a GC pause, and has no
+        // concurrent or subsequent aliases or uses once ownership is transferred to
+        // `mmtk_destroy_mutator`.
         unsafe { mmtk_destroy_mutator(mutator) };
     }
 }

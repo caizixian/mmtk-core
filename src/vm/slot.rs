@@ -207,18 +207,22 @@ unsafe impl Sync for SimpleSlot {}
 
 impl Slot for SimpleSlot {
     fn load(&self) -> Option<ObjectReference> {
-        // SAFETY: Under MMTk's `Slot` VM binding contract (frozen public safe trait API),
-        // `self.slot_addr` is non-null, aligned to `align_of::<Atomic<Address>>()`, and points to
-        // live, initialized slot memory valid for atomic word reads during scanning/barriers.
+        // SAFETY: Under MMTk's `Slot` VM binding contract (frozen public safe trait API):
+        // (a) `self.slot_addr` is non-null, aligned to `align_of::<Atomic<Address>>()`, and points
+        //     to live, initialized slot memory;
+        // (b) no active `&mut` reference aliases `*self.slot_addr` for the duration of this call;
+        // (c) no concurrent non-atomic writes race with this atomic load.
         let addr = unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) };
         ObjectReference::from_raw_address(addr)
     }
 
     fn store(&self, object: ObjectReference) {
-        // SAFETY: Under MMTk's `Slot` VM binding contract (frozen public safe trait API),
-        // `self.slot_addr` is non-null, aligned to `align_of::<Atomic<Address>>()`, and points to
-        // live, writable slot memory; using an atomic store avoids data races when multiple GC
-        // workers trace duplicate edges (`may_trace_duplicate_edges`).
+        // SAFETY: Under MMTk's `Slot` VM binding contract (frozen public safe trait API):
+        // (a) `self.slot_addr` is non-null, aligned to `align_of::<Atomic<Address>>()`, and points
+        //     to live, initialized (required to form `&Atomic<Address>`), writable slot memory;
+        // (b) no active `&mut` reference aliases `*self.slot_addr` for the duration of this call;
+        // (c) no concurrent non-atomic reads or writes race with this atomic store (concurrent GC
+        //     workers tracing duplicate edges via `SimpleSlot` also use `Atomic<Address>`).
         unsafe { (*self.slot_addr).store(object.to_raw_address(), atomic::Ordering::Relaxed) }
     }
 }
@@ -316,23 +320,36 @@ impl MemorySlice for Range<Address> {
     }
 
     fn bytes(&self) -> usize {
+        assert!(
+            self.end >= self.start,
+            "Invalid Address range {:?}..{:?}: end < start",
+            self.start,
+            self.end
+        );
         self.end - self.start
     }
 
     fn copy(src: &Self, tgt: &Self) {
-        debug_assert_eq!(src.bytes(), tgt.bytes());
+        let bytes = src.bytes();
+        assert_eq!(bytes, tgt.bytes());
         debug_assert_eq!(
-            src.bytes() & ((1 << LOG_BYTES_IN_ADDRESS) - 1),
+            bytes & ((1 << LOG_BYTES_IN_ADDRESS) - 1),
             0,
             "bytes are not a multiple of words"
         );
-        let bytes = tgt.bytes();
+        if bytes == 0 {
+            return;
+        }
         let src = src.start().to_ptr::<u8>();
         let tgt = tgt.start().to_mut_ptr::<u8>();
-        // SAFETY: Under MMTk's `MemorySlice` VM binding contract (frozen public safe trait API),
-        // `src` and `tgt` represent valid, initialized, equal-length (`bytes`) heap memory ranges
-        // with read provenance on `src` and exclusive write provenance on `tgt`. Copying as `u8`
-        // requires only 1-byte alignment and handles potentially overlapping ranges via `ptr::copy`.
+        assert!(!src.is_null() && !tgt.is_null());
+        // SAFETY: `bytes > 0` and both `src` and `tgt` are verified non-null with equal byte
+        // length `bytes`. Under MMTk's `MemorySlice` VM binding contract (frozen public safe trait
+        // API), `src` is valid for reads of `bytes` initialized `u8` bytes, `tgt` is valid for
+        // writes of `bytes` bytes (possibly overlapping `src` within the same array allocation,
+        // which `std::ptr::copy` handles), `u8` has alignment 1, no active Rust `&mut` reference
+        // aliases `src` and no active `&`/`&mut` reference aliases `tgt`, and no concurrent
+        // accesses race with this copy.
         unsafe { std::ptr::copy(src, tgt, bytes) }
     }
 }
@@ -385,13 +402,15 @@ mod tests {
     #[test]
     fn address_range_iteration() {
         let src: Vec<usize> = (0..32).collect();
-        let src_slice = Address::from_ptr(&src[0])..Address::from_ptr(&src[0]) + src.len();
+        let src_start = Address::from_ptr(src.as_ptr());
+        let src_slice = src_start..src_start + src.len();
         for (i, v) in src_slice.iter_slots().enumerate() {
-            // SAFETY: `src` holds `32 * BYTES_IN_ADDRESS` initialized, `usize`-aligned bytes and
-            // lives without mutation across the loop. `src_slice` spans the first `32` bytes
-            // (`32 / BYTES_IN_ADDRESS` words, which is `< 32` elements), and `AddressRangeIterator`
-            // steps by `BYTES_IN_ADDRESS`, so every `v` is non-null, `usize`-aligned, and points to
-            // initialized element `src[i]`.
+            // SAFETY: `src_start` is derived from `src.as_ptr()`, carrying read provenance over
+            // all `32 * BYTES_IN_ADDRESS` initialized, `usize`-aligned bytes of `src`, which lives
+            // without mutation across the loop. `src_slice` spans the first `32` bytes
+            // (`32 / BYTES_IN_ADDRESS` words, `< 32` elements), and `AddressRangeIterator` steps
+            // by `BYTES_IN_ADDRESS`, so every `v` is non-null, `usize`-aligned, and within `src`'s
+            // provenance at initialized element `src[i]`.
             assert_eq!(i, unsafe { v.load::<usize>() })
         }
     }
@@ -400,10 +419,26 @@ mod tests {
     fn memory_copy_on_address_ranges() {
         let src = [1u8; 32];
         let mut dst = [0u8; 32];
-        let src_slice = Address::from_ptr(&src[0])..Address::from_ptr(&src[0]) + src.len();
-        let dst_slice =
-            Address::from_mut_ptr(&mut dst[0])..Address::from_mut_ptr(&mut dst[0]) + src.len();
+        let src_start = Address::from_ptr(src.as_ptr());
+        let dst_start = Address::from_mut_ptr(dst.as_mut_ptr());
+        let src_slice = src_start..src_start + src.len();
+        let dst_slice = dst_start..dst_start + dst.len();
         MemorySlice::copy(&src_slice, &dst_slice);
         assert_eq!(dst.iter().sum::<u8>(), src.len() as u8);
+    }
+
+    #[test]
+    fn memory_copy_on_empty_and_overlapping_address_ranges() {
+        let empty = Address::ZERO..Address::ZERO;
+        MemorySlice::copy(&empty, &empty);
+
+        let mut buf = [0u8; 32];
+        buf[0..16].fill(7);
+        let base = Address::from_mut_ptr(buf.as_mut_ptr());
+        let src_slice = base..(base + 16usize);
+        let dst_slice = (base + 8usize)..(base + 24usize);
+        MemorySlice::copy(&src_slice, &dst_slice);
+        assert!(buf[0..24].iter().all(|&b| b == 7));
+        assert!(buf[24..32].iter().all(|&b| b == 0));
     }
 }

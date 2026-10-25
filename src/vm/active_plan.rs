@@ -12,8 +12,7 @@ pub trait ActivePlan<VM: VMBinding> {
     /// Arguments:
     /// * `tls`: The thread to query.
     ///
-    /// # Safety
-    /// The caller needs to make sure that the thread is valid (a value passed in by the VM binding through API).
+    /// Note: The caller needs to make sure that the thread is valid (a value passed in by the VM binding through API).
     fn is_mutator(tls: VMThread) -> bool;
 
     /// Return a `Mutator` reference for the thread.
@@ -21,8 +20,7 @@ pub trait ActivePlan<VM: VMBinding> {
     /// Arguments:
     /// * `tls`: The thread to query.
     ///
-    /// # Safety
-    /// The caller needs to make sure that the thread is a mutator thread.
+    /// Note: The caller needs to make sure that the thread is a mutator thread.
     fn mutator(tls: VMMutatorThread) -> &'static mut Mutator<VM>;
 
     /// Return an iterator that includes all the mutators at the point of invocation.
