@@ -352,7 +352,10 @@ impl<VM: VMBinding> MallocSpace<VM> {
     /// Unset multiple pages, starting from the given address, for the given size, and decrease the active page count if we unset any page mark in the region
     ///
     /// # Safety
-    /// We need to ensure that only one GC thread is accessing the range.
+    /// - `start` and `size` must both be aligned to `BYTES_IN_MALLOC_PAGE`.
+    /// - `ACTIVE_PAGE_METADATA_SPEC` side metadata must be mapped for `[start, start + size)`.
+    /// - Only the calling GC thread may access the `ACTIVE_PAGE_METADATA_SPEC` bytes for pages in
+    ///   `[start, start + size)` (1 metadata byte per `BYTES_IN_MALLOC_PAGE`).
     unsafe fn unset_page_mark(&self, start: Address, size: usize) {
         debug_assert!(start.is_aligned_to(BYTES_IN_MALLOC_PAGE));
         debug_assert!(crate::util::conversions::raw_is_aligned(
@@ -362,9 +365,12 @@ impl<VM: VMBinding> MallocSpace<VM> {
         let mut page = start;
         let mut cleared_pages = 0;
         while page < start + size {
-            if is_page_marked_unsafe(page) {
+            // SAFETY: Caller guarantees `ACTIVE_PAGE_METADATA_SPEC` is mapped for `[start, start + size)`
+            // and exclusively accessed by this thread.
+            if unsafe { is_page_marked_unsafe(page) } {
                 cleared_pages += 1;
-                unset_page_mark_unsafe(page);
+                // SAFETY: Same mapped + exclusive-access invariant on `page`'s metadata byte.
+                unsafe { unset_page_mark_unsafe(page) };
             }
             page += BYTES_IN_MALLOC_PAGE;
         }
@@ -379,7 +385,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
         if self.get_gc_trigger().poll(false, Some(self)) {
             assert!(VM::VMActivePlan::is_mutator(tls), "Polling in GC worker");
             VM::VMCollection::block_for_gc(VMMutatorThread(tls));
-            return unsafe { Address::zero() };
+            return Address::ZERO;
         }
 
         let (address, is_offset_malloc) = alloc::<VM>(size, align, offset);
@@ -387,10 +393,22 @@ impl<VM: VMBinding> MallocSpace<VM> {
             let actual_size = get_malloc_usable_size(address, is_offset_malloc);
 
             if !self.is_meta_space_mapped(address, actual_size) {
+                assert!(address.as_usize().checked_add(actual_size).is_some());
                 // Map the metadata space for the associated chunk
                 self.map_metadata_and_update_bound(address, actual_size);
-                // Update SFT
-                assert!(crate::mmtk::SFT_MAP.has_sft_entry(address)); // make sure the address is okay with our SFT map
+                // Verify every chunk covered by `[address, address + actual_size)` has a valid SFT entry.
+                if actual_size > 0 {
+                    let first_chunk = address.chunk_index();
+                    let last_chunk = (address + (actual_size - 1)).chunk_index();
+                    for chunk_idx in first_chunk..=last_chunk {
+                        assert!(crate::mmtk::SFT_MAP
+                            .has_sft_entry(conversions::chunk_index_to_address(chunk_idx)));
+                    }
+                }
+                // SAFETY: `self` is a heap-pinned `MallocSpace` inside `'static MMTK<VM>` registered
+                // via `notify_space_creation` during `Plan::initialize_sft`, `map_metadata_and_update_bound`
+                // mapped global/local side metadata for `[address, address + actual_size)`, and every
+                // chunk in that range was just asserted to satisfy `has_sft_entry`.
                 unsafe { crate::mmtk::SFT_MAP.update(self, address, actual_size) };
             }
 
@@ -452,22 +470,39 @@ impl<VM: VMBinding> MallocSpace<VM> {
                 .is_some()
     }
 
-    pub fn free(&self, addr: Address) {
-        let offset_malloc_bit = is_offset_malloc(addr);
+    /// Free an allocation starting at `addr` that was previously returned by [`Self::alloc`].
+    ///
+    /// # Safety
+    /// - `addr` must be the exact allocation start address returned by [`Self::alloc`] for a live
+    ///   (not yet freed) allocation in `self`, with mapped side metadata.
+    /// - The allocation must not be accessed or freed again after this call.
+    pub unsafe fn free(&self, addr: Address) {
+        // SAFETY: Caller guarantees `addr` is a live `MallocSpace` allocation with mapped side metadata.
+        let offset_malloc_bit = unsafe { is_offset_malloc_unsafe(addr) };
         let bytes = get_malloc_usable_size(addr, offset_malloc_bit);
-        self.free_internal(addr, bytes, offset_malloc_bit);
+        // SAFETY: `addr`, `bytes`, and `offset_malloc_bit` correspond to a live allocation in `self`.
+        unsafe { self.free_internal(addr, bytes, offset_malloc_bit) };
     }
 
     // XXX optimize: We pass the bytes in to free as otherwise there were multiple
     // indirect call instructions in the generated assembly
-    fn free_internal(&self, addr: Address, bytes: usize, offset_malloc_bit: bool) {
+    /// Free a live allocation in `self` given its start address, usable byte size, and offset-malloc flag.
+    ///
+    /// # Safety
+    /// - `addr` must be a live allocation returned by `malloc_ms_util::alloc` in `self`, matching
+    ///   `offset_malloc_bit` and `bytes`, with mapped `OFFSET_MALLOC_METADATA_SPEC` metadata.
+    /// - `addr` must not be accessed or freed again after this call.
+    unsafe fn free_internal(&self, addr: Address, bytes: usize, offset_malloc_bit: bool) {
         if offset_malloc_bit {
             trace!("Free memory {:x}", addr);
             offset_free(addr);
+            // SAFETY: Caller guarantees `OFFSET_MALLOC_METADATA_SPEC` is mapped for `addr`.
             unsafe { unset_offset_malloc_bit_unsafe(addr) };
         } else {
             let ptr = addr.to_mut_ptr();
             trace!("Free memory {:?}", ptr);
+            // SAFETY: Caller guarantees `addr` (`ptr`) was returned directly by `calloc`/`posix_memalign`
+            // (`!offset_malloc_bit`) and has not yet been freed.
             unsafe {
                 free(ptr);
             }
@@ -556,8 +591,14 @@ impl<VM: VMBinding> MallocSpace<VM> {
 
     pub fn release(&mut self) {
         use crate::scheduler::WorkBucketStage;
-        let space = unsafe { &*(self as *const Self) };
-        let work_packets = self.chunk_map.generate_tasks(|chunk| {
+        // Reborrow `self: &mut Self` as `shared_self: &Self` BEFORE extending its lifetime for
+        // worker packets so `self: &mut Self` is never touched again after `&'static Self` exists
+        // (preserving Stacked Borrows / Tree Borrows aliasing invariants).
+        let shared_self: &Self = self;
+        // SAFETY: Every `MallocSpace` lives inside the heap-pinned `Plan` owned by `'static MMTK<VM>`,
+        // and all `WorkBucketStage::Release` tasks complete before `MMTK` could ever be dropped.
+        let space: &'static Self = unsafe { &*(shared_self as *const Self) };
+        let work_packets = shared_self.chunk_map.generate_tasks(|chunk| {
             Box::new(MSSweepChunk {
                 ms: space,
                 chunk: chunk.start(),
@@ -567,61 +608,141 @@ impl<VM: VMBinding> MallocSpace<VM> {
         debug!("Generated {} sweep work packets", work_packets.len());
         #[cfg(debug_assertions)]
         {
-            self.total_work_packets
+            shared_self
+                .total_work_packets
                 .store(work_packets.len() as u32, Ordering::SeqCst);
-            self.completed_work_packets.store(0, Ordering::SeqCst);
-            self.work_live_bytes.store(0, Ordering::SeqCst);
+            shared_self
+                .completed_work_packets
+                .store(0, Ordering::SeqCst);
+            shared_self.work_live_bytes.store(0, Ordering::SeqCst);
         }
 
-        self.scheduler.work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
+        shared_self.scheduler.work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
     }
 
     pub fn end_of_gc(&mut self) {}
 
-    pub fn sweep_chunk(&self, chunk_start: Address) {
+    /// Sweep all dead objects in the chunk starting at `chunk_start`.
+    ///
+    /// # Safety
+    /// - `chunk_start` must be aligned to `BYTES_IN_CHUNK` and correspond to an allocated chunk in
+    ///   `self.chunk_map` with mapped side metadata and a valid `SFT_MAP` entry.
+    /// - Called during the STW `Release` stage by the unique `MSSweepChunk` worker assigned to
+    ///   `chunk_start` (no mutators are allocating and no other worker sweeps `chunk_start`).
+    pub unsafe fn sweep_chunk(&self, chunk_start: Address) {
+        debug_assert!(chunk_start.is_aligned_to(BYTES_IN_CHUNK));
         // Call the relevant sweep function depending on the location of the mark bits
         match *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC {
             MetadataSpec::OnSide(local_mark_bit_side_spec) => {
-                self.sweep_chunk_mark_on_side(chunk_start, local_mark_bit_side_spec);
+                // SAFETY: Caller upholds all `sweep_chunk` preconditions, and `LOCAL_MARK_BIT_SPEC`
+                // is mapped on the side for `chunk_start`.
+                unsafe { self.sweep_chunk_mark_on_side(chunk_start, local_mark_bit_side_spec) };
             }
             _ => {
-                self.sweep_chunk_mark_in_header(chunk_start);
+                // SAFETY: Caller upholds all `sweep_chunk` preconditions.
+                unsafe { self.sweep_chunk_mark_in_header(chunk_start) };
             }
         }
     }
 
-    /// Given an object in MallocSpace, return its malloc address, whether it is an offset malloc, and malloc size
-    fn get_malloc_addr_size(object: ObjectReference) -> (Address, bool, usize) {
+    /// Given a live (not-yet-freed) object in `MallocSpace`, return its malloc start address,
+    /// whether it is an offset malloc, and its malloc usable size.
+    ///
+    /// # Safety
+    /// `object` must be a currently allocated (not yet `free`d) object in `MallocSpace` with
+    /// mapped `OFFSET_MALLOC_METADATA_SPEC` metadata for `object.to_object_start::<VM>()`.
+    unsafe fn get_malloc_addr_size(object: ObjectReference) -> (Address, bool, usize) {
         let obj_start = object.to_object_start::<VM>();
-        let offset_malloc_bit = is_offset_malloc(obj_start);
+        // SAFETY: Caller guarantees `OFFSET_MALLOC_METADATA_SPEC` is mapped for `obj_start`.
+        let offset_malloc_bit = unsafe { is_offset_malloc_unsafe(obj_start) };
         let bytes = get_malloc_usable_size(obj_start, offset_malloc_bit);
         (obj_start, offset_malloc_bit, bytes)
     }
 
-    /// Clean up for an empty chunk
-    fn clean_up_empty_chunk(&self, chunk_start: Address) {
+    /// Linearly scan word-aligned addresses in `[start, end)` via non-atomic VO-bit loads,
+    /// invoking `visit(object)` on each object found.
+    ///
+    /// Reads each object's malloc usable size *before* invoking `visit(object)` because `visit`
+    /// may sweep and `libc::free` dead objects.
+    ///
+    /// # Safety
+    /// - `start < end`, and both `start` and `end` must be aligned to `ObjectReference::ALIGNMENT`.
+    /// - `VO_BIT` side metadata must be mapped for `[start, end)` and exclusively accessed by this
+    ///   thread (no concurrent writes to VO-bit metadata bytes covering `[start, end)`).
+    /// - Every address in `[start, end)` with its VO bit set must be a currently allocated
+    ///   (not-yet-freed) `MallocSpace` object with mapped `OFFSET_MALLOC_METADATA_SPEC` metadata.
+    unsafe fn for_each_object_in_range(
+        start: Address,
+        end: Address,
+        mut visit: impl FnMut(ObjectReference),
+    ) {
+        debug_assert!(start < end);
+        debug_assert!(start.is_aligned_to(ObjectReference::ALIGNMENT));
+        debug_assert!(end.is_aligned_to(ObjectReference::ALIGNMENT));
+        let mut cursor = start;
+        while cursor < end {
+            // SAFETY: `cursor` is aligned to `ObjectReference::ALIGNMENT` within `[start, end)`,
+            // where VO-bit side metadata is mapped and exclusively accessed by this thread.
+            let maybe_object =
+                unsafe { crate::util::metadata::vo_bit::is_vo_bit_set_unsafe(cursor) };
+            if let Some(object) = maybe_object {
+                // SAFETY: `object` has its VO bit set in `[start, end)`, so by caller invariant it
+                // is a live `MallocSpace` allocation with mapped side metadata; we query its start
+                // address and usable size before `visit` potentially frees it.
+                let (obj_start, _, bytes) = unsafe { Self::get_malloc_addr_size(object) };
+                let next_cursor = (obj_start + bytes).align_up(ObjectReference::ALIGNMENT);
+                visit(object);
+                cursor = next_cursor;
+            } else {
+                cursor += ObjectReference::ALIGNMENT;
+            }
+        }
+    }
+
+    /// Clean up metadata and SFT state for an empty chunk.
+    ///
+    /// # Safety
+    /// - `chunk_start` must be aligned to `BYTES_IN_CHUNK`, have mapped side metadata, and satisfy
+    ///   `SFT_MAP.has_sft_entry(chunk_start)`.
+    /// - The calling thread must have exclusive sweep ownership of `chunk_start`.
+    unsafe fn clean_up_empty_chunk(&self, chunk_start: Address) {
+        debug_assert!(chunk_start.is_aligned_to(BYTES_IN_CHUNK));
+        debug_assert!(crate::mmtk::SFT_MAP.has_sft_entry(chunk_start));
         // Clear the chunk map
         self.chunk_map
             .set_allocated(Chunk::from_aligned_address(chunk_start), false);
-        // Clear the SFT entry
+        // SAFETY: `chunk_start` is chunk-aligned and was registered in `SFT_MAP` when allocated.
         unsafe { crate::mmtk::SFT_MAP.clear(chunk_start) };
-        // Clear the page marks - we are the only GC thread that is accessing this chunk
+        // SAFETY: `[chunk_start, chunk_start + BYTES_IN_CHUNK)` has mapped `ACTIVE_PAGE_METADATA_SPEC`
+        // metadata and this worker is the sole thread sweeping `chunk_start`.
         unsafe { self.unset_page_mark(chunk_start, BYTES_IN_CHUNK) };
     }
 
     /// Sweep an object if it is dead, and unset page marks for empty pages before this object.
     /// Return true if the object is swept.
-    fn sweep_object(&self, object: ObjectReference, empty_page_start: &mut Address) -> bool {
-        let (obj_start, offset_malloc, bytes) = Self::get_malloc_addr_size(object);
+    ///
+    /// # Safety
+    /// - `object` must be a currently allocated `MallocSpace` object whose `object.to_raw_address()`
+    ///   lies in the chunk exclusively swept by the calling worker, with mapped side metadata.
+    /// - `*empty_page_start` must be either `Address::ZERO` or an address aligned to
+    ///   `BYTES_IN_MALLOC_PAGE` strictly greater than `chunk_start` of the worker's chunk.
+    unsafe fn sweep_object(&self, object: ObjectReference, empty_page_start: &mut Address) -> bool {
+        // SAFETY: Caller guarantees `object` is a valid, not-yet-freed `MallocSpace` object with
+        // mapped metadata.
+        let (obj_start, offset_malloc, bytes) = unsafe { Self::get_malloc_addr_size(object) };
 
-        // We are the only thread that is dealing with the object. We can use non-atomic methods for the metadata.
+        // SAFETY: `object.to_raw_address()` lies in this worker's exclusively swept chunk during
+        // STW `Release`, so no other thread concurrently modifies `object`'s mark-bit metadata.
         if !unsafe { is_marked_unsafe::<VM>(object) } {
             // Dead object
             trace!("Object {} has been allocated but not marked", object);
 
-            // Free object
-            self.free_internal(obj_start, bytes, offset_malloc);
+            // SAFETY: `obj_start`, `bytes`, and `offset_malloc` describe the dead allocation
+            // `object`, which has not yet been freed and will have its VO bit cleared immediately.
+            unsafe { self.free_internal(obj_start, bytes, offset_malloc) };
             trace!("free object {}", object);
+            // SAFETY: `object.to_raw_address()` is in this worker's exclusively swept chunk, so
+            // no other thread concurrently accesses this VO-bit metadata byte.
             unsafe { unset_vo_bit_unsafe(object) };
 
             true
@@ -635,7 +756,9 @@ impl<VM: VMBinding> MallocSpace<VM> {
                     .to_object_start::<VM>()
                     .align_down(BYTES_IN_MALLOC_PAGE);
                 if current_page > *empty_page_start {
-                    // we are the only GC thread that is accessing this chunk
+                    // SAFETY: `*empty_page_start > chunk_start` and `current_page < chunk_start + BYTES_IN_CHUNK`,
+                    // so `[*empty_page_start, current_page)` lies strictly within this worker's chunk,
+                    // has mapped `ACTIVE_PAGE_METADATA_SPEC`, and is exclusively accessed by this thread.
                     unsafe {
                         self.unset_page_mark(*empty_page_start, current_page - *empty_page_start)
                     };
@@ -675,14 +798,16 @@ impl<VM: VMBinding> MallocSpace<VM> {
         }
     }
 
-    /// This function is called when the mark bits sit on the side metadata.
-    /// This has been optimized with the use of bulk loading and bulk zeroing of
-    /// metadata.
+    /// Sweep a chunk when mark bits reside in side metadata (`mark_bit_spec`).
     ///
-    /// This function uses non-atomic accesses to side metadata (although these
-    /// non-atomic accesses should not have race conditions associated with them)
-    /// as well as calls libc functions (`malloc_usable_size()`, `free()`)
-    fn sweep_chunk_mark_on_side(&self, chunk_start: Address, mark_bit_spec: SideMetadataSpec) {
+    /// # Safety
+    /// Same preconditions as [`Self::sweep_chunk`], plus `mark_bit_spec` side metadata must be
+    /// mapped for `[chunk_start, chunk_start + BYTES_IN_CHUNK)`.
+    unsafe fn sweep_chunk_mark_on_side(
+        &self,
+        chunk_start: Address,
+        mark_bit_spec: SideMetadataSpec,
+    ) {
         // We can do xor on bulk for mark bits and valid object bits. If the result is zero, that means
         // the objects in it are all alive (both valid object bit and mark bit is set), and we do not
         // need to do anything for the region. Otherwise, we will sweep each single object in the region.
@@ -715,33 +840,36 @@ impl<VM: VMBinding> MallocSpace<VM> {
 
             // Scan the chunk by every 'bulk_load_size' region.
             while address < chunk_end {
+                // SAFETY: `address` is `bulk_load_size`-aligned inside `[chunk_start, chunk_end)`,
+                // so 16 contiguous bytes of `VO_BIT` and `mark_bit_spec` metadata are mapped,
+                // initialized, and exclusively accessed by this chunk's sweep worker.
                 let alloc_128: u128 = unsafe {
                     load128(
                         &crate::util::metadata::vo_bit::VO_BIT_SIDE_METADATA_SPEC,
                         address,
                     )
                 };
+                // SAFETY: Same mapped, initialized, exclusive-access invariant on `mark_bit_spec`.
                 let mark_128: u128 = unsafe { load128(&mark_bit_spec, address) };
 
                 // Check if there are dead objects in the bulk loaded region
                 if alloc_128 ^ mark_128 != 0 {
                     let end = address + bulk_load_size;
 
-                    // We will do non atomic load on the VO bit, as this is the only thread that access the VO bit for a chunk.
-                    // Linear scan through the bulk load region.
-                    let bulk_load_scan = crate::util::linear_scan::ObjectIterator::<
-                        VM,
-                        MallocObjectSize<VM>,
-                        false,
-                    >::new(address, end);
-                    for object in bulk_load_scan {
-                        self.sweep_object(object, &mut empty_page_start);
-                    }
+                    let sweep_in_bulk = |object| {
+                        // SAFETY: `object` lies in `chunk_start` and `empty_page_start` is zero
+                        // or a page-aligned address `> chunk_start`.
+                        unsafe { self.sweep_object(object, &mut empty_page_start) };
+                    };
+                    // SAFETY: `[address, end)` is word-aligned within `chunk_start`'s mapped,
+                    // worker-exclusive VO-bit range, and all VO-marked objects are live allocations.
+                    unsafe { Self::for_each_object_in_range(address, end, sweep_in_bulk) };
                 } else {
                     // TODO we aren't actually accounting for the case where an object is alive and spans
                     // a page boundary as we don't know what the object sizes are/what is alive in the bulk region
                     if alloc_128 != 0 {
-                        empty_page_start = address + bulk_load_size;
+                        empty_page_start = empty_page_start
+                            .max((address + bulk_load_size).align_up(BYTES_IN_MALLOC_PAGE));
                     }
                 }
 
@@ -754,13 +882,9 @@ impl<VM: VMBinding> MallocSpace<VM> {
             // We have to do this as a separate pass, as in the above pass, we did not go through all the live objects
             #[cfg(debug_assertions)]
             {
-                let chunk_linear_scan = crate::util::linear_scan::ObjectIterator::<
-                    VM,
-                    MallocObjectSize<VM>,
-                    false,
-                >::new(chunk_start, chunk_end);
-                for object in chunk_linear_scan {
-                    let (obj_start, _, bytes) = Self::get_malloc_addr_size(object);
+                let count_live = |object| {
+                    // SAFETY: `object` is a surviving allocation in `self`.
+                    let (obj_start, _, bytes) = unsafe { Self::get_malloc_addr_size(object) };
 
                     if ASSERT_ALLOCATION {
                         debug_assert!(
@@ -777,13 +901,17 @@ impl<VM: VMBinding> MallocSpace<VM> {
                     }
 
                     debug_assert!(
+                        // SAFETY: `object` is in this worker's exclusively swept chunk.
                         unsafe { is_marked_unsafe::<VM>(object) },
                         "Dead object = {} found after sweep",
                         object
                     );
 
                     live_bytes += bytes;
-                }
+                };
+                // SAFETY: `[chunk_start, chunk_end)` has mapped VO-bit metadata exclusively owned
+                // by this worker, and all remaining VO-marked objects survived sweeping above.
+                unsafe { Self::for_each_object_in_range(chunk_start, chunk_end, count_live) };
             }
 
             // Clear all the mark bits
@@ -791,26 +919,32 @@ impl<VM: VMBinding> MallocSpace<VM> {
 
             // If we never updated empty_page_start, the entire chunk is empty.
             if empty_page_start.is_zero() {
-                self.clean_up_empty_chunk(chunk_start);
+                // SAFETY: `chunk_start` is an empty allocated chunk exclusively swept by this worker.
+                unsafe { self.clean_up_empty_chunk(chunk_start) };
             }
 
             #[cfg(debug_assertions)]
             self.debug_sweep_chunk_done(live_bytes);
         } else {
-            self.sweep_each_object_in_chunk(chunk_start);
+            // SAFETY: Caller upholds all `sweep_chunk` preconditions for `chunk_start`.
+            unsafe { self.sweep_each_object_in_chunk(chunk_start) };
         }
     }
 
-    /// This sweep function is called when the mark bit sits in the object header
+    /// Sweep a chunk when the mark bit resides in the object header.
     ///
-    /// This function uses non-atomic accesses to side metadata (although these
-    /// non-atomic accesses should not have race conditions associated with them)
-    /// as well as calls libc functions (`malloc_usable_size()`, `free()`)
-    fn sweep_chunk_mark_in_header(&self, chunk_start: Address) {
-        self.sweep_each_object_in_chunk(chunk_start)
+    /// # Safety
+    /// Same preconditions as [`Self::sweep_chunk`].
+    unsafe fn sweep_chunk_mark_in_header(&self, chunk_start: Address) {
+        // SAFETY: Caller upholds all `sweep_chunk` preconditions for `chunk_start`.
+        unsafe { self.sweep_each_object_in_chunk(chunk_start) }
     }
 
-    fn sweep_each_object_in_chunk(&self, chunk_start: Address) {
+    /// Sweep every object in `[chunk_start, chunk_start + BYTES_IN_CHUNK)` one by one.
+    ///
+    /// # Safety
+    /// Same preconditions as [`Self::sweep_chunk`].
+    unsafe fn sweep_each_object_in_chunk(&self, chunk_start: Address) {
         #[cfg(debug_assertions)]
         let mut live_bytes = 0;
 
@@ -819,16 +953,11 @@ impl<VM: VMBinding> MallocSpace<VM> {
         // The start of a possibly empty page. This will be updated during the sweeping, and always points to the next page of last live objects.
         let mut empty_page_start = Address::ZERO;
 
-        let chunk_linear_scan = crate::util::linear_scan::ObjectIterator::<
-            VM,
-            MallocObjectSize<VM>,
-            false,
-        >::new(chunk_start, chunk_start + BYTES_IN_CHUNK);
-
-        for object in chunk_linear_scan {
+        let sweep_one = |object| {
             #[cfg(debug_assertions)]
             if ASSERT_ALLOCATION {
-                let (obj_start, _, bytes) = Self::get_malloc_addr_size(object);
+                // SAFETY: `object` has not yet been swept/freed.
+                let (obj_start, _, bytes) = unsafe { Self::get_malloc_addr_size(object) };
                 debug_assert!(
                     self.active_mem.lock().unwrap().contains_key(&obj_start),
                     "Address {} with VO bit is not in active_mem",
@@ -842,30 +971,43 @@ impl<VM: VMBinding> MallocSpace<VM> {
                 );
             }
 
-            let live = !self.sweep_object(object, &mut empty_page_start);
+            // SAFETY: `object` lies in `chunk_start`, and `empty_page_start` is zero or a
+            // page-aligned address strictly greater than `chunk_start`.
+            let live = !unsafe { self.sweep_object(object, &mut empty_page_start) };
             if live {
                 // Live object. Unset mark bit.
-                // We should be the only thread that access this chunk, it is okay to use non-atomic store.
+                // SAFETY: `object.to_raw_address()` lies in `chunk_start`, which is exclusively
+                // swept by this worker during STW `Release`.
                 unsafe { unset_mark_bit::<VM>(object) };
 
                 #[cfg(debug_assertions)]
                 {
-                    // Accumulate live bytes
-                    let (_, _, bytes) = Self::get_malloc_addr_size(object);
+                    // SAFETY: `object` is live and was not freed.
+                    let (_, _, bytes) = unsafe { Self::get_malloc_addr_size(object) };
                     live_bytes += bytes;
                 }
             }
+        };
+        // SAFETY: `[chunk_start, chunk_start + BYTES_IN_CHUNK)` is chunk-aligned (hence word-aligned),
+        // has mapped VO-bit metadata exclusively accessed by this worker, and every VO-marked
+        // address in the chunk is a not-yet-freed `MallocSpace` object.
+        unsafe {
+            Self::for_each_object_in_range(chunk_start, chunk_start + BYTES_IN_CHUNK, sweep_one);
         }
 
         // If we never updated empty_page_start, the entire chunk is empty.
         if empty_page_start.is_zero() {
-            self.clean_up_empty_chunk(chunk_start);
+            // SAFETY: `chunk_start` is an empty allocated chunk exclusively swept by this worker.
+            unsafe { self.clean_up_empty_chunk(chunk_start) };
         } else if empty_page_start < chunk_start + BYTES_IN_CHUNK {
             // This is for the edge case where we have a live object and then no other live
             // objects afterwards till the end of the chunk. For example consider chunk
             // 0x0-0x400000 where only one object at 0x100 is alive. We will unset page bits
             // for 0x0-0x100 but then not unset it for the pages after 0x100. This checks
             // if we have empty pages at the end of a chunk that needs to be cleared.
+            // SAFETY: `chunk_start < empty_page_start < chunk_start + BYTES_IN_CHUNK`, so the
+            // page range lies strictly inside `chunk_start`, has mapped `ACTIVE_PAGE_METADATA_SPEC`,
+            // and is exclusively swept by this worker.
             unsafe {
                 self.unset_page_mark(
                     empty_page_start,
@@ -876,14 +1018,6 @@ impl<VM: VMBinding> MallocSpace<VM> {
 
         #[cfg(debug_assertions)]
         self.debug_sweep_chunk_done(live_bytes);
-    }
-}
-
-struct MallocObjectSize<VM>(PhantomData<VM>);
-impl<VM: VMBinding> crate::util::linear_scan::LinearScanObjectSize for MallocObjectSize<VM> {
-    fn size(object: ObjectReference) -> usize {
-        let (_, _, bytes) = MallocSpace::<VM>::get_malloc_addr_size(object);
-        bytes
     }
 }
 
@@ -899,6 +1033,10 @@ pub struct MSSweepChunk<VM: VMBinding> {
 
 impl<VM: VMBinding> GCWork<VM> for MSSweepChunk<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        self.ms.sweep_chunk(self.chunk);
+        // SAFETY: `MSSweepChunk` is created in `MallocSpace::release` (scheduled in
+        // `WorkBucketStage::Release` during STW GC) with one unique work packet per allocated
+        // chunk in `self.ms.chunk_map`, so `self.chunk` has mapped side metadata, a valid SFT
+        // entry, and is swept exclusively by this worker.
+        unsafe { self.ms.sweep_chunk(self.chunk) };
     }
 }

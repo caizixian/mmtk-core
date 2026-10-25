@@ -22,8 +22,9 @@ pub trait SFTMap {
     /// that is known to be in our spaces). Otherwise, use `get_checked()`.
     ///
     /// # Safety
-    /// The address must have a valid SFT entry in the map. Usually we know this if the address is from an object reference, or from our space address range.
-    /// Otherwise, the caller should check with `has_sft_entry()` before calling this method, or use `get_checked()`.
+    /// `self.has_sft_entry(address)` must hold (i.e. `address` maps to an in-bounds, mapped SFT
+    /// table entry in `self`, such as an address from a valid `ObjectReference` or an allocated
+    /// MMTk space range). Otherwise, call `has_sft_entry()` first or use `get_checked()`.
     unsafe fn get_unchecked(&self, address: Address) -> &dyn SFT;
 
     /// Get SFT for the address. The address can be arbitrary. For out-of-bound access, an empty SFT will be returned.
@@ -34,8 +35,11 @@ pub trait SFTMap {
     /// Set SFT for the address range. The address must have a valid SFT entry in the table.
     ///
     /// # Safety
-    /// The address must have a valid SFT entry in the map. Usually we know this if the address is from an object reference, or from our space address range.
-    /// Otherwise, the caller should check with `has_sft_entry()` before calling this method.
+    /// - `space` must be non-null, properly aligned, and valid to dereference as a shared
+    ///   `&'static (dyn SFT + Sync + 'static)` for the entire lifetime of `self` (and for
+    ///   `SFTDenseChunkMap`, `notify_space_creation(space)` must have been called beforehand).
+    /// - `start + bytes` must not overflow `Address`, and every chunk/entry in `[start, start + bytes)`
+    ///   must have a valid, mapped SFT entry in `self` (`has_sft_entry`).
     unsafe fn update(&self, space: SFTRawPointer, start: Address, bytes: usize);
 
     /// Notify the SFT map for space creation. `DenseChunkMap` needs to create an entry for the space.
@@ -46,22 +50,26 @@ pub trait SFTMap {
     /// before setting the table.
     ///
     /// # Safety
-    /// The address must have a valid SFT entry in the map. Usually we know this if the address is from an object reference, or from our space address range.
-    /// Otherwise, the caller should check with `has_sft_entry()` before calling this method.
+    /// - `space` must be non-null, properly aligned, and valid to dereference as a shared
+    ///   `&'static (dyn SFT + Sync + 'static)` for the entire lifetime of `self` (and for
+    ///   `SFTDenseChunkMap`, `notify_space_creation(space)` must have been called beforehand).
+    /// - `start + bytes` must not overflow `Address`, and every chunk/entry in `[start, start + bytes)`
+    ///   must fall within `self`'s addressable SFT range (`has_sft_entry` once side metadata is mapped).
     unsafe fn eager_initialize(
         &mut self,
         space: *const (dyn SFT + Sync + 'static),
         start: Address,
         bytes: usize,
     ) {
-        self.update(space, start, bytes);
+        // SAFETY: Caller upholds all `update` preconditions for `(space, start, bytes)`.
+        unsafe { self.update(space, start, bytes) };
     }
 
     /// Clear SFT for the address. The address must have a valid SFT entry in the table.
     ///
     /// # Safety
-    /// The address must have a valid SFT entry in the map. Usually we know this if the address is from an object reference, or from our space address range.
-    /// Otherwise, the caller should check with `has_sft_entry()` before calling this method.
+    /// `self.has_sft_entry(address)` must hold (and for chunk-based maps, `address` must be
+    /// chunk-aligned when clearing a chunk entry).
     unsafe fn clear(&self, address: Address);
 }
 
@@ -110,8 +118,17 @@ type AtomicDoubleWord = portable_atomic::AtomicU64;
 #[cfg(target_pointer_width = "32")]
 type DoubleWord = u64;
 
+const _: () = assert!(
+    std::mem::size_of::<AtomicDoubleWord>() == std::mem::size_of::<SFTRawPointer>(),
+    "AtomicDoubleWord must match SFTRawPointer fat-pointer width"
+);
+
 /// The type we store SFT raw pointer as. It basically just double word sized atomic integer.
 /// This type provides an abstraction so we can access SFT easily.
+///
+/// # Representation Invariant
+/// `self.0` always stores the bit-pattern of a valid `&'static (dyn SFT + Sync + 'static)` trait
+/// object reference (either `&EMPTY_SPACE_SFT` or a `'static` space instance in `MMTK<VM>`).
 #[repr(transparent)]
 pub(crate) struct SFTRefStorage(AtomicDoubleWord);
 
@@ -131,8 +148,13 @@ impl SFTRefStorage {
         );
     }
 
-    pub fn new(sft: SFTRawPointer) -> Self {
-        let val: DoubleWord = unsafe { std::mem::transmute(sft) };
+    /// Create an `SFTRefStorage` initialized with a `'static` SFT reference.
+    pub fn from_static(sft: &'static (dyn SFT + Sync + 'static)) -> Self {
+        let ptr: SFTRawPointer = sft;
+        // SAFETY: `DoubleWord` has the exact same size as `SFTRawPointer` (verified by compile-time
+        // assertion above) and has no invalid bit patterns; `sft` is a valid `'static` `SFT + Sync`
+        // reference, establishing `SFTRefStorage`'s invariant.
+        let val: DoubleWord = unsafe { std::mem::transmute(ptr) };
         Self(AtomicDoubleWord::new(val))
     }
 
@@ -144,15 +166,34 @@ impl SFTRefStorage {
         // However, pointer provenance API only works for ptr-sized intergers, and
         // here we are transmuting from a double-word sized integer to a fat pointer.
         // We still need to use transmute here.
+        // SAFETY: By `SFTRefStorage`'s representation invariant (maintained by `from_static`,
+        // `store_static`, and `store_raw` with `Release` ordering paired with `Acquire` above),
+        // `val` is the exact bit-pattern (including provenance and vtable) of a valid
+        // `&'static (dyn SFT + Sync + 'static)` reference.
         #[allow(unknown_lints)]
         #[allow(integer_to_ptr_transmutes)]
-        unsafe {
-            std::mem::transmute(val)
-        }
+        let sft: &'static (dyn SFT + Sync + 'static) = unsafe { std::mem::transmute(val) };
+        sft
     }
 
-    // Store a raw SFT pointer with the release ordering.
-    pub fn store(&self, sft: SFTRawPointer) {
+    /// Store a `'static` SFT reference with `Release` ordering.
+    pub fn store_static(&self, sft: &'static (dyn SFT + Sync + 'static)) {
+        let ptr: SFTRawPointer = sft;
+        // SAFETY: `DoubleWord` has the exact same size as `SFTRawPointer` (compile-time asserted)
+        // and `sft` is a valid `'static` `SFT + Sync` reference, preserving `SFTRefStorage`'s invariant.
+        let val: DoubleWord = unsafe { std::mem::transmute(ptr) };
+        self.0.store(val, Ordering::Release)
+    }
+
+    /// Store a raw SFT fat pointer with `Release` ordering.
+    ///
+    /// # Safety
+    /// `sft` must be non-null, properly aligned, and valid to dereference as a shared
+    /// `&'static (dyn SFT + Sync + 'static)` for the entire lifetime of any reader that may call
+    /// [`Self::load`].
+    pub unsafe fn store_raw(&self, sft: SFTRawPointer) {
+        // SAFETY: `DoubleWord` has the exact same size as `SFTRawPointer` (compile-time asserted)
+        // and caller guarantees `sft` is a valid `'static` `SFT + Sync` trait-object pointer.
         let val: DoubleWord = unsafe { std::mem::transmute(sft) };
         self.0.store(val, Ordering::Release)
     }
@@ -160,7 +201,7 @@ impl SFTRefStorage {
 
 impl std::default::Default for SFTRefStorage {
     fn default() -> Self {
-        Self::new(&EMPTY_SPACE_SFT as SFTRawPointer)
+        Self::from_static(&EMPTY_SPACE_SFT)
     }
 }
 
@@ -172,12 +213,10 @@ mod space_map {
 
     /// Space map is a small table, and it has one entry for each MMTk space.
     pub struct SFTSpaceMap {
-        sft: Vec<SFTRefStorage>,
+        sft: [SFTRefStorage; Self::TABLE_SIZE],
         space_address_start: Address,
         space_address_end: Address,
     }
-
-    unsafe impl Sync for SFTSpaceMap {}
 
     impl SFTMap for SFTSpaceMap {
         fn has_sft_entry(&self, addr: Address) -> bool {
@@ -192,17 +231,14 @@ mod space_map {
 
         fn get_checked(&self, address: Address) -> &dyn SFT {
             if self.has_sft_entry(address) {
-                // We should be able to map the entire address range to indices in the table.
-                debug_assert!(Self::addr_to_index(address) < self.sft.len());
-                unsafe { self.get_unchecked(address) }
+                self.sft[Self::addr_to_index(address)].load()
             } else {
                 &EMPTY_SPACE_SFT
             }
         }
 
         unsafe fn get_unchecked(&self, address: Address) -> &dyn SFT {
-            let cell = unsafe { self.sft.get_unchecked(Self::addr_to_index(address)) };
-            cell.load()
+            self.sft[Self::addr_to_index(address)].load()
         }
 
         unsafe fn update(
@@ -211,11 +247,16 @@ mod space_map {
             start: Address,
             bytes: usize,
         ) {
+            if bytes == 0 {
+                return;
+            }
             let index = Self::addr_to_index(start);
             if cfg!(debug_assertions) {
                 // Make sure we only update from empty to a valid space, or overwrite the space
                 let old = self.sft[index].load();
-                assert!((*old).name() == EMPTY_SFT_NAME || (*old).name() == (*space).name());
+                // SAFETY: Caller guarantees `space` is a valid shared `SFT` fat pointer.
+                let new_name = unsafe { (*space).name() };
+                assert!(old.name() == EMPTY_SFT_NAME || old.name() == new_name);
                 // Make sure the range is in the space
                 let space_start = Self::index_to_space_start(index);
                 assert!(start >= space_start);
@@ -230,33 +271,41 @@ mod space_map {
                 );
             }
 
-            self.sft.get_unchecked(index).store(space);
+            // SAFETY: Caller guarantees `space` is a valid `'static` `SFT + Sync` fat pointer.
+            unsafe { self.sft[index].store_raw(space) };
         }
 
         unsafe fn clear(&self, addr: Address) {
-            let index = Self::addr_to_index(addr);
-            self.sft.get_unchecked(index).store(&EMPTY_SPACE_SFT as _);
+            self.sft[Self::addr_to_index(addr)].store_static(&EMPTY_SPACE_SFT);
         }
     }
 
     impl SFTSpaceMap {
+        const TABLE_SIZE: usize = 32;
+        const INDEX_MASK: usize = Self::TABLE_SIZE - 1;
+
         /// Create a new space map.
         #[allow(clippy::assertions_on_constants)] // We assert to make sure the constants
         pub fn new() -> Self {
             use crate::util::heap::layout::heap_parameters::MAX_SPACES;
+            assert!(
+                vm_layout().log_space_extent <= usize::BITS as usize - 5,
+                "log_space_extent ({}) too large for 5-bit SFTSpaceMap index",
+                vm_layout().log_space_extent
+            );
             let table_size = Self::addr_to_index(Address::MAX) + 1;
+            assert_eq!(table_size, Self::TABLE_SIZE);
             debug_assert!(table_size >= MAX_SPACES);
             Self {
-                sft: std::iter::repeat_with(SFTRefStorage::default)
-                    .take(table_size)
-                    .collect(),
+                sft: std::array::from_fn(|_| SFTRefStorage::default()),
                 space_address_start: Self::index_to_space_range(1).0, // the start of the first space
                 space_address_end: Self::index_to_space_range(MAX_SPACES - 1).1, // the end of the last space
             }
         }
 
         fn addr_to_index(addr: Address) -> usize {
-            addr.and(vm_layout().address_mask()) >> vm_layout().log_space_extent
+            (addr.and(vm_layout().address_mask()) >> vm_layout().log_space_extent)
+                & Self::INDEX_MASK
         }
 
         fn index_to_space_start(i: usize) -> Address {
@@ -318,7 +367,6 @@ mod space_map {
 mod dense_chunk_map {
     use super::*;
     use crate::util::conversions;
-    use crate::util::heap::layout::vm_layout::BYTES_IN_CHUNK;
     use crate::util::metadata::side_metadata::spec_defs::SFT_DENSE_CHUNK_MAP_INDEX;
     use crate::util::metadata::side_metadata::*;
     use std::collections::HashMap;
@@ -333,21 +381,22 @@ mod dense_chunk_map {
     /// library malloc may allocate into, so we cannot use the space map. And using a sparse chunk map
     /// will be costly in terms of memory. In this case, the dense chunk map is a good solution.
     pub struct SFTDenseChunkMap {
-        /// The dense table, one entry per space. We use side metadata to store the space index for each chunk.
-        /// 0 is EMPTY_SPACE_SFT.
-        sft: Vec<SFTRefStorage>,
-        /// A map from space name (assuming they are unique) to their index. We use this to know whether we have
-        /// pushed &dyn SFT for a space, and to know its index.
-        index_map: HashMap<String, usize>,
+        /// Fixed 256-entry dense table indexed directly by `u8` side-metadata values (`0` is
+        /// `EMPTY_SPACE_SFT`, eliminating `Vec` pointer indirection and `get_unchecked`).
+        sft: [SFTRefStorage; Self::MAX_SPACES],
+        /// Next unused dense-table index (`1..=255`).
+        next_index: usize,
+        /// A map from space data-pointer address (`space as *const () as usize`) to its index in
+        /// `self.sft`. Keying by thin pointer address avoids dereferencing `SFTRawPointer` inside
+        /// safe `notify_space_creation`.
+        index_map: HashMap<usize, usize>,
     }
-
-    unsafe impl Sync for SFTDenseChunkMap {}
 
     impl SFTMap for SFTDenseChunkMap {
         fn has_sft_entry(&self, addr: Address) -> bool {
             if SFT_DENSE_CHUNK_MAP_INDEX.is_mapped(addr) {
                 let index = Self::addr_to_index(addr);
-                index < self.sft.len() as u8
+                (index as usize) < self.next_index
             } else {
                 // We haven't mapped side metadata for the chunk, so we do not have an SFT entry for the address.
                 false
@@ -359,31 +408,39 @@ mod dense_chunk_map {
         }
 
         fn get_checked(&self, address: Address) -> &dyn SFT {
-            if self.has_sft_entry(address) {
-                unsafe { self.get_unchecked(address) }
+            if SFT_DENSE_CHUNK_MAP_INDEX.is_mapped(address) {
+                let index = Self::addr_to_index(address) as usize;
+                if index < self.next_index {
+                    self.sft[index].load()
+                } else {
+                    &EMPTY_SPACE_SFT
+                }
             } else {
                 &EMPTY_SPACE_SFT
             }
         }
 
         unsafe fn get_unchecked(&self, address: Address) -> &dyn SFT {
-            let cell = self
-                .sft
-                .get_unchecked(Self::addr_to_index(address) as usize);
-            cell.load()
+            self.sft[Self::addr_to_index(address) as usize].load()
         }
 
         fn notify_space_creation(&mut self, space: SFTRawPointer) {
-            // Insert the space into the SFT table, and the SFT map.
-
-            let space_name = unsafe { &*space }.name().to_string();
+            // Reserve a dense-table slot keyed by the space's thin data address without
+            // dereferencing the raw pointer here. The slot is initialized to `&EMPTY_SPACE_SFT`
+            // and populated with `space` in `unsafe fn update`, where `space`'s validity and
+            // `'static` lifetime are guaranteed by `update`'s safety contract.
+            let space_addr = space as *const () as usize;
             // We shouldn't have this space in our map yet. Otherwise, this method is called multiple times for the same space.
-            assert!(!self.index_map.contains_key(&space_name));
+            assert!(!self.index_map.contains_key(&space_addr));
             // Index for the space
-            let index = self.sft.len();
-            // Insert to hashmap and vec
-            self.sft.push(SFTRefStorage::new(space));
-            self.index_map.insert(space_name, index);
+            let index = self.next_index;
+            assert!(
+                index < Self::MAX_SPACES,
+                "SFTDenseChunkMap supports at most {} spaces",
+                u8::MAX
+            );
+            self.next_index += 1;
+            self.index_map.insert(space_addr, index);
         }
 
         unsafe fn eager_initialize(&mut self, space: SFTRawPointer, start: Address, bytes: usize) {
@@ -397,7 +454,10 @@ mod dense_chunk_map {
                     panic!("failed to mmap metadata memory: {e}");
                 });
 
-            self.update(space, start, bytes);
+            // SAFETY: Side metadata for `[start, start + bytes)` was just mapped above, and caller
+            // guarantees `space` is a valid `'static` `SFT + Sync` fat pointer registered via
+            // `notify_space_creation`.
+            unsafe { self.update(space, start, bytes) };
         }
 
         unsafe fn update(
@@ -406,23 +466,33 @@ mod dense_chunk_map {
             start: Address,
             bytes: usize,
         ) {
-            let index: u8 = *self.index_map.get((*space).name()).unwrap() as u8;
+            let space_addr = space as *const () as usize;
+            let index = *self
+                .index_map
+                .get(&space_addr)
+                .expect("notify_space_creation must be called before update");
+            // SAFETY: Caller guarantees `space` is a valid `'static` `SFT + Sync` trait-object pointer.
+            unsafe {
+                self.sft[index].store_raw(space);
+            }
+            let index_u8 = index as u8;
 
             // Iterate through the chunks and record the space index in the side metadata.
-            let first_chunk = conversions::chunk_align_down(start);
-            let last_chunk = conversions::chunk_align_up(start + bytes);
-            let mut chunk = first_chunk;
-            debug!(
-                "update {} (chunk {}) to {} (chunk {})",
-                start,
-                first_chunk,
-                start + bytes,
-                last_chunk
-            );
-            while chunk < last_chunk {
-                trace!("Update {} to index {}", chunk, index);
-                SFT_DENSE_CHUNK_MAP_INDEX.store_atomic::<u8>(chunk, index, Ordering::SeqCst);
-                chunk += BYTES_IN_CHUNK;
+            if bytes > 0 {
+                let first_chunk = start.chunk_index();
+                let last_chunk = (start + (bytes - 1)).chunk_index();
+                debug!(
+                    "update {} (chunk #{}) to {} (chunk #{})",
+                    start,
+                    first_chunk,
+                    start + bytes,
+                    last_chunk
+                );
+                for chunk_idx in first_chunk..=last_chunk {
+                    let chunk = conversions::chunk_index_to_address(chunk_idx);
+                    trace!("Update {} to index {}", chunk, index_u8);
+                    SFT_DENSE_CHUNK_MAP_INDEX.store_atomic::<u8>(chunk, index_u8, Ordering::SeqCst);
+                }
             }
             debug!("update done");
         }
@@ -439,17 +509,22 @@ mod dense_chunk_map {
     impl SFTDenseChunkMap {
         /// Empty space is at index 0
         const EMPTY_SFT_INDEX: u8 = 0;
+        const MAX_SPACES: usize = u8::MAX as usize + 1;
 
         pub fn new() -> Self {
             Self {
-                // Empty space is at index 0
-                sft: vec![SFTRefStorage::default()],
+                // Empty space is at index 0; all 256 slots default to EMPTY_SPACE_SFT
+                sft: std::array::from_fn(|_| SFTRefStorage::default()),
+                next_index: 1,
                 index_map: HashMap::new(),
             }
         }
 
-        pub fn addr_to_index(addr: Address) -> u8 {
-            SFT_DENSE_CHUNK_MAP_INDEX.load_atomic::<u8>(addr, Ordering::Relaxed)
+        fn addr_to_index(addr: Address) -> u8 {
+            // `Acquire` pairs with the `SeqCst` store in `update()` so any thread observing a
+            // newly published non-zero `index` also observes the preceding `store_raw(space)`
+            // write to `self.sft[index]` on weakly-ordered architectures (zero cost on x86_64).
+            SFT_DENSE_CHUNK_MAP_INDEX.load_atomic::<u8>(addr, Ordering::Acquire)
         }
     }
 }
@@ -457,7 +532,6 @@ mod dense_chunk_map {
 #[allow(dead_code)]
 mod sparse_chunk_map {
     use super::*;
-    use crate::util::conversions;
     use crate::util::conversions::*;
     use crate::util::heap::layout::vm_layout::vm_layout;
     use crate::util::heap::layout::vm_layout::BYTES_IN_CHUNK;
@@ -467,11 +541,9 @@ mod sparse_chunk_map {
         sft: Vec<SFTRefStorage>,
     }
 
-    unsafe impl Sync for SFTSparseChunkMap {}
-
     impl SFTMap for SFTSparseChunkMap {
         fn has_sft_entry(&self, addr: Address) -> bool {
-            addr.chunk_index() < vm_layout().max_chunks()
+            addr.chunk_index() < self.sft.len()
         }
 
         fn get_side_metadata(&self) -> Option<&SideMetadataSpec> {
@@ -479,15 +551,17 @@ mod sparse_chunk_map {
         }
 
         fn get_checked(&self, address: Address) -> &dyn SFT {
-            if self.has_sft_entry(address) {
-                unsafe { self.get_unchecked(address) }
+            if let Some(cell) = self.sft.get(address.chunk_index()) {
+                cell.load()
             } else {
                 &EMPTY_SPACE_SFT
             }
         }
 
         unsafe fn get_unchecked(&self, address: Address) -> &dyn SFT {
-            let cell = self.sft.get_unchecked(address.chunk_index());
+            // SAFETY: Caller guarantees `self.has_sft_entry(address)` holds, i.e.
+            // `address.chunk_index() < self.sft.len()`.
+            let cell = unsafe { self.sft.get_unchecked(address.chunk_index()) };
             cell.load()
         }
 
@@ -501,12 +575,18 @@ mod sparse_chunk_map {
             bytes: usize,
         ) {
             if DEBUG_SFT {
-                self.log_update(&*space, start, bytes);
+                // SAFETY: Caller guarantees `space` is a valid `'static` `SFT + Sync` pointer.
+                self.log_update(unsafe { &*space }, start, bytes);
             }
-            let first = start.chunk_index();
-            let last = conversions::chunk_align_up(start + bytes).chunk_index();
-            for chunk in first..last {
-                self.set(chunk, &*space);
+            if bytes > 0 {
+                let first = start.chunk_index();
+                let last = (start + (bytes - 1)).chunk_index();
+                for chunk in first..=last {
+                    // SAFETY: Caller guarantees every chunk in `[start, start + bytes)` has a valid
+                    // SFT entry (`chunk < self.sft.len()`) and `space` is a valid `'static` `SFT + Sync`
+                    // pointer.
+                    unsafe { self.set(chunk, space) };
+                }
             }
             if DEBUG_SFT {
                 self.trace_sft_map();
@@ -525,7 +605,9 @@ mod sparse_chunk_map {
             }
             assert!(chunk_start.is_aligned_to(BYTES_IN_CHUNK));
             let chunk_idx = chunk_start.chunk_index();
-            self.set(chunk_idx, &EMPTY_SPACE_SFT);
+            // SAFETY: Caller guarantees `self.has_sft_entry(chunk_start)` (`chunk_idx < self.sft.len()`),
+            // and `&EMPTY_SPACE_SFT` is a valid `'static` `SFT + Sync` reference.
+            unsafe { self.set(chunk_idx, &EMPTY_SPACE_SFT) };
         }
     }
 
@@ -578,7 +660,12 @@ mod sparse_chunk_map {
             res
         }
 
-        fn set(&self, chunk: usize, sft: &(dyn SFT + Sync + 'static)) {
+        /// Store `sft` into `self.sft[chunk]`.
+        ///
+        /// # Safety
+        /// `chunk` must be `< self.sft.len()`, and `sft` must be non-null, aligned, and valid to
+        /// dereference as `&'static (dyn SFT + Sync + 'static)` for the lifetime of `self`.
+        unsafe fn set(&self, chunk: usize, sft: SFTRawPointer) {
             /*
              * This is safe (only) because a) this is only called during the
              * allocation and deallocation of chunks, which happens under a global
@@ -592,7 +679,8 @@ mod sparse_chunk_map {
             // It is okay to set empty to valid, or set valid to empty. It is wrong if we overwrite a valid value with another valid value.
             if cfg!(debug_assertions) {
                 let old = self.sft[chunk].load().name();
-                let new = sft.name();
+                // SAFETY: Caller guarantees `sft` is a valid `'static` `SFT + Sync` pointer.
+                let new = unsafe { (*sft).name() };
                 // Allow overwriting the same SFT pointer. E.g., if we have set SFT map for a space, then ensure_mapped() is called on the same,
                 // in which case, we still set SFT map again.
                 debug_assert!(
@@ -604,7 +692,9 @@ mod sparse_chunk_map {
                     new
                 );
             }
-            unsafe { self.sft.get_unchecked(chunk).store(sft) };
+            // SAFETY: Caller guarantees `chunk < self.sft.len()` and `sft` is a valid `'static`
+            // `SFT + Sync` trait-object pointer.
+            unsafe { self.sft.get_unchecked(chunk).store_raw(sft) };
         }
     }
 }

@@ -2,16 +2,35 @@ use super::{Block, BlockState};
 use crate::util::alloc::allocator;
 use crate::util::linear_scan::Region;
 use crate::vm::VMBinding;
+use std::marker::PhantomData;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 
-/// List of blocks owned by the allocator
+/// List of blocks owned by the allocator.
+///
+/// # Representation Invariant
+/// 1. Either `self.first.is_none() && self.last.is_none()` (empty list), or
+///    `self.first == Some(head) && self.last == Some(tail)` forming a finite, acyclic
+///    doubly-linked list of distinct blocks via `Block::PREV_BLOCK_TABLE` and
+///    `Block::NEXT_BLOCK_TABLE` (`head` has `prev == None`, `tail` has `next == None`, and every
+///    adjacent pair `(a, b)` satisfies `a.next == Some(b)` and `b.prev == Some(a)`).
+/// 2. Every `Block` in the list belongs to an allocated `MarkSweepSpace` chunk with mapped local
+///    side metadata (`PREV_BLOCK_TABLE`, `NEXT_BLOCK_TABLE`, `FREE_LIST_TABLE`, `SIZE_TABLE`,
+///    `MARK_TABLE`, `TLS_TABLE`, `BLOCK_LIST_TABLE`).
+/// 3. Exclusive ownership: each `Block` belongs to at most one `BlockList` at a time, and while it
+///    remains in `self`, its `PREV_BLOCK_TABLE` and `NEXT_BLOCK_TABLE` links are mutated only via
+///    `&mut self` (with no concurrent writes to `FREE_LIST_TABLE` while `&self` or `&mut self`
+///    methods inspect list blocks).
+/// 4. `self.size` is an immutable, non-zero, word-aligned MiMalloc bin size (`<= Block::BYTES`)
+///    established by [`new_empty_block_lists`]. All fields are module-private to enforce list and
+///    cell-size invariants while preserving the `#[repr(C)]` layout embedded in
+///    [`crate::util::alloc::FreeListAllocator`].
 #[repr(C)]
 pub struct BlockList {
-    pub first: Option<Block>,
-    pub last: Option<Block>,
-    pub size: usize,
-    pub lock: AtomicBool,
+    first: Option<Block>,
+    last: Option<Block>,
+    size: usize,
+    // Retained to preserve the `#[repr(C)]` layout of `BlockList`.
+    _lock: AtomicBool,
 }
 
 impl std::fmt::Debug for BlockList {
@@ -26,8 +45,13 @@ impl BlockList {
             first: None,
             last: None,
             size,
-            lock: AtomicBool::new(false),
+            _lock: AtomicBool::new(false),
         }
+    }
+
+    /// Return the cell size (in bytes) for blocks in this bin.
+    pub(crate) const fn size(&self) -> usize {
+        self.size
     }
 
     /// List has no blocks
@@ -35,64 +59,108 @@ impl BlockList {
         self.first.is_none()
     }
 
-    /// Remove a block from the list
-    pub fn remove(&mut self, block: Block) {
-        match (block.load_prev_block(), block.load_next_block()) {
+    /// Return the first block in the list without removing it.
+    pub fn first(&self) -> Option<Block> {
+        self.first
+    }
+
+    /// Remove `block` from `self`.
+    ///
+    /// # Safety
+    /// `block` must currently be a member of `self`.
+    unsafe fn remove(&mut self, block: Block) {
+        // SAFETY: Caller guarantees `block` is in `self`; by `BlockList`'s invariant, `block` has
+        // mapped `PREV_BLOCK_TABLE` and `NEXT_BLOCK_TABLE` metadata exclusively owned by `self`.
+        let prev_next = unsafe { (block.load_prev_block(), block.load_next_block()) };
+        match prev_next {
             (None, None) => {
+                debug_assert_eq!(self.first, Some(block));
+                debug_assert_eq!(self.last, Some(block));
                 self.first = None;
                 self.last = None;
             }
             (None, Some(next)) => {
-                next.clear_prev_block();
+                debug_assert_eq!(self.first, Some(block));
+                // SAFETY: `next` is in `self` with mapped `PREV_BLOCK_TABLE` exclusively owned via `&mut self`.
+                unsafe { next.clear_prev_block() };
                 self.first = Some(next);
-                next.store_block_list(self);
             }
             (Some(prev), None) => {
-                prev.clear_next_block();
+                debug_assert_eq!(self.last, Some(block));
+                // SAFETY: `prev` is in `self` with mapped `NEXT_BLOCK_TABLE` exclusively owned via `&mut self`.
+                unsafe { prev.clear_next_block() };
                 self.last = Some(prev);
-                prev.store_block_list(self);
             }
             (Some(prev), Some(next)) => {
-                prev.store_next_block(next);
-                next.store_prev_block(prev);
+                // SAFETY: Both `prev` and `next` are distinct members of `self` with mapped link
+                // side metadata exclusively owned via `&mut self`.
+                unsafe {
+                    prev.store_next_block(next);
+                    next.store_prev_block(prev);
+                }
             }
+        }
+        // SAFETY: `block` has mapped link metadata and is exclusively owned here as it leaves `self`.
+        unsafe {
+            block.clear_prev_block();
+            block.clear_next_block();
         }
     }
 
     /// Pop the first block in the list
     pub fn pop(&mut self) -> Option<Block> {
         if let Some(head) = self.first {
-            if let Some(next) = head.load_next_block() {
+            // SAFETY: `head` is in `self`, so by `BlockList`'s invariant its `NEXT_BLOCK_TABLE`
+            // metadata is mapped and exclusively owned via `&mut self`.
+            if let Some(next) = unsafe { head.load_next_block() } {
                 self.first = Some(next);
-                next.clear_prev_block();
-                next.store_block_list(self);
+                // SAFETY: `next` is in `self` with mapped `PREV_BLOCK_TABLE` exclusively owned via `&mut self`.
+                unsafe { next.clear_prev_block() };
             } else {
                 self.first = None;
                 self.last = None;
             }
-            head.clear_next_block();
-            head.clear_prev_block();
+            // SAFETY: `head` was in `self` with mapped link metadata exclusively owned via `&mut self`.
+            unsafe {
+                head.clear_next_block();
+                head.clear_prev_block();
+            }
             Some(head)
         } else {
             None
         }
     }
 
-    /// Push block to the front of the list
-    pub fn push(&mut self, block: Block) {
+    /// Push `block` to the front of the list.
+    ///
+    /// # Safety
+    /// - `block` must belong to an allocated `MarkSweepSpace` chunk with mapped local side metadata
+    ///   (`PREV_BLOCK_TABLE`, `NEXT_BLOCK_TABLE`, `FREE_LIST_TABLE`, `SIZE_TABLE`, `MARK_TABLE`,
+    ///   `TLS_TABLE`, `BLOCK_LIST_TABLE`).
+    /// - `block` must not currently belong to `self` or any other `BlockList`, and the caller
+    ///   transfers exclusive ownership of `block`'s list-link side metadata (`PREV_BLOCK_TABLE`,
+    ///   `NEXT_BLOCK_TABLE`) to `self` while `block` remains in `self` (with no concurrent writes to
+    ///   `FREE_LIST_TABLE` while `&self` or `&mut self` methods inspect list blocks).
+    pub unsafe fn push(&mut self, block: Block) {
         if self.is_empty() {
-            block.clear_next_block();
-            block.clear_prev_block();
+            // SAFETY: Caller guarantees `block` has mapped link metadata and is exclusively owned.
+            unsafe {
+                block.clear_next_block();
+                block.clear_prev_block();
+            }
             self.first = Some(block);
             self.last = Some(block);
         } else {
             let self_head = self.first.unwrap();
-            block.store_next_block(self_head);
-            self_head.store_prev_block(block);
-            block.clear_prev_block();
+            // SAFETY: Caller guarantees `block` is distinct from `self_head` with mapped link
+            // metadata, and `self_head` is in `self` with mapped link metadata owned via `&mut self`.
+            unsafe {
+                block.store_next_block(self_head);
+                self_head.store_prev_block(block);
+                block.clear_prev_block();
+            }
             self.first = Some(block);
         }
-        block.store_block_list(self);
     }
 
     /// Moves all the blocks of `other` into `self`, leaving `other` empty.
@@ -100,31 +168,29 @@ impl BlockList {
         debug_assert_eq!(self.size, other.size);
         if !other.is_empty() {
             debug_assert!(
-                other.first.unwrap().load_prev_block().is_none(),
-                "The other list's head has prev block: prev{} -> head{}",
-                other.first.unwrap().load_prev_block().unwrap().start(),
-                other.first.unwrap().start()
+                // SAFETY: `other.first` is in `other` with mapped `PREV_BLOCK_TABLE` metadata.
+                unsafe { other.first.unwrap().load_prev_block() }.is_none(),
+                "The other list's head has prev block"
             );
             if self.is_empty() {
                 self.first = other.first;
                 self.last = other.last;
             } else {
                 debug_assert!(
-                    self.first.unwrap().load_prev_block().is_none(),
-                    "Current list's head has prev block: prev{} -> head{}",
-                    self.first.unwrap().load_prev_block().unwrap().start(),
-                    self.first.unwrap().start()
+                    // SAFETY: `self.first` is in `self` with mapped `PREV_BLOCK_TABLE` metadata.
+                    unsafe { self.first.unwrap().load_prev_block() }.is_none(),
+                    "Current list's head has prev block"
                 );
                 let self_tail = self.last.unwrap();
                 let other_head = other.first.unwrap();
-                self_tail.store_next_block(other_head);
-                other_head.store_prev_block(self_tail);
+                // SAFETY: `self` and `other` are disjoint `&mut BlockList`s, so by `BlockList`'s
+                // invariant their block sets are disjoint and both `self_tail` and `other_head`
+                // have mapped link side metadata exclusively owned here.
+                unsafe {
+                    self_tail.store_next_block(other_head);
+                    other_head.store_prev_block(self_tail);
+                }
                 self.last = other.last;
-            }
-            let mut cursor = other.first;
-            while let Some(block) = cursor {
-                block.store_block_list(self);
-                cursor = block.load_next_block();
             }
             other.reset();
         }
@@ -136,66 +202,108 @@ impl BlockList {
         self.last = None;
     }
 
-    /// Lock the list. The MiMalloc allocator mostly uses thread-local block lists, and those operations on the list
-    /// do not need synchronisation. However, in cases where a block list may be accessed by multiple threads, we need
-    /// to lock the list before accessing it.
-    ///
-    /// Our current sole use for locking is parallel sweeping. During the Release phase, multiple GC worker threads can
-    /// sweep chunks and release mutators at the same time, and the same `BlockList` can be reached by traversing blocks in a chunk,
-    /// and also by traversing blocks held by a mutator.  This lock is necessary to prevent
-    /// multiple GC workers from mutating the same `BlockList` instance.
-    pub fn lock(&mut self) {
-        let mut success = false;
-        while !success {
-            success = self
-                .lock
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok();
+    /// Move all blocks in `self` that currently have free cells to `dest`.
+    pub(crate) fn transfer_available_blocks(&mut self, dest: &mut BlockList) {
+        debug_assert_eq!(self.size, dest.size);
+        let mut cursor = self.first;
+        while let Some(block) = cursor {
+            // SAFETY: `block` is currently in `self`; by `BlockList`'s invariant its
+            // `NEXT_BLOCK_TABLE` and `FREE_LIST_TABLE` metadata are mapped with no concurrent writes.
+            let next = unsafe { block.load_next_block() };
+            // SAFETY: Same as above (`FREE_LIST_TABLE` is mapped with no concurrent writes).
+            let has_free = unsafe { block.has_free_cells() };
+            if has_free {
+                // SAFETY: `block` is currently a member of `self`.
+                unsafe { self.remove(block) };
+                // SAFETY: `block` was just removed from `self` (which is disjoint from `dest`),
+                // so it belongs to no `BlockList` and preserves `BlockList`'s invariant on `dest`.
+                unsafe { dest.push(block) };
+            }
+            cursor = next;
         }
     }
 
-    /// Unlock list. See the comments on the lock method.
-    pub fn unlock(&mut self) {
-        self.lock.store(false, Ordering::SeqCst);
-    }
-
     /// Get an iterator for the block list.
-    pub fn iter(&self) -> BlockListIterator {
-        BlockListIterator { cursor: self.first }
+    pub fn iter(&self) -> BlockListIterator<'_> {
+        BlockListIterator {
+            cursor: self.first,
+            _list: PhantomData,
+        }
     }
 
     /// Release unmarked blocks, and sweep other blocks in the block list. Used by eager sweeping.
-    pub fn release_and_sweep_blocks<VM: VMBinding>(&self, space: &super::MarkSweepSpace<VM>) {
-        for block in self.iter() {
-            // We should not have unallocated blocks in a block list
-            debug_assert_ne!(block.get_state(), BlockState::Unallocated);
-            if !block.attempt_release(space) {
-                block.sweep::<VM>();
+    ///
+    /// # Safety
+    /// Every block in `self` must belong to `space`, and no mutator or other GC worker may
+    /// concurrently access blocks in `self`, their side metadata, or their unmarked cells.
+    pub unsafe fn release_and_sweep_blocks<VM: VMBinding>(
+        &mut self,
+        space: &super::MarkSweepSpace<VM>,
+    ) {
+        let mut cursor = self.first;
+        while let Some(block) = cursor {
+            // SAFETY: `block` is currently in `self` with mapped `NEXT_BLOCK_TABLE` owned via `&mut self`.
+            let next = unsafe { block.load_next_block() };
+            match block.get_state() {
+                BlockState::Unallocated => unreachable!(),
+                BlockState::Unmarked => {
+                    // SAFETY: `block` is currently a member of `self`.
+                    unsafe { self.remove(block) };
+                    // SAFETY: `block` has been removed from `self`, and caller guarantees it
+                    // belongs to `space` with no concurrent access.
+                    unsafe { space.release_block(block) };
+                }
+                BlockState::Marked => {
+                    // SAFETY: Caller guarantees `block` belongs to `space` with mapped metadata/cells
+                    // and exclusive access to its free list and unmarked cells.
+                    unsafe { block.sweep::<VM>() };
+                }
             }
+            cursor = next;
         }
     }
 
     /// Release unmarked blocks, and do not sweep any blocks. Used by lazy sweeping
-    pub fn release_blocks<VM: VMBinding>(&self, space: &super::MarkSweepSpace<VM>) {
-        for block in self.iter() {
-            // We should not have unallocated blocks in a block list
-            debug_assert_ne!(block.get_state(), BlockState::Unallocated);
-            block.attempt_release(space);
+    ///
+    /// # Safety
+    /// Every block in `self` must belong to `space`, and no mutator or other GC worker may
+    /// concurrently access blocks in `self` or their side metadata.
+    pub unsafe fn release_blocks<VM: VMBinding>(&mut self, space: &super::MarkSweepSpace<VM>) {
+        let mut cursor = self.first;
+        while let Some(block) = cursor {
+            // SAFETY: `block` is currently in `self` with mapped `NEXT_BLOCK_TABLE` owned via `&mut self`.
+            let next = unsafe { block.load_next_block() };
+            match block.get_state() {
+                BlockState::Unallocated => unreachable!(),
+                BlockState::Unmarked => {
+                    // SAFETY: `block` is currently a member of `self`.
+                    unsafe { self.remove(block) };
+                    // SAFETY: `block` has been removed from `self`, and caller guarantees it
+                    // belongs to `space` with no concurrent access.
+                    unsafe { space.release_block(block) };
+                }
+                BlockState::Marked => {}
+            }
+            cursor = next;
         }
     }
 }
 
-pub struct BlockListIterator {
+pub struct BlockListIterator<'a> {
     cursor: Option<Block>,
+    _list: PhantomData<&'a BlockList>,
 }
 
-impl Iterator for BlockListIterator {
+impl Iterator for BlockListIterator<'_> {
     type Item = Block;
 
     fn next(&mut self) -> Option<Self::Item> {
         let ret = self.cursor;
         if let Some(cur) = self.cursor {
-            self.cursor = cur.load_next_block();
+            // SAFETY: `self._list` borrows the owning `&'a BlockList` for the lifetime of this
+            // iterator, preventing concurrent mutation, and `cur` is a member of that `BlockList`
+            // with mapped `NEXT_BLOCK_TABLE` metadata by `BlockList`'s invariant.
+            self.cursor = unsafe { cur.load_next_block() };
         }
         ret
     }
@@ -293,13 +401,8 @@ pub(crate) fn new_empty_block_lists() -> BlockLists {
 pub(crate) fn pages_used_by_blocklists(lists: &BlockLists) -> usize {
     let mut pages = 0;
     for bin in 1..=MAX_BIN {
-        let list = &lists[bin];
-
-        // walk the blocks
-        let mut cursor = list.first;
-        while let Some(block) = cursor {
+        for _block in lists[bin].iter() {
             pages += Block::BYTES >> crate::util::constants::LOG_BYTES_IN_PAGE;
-            cursor = block.load_next_block();
         }
     }
 

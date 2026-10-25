@@ -220,6 +220,10 @@ impl<VM: VMBinding> CopySpace<VM> {
             crate::util::metadata::vo_bit::bzero_vo_bit(start, size);
         }
 
+        // SAFETY: Called during the STW `Release` pause after all live objects in from-space
+        // have been evacuated to to-space and mutator/copy bump allocators are reset or rebound
+        // before further allocation, so no live object references or active allocators point into
+        // `self.pr`'s pages.
         unsafe {
             self.pr.reset();
         }
@@ -361,7 +365,11 @@ impl<VM: VMBinding> CopySpaceCopyContext<VM> {
     }
 
     pub fn rebind(&mut self, space: &CopySpace<VM>) {
+        // SAFETY: `CopySpace` instances only exist as fields of heap-pinned `'static` `Plan`
+        // structs inside `MMTK<VM>`, and `CopySpaceCopyContext::rebind` is called during
+        // `Plan::prepare_worker` (which receives `&self` rather than `&'static self`) to point
+        // worker-local copy allocators at the plan's permanent to-space.
         self.copy_allocator
-            .rebind(unsafe { &*{ space as *const _ } });
+            .rebind(unsafe { &*(space as *const CopySpace<VM>) });
     }
 }

@@ -66,8 +66,7 @@ impl<VM: VMBinding> BumpAllocator<VM> {
     }
 
     pub(crate) fn reset(&mut self) {
-        let zero = unsafe { Address::zero() };
-        self.bump_pointer.reset(zero, zero);
+        self.bump_pointer.reset(Address::ZERO, Address::ZERO);
     }
 
     pub(crate) fn rebind(&mut self, space: &'static dyn Space<VM>) {
@@ -103,7 +102,7 @@ impl<VM: VMBinding> Allocator<VM> for BumpAllocator<VM> {
         let result = align_allocation_no_fill::<VM>(self.bump_pointer.cursor, align, offset);
         let new_cursor = result + size;
 
-        if new_cursor > self.bump_pointer.limit {
+        if new_cursor < result || new_cursor > self.bump_pointer.limit {
             trace!("Thread local buffer used up, go to alloc slow path");
             self.alloc_slow(size, align, offset)
         } else {
@@ -151,7 +150,9 @@ impl<VM: VMBinding> Allocator<VM> for BumpAllocator<VM> {
         // For stress test, limit is [0, block_size) to artificially make the
         // check in the fastpath (alloc()) fail. The real limit is recovered by
         // adding it to the current cursor.
-        if new_cursor > self.bump_pointer.cursor + self.bump_pointer.limit.as_usize() {
+        if new_cursor < result
+            || new_cursor > self.bump_pointer.cursor + self.bump_pointer.limit.as_usize()
+        {
             self.acquire_block(size, align, offset, true)
         } else {
             fill_alignment_gap::<VM>(self.bump_pointer.cursor, result);
@@ -221,7 +222,12 @@ impl<VM: VMBinding> BumpAllocator<VM> {
                 // manipulating the limit as below.
                 // The assumption here is that we use an address range such that
                 // cursor > block_size always.
-                self.set_limit(acquired_start, unsafe { Address::from_usize(block_size) });
+                // SAFETY: `Address::from_usize` simply wraps `block_size` without Rust-level UB.
+                // This fake limit is never dereferenced: it is strictly smaller than `acquired_start`
+                // so fastpath `cursor + size > limit` triggers slowpath entry, where
+                // `alloc_slow_once_precise_stress` recovers the real limit via `cursor + limit.as_usize()`.
+                let stress_limit = unsafe { Address::from_usize(block_size) };
+                self.set_limit(acquired_start, stress_limit);
                 // Note that we have just acquired a new block so we know that we don't have to go
                 // through the entire allocation sequence again, we can directly call the slow path
                 // allocation.

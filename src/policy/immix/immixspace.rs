@@ -101,6 +101,12 @@ pub struct ImmixSpaceArgs {
     pub never_move_objects: bool,
 }
 
+// SAFETY: Every field of `ImmixSpace<VM>` other than `pr: BlockPageResource<VM, Block>` is
+// auto-`Sync`. `BlockPageResource` fails auto-`Sync` only because `BlockQueue::data` uses
+// `UnsafeCell<Box<[MaybeUninit<Block>]>>`; `BlockPageResource` synchronizes all concurrent
+// accesses via `RwLock` (`head_global_freed_blocks`, `global_freed_blocks`), `AtomicUsize`
+// `pop` cursors, `Mutex` (`sync`), and disjoint `worker.ordinal` indexing on
+// `worker_local_freed_blocks` (flushed before mutators resume).
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
 
 impl<VM: VMBinding> SFT for ImmixSpace<VM> {
@@ -613,11 +619,31 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 self.defrag.prepare(self, plan_stats.unwrap());
             }
 
+            if !super::BLOCK_ONLY {
+                self.line_mark_state.fetch_add(1, Ordering::AcqRel);
+                if self.line_mark_state.load(Ordering::Acquire) > Line::MAX_MARK_STATE {
+                    self.line_mark_state
+                        .store(Line::RESET_MARK_STATE, Ordering::Release);
+                }
+            }
+        }
+
+        // All `&mut self` mutations are complete; bind `shared_self` so `self` is never used
+        // mutably after extending `space`'s lifetime for `PrepareBlockState` packets (preserving
+        // Stacked Borrows).
+        let shared_self: &Self = self;
+
+        if major_gc {
             // Prepare each block for GC
-            let threshold = self.defrag.defrag_spill_threshold.load(Ordering::Acquire);
-            // # Safety: ImmixSpace reference is always valid within this collection cycle.
-            let space = unsafe { &*(self as *const Self) };
-            let work_packets = self.chunk_map.generate_tasks(|chunk| {
+            let threshold = shared_self
+                .defrag
+                .defrag_spill_threshold
+                .load(Ordering::Acquire);
+            // SAFETY: `ImmixSpace` lives inside the `'static` `MMTK<VM>` plan instance and outlives
+            // all `PrepareBlockState` work packets executed during this STW `Prepare` stage.
+            // `shared_self` is a shared borrow and `self` is not accessed mutably below.
+            let space = unsafe { &*(shared_self as *const Self) };
+            let work_packets = space.chunk_map.generate_tasks(|chunk| {
                 Box::new(PrepareBlockState {
                     space,
                     chunk,
@@ -629,15 +655,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     unlog_bits_op,
                 })
             });
-            self.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
-
-            if !super::BLOCK_ONLY {
-                self.line_mark_state.fetch_add(1, Ordering::AcqRel);
-                if self.line_mark_state.load(Ordering::Acquire) > Line::MAX_MARK_STATE {
-                    self.line_mark_state
-                        .store(Line::RESET_MARK_STATE, Ordering::Release);
-                }
-            }
+            space.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
         }
 
         #[cfg(feature = "vo_bit")]
@@ -646,7 +664,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 // If it is major GC, we always clear all VO bits because we are doing full-heap
                 // tracing.
                 Some(VOBitsClearingScope::FullGC)
-            } else if self.space_args.mixed_age {
+            } else if shared_self.space_args.mixed_age {
                 // StickyImmix nursery GC.
                 // Some lines (or blocks) contain only young objects,
                 // while other lines (or blocks) contain only old objects.
@@ -657,7 +675,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 } else {
                     // Young objects are allocated into empty lines.
                     // Only clear unmarked lines.
-                    let line_mark_state = self.line_mark_state.load(Ordering::SeqCst);
+                    let line_mark_state = shared_self.line_mark_state.load(Ordering::SeqCst);
                     Some(VOBitsClearingScope::Line {
                         state: line_mark_state,
                     })
@@ -669,10 +687,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             };
 
             if let Some(scope) = maybe_scope {
-                let work_packets = self
+                let work_packets = shared_self
                     .chunk_map
                     .generate_tasks(|chunk| Box::new(ClearVOBitsAfterPrepare { chunk, scope }));
-                self.scheduler.work_buckets[WorkBucketStage::ClearVOBits].bulk_add(work_packets);
+                shared_self.scheduler.work_buckets[WorkBucketStage::ClearVOBits]
+                    .bulk_add(work_packets);
             }
         }
     }
@@ -693,11 +712,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if !super::BLOCK_ONLY {
             self.reusable_blocks.reset();
         }
-        // Sweep chunks and blocks
-        let work_packets = self.generate_sweep_tasks(unlog_bits_op);
-        self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
-
         self.lines_consumed.store(0, Ordering::Relaxed);
+
+        // Sweep chunks and blocks via `shared_self` so `self` (`&mut Self`) is not touched after
+        // `generate_sweep_tasks` forms `space: &'static Self`.
+        let shared_self: &Self = self;
+        let work_packets = shared_self.generate_sweep_tasks(unlog_bits_op);
+        shared_self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
     }
 
     /// This is called when a GC finished.
@@ -713,7 +734,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Generate chunk sweep tasks
     fn generate_sweep_tasks(&self, unlog_bits_op: UnlogBitsOperation) -> Vec<Box<dyn GCWork<VM>>> {
         self.defrag.mark_histograms.lock().clear();
-        // # Safety: ImmixSpace reference is always valid within this collection cycle.
+        // SAFETY: `ImmixSpace` lives inside the `'static` `MMTK<VM>` plan instance and outlives
+        // all `SweepChunk` and `FlushPageResource` tasks executed during this STW `Release` stage.
         let space = unsafe { &*(self as *const Self) };
         let epilogue = Arc::new(FlushPageResource {
             space,
@@ -1185,19 +1207,34 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// return a tuple of the start line and the end line (non-inclusive).
     ///
     /// Returns None if the search could not find any more holes.
+    ///
+    /// # Safety
+    /// `search_start` must lie within an allocated block of `self` whose line/RC metadata is
+    /// mapped, and when `self.rc_enabled` is true, no thread may perform concurrent non-atomic
+    /// writes to `RC_TABLE` for `search_start.block()`.
     #[allow(clippy::assertions_on_constants)]
-    pub fn get_next_available_lines(&self, copy: bool, search_start: Line) -> Option<(Line, Line)> {
+    pub(crate) unsafe fn get_next_available_lines(
+        &self,
+        copy: bool,
+        search_start: Line,
+    ) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
         if self.rc_enabled {
-            self.rc_get_next_available_lines(copy, search_start)
+            // SAFETY: Caller upholds all `rc_get_next_available_lines` preconditions.
+            unsafe { self.rc_get_next_available_lines(copy, search_start) }
         } else {
             self.normal_get_next_available_lines(search_start)
         }
     }
 
-    /// Search holes by ref-counts instead of line marks
+    /// Search holes by ref-counts instead of line marks.
+    ///
+    /// # Safety
+    /// `search_start` must lie within an allocated block of `self` with mapped `RC_TABLE` side
+    /// metadata, and no thread may perform concurrent non-atomic writes to `RC_TABLE` for
+    /// `search_start.block()`.
     #[allow(clippy::assertions_on_constants)]
-    pub fn rc_get_next_available_lines(
+    unsafe fn rc_get_next_available_lines(
         &self,
         copy: bool,
         search_start: Line,
@@ -1205,7 +1242,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         debug_assert!(!super::BLOCK_ONLY);
         debug_assert!(self.rc_enabled);
         let block = search_start.block();
-        let rc_array = RCArray::of(block);
+        // SAFETY: Caller guarantees `search_start` lies in an allocated block of `self` (so
+        // `!block.is_zero()`, `block.start()` is aligned to `Block::BYTES` via `Line::block`, and
+        // `RC_TABLE` is mapped for `block`) with no concurrent non-atomic writes.
+        let rc_array = unsafe { RCArray::of(block) };
         let limit = Block::LINES;
         // Find start
         let first_free_cursor = {
@@ -1262,8 +1302,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if end <= start {
             // The reservation consumed the entire hole (it was exactly one line). Retry from
             // just past it instead of handing out an empty range.
+            if start + 1 >= limit {
+                return None;
+            }
             let next_search_start = Line::from_aligned_address(block.start()).next_nth(start + 1);
-            return self.rc_get_next_available_lines(copy, next_search_start);
+            // SAFETY: `start + 1 < Block::LINES`, so `next_search_start` lies within the exact
+            // same `block` for which the caller guarantees `RC_TABLE` is mapped without concurrent
+            // non-atomic writes.
+            return unsafe { self.rc_get_next_available_lines(copy, next_search_start) };
         }
         let start = Line::from_aligned_address(block.start()).next_nth(start);
         let end = Line::from_aligned_address(block.start()).next_nth(end);
@@ -1294,31 +1340,32 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         debug_assert!(!self.rc_enabled);
         let unavail_state = self.line_unavail_state.load(Ordering::Acquire);
         let current_state = self.line_mark_state.load(Ordering::Acquire);
-        let block = search_start.block();
-        let mark_data = block.line_mark_table();
         let start_cursor = search_start.get_index_within_block();
         let mut cursor = start_cursor;
+        let mut current_line = search_start;
         // Find start
-        while cursor < mark_data.len() {
-            let mark = mark_data.get(cursor);
+        while cursor < Block::LINES {
+            let mark = current_line.get_mark_state();
             if mark != unavail_state && mark != current_state {
                 break;
             }
             cursor += 1;
+            current_line = current_line.next();
         }
-        if cursor == mark_data.len() {
+        if cursor == Block::LINES {
             return None;
         }
-        let start = search_start.next_nth(cursor - start_cursor);
+        let start = current_line;
         // Find limit
-        while cursor < mark_data.len() {
-            let mark = mark_data.get(cursor);
+        while cursor < Block::LINES {
+            let mark = current_line.get_mark_state();
             if mark == unavail_state || mark == current_state {
                 break;
             }
             cursor += 1;
+            current_line = current_line.next();
         }
-        let end = search_start.next_nth(cursor - start_cursor);
+        let end = current_line;
         debug_assert!(RegionIterator::<Line>::new(start, end)
             .all(|line| !line.is_marked(unavail_state) && !line.is_marked(current_state)));
         Some((start, end))

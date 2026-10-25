@@ -88,12 +88,18 @@ pub struct MarkSweepSpace<VM: VMBinding> {
     pending_release_packets: AtomicUsize,
 }
 
+// SAFETY: Every field of `MarkSweepSpace<VM>` other than `pr: BlockPageResource<VM, Block>` is
+// auto-`Sync`. `BlockPageResource` fails auto-`Sync` only because `BlockQueue::data` uses
+// `UnsafeCell<Box<[MaybeUninit<Block>]>>`; `BlockPageResource` synchronizes all concurrent
+// accesses via `RwLock` (`head_global_freed_blocks`, `global_freed_blocks`), `AtomicUsize`
+// `pop` cursors, `Mutex` (`sync`), and disjoint `worker.ordinal` indexing on
+// `worker_local_freed_blocks` (flushed before mutators resume).
 unsafe impl<VM: VMBinding> Sync for MarkSweepSpace<VM> {}
 
 pub struct AbandonedBlockLists {
-    pub available: BlockLists,
-    pub unswept: BlockLists,
-    pub consumed: BlockLists,
+    available: BlockLists,
+    unswept: BlockLists,
+    consumed: BlockLists,
 }
 
 impl AbandonedBlockLists {
@@ -105,13 +111,51 @@ impl AbandonedBlockLists {
         }
     }
 
-    fn sweep_later<VM: VMBinding>(&mut self, space: &MarkSweepSpace<VM>) {
+    /// Move all blocks from a mutator's local block lists into `self`.
+    ///
+    /// # Safety
+    /// Every block in `available`, `available_stress`, `consumed`, and `unswept` must belong to
+    /// the `MarkSweepSpace` that owns `self`.
+    pub(crate) unsafe fn abandon_from(
+        &mut self,
+        available: &mut BlockLists,
+        available_stress: &mut BlockLists,
+        consumed: &mut BlockLists,
+        unswept: &mut BlockLists,
+    ) {
+        for i in 0..MI_BIN_FULL {
+            if !available[i].is_empty() {
+                self.available[i].append(&mut available[i]);
+            }
+            if !available_stress[i].is_empty() {
+                self.available[i].append(&mut available_stress[i]);
+            }
+            if !consumed[i].is_empty() {
+                self.consumed[i].append(&mut consumed[i]);
+            }
+            if !unswept[i].is_empty() {
+                self.unswept[i].append(&mut unswept[i]);
+            }
+        }
+    }
+
+    /// Release unmarked blocks in all bins back to `space`, and move remaining blocks into
+    /// `unswept` for lazy sweeping.
+    ///
+    /// # Safety
+    /// Every block in `self` must belong to `space`, and no mutator or other GC worker may
+    /// concurrently access blocks in `self` or their side metadata.
+    unsafe fn sweep_later<VM: VMBinding>(&mut self, space: &MarkSweepSpace<VM>) {
         for i in 0..MI_BIN_FULL {
             // Release free blocks
-            self.available[i].release_blocks(space);
-            self.consumed[i].release_blocks(space);
+            // SAFETY: Caller guarantees all blocks in `self` belong to `space` with no concurrent access.
+            unsafe {
+                self.available[i].release_blocks(space);
+                self.consumed[i].release_blocks(space);
+            }
             if cfg!(not(feature = "eager_sweeping")) {
-                self.unswept[i].release_blocks(space);
+                // SAFETY: Same as above.
+                unsafe { self.unswept[i].release_blocks(space) };
             } else {
                 // If we do eager sweeping, we should have no unswept blocks.
                 debug_assert!(self.unswept[i].is_empty());
@@ -131,12 +175,7 @@ impl AbandonedBlockLists {
 
     fn recycle_blocks(&mut self) {
         for i in 0..MI_BIN_FULL {
-            for block in self.consumed[i].iter() {
-                if block.has_free_cells() {
-                    self.consumed[i].remove(block);
-                    self.available[i].push(block);
-                }
-            }
+            self.consumed[i].transfer_available_blocks(&mut self.available[i]);
         }
     }
 
@@ -299,6 +338,10 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
     }
 
     pub fn new(args: crate::policy::space::PlanCreateSpaceArgs<VM>) -> MarkSweepSpace<VM> {
+        assert!(
+            VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side(),
+            "MarkSweepSpace requires LOCAL_MARK_BIT_SPEC to be on the side"
+        );
         let scheduler = args.scheduler.clone();
         let vm_map = args.vm_map;
         let is_discontiguous = args.vmrequest.is_discontiguous();
@@ -424,12 +467,15 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
         #[cfg(debug_assertions)]
         self.abandoned_in_gc.lock().unwrap().assert_empty();
 
-        // # Safety: MarkSweepSpace reference is always valid within this collection cycle.
-        let space = unsafe { &*(self as *const Self) };
-        let work_packets = self
+        let shared_self: &Self = self;
+        // SAFETY: `MarkSweepSpace` lives inside the `'static` `MMTK<VM>` plan instance and outlives
+        // all `PrepareChunkMap` packets executed during this STW `Prepare` stage. Reborrowing from
+        // `shared_self` (and never accessing `self` mutably below) preserves Stacked Borrows.
+        let space = unsafe { &*(shared_self as *const Self) };
+        let work_packets = space
             .chunk_map
             .generate_tasks(|chunk| Box::new(PrepareChunkMap { space, chunk }));
-        self.scheduler.work_buckets[crate::scheduler::WorkBucketStage::Prepare]
+        space.scheduler.work_buckets[crate::scheduler::WorkBucketStage::Prepare]
             .bulk_add(work_packets);
     }
 
@@ -441,9 +487,13 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
 
         // Do work in separate work packet in order not to slow down the `Release` work packet which
         // blocks all `ReleaseMutator` packets.
-        let space = unsafe { &*(self as *const Self) };
+        let shared_self: &Self = self;
+        // SAFETY: `MarkSweepSpace` lives inside the `'static` `MMTK<VM>` plan instance and outlives
+        // `ReleaseMarkSweepSpace` executed during this STW `Release` stage. `self` is not used
+        // mutably after `shared_self` is formed.
+        let space = unsafe { &*(shared_self as *const Self) };
         let work_packet = ReleaseMarkSweepSpace { space };
-        self.scheduler.work_buckets[crate::scheduler::WorkBucketStage::Release].add(work_packet);
+        space.scheduler.work_buckets[crate::scheduler::WorkBucketStage::Release].add(work_packet);
     }
 
     pub fn end_of_gc(&mut self) {
@@ -453,15 +503,26 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
         );
     }
 
-    /// Release a block.
-    pub fn release_block(&self, block: Block) {
-        self.block_clear_metadata(block);
+    /// Release a block back to the page resource after clearing its metadata.
+    ///
+    /// # Safety
+    /// `block` must belong to `self`, must have been removed from any `BlockList`, and must not be
+    /// concurrently accessed by any mutator or other GC worker.
+    pub(super) unsafe fn release_block(&self, block: Block) {
+        // SAFETY: Caller guarantees `block` belongs to `self`, is unlinked from all `BlockList`s,
+        // and has no concurrent access.
+        unsafe { self.block_clear_metadata(block) };
 
         block.deinit();
         self.pr.release_block(block);
     }
 
-    pub fn block_clear_metadata(&self, block: Block) {
+    /// Zero all local metadata for `block`.
+    ///
+    /// # Safety
+    /// `block` must belong to `self`, must not be linked in any `BlockList`, and must not have its
+    /// metadata concurrently accessed by other threads.
+    unsafe fn block_clear_metadata(&self, block: Block) {
         for metadata_spec in Block::METADATA_SPECS {
             metadata_spec.set_zero_atomic(block.start(), Ordering::SeqCst);
         }
@@ -529,6 +590,8 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
     }
 
     fn generate_sweep_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
+        // SAFETY: `MarkSweepSpace` lives inside the `'static` `MMTK<VM>` plan instance and outlives
+        // all `SweepChunk` and `RecycleBlocks` tasks executed during this STW `Release` stage.
         let space = unsafe { &*(self as *const Self) };
         let epilogue = Arc::new(RecycleBlocks {
             space,
@@ -612,7 +675,10 @@ impl<VM: VMBinding> GCWork<VM> for ReleaseMarkSweepSpace<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         {
             let mut abandoned = self.space.abandoned.lock().unwrap();
-            abandoned.sweep_later(self.space);
+            // SAFETY: All blocks in `self.space.abandoned` belong to `self.space`, and this work
+            // packet holds the `abandoned` mutex during the STW `Release` stage before `SweepChunk`
+            // packets are spawned (`pending_release_packets` barrier).
+            unsafe { abandoned.sweep_later(self.space) };
         }
 
         self.space.release_packet_done();
@@ -643,7 +709,11 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
             // We have released unmarked blocks in `ReleaseMarkSweepSpace` and `ReleaseMutator`.
             // We shouldn't see any unmarked blocks now.
             debug_assert_eq!(block.get_state(), BlockState::Marked);
-            block.sweep::<VM>();
+            // SAFETY: `self.chunk` is an allocated chunk of `self.space` exclusively assigned to
+            // this `SweepChunk` packet during the STW `Release` stage (after all `ReleaseMutator`
+            // and `ReleaseMarkSweepSpace` packets completed via `pending_release_packets`), and
+            // `block` is an initialized marked block in `self.chunk`.
+            unsafe { block.sweep::<VM>() };
             allocated_blocks += 1;
         }
         probe!(mmtk, sweep_chunk_ms, allocated_blocks);

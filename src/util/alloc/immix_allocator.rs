@@ -74,7 +74,7 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
         let result = align_allocation_no_fill::<VM>(self.bump_pointer.cursor, align, offset);
         let new_cursor = result + size;
 
-        if new_cursor > self.bump_pointer.limit {
+        if new_cursor < result || new_cursor > self.bump_pointer.limit {
             trace!(
                 "{:?}: Thread local buffer used up, go to alloc slow path",
                 self.tls
@@ -196,7 +196,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         trace!("{:?}: overflow_alloc", self.tls);
         let start = align_allocation_no_fill::<VM>(self.large_bump_pointer.cursor, align, offset);
         let end = start + size;
-        if end > self.large_bump_pointer.limit {
+        if end < start || end > self.large_bump_pointer.limit {
             self.request_for_large = true;
             let rtn = self.alloc_slow_inline(size, align, offset);
             self.request_for_large = false;
@@ -238,9 +238,14 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     fn acquire_recyclable_lines(&mut self, size: usize, align: usize, offset: usize) -> bool {
         while self.line.is_some() || self.acquire_recyclable_block() {
             let line = self.line.unwrap();
-            if let Some((start_line, end_line)) =
-                self.immix_space().get_next_available_lines(self.copy, line)
-            {
+            // SAFETY: `self.line` is only set from `acquire_recyclable_block` (returning a
+            // reusable block owned by `self` in `BlockState::Reusing` / initialized state) and
+            // advanced strictly within `[block.start_line(), block.end_line())`, so `line` lies
+            // in an allocated `ImmixSpace` block with mapped line/RC metadata and no concurrent
+            // non-atomic writes to `RC_TABLE`.
+            let next_lines =
+                unsafe { self.immix_space().get_next_available_lines(self.copy, line) };
+            if let Some((start_line, end_line)) = next_lines {
                 // Find recyclable lines. Update the bump allocation cursor and limit.
                 self.bump_pointer.cursor = start_line.start();
                 self.bump_pointer.limit = end_line.start();
@@ -351,7 +356,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     fn require_new_block(&mut self, size: usize, align: usize, offset: usize) -> bool {
         let result = align_allocation_no_fill::<VM>(self.bump_pointer.cursor, align, offset);
         let new_cursor = result + size;
-        let insufficient_space = new_cursor > self.bump_pointer.limit;
+        let insufficient_space = new_cursor < result || new_cursor > self.bump_pointer.limit;
 
         // We want this function to behave as if `alloc()` has been called. Hence, we perform a
         // size check and then return the conditions where `alloc_slow_inline()` would be called
@@ -361,7 +366,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             let start =
                 align_allocation_no_fill::<VM>(self.large_bump_pointer.cursor, align, offset);
             let end = start + size;
-            end > self.large_bump_pointer.limit
+            end < start || end > self.large_bump_pointer.limit
         } else {
             // We try to acquire recyclable lines here just like `alloc_slow_hot()`
             insufficient_space && !self.acquire_recyclable_lines(size, align, offset)
@@ -374,6 +379,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     fn set_limit_for_stress(&mut self) {
         if self.bump_pointer.cursor < self.bump_pointer.limit {
             let old_limit = self.bump_pointer.limit;
+            // SAFETY: `Address::from_usize` wraps the remaining buffer byte count without Rust-level
+            // UB. This sentinel limit (`< cursor` because heap addresses exceed block size) is never
+            // dereferenced and is restored to `cursor + limit.as_usize()` in `restore_limit_for_stress`.
             let new_limit =
                 unsafe { Address::from_usize(self.bump_pointer.limit - self.bump_pointer.cursor) };
             self.bump_pointer.limit = new_limit;
@@ -388,6 +396,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
         if self.large_bump_pointer.cursor < self.large_bump_pointer.limit {
             let old_lg_limit = self.large_bump_pointer.limit;
+            // SAFETY: `Address::from_usize` wraps the remaining large-buffer byte count without
+            // Rust-level UB. This sentinel limit is never dereferenced and is restored to
+            // `cursor + limit.as_usize()` in `restore_limit_for_stress`.
             let new_lg_limit = unsafe {
                 Address::from_usize(self.large_bump_pointer.limit - self.large_bump_pointer.cursor)
             };

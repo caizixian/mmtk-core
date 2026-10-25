@@ -71,20 +71,21 @@ impl Transducer {
         self.last_bit_visited = address;
     }
 
-    pub fn encode(&self, current_position: Address) -> usize {
+    pub fn encode(&self, region: OVCRegion, current_position: Address) -> usize {
+        let to_offset_in_region = self.to - region.start();
         if self.in_object {
             // We count the space between the last mark bit and
             // the current address as live when we stop in the
             // middle of an object.
-            self.to.as_usize() + (current_position - self.last_bit_visited) + 1
+            to_offset_in_region + (current_position - self.last_bit_visited) + 1
         } else {
-            self.to.as_usize()
+            to_offset_in_region
         }
     }
 
-    pub fn decode(offset: usize, current_position: Address) -> Self {
+    pub fn decode(offset: usize, region: OVCRegion, current_position: Address) -> Self {
         Transducer {
-            to: unsafe { Address::from_usize(offset & !1) },
+            to: region.start() + (offset & !1),
             last_bit_visited: current_position,
             in_object: (offset & 1) == 1,
         }
@@ -155,7 +156,7 @@ impl<VM: VMBinding> ForwardingMetadata<VM> {
         for block in RegionIterator::<Block>::new(first_block, last_block) {
             OFFSET_VECTOR_SPEC.store_atomic::<usize>(
                 block.start(),
-                state.encode(block.start()),
+                state.encode(region, block.start()),
                 Ordering::Relaxed,
             );
             MARK_SPEC.scan_non_zero_values::<u8>(
@@ -178,9 +179,11 @@ impl<VM: VMBinding> ForwardingMetadata<VM> {
             self.calculated.load(Ordering::Relaxed),
             "forward() should only be called when we have calculated an offset vector"
         );
+        let region = OVCRegion::from_unaligned_address(address);
         let block = Block::from_unaligned_address(address);
         let mut state = Transducer::decode(
             OFFSET_VECTOR_SPEC.load_atomic::<usize>(block.start(), Ordering::Relaxed),
+            region,
             block.start(),
         );
         // The transducer in this implementation computes the final

@@ -231,6 +231,14 @@ impl<VM: VMBinding> VMSpace<VM> {
         assert!(size > 0);
         assert!(!start.is_zero());
 
+        let end_raw = start
+            .as_usize()
+            .checked_add(size)
+            .expect("VMSpace region start + size overflowed Address");
+        assert!(
+            end_raw.checked_add(BYTES_IN_CHUNK - 1).is_some(),
+            "VMSpace region end chunk alignment overflowed Address"
+        );
         let end = start + size;
 
         let chunk_start = start.align_down(BYTES_IN_CHUNK);
@@ -270,7 +278,28 @@ impl<VM: VMBinding> VMSpace<VM> {
     }
 
     fn set_sft(&self, chunk_start: Address, chunk_size: usize) {
-        assert!(SFT_MAP.has_sft_entry(chunk_start), "The VM space start (aligned to {}) does not have a valid SFT entry. Possibly the address range is not in the address range we use.", chunk_start);
+        debug_assert!(chunk_start.is_aligned_to(BYTES_IN_CHUNK));
+        debug_assert!(chunk_size % BYTES_IN_CHUNK == 0);
+        assert!(chunk_start.as_usize().checked_add(chunk_size).is_some());
+        if chunk_size > 0 {
+            let first_chunk = chunk_start.chunk_index();
+            let last_chunk = (chunk_start + (chunk_size - 1)).chunk_index();
+            for chunk_idx in first_chunk..=last_chunk {
+                let chunk = crate::util::conversions::chunk_index_to_address(chunk_idx);
+                assert!(
+                    SFT_MAP.has_sft_entry(chunk),
+                    "The VM space chunk {} (in [{}, {})) does not have a valid SFT entry. Possibly the address range is not in the address range we use.",
+                    chunk,
+                    chunk_start,
+                    chunk_start + chunk_size
+                );
+            }
+        }
+        // SAFETY: `set_sft` is only called during or after `Space::initialize_sft` (when `self`
+        // resides in the heap-pinned `'static` `Plan` and `notify_space_creation` has run) and
+        // after `set_side_metadata` mapped side metadata for `[chunk_start, chunk_start + chunk_size)`,
+        // `chunk_start + chunk_size` was checked not to overflow, and every chunk in the range was
+        // asserted above to satisfy `SFT_MAP.has_sft_entry`.
         unsafe {
             SFT_MAP.update(self.as_sft(), chunk_start, chunk_size);
         }

@@ -39,58 +39,126 @@ pub struct Allocators<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> Allocators<VM> {
+    /// Return a reference to the allocator selected by `selector`.
+    ///
     /// # Safety
-    /// The selector needs to be valid, and points to an allocator that has been initialized.
+    /// `selector` must not be [`AllocatorSelector::None`], its index must be in bounds for the
+    /// corresponding allocator array, and that `MaybeUninit` slot must have been initialized
+    /// (e.g. via [`Allocators::new`]) and not subsequently overwritten with uninitialized data.
     pub unsafe fn get_allocator(&self, selector: AllocatorSelector) -> &dyn Allocator<VM> {
         match selector {
             AllocatorSelector::BumpPointer(index) => {
-                self.bump_pointer[index as usize].assume_init_ref()
+                let slot = &self.bump_pointer[index as usize];
+                // SAFETY: Caller guarantees `slot` was initialized with a valid `BumpAllocator<VM>`.
+                unsafe { slot.assume_init_ref() }
             }
             AllocatorSelector::LargeObject(index) => {
-                self.large_object[index as usize].assume_init_ref()
+                let slot = &self.large_object[index as usize];
+                // SAFETY: Caller guarantees `slot` was initialized with a valid `LargeObjectAllocator<VM>`.
+                unsafe { slot.assume_init_ref() }
             }
-            AllocatorSelector::Malloc(index) => self.malloc[index as usize].assume_init_ref(),
-            AllocatorSelector::Immix(index) => self.immix[index as usize].assume_init_ref(),
-            AllocatorSelector::FreeList(index) => self.free_list[index as usize].assume_init_ref(),
-            AllocatorSelector::Lisp2(index) => self.lisp2[index as usize].assume_init_ref(),
+            AllocatorSelector::Malloc(index) => {
+                let slot = &self.malloc[index as usize];
+                // SAFETY: Caller guarantees `slot` was initialized with a valid `MallocAllocator<VM>`.
+                unsafe { slot.assume_init_ref() }
+            }
+            AllocatorSelector::Immix(index) => {
+                let slot = &self.immix[index as usize];
+                // SAFETY: Caller guarantees `slot` was initialized with a valid `ImmixAllocator<VM>`.
+                unsafe { slot.assume_init_ref() }
+            }
+            AllocatorSelector::FreeList(index) => {
+                let slot = &self.free_list[index as usize];
+                // SAFETY: Caller guarantees `slot` was initialized with a valid `FreeListAllocator<VM>`.
+                unsafe { slot.assume_init_ref() }
+            }
+            AllocatorSelector::Lisp2(index) => {
+                let slot = &self.lisp2[index as usize];
+                // SAFETY: Caller guarantees `slot` was initialized with a valid `Lisp2Allocator<VM>`.
+                unsafe { slot.assume_init_ref() }
+            }
             AllocatorSelector::None => panic!("Allocator mapping is not initialized"),
         }
     }
 
+    /// Return a typed reference to the allocator selected by `selector`.
+    ///
     /// # Safety
-    /// The selector needs to be valid, and points to an allocator that has been initialized.
+    /// `selector` must satisfy all safety requirements of [`Self::get_allocator`] (valid index
+    /// pointing to an initialized allocator slot). Panics if `T` does not match the concrete
+    /// allocator type of `selector`.
     pub unsafe fn get_typed_allocator<T: Allocator<VM>>(&self, selector: AllocatorSelector) -> &T {
-        self.get_allocator(selector).downcast_ref().unwrap()
+        // SAFETY: Caller upholds all safety preconditions of `Self::get_allocator`.
+        unsafe { self.get_allocator(selector) }
+            .downcast_ref()
+            .unwrap()
     }
 
+    /// Return a mutable reference to the allocator selected by `selector`.
+    ///
     /// # Safety
-    /// The selector needs to be valid, and points to an allocator that has been initialized.
+    /// `selector` must not be [`AllocatorSelector::None`], its index must be in bounds for the
+    /// corresponding allocator array, and that `MaybeUninit` slot must have been initialized
+    /// (e.g. via [`Allocators::new`]) and not subsequently overwritten with uninitialized data.
     pub unsafe fn get_allocator_mut(
         &mut self,
         selector: AllocatorSelector,
     ) -> &mut dyn Allocator<VM> {
         match selector {
             AllocatorSelector::BumpPointer(index) => {
-                self.bump_pointer[index as usize].assume_init_mut()
+                let slot = &mut self.bump_pointer[index as usize];
+                // SAFETY: Caller guarantees `slot` was initialized with a valid `BumpAllocator<VM>`,
+                // and `&mut self` guarantees exclusive access.
+                unsafe { slot.assume_init_mut() }
             }
             AllocatorSelector::LargeObject(index) => {
-                self.large_object[index as usize].assume_init_mut()
+                let slot = &mut self.large_object[index as usize];
+                // SAFETY: Caller guarantees `slot` was initialized with a valid `LargeObjectAllocator<VM>`,
+                // and `&mut self` guarantees exclusive access.
+                unsafe { slot.assume_init_mut() }
             }
-            AllocatorSelector::Malloc(index) => self.malloc[index as usize].assume_init_mut(),
-            AllocatorSelector::Immix(index) => self.immix[index as usize].assume_init_mut(),
-            AllocatorSelector::FreeList(index) => self.free_list[index as usize].assume_init_mut(),
-            AllocatorSelector::Lisp2(index) => self.lisp2[index as usize].assume_init_mut(),
+            AllocatorSelector::Malloc(index) => {
+                let slot = &mut self.malloc[index as usize];
+                // SAFETY: Caller guarantees `slot` was initialized with a valid `MallocAllocator<VM>`,
+                // and `&mut self` guarantees exclusive access.
+                unsafe { slot.assume_init_mut() }
+            }
+            AllocatorSelector::Immix(index) => {
+                let slot = &mut self.immix[index as usize];
+                // SAFETY: Caller guarantees `slot` was initialized with a valid `ImmixAllocator<VM>`,
+                // and `&mut self` guarantees exclusive access.
+                unsafe { slot.assume_init_mut() }
+            }
+            AllocatorSelector::FreeList(index) => {
+                let slot = &mut self.free_list[index as usize];
+                // SAFETY: Caller guarantees `slot` was initialized with a valid `FreeListAllocator<VM>`,
+                // and `&mut self` guarantees exclusive access.
+                unsafe { slot.assume_init_mut() }
+            }
+            AllocatorSelector::Lisp2(index) => {
+                let slot = &mut self.lisp2[index as usize];
+                // SAFETY: Caller guarantees `slot` was initialized with a valid `Lisp2Allocator<VM>`,
+                // and `&mut self` guarantees exclusive access.
+                unsafe { slot.assume_init_mut() }
+            }
             AllocatorSelector::None => panic!("Allocator mapping is not initialized"),
         }
     }
 
+    /// Return a typed mutable reference to the allocator selected by `selector`.
+    ///
     /// # Safety
-    /// The selector needs to be valid, and points to an allocator that has been initialized.
+    /// `selector` must satisfy all safety requirements of [`Self::get_allocator_mut`] (valid index
+    /// pointing to an initialized allocator slot). Panics if `T` does not match the concrete
+    /// allocator type of `selector`.
     pub unsafe fn get_typed_allocator_mut<T: Allocator<VM>>(
         &mut self,
         selector: AllocatorSelector,
     ) -> &mut T {
-        self.get_allocator_mut(selector).downcast_mut().unwrap()
+        // SAFETY: Caller upholds all safety preconditions of `Self::get_allocator_mut`.
+        unsafe { self.get_allocator_mut(selector) }
+            .downcast_mut()
+            .unwrap()
     }
 
     pub fn new(
@@ -99,59 +167,84 @@ impl<VM: VMBinding> Allocators<VM> {
         space_mapping: &[(AllocatorSelector, &'static dyn Space<VM>)],
     ) -> Self {
         let mut ret = Allocators {
-            bump_pointer: unsafe { MaybeUninit::uninit().assume_init() },
-            large_object: unsafe { MaybeUninit::uninit().assume_init() },
-            malloc: unsafe { MaybeUninit::uninit().assume_init() },
-            immix: unsafe { MaybeUninit::uninit().assume_init() },
-            free_list: unsafe { MaybeUninit::uninit().assume_init() },
-            lisp2: unsafe { MaybeUninit::uninit().assume_init() },
+            bump_pointer: std::array::from_fn(|_| MaybeUninit::uninit()),
+            large_object: std::array::from_fn(|_| MaybeUninit::uninit()),
+            malloc: std::array::from_fn(|_| MaybeUninit::uninit()),
+            immix: std::array::from_fn(|_| MaybeUninit::uninit()),
+            free_list: std::array::from_fn(|_| MaybeUninit::uninit()),
+            lisp2: std::array::from_fn(|_| MaybeUninit::uninit()),
         };
         let context = Arc::new(AllocatorContext::new(mmtk));
+
+        let mut bump_init = [false; MAX_BUMP_ALLOCATORS];
+        let mut large_object_init = [false; MAX_LARGE_OBJECT_ALLOCATORS];
+        let mut malloc_init = [false; MAX_MALLOC_ALLOCATORS];
+        let mut immix_init = [false; MAX_IMMIX_ALLOCATORS];
+        let mut free_list_init = [false; MAX_FREE_LIST_ALLOCATORS];
+        let mut lisp2_init = [false; MAX_LISP2_ALLOCATORS];
 
         for &(selector, space) in space_mapping.iter() {
             match selector {
                 AllocatorSelector::BumpPointer(index) => {
-                    ret.bump_pointer[index as usize].write(BumpAllocator::new(
+                    let idx = index as usize;
+                    assert!(!bump_init[idx], "Duplicate selector {selector:?}");
+                    ret.bump_pointer[idx].write(BumpAllocator::new(
                         mutator_tls.0,
                         space,
                         context.clone(),
                     ));
+                    bump_init[idx] = true;
                 }
                 AllocatorSelector::LargeObject(index) => {
-                    ret.large_object[index as usize].write(LargeObjectAllocator::new(
+                    let idx = index as usize;
+                    assert!(!large_object_init[idx], "Duplicate selector {selector:?}");
+                    ret.large_object[idx].write(LargeObjectAllocator::new(
                         mutator_tls.0,
                         space.downcast_ref::<LargeObjectSpace<VM>>().unwrap(),
                         context.clone(),
                     ));
+                    large_object_init[idx] = true;
                 }
                 AllocatorSelector::Malloc(index) => {
-                    ret.malloc[index as usize].write(MallocAllocator::new(
+                    let idx = index as usize;
+                    assert!(!malloc_init[idx], "Duplicate selector {selector:?}");
+                    ret.malloc[idx].write(MallocAllocator::new(
                         mutator_tls.0,
                         space.downcast_ref::<MallocSpace<VM>>().unwrap(),
                         context.clone(),
                     ));
+                    malloc_init[idx] = true;
                 }
                 AllocatorSelector::Immix(index) => {
-                    ret.immix[index as usize].write(ImmixAllocator::new(
+                    let idx = index as usize;
+                    assert!(!immix_init[idx], "Duplicate selector {selector:?}");
+                    ret.immix[idx].write(ImmixAllocator::new(
                         mutator_tls.0,
                         Some(space),
                         context.clone(),
                         false,
                     ));
+                    immix_init[idx] = true;
                 }
                 AllocatorSelector::FreeList(index) => {
-                    ret.free_list[index as usize].write(FreeListAllocator::new(
+                    let idx = index as usize;
+                    assert!(!free_list_init[idx], "Duplicate selector {selector:?}");
+                    ret.free_list[idx].write(FreeListAllocator::new(
                         mutator_tls.0,
                         space.downcast_ref::<MarkSweepSpace<VM>>().unwrap(),
                         context.clone(),
                     ));
+                    free_list_init[idx] = true;
                 }
                 AllocatorSelector::Lisp2(index) => {
-                    ret.lisp2[index as usize].write(Lisp2Allocator::new(
+                    let idx = index as usize;
+                    assert!(!lisp2_init[idx], "Duplicate selector {selector:?}");
+                    ret.lisp2[idx].write(Lisp2Allocator::new(
                         mutator_tls.0,
                         space,
                         context.clone(),
                     ));
+                    lisp2_init[idx] = true;
                 }
                 AllocatorSelector::None => panic!("Allocator mapping is not initialized"),
             }
