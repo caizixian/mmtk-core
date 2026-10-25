@@ -9,7 +9,7 @@ use mmtk::util::test_util::mock_vm::*;
 pub fn bench(c: &mut Criterion) {
     // Setting a larger heap, although the GC should be disabled below
     #[cfg(feature = "vo_bit")]
-    let fixture = MutatorFixture::create_with_heapsize(1 << 30);
+    let mut fixture = MutatorFixture::create_with_heapsize(1 << 30);
     #[cfg(feature = "vo_bit")]
     memory_manager::disable_collection(fixture.mmtk()).unwrap();
 

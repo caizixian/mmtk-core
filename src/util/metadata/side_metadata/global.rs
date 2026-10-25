@@ -286,6 +286,17 @@ impl SideMetadataSpec {
             !meta_addr.is_zero(),
             "SideMetadataSpec slice resolved to null metadata address"
         );
+        assert!(
+            meta_bytes <= isize::MAX as usize,
+            "SideMetadataSpec slice byte length (0x{:x}) exceeds isize::MAX",
+            meta_bytes
+        );
+        assert!(
+            meta_addr.as_usize().checked_add(meta_bytes).is_some(),
+            "SideMetadataSpec slice metadata address range overflow ({} + 0x{:x})",
+            meta_addr,
+            meta_bytes
+        );
         #[cfg(all(debug_assertions, feature = "extreme_assertions"))]
         if meta_bytes > 0 {
             self.assert_metadata_mapped(data_addr);
@@ -293,36 +304,54 @@ impl SideMetadataSpec {
         (meta_addr, meta_bytes)
     }
 
+    /// Validate `self`'s `<= 8`-bit geometry and compute the exact data byte count covered by
+    /// `meta_bytes` contiguous side-metadata bytes without shift or multiply wraparound.
+    #[inline(always)]
+    fn checked_meta_to_data_bytes(&self, meta_bytes: usize) -> usize {
+        assert!(
+            self.log_num_of_bits <= LOG_BITS_IN_BYTE as usize
+                && self.log_bytes_in_region < usize::BITS as usize,
+            "Invalid <= 8-bit SideMetadataSpec geometry: {:?}",
+            self
+        );
+        let shift = self.log_bytes_in_region + (LOG_BITS_IN_BYTE as usize - self.log_num_of_bits);
+        assert!(
+            shift < usize::BITS as usize,
+            "SideMetadataSpec data-to-metadata ratio shift ({}) overflows usize: {:?}",
+            shift,
+            self
+        );
+        meta_bytes
+            .checked_mul(1usize << shift)
+            .expect("SideMetadataSpec slice data_bytes overflow")
+    }
+
     /// Project the contiguous `N`-byte side-metadata range starting at `data_addr` as
     /// `&'a [AtomicU8; N]`.
     ///
     /// # Safety
-    /// * `self.log_num_of_bits <= 3`, `data_addr` must fall on a byte boundary in `self`'s side
-    ///   metadata, and if `N > 0 && self.uses_chunked_side_metadata()`, the covered data range
-    ///   `[data_addr, data_addr + meta_to_data_size(self, N))` must lie within a single
-    ///   `BYTES_IN_CHUNK` chunk.
+    /// * `self.log_num_of_bits <= 3`, `N <= isize::MAX as usize`, `data_addr` must fall on a byte
+    ///   boundary in `self`'s side metadata without data or metadata range overflow, and if
+    ///   `N > 0 && self.uses_chunked_side_metadata()`, the covered data range must lie within a
+    ///   single `BYTES_IN_CHUNK` chunk.
     /// * The `N` side-metadata bytes starting at `address_to_meta_address(self, data_addr)` must be
     ///   mapped, initialized, and remain mapped for `'a`.
     /// * For the entire lifetime `'a`, no thread may perform non-atomic reads/writes or mixed-width
     ///   atomic accesses (wider than `AtomicU8`), and no live non-atomic Rust reference (`&[u8]` or
     ///   `&mut [u8]`) may alias `[meta_addr, meta_addr + N)`.
-    #[allow(dead_code)] // Consumed by Wave 2B (`immix` `MappedBlock::line_mark_table`).
     #[inline(always)]
     pub(crate) unsafe fn mapped_atomic_bytes_unchecked<'a, const N: usize>(
         &self,
         data_addr: Address,
     ) -> &'a [AtomicU8; N] {
-        assert!(
-            self.log_num_of_bits <= LOG_BITS_IN_BYTE as usize,
-            "mapped_atomic_bytes_unchecked requires <= 8-bit side metadata: {:?}",
-            self
-        );
-        let data_bytes = meta_to_data_size(self, N);
+        let data_bytes = self.checked_meta_to_data_bytes(N);
         let (meta_addr, meta_bytes) = self.checked_mapped_byte_range(data_addr, data_bytes);
-        debug_assert_eq!(meta_bytes, N);
-        // SAFETY: `checked_mapped_byte_range` verified byte alignment, chunk containment, and
-        // `!meta_addr.is_zero()` (`AtomicU8` has alignment 1), and the caller guarantees `[meta_addr, meta_addr + N)`
-        // is mapped, initialized, valid for `'a`, and accessed solely via `AtomicU8`.
+        assert_eq!(meta_bytes, N);
+        // SAFETY: `checked_meta_to_data_bytes` and `checked_mapped_byte_range` verified byte
+        // alignment, single-chunk containment, `!meta_addr.is_zero()`, `N <= isize::MAX as usize`,
+        // and non-wrapping `meta_addr + N` (`AtomicU8` has alignment 1); the caller guarantees
+        // `[meta_addr, meta_addr + N)` is mapped, initialized, valid for `'a`, and accessed solely
+        // via `AtomicU8`.
         unsafe { &*meta_addr.to_ptr::<[AtomicU8; N]>() }
     }
 
@@ -343,21 +372,18 @@ impl SideMetadataSpec {
         &self,
         data_addr: Address,
     ) -> &'a [[AtomicU8; COLS]; ROWS] {
-        assert!(
-            self.log_num_of_bits <= LOG_BITS_IN_BYTE as usize,
-            "mapped_atomic_byte_chunks_unchecked requires <= 8-bit side metadata: {:?}",
-            self
-        );
         let total_meta_bytes = ROWS
             .checked_mul(COLS)
             .expect("mapped_atomic_byte_chunks_unchecked ROWS * COLS overflow");
-        let data_bytes = meta_to_data_size(self, total_meta_bytes);
+        let data_bytes = self.checked_meta_to_data_bytes(total_meta_bytes);
         let (meta_addr, meta_bytes) = self.checked_mapped_byte_range(data_addr, data_bytes);
-        debug_assert_eq!(meta_bytes, total_meta_bytes);
-        // SAFETY: `checked_mapped_byte_range` verified byte alignment, chunk containment, and
-        // `!meta_addr.is_zero()` (`[[AtomicU8; COLS]; ROWS]` has alignment 1 and size `ROWS * COLS`),
-        // and the caller guarantees the range is mapped, initialized, valid for `'a`, and accessed
-        // solely via `AtomicU8`.
+        assert_eq!(meta_bytes, total_meta_bytes);
+        // SAFETY: `checked_meta_to_data_bytes` and `checked_mapped_byte_range` verified byte
+        // alignment, single-chunk containment, `!meta_addr.is_zero()`,
+        // `total_meta_bytes <= isize::MAX as usize`, and non-wrapping
+        // `meta_addr + total_meta_bytes` (`[[AtomicU8; COLS]; ROWS]` has alignment 1 and size
+        // `ROWS * COLS`); the caller guarantees the range is mapped, initialized, valid for `'a`,
+        // and accessed solely via `AtomicU8`.
         unsafe { &*meta_addr.to_ptr::<[[AtomicU8; COLS]; ROWS]>() }
     }
 
@@ -366,8 +392,8 @@ impl SideMetadataSpec {
     ///
     /// # Safety
     /// * `data_addr` and `data_addr + data_bytes` must both fall on exact byte boundaries in
-    ///   `self`'s side metadata, `data_addr.as_usize() + data_bytes` must not overflow, and if
-    ///   `data_bytes > 0 && self.uses_chunked_side_metadata()`, `[data_addr, data_addr + data_bytes)`
+    ///   `self`'s side metadata without data or metadata range overflow (`meta_bytes <= isize::MAX as usize`),
+    ///   and if `data_bytes > 0 && self.uses_chunked_side_metadata()`, `[data_addr, data_addr + data_bytes)`
     ///   must lie within a single `BYTES_IN_CHUNK` chunk.
     /// * The `meta_bytes` bytes starting at `address_to_meta_address(self, data_addr)` must be
     ///   mapped, initialized, and remain mapped for `'a`.
@@ -381,9 +407,10 @@ impl SideMetadataSpec {
         data_bytes: usize,
     ) -> &'a [u8] {
         let (meta_addr, meta_bytes) = self.checked_mapped_byte_range(data_addr, data_bytes);
-        // SAFETY: `checked_mapped_byte_range` verified non-null `meta_addr` (`u8` has alignment 1)
-        // and single-chunk containment, and caller guarantees `[meta_addr, meta_addr + meta_bytes)`
-        // is mapped, initialized, and immutable without `&mut` or atomic-write aliases for `'a`.
+        // SAFETY: `checked_mapped_byte_range` verified non-null `meta_addr` (`u8` has alignment 1),
+        // `meta_bytes <= isize::MAX as usize`, non-wrapping `meta_addr + meta_bytes`, and
+        // single-chunk containment; the caller guarantees `[meta_addr, meta_addr + meta_bytes)` is
+        // mapped, initialized, and immutable without `&mut` or atomic-write aliases for `'a`.
         unsafe { std::slice::from_raw_parts(meta_addr.to_ptr::<u8>(), meta_bytes) }
     }
 
@@ -392,8 +419,8 @@ impl SideMetadataSpec {
     ///
     /// # Safety
     /// * `data_addr` and `data_addr + data_bytes` must both fall on exact byte boundaries in
-    ///   `self`'s side metadata, `data_addr.as_usize() + data_bytes` must not overflow, and if
-    ///   `data_bytes > 0 && self.uses_chunked_side_metadata()`, `[data_addr, data_addr + data_bytes)`
+    ///   `self`'s side metadata without data or metadata range overflow (`meta_bytes <= isize::MAX as usize`),
+    ///   and if `data_bytes > 0 && self.uses_chunked_side_metadata()`, `[data_addr, data_addr + data_bytes)`
     ///   must lie within a single `BYTES_IN_CHUNK` chunk.
     /// * The `meta_bytes` bytes starting at `address_to_meta_address(self, data_addr)` must be
     ///   mapped, writable, initialized, and remain mapped for `'a`.
@@ -409,10 +436,11 @@ impl SideMetadataSpec {
         data_bytes: usize,
     ) -> &'a mut [u8] {
         let (meta_addr, meta_bytes) = self.checked_mapped_byte_range(data_addr, data_bytes);
-        // SAFETY: `checked_mapped_byte_range` verified non-null `meta_addr` (`u8` has alignment 1)
-        // and single-chunk containment, and caller guarantees `[meta_addr, meta_addr + meta_bytes)`
-        // is mapped, initialized, writable, and uniquely borrowed without any aliasing references
-        // or concurrent/interleaved raw-pointer accesses for `'a`.
+        // SAFETY: `checked_mapped_byte_range` verified non-null `meta_addr` (`u8` has alignment 1),
+        // `meta_bytes <= isize::MAX as usize`, non-wrapping `meta_addr + meta_bytes`, and
+        // single-chunk containment; the caller guarantees `[meta_addr, meta_addr + meta_bytes)` is
+        // mapped, initialized, writable, and uniquely borrowed without any aliasing references or
+        // concurrent/interleaved raw-pointer accesses for `'a`.
         unsafe { std::slice::from_raw_parts_mut(meta_addr.to_mut_ptr::<u8>(), meta_bytes) }
     }
 
@@ -3158,5 +3186,19 @@ mod tests {
             // SAFETY: Expected to panic in `checked_mapped_byte_range` before any pointer dereference.
             let _ = unsafe { spec.mapped_bytes_unchecked(unaligned_data, 64) };
         });
+    }
+
+    #[test]
+    #[should_panic(expected = "overflows usize")]
+    fn test_mapped_atomic_bytes_shift_overflow_panics() {
+        let spec = SideMetadataSpec {
+            name: "shift_overflow_slice_test",
+            is_global: true,
+            offset: 0,
+            log_num_of_bits: 0,
+            log_bytes_in_region: (usize::BITS as usize) - 2,
+        };
+        // SAFETY: Expected to panic in `checked_meta_to_data_bytes` before any pointer dereference.
+        let _ = unsafe { spec.mapped_atomic_bytes_unchecked::<1>(Address::ZERO) };
     }
 }
