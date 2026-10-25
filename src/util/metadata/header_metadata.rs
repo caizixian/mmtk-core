@@ -50,29 +50,44 @@ impl HeaderMetadataSpec {
     /// We allow using mask for certain operations. The reason for mask is that for header metadata, we may have overlapping metadata specs. For example,
     /// a forwarding pointer is pointer-size, but its last 2 bits could be used as forwarding bits. In that case, all accesses to the forwarding pointer
     /// spec should be used with a mask to make sure that we exclude the forwarding bits.
-    #[cfg(debug_assertions)]
+    #[inline(always)]
     fn assert_mask<T: MetadataValue>(&self, mask: Option<T>) {
-        debug_assert!(mask.is_none() || self.num_of_bits >= 8, "optional_mask is only supported for 8X-bits in-header metadata. Problematic MetadataSpec: ({:?})", self);
+        assert!(
+            mask.is_none() || self.num_of_bits >= 8,
+            "optional_mask is only supported for 8X-bits in-header metadata. Problematic MetadataSpec: ({:?})",
+            self
+        );
     }
 
-    /// Assert if this is a valid spec.
-    #[cfg(debug_assertions)]
+    /// Assert that `self` has valid bit-width and natural/atomic alignment for `T`.
+    /// Because real `HeaderMetadataSpec` values are `const`, LLVM constant-folds these checks to
+    /// zero instructions in release builds while preventing UB on arbitrary `pub`-field specs.
+    #[inline(always)]
     fn assert_spec<T: MetadataValue>(&self) {
         if self.num_of_bits == 0 {
             panic!("Metadata of 0 bits is not allowed.");
         } else if self.num_of_bits < 8 {
-            debug_assert!(
+            assert!(
                 (self.bit_offset >> LOG_BITS_IN_BYTE)
                     == ((self.bit_offset + self.num_of_bits as isize - 1) >> LOG_BITS_IN_BYTE),
                 "Metadata << 8-bits: ({:?}) stretches over two bytes!",
                 self
             );
-        } else if self.num_of_bits >= 8 && self.num_of_bits <= 64 {
-            debug_assert!(
-                self.bit_offset.trailing_zeros() >= T::LOG2,
+        } else if self.num_of_bits <= 64 {
+            assert_eq!(
+                self.num_of_bits,
+                T::BITS as usize,
+                "{:?}: num_of_bits ({}) must equal T::BITS ({})",
+                self,
+                self.num_of_bits,
+                T::BITS
+            );
+            let req_align_bits = (max_metadata_align::<T>() * BITS_IN_BYTE) as isize;
+            assert!(
+                self.bit_offset.rem_euclid(req_align_bits) == 0,
                 "{:?}: bit_offset must be aligned to {}",
                 self,
-                1 << T::LOG2
+                req_align_bits
             );
         } else {
             // num_of_bits larger than 64
@@ -137,11 +152,8 @@ impl HeaderMetadataSpec {
     /// * This is a non-atomic load: no other thread may concurrently write to or atomically modify
     ///   the underlying header byte/word, and no live `&mut` reference may alias it.
     pub unsafe fn load<T: MetadataValue>(&self, header: Address, optional_mask: Option<T>) -> T {
-        #[cfg(debug_assertions)]
-        {
-            self.assert_mask::<T>(optional_mask);
-            self.assert_spec::<T>();
-        }
+        self.assert_mask::<T>(optional_mask);
+        self.assert_spec::<T>();
 
         let addr = self.meta_addr(header);
         // Metadata smaller than 8-bits is packed into a single byte and requires shift and mask.
@@ -151,8 +163,9 @@ impl HeaderMetadataSpec {
             let byte_val = unsafe { <u8 as MetadataValue>::load(addr) };
             FromPrimitive::from_u8(self.get_bits_from_u8(byte_val)).unwrap()
         } else {
-            // SAFETY: Caller guarantees `addr` is non-null, aligned to `T` (verified in debug builds
-            // by `assert_spec`), points to initialized header memory for `size_of::<T>()` bytes, and
+            // SAFETY: Caller guarantees `header` is properly aligned and `assert_spec` verified
+            // `num_of_bits == T::BITS` and `bit_offset` alignment for `T`, so `addr` is non-null,
+            // aligned to `T`, points to initialized header memory for `size_of::<T>()` bytes, and
             // has no racing writes or `&mut` aliases.
             unsafe { T::load(addr) }
         };
@@ -171,11 +184,8 @@ impl HeaderMetadataSpec {
         optional_mask: Option<T>,
         ordering: Ordering,
     ) -> T {
-        #[cfg(debug_assertions)]
-        {
-            self.assert_mask::<T>(optional_mask);
-            self.assert_spec::<T>();
-        }
+        self.assert_mask::<T>(optional_mask);
+        self.assert_spec::<T>();
 
         let addr = self.meta_addr(header);
         // Metadata smaller than 8-bits is special in that more than one metadata value may be
@@ -188,10 +198,11 @@ impl HeaderMetadataSpec {
             let byte_val = unsafe { <u8 as MetadataValue>::load_atomic(addr, ordering) };
             FromPrimitive::from_u8(self.get_bits_from_u8(byte_val)).unwrap()
         } else {
-            // SAFETY: By MMTk's `ObjectModel` header-metadata contract and `self`'s alignment
-            // (`bit_offset` aligned to `T::BITS`, checked by `assert_spec`), `addr` is non-null,
-            // aligned to `T`'s atomic counterpart, and points to mapped, initialized header memory
-            // of `size_of::<T>()` bytes with no conflicting non-atomic accesses or `&mut` aliases.
+            // SAFETY: By MMTk's `ObjectModel` header-metadata contract and unconditional `assert_spec`
+            // (`num_of_bits == T::BITS` and `bit_offset` aligned to `max_metadata_align::<T>()`),
+            // `addr` is non-null, aligned to `T`'s atomic counterpart, and points to mapped,
+            // initialized header memory of `size_of::<T>()` bytes with no conflicting non-atomic
+            // accesses or `&mut` aliases.
             unsafe { T::load_atomic(addr, ordering) }
         };
 
@@ -220,11 +231,8 @@ impl HeaderMetadataSpec {
         val: T,
         optional_mask: Option<T>,
     ) {
-        #[cfg(debug_assertions)]
-        {
-            self.assert_mask::<T>(optional_mask);
-            self.assert_spec::<T>();
-        }
+        self.assert_mask::<T>(optional_mask);
+        self.assert_spec::<T>();
 
         if self.num_of_bits < 8 {
             let val_u8 = val.to_u8().unwrap();
@@ -241,15 +249,15 @@ impl HeaderMetadataSpec {
         } else {
             let addr = self.meta_addr(header);
             let val = if let Some(mask) = optional_mask {
-                // SAFETY: Caller guarantees `addr` is non-null, aligned to `T`, initialized, and
-                // exclusively accessed without concurrent accesses or aliasing Rust references.
+                // SAFETY: Caller guarantees `addr` is non-null, aligned to `T` (checked by
+                // `assert_spec`), initialized, and exclusively accessed without aliasing references.
                 let old_val = unsafe { T::load(addr) };
                 old_val.bitand(mask.inv()).bitor(val.bitand(mask))
             } else {
                 val
             };
-            // SAFETY: Caller guarantees `addr` is non-null, aligned to `T`, writable for
-            // `size_of::<T>()` bytes, and exclusively accessed without aliasing references.
+            // SAFETY: Caller guarantees `addr` is non-null, aligned to `T` (checked by `assert_spec`),
+            // writable for `size_of::<T>()` bytes, and exclusively accessed without aliasing references.
             unsafe {
                 T::store(addr, val);
             }
@@ -266,41 +274,45 @@ impl HeaderMetadataSpec {
         optional_mask: Option<T>,
         ordering: Ordering,
     ) {
-        #[cfg(debug_assertions)]
-        {
-            self.assert_mask::<T>(optional_mask);
-            self.assert_spec::<T>();
-        }
+        self.assert_mask::<T>(optional_mask);
+        self.assert_spec::<T>();
 
         // Metadata smaller than 8-bits is special in that more than one metadata value may be
         // included in one AtomicU8 operation, requiring shift, mask, and `fetch_update`.
         if self.num_of_bits < 8 {
             let val_u8 = val.to_u8().unwrap();
             let byte_addr = self.meta_addr(header);
+            let fetch_order = load_order_for_rmw(ordering);
             // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `byte_addr` is non-null,
             // 1-byte aligned for `AtomicU8`, and points to mapped, initialized, writable header
-            // memory with no conflicting non-atomic accesses or non-atomic Rust references.
+            // memory without non-atomic races, and `load_order_for_rmw(ordering)` maps `Release` /
+            // `AcqRel` to a valid load ordering for `fetch_update`.
             let _ = unsafe {
-                <u8 as MetadataValue>::fetch_update(byte_addr, ordering, ordering, |old_val: u8| {
-                    Some(self.set_bits_to_u8(old_val, val_u8))
-                })
+                <u8 as MetadataValue>::fetch_update(
+                    byte_addr,
+                    ordering,
+                    fetch_order,
+                    |old_val: u8| Some(self.set_bits_to_u8(old_val, val_u8)),
+                )
             };
         } else {
             let addr = self.meta_addr(header);
             // If the optional mask is provided (e.g. for forwarding pointer), we need compare-exchange.
             if let Some(mask) = optional_mask {
-                // SAFETY: By MMTk's `ObjectModel` header-metadata contract and `self`'s natural
-                // alignment (`assert_spec`), `addr` is non-null, aligned to `T`'s atomic counterpart,
-                // and points to mapped, initialized, writable header memory without non-atomic races.
+                let fetch_order = load_order_for_rmw(ordering);
+                // SAFETY: By MMTk's `ObjectModel` header-metadata contract and unconditional
+                // `assert_spec`, `addr` is non-null, aligned to `T`'s atomic counterpart, and points
+                // to mapped, initialized, writable header memory without non-atomic races;
+                // `load_order_for_rmw(ordering)` guarantees a valid `fetch_order`.
                 let _ = unsafe {
-                    T::fetch_update(addr, ordering, ordering, |old_val: T| {
+                    T::fetch_update(addr, ordering, fetch_order, |old_val: T| {
                         Some(old_val.bitand(mask.inv()).bitor(val.bitand(mask)))
                     })
                 };
             } else {
-                // SAFETY: By MMTk's `ObjectModel` header-metadata contract and `self`'s natural
-                // alignment (`assert_spec`), `addr` is non-null, aligned to `T`'s atomic counterpart,
-                // and points to mapped, initialized, writable header memory without non-atomic races.
+                // SAFETY: By MMTk's `ObjectModel` header-metadata contract and unconditional
+                // `assert_spec`, `addr` is non-null, aligned to `T`'s atomic counterpart, and points
+                // to mapped, initialized, writable header memory without non-atomic races.
                 unsafe {
                     T::store_atomic(addr, val, ordering);
                 }
@@ -320,17 +332,19 @@ impl HeaderMetadataSpec {
         success_order: Ordering,
         failure_order: Ordering,
     ) -> Result<T, T> {
-        #[cfg(debug_assertions)]
+        self.assert_mask::<T>(optional_mask);
         self.assert_spec::<T>();
         // Metadata smaller than 8-bits is special in that more than one metadata value may be
         // included in one AtomicU8 operation, and extra shift and mask is required.
         if self.num_of_bits < 8 {
             let byte_addr = self.meta_addr(header);
+            let load_order = load_order_for_rmw(success_order);
             // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `byte_addr` is non-null,
             // 1-byte aligned for `AtomicU8`, and points to mapped, initialized header memory
-            // without conflicting non-atomic accesses or `&mut` aliases.
+            // without conflicting non-atomic accesses or `&mut` aliases, and `load_order_for_rmw`
+            // maps `Release` / `AcqRel` to a valid load ordering.
             let real_old_byte =
-                unsafe { <u8 as MetadataValue>::load_atomic(byte_addr, success_order) };
+                unsafe { <u8 as MetadataValue>::load_atomic(byte_addr, load_order) };
             let expected_old_byte =
                 self.set_bits_to_u8(real_old_byte, old_metadata.to_u8().unwrap());
             let expected_new_byte =
@@ -346,15 +360,17 @@ impl HeaderMetadataSpec {
                     failure_order,
                 )
             }
-            .map(|x| FromPrimitive::from_u8(x).unwrap())
-            .map_err(|x| FromPrimitive::from_u8(x).unwrap())
+            .map(|x| FromPrimitive::from_u8(self.get_bits_from_u8(x)).unwrap())
+            .map_err(|x| FromPrimitive::from_u8(self.get_bits_from_u8(x)).unwrap())
         } else {
             let addr = self.meta_addr(header);
             let (old_metadata, new_metadata) = if let Some(mask) = optional_mask {
-                // SAFETY: By MMTk's `ObjectModel` header-metadata contract and `self`'s natural
-                // alignment (`assert_spec`), `addr` is non-null, aligned to `T`'s atomic type, and
-                // points to mapped, initialized header memory without non-atomic data races.
-                let old_byte = unsafe { T::load_atomic(addr, success_order) };
+                let load_order = load_order_for_rmw(success_order);
+                // SAFETY: By MMTk's `ObjectModel` header-metadata contract and unconditional
+                // `assert_spec`, `addr` is non-null, aligned to `T`'s atomic type, and points to
+                // mapped, initialized header memory without non-atomic data races;
+                // `load_order_for_rmw` maps `Release` / `AcqRel` to a valid load ordering.
+                let old_byte = unsafe { T::load_atomic(addr, load_order) };
                 let expected_new_byte = old_byte.bitand(mask.inv()).bitor(new_metadata);
                 let expected_old_byte = old_byte.bitand(mask.inv()).bitor(old_metadata);
                 (expected_old_byte, expected_new_byte)
@@ -362,9 +378,9 @@ impl HeaderMetadataSpec {
                 (old_metadata, new_metadata)
             };
 
-            // SAFETY: By MMTk's `ObjectModel` header-metadata contract and `self`'s natural
-            // alignment (`assert_spec`), `addr` is non-null, aligned to `T`'s atomic type, and
-            // points to mapped, initialized, writable header memory without non-atomic races.
+            // SAFETY: By MMTk's `ObjectModel` header-metadata contract and unconditional
+            // `assert_spec`, `addr` is non-null, aligned to `T`'s atomic type, and points to
+            // mapped, initialized, writable header memory without non-atomic races.
             unsafe {
                 T::compare_exchange(
                     addr,
@@ -383,7 +399,8 @@ impl HeaderMetadataSpec {
     /// * `self.num_of_bits` must be in `1..8` without crossing a byte boundary.
     /// * `self.meta_addr(header)` must be non-null and point to a mapped, initialized, writable
     ///   object-header byte accessed only via atomic operations for the duration of this call.
-    /// * `set_order` and `fetch_order` must be valid orderings for `AtomicU8::fetch_update`.
+    /// * `set_order` and `fetch_order` must be valid orderings for `AtomicU8::fetch_update`
+    ///   (`fetch_order` may not be `Ordering::Release` or `Ordering::AcqRel`).
     unsafe fn fetch_ops_on_bits<F: Fn(u8) -> u8>(
         &self,
         header: Address,
@@ -414,51 +431,52 @@ impl HeaderMetadataSpec {
 
     /// This function provides a default implementation for the `fetch_add` method from the `ObjectModel` trait.
     pub fn fetch_add<T: MetadataValue>(&self, header: Address, val: T, order: Ordering) -> T {
-        #[cfg(debug_assertions)]
         self.assert_spec::<T>();
         if self.num_of_bits < 8 {
-            // SAFETY: `self.num_of_bits < 8` holds, and by MMTk's `ObjectModel` header-metadata
-            // contract `self.meta_addr(header)` is a valid, mapped, initialized header byte
-            // accessed atomically without non-atomic races.
+            let fetch_order = load_order_for_rmw(order);
+            // SAFETY: `self.num_of_bits < 8` holds (single-byte verified by `assert_spec`),
+            // `self.meta_addr(header)` is a valid, mapped, initialized header byte accessed
+            // atomically without non-atomic races, and `load_order_for_rmw(order)` yields a valid
+            // `fetch_order`.
             let old_bits = unsafe {
-                self.fetch_ops_on_bits(header, order, order, |x: u8| {
+                self.fetch_ops_on_bits(header, order, fetch_order, |x: u8| {
                     x.wrapping_add(val.to_u8().unwrap())
                 })
             };
             FromPrimitive::from_u8(old_bits).unwrap()
         } else {
-            // SAFETY: By MMTk's `ObjectModel` header-metadata contract and `self`'s natural
-            // alignment (`assert_spec`), `self.meta_addr(header)` is non-null, aligned to `T`'s
-            // atomic type, and points to mapped, initialized, writable header memory.
+            // SAFETY: By MMTk's `ObjectModel` header-metadata contract and unconditional
+            // `assert_spec`, `self.meta_addr(header)` is non-null, aligned to `T`'s atomic type,
+            // and points to mapped, initialized, writable header memory.
             unsafe { T::fetch_add(self.meta_addr(header), val, order) }
         }
     }
 
     /// This function provides a default implementation for the `fetch_sub` method from the `ObjectModel` trait.
     pub fn fetch_sub<T: MetadataValue>(&self, header: Address, val: T, order: Ordering) -> T {
-        #[cfg(debug_assertions)]
         self.assert_spec::<T>();
         if self.num_of_bits < 8 {
-            // SAFETY: `self.num_of_bits < 8` holds, and by MMTk's `ObjectModel` header-metadata
-            // contract `self.meta_addr(header)` is a valid, mapped, initialized header byte
-            // accessed atomically without non-atomic races.
+            let fetch_order = load_order_for_rmw(order);
+            // SAFETY: `self.num_of_bits < 8` holds (single-byte verified by `assert_spec`),
+            // `self.meta_addr(header)` is a valid, mapped, initialized header byte accessed
+            // atomically without non-atomic races, and `load_order_for_rmw(order)` yields a valid
+            // `fetch_order`.
             let old_bits = unsafe {
-                self.fetch_ops_on_bits(header, order, order, |x: u8| {
+                self.fetch_ops_on_bits(header, order, fetch_order, |x: u8| {
                     x.wrapping_sub(val.to_u8().unwrap())
                 })
             };
             FromPrimitive::from_u8(old_bits).unwrap()
         } else {
-            // SAFETY: By MMTk's `ObjectModel` header-metadata contract and `self`'s natural
-            // alignment (`assert_spec`), `self.meta_addr(header)` is non-null, aligned to `T`'s
-            // atomic type, and points to mapped, initialized, writable header memory.
+            // SAFETY: By MMTk's `ObjectModel` header-metadata contract and unconditional
+            // `assert_spec`, `self.meta_addr(header)` is non-null, aligned to `T`'s atomic type,
+            // and points to mapped, initialized, writable header memory.
             unsafe { T::fetch_sub(self.meta_addr(header), val, order) }
         }
     }
 
     /// This function provides a default implementation for the `fetch_and` method from the `ObjectModel` trait.
     pub fn fetch_and<T: MetadataValue>(&self, header: Address, val: T, order: Ordering) -> T {
-        #[cfg(debug_assertions)]
         self.assert_spec::<T>();
         if self.num_of_bits < 8 {
             let (lshift, mask) = self.get_shift_and_mask_for_bits();
@@ -472,16 +490,15 @@ impl HeaderMetadataSpec {
             let old_val = self.get_bits_from_u8(old_raw_byte);
             FromPrimitive::from_u8(old_val).unwrap()
         } else {
-            // SAFETY: By MMTk's `ObjectModel` header-metadata contract and `self`'s natural
-            // alignment (`assert_spec`), `self.meta_addr(header)` is non-null, aligned to `T`'s
-            // atomic type, and points to mapped, initialized, writable header memory.
+            // SAFETY: By MMTk's `ObjectModel` header-metadata contract and unconditional
+            // `assert_spec`, `self.meta_addr(header)` is non-null, aligned to `T`'s atomic type,
+            // and points to mapped, initialized, writable header memory.
             unsafe { T::fetch_and(self.meta_addr(header), val, order) }
         }
     }
 
     /// This function provides a default implementation for the `fetch_or` method from the `ObjectModel` trait.
     pub fn fetch_or<T: MetadataValue>(&self, header: Address, val: T, order: Ordering) -> T {
-        #[cfg(debug_assertions)]
         self.assert_spec::<T>();
         if self.num_of_bits < 8 {
             let (lshift, mask) = self.get_shift_and_mask_for_bits();
@@ -495,9 +512,9 @@ impl HeaderMetadataSpec {
             let old_val = self.get_bits_from_u8(old_raw_byte);
             FromPrimitive::from_u8(old_val).unwrap()
         } else {
-            // SAFETY: By MMTk's `ObjectModel` header-metadata contract and `self`'s natural
-            // alignment (`assert_spec`), `self.meta_addr(header)` is non-null, aligned to `T`'s
-            // atomic type, and points to mapped, initialized, writable header memory.
+            // SAFETY: By MMTk's `ObjectModel` header-metadata contract and unconditional
+            // `assert_spec`, `self.meta_addr(header)` is non-null, aligned to `T`'s atomic type,
+            // and points to mapped, initialized, writable header memory.
             unsafe { T::fetch_or(self.meta_addr(header), val, order) }
         }
     }
@@ -511,7 +528,6 @@ impl HeaderMetadataSpec {
         fetch_order: Ordering,
         mut f: F,
     ) -> std::result::Result<T, T> {
-        #[cfg(debug_assertions)]
         self.assert_spec::<T>();
         if self.num_of_bits < 8 {
             let byte_addr = self.meta_addr(header);
@@ -535,9 +551,9 @@ impl HeaderMetadataSpec {
             .map(|raw_byte| FromPrimitive::from_u8(self.get_bits_from_u8(raw_byte)).unwrap())
             .map_err(|raw_byte| FromPrimitive::from_u8(self.get_bits_from_u8(raw_byte)).unwrap())
         } else {
-            // SAFETY: By MMTk's `ObjectModel` header-metadata contract and `self`'s natural
-            // alignment (`assert_spec`), `self.meta_addr(header)` is non-null, aligned to `T`'s
-            // atomic type, and points to mapped, initialized, writable header memory.
+            // SAFETY: By MMTk's `ObjectModel` header-metadata contract and unconditional
+            // `assert_spec`, `self.meta_addr(header)` is non-null, aligned to `T`'s atomic type,
+            // and points to mapped, initialized, writable header memory.
             unsafe { T::fetch_update(self.meta_addr(header), set_order, fetch_order, f) }
         }
     }
@@ -937,9 +953,13 @@ mod tests {
                     let spec = HeaderMetadataSpec { bit_offset: 0, num_of_bits: $num_of_bits };
                     let max_value = max_value($num_of_bits) as $type;
                     buf.with_mid_addr(|obj| {
-                        assert_eq!(spec.load_atomic::<$type>(obj, None, Ordering::SeqCst), 0);
+                        // SAFETY: `obj` points to `buf.cells[1]`, zero-initialized, aligned to
+                        // `$type`, and exclusively accessed in this single-threaded test.
+                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
                         spec.store_atomic::<$type>(obj, max_value, None, Ordering::SeqCst);
-                        assert_eq!(spec.load_atomic::<$type>(obj, None, Ordering::SeqCst), max_value);
+                        // SAFETY: `store_atomic` completed on this thread; `buf.cells[1]` remains
+                        // valid, initialized, aligned, and unaliased for cross-checking via `load`.
+                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
                     });
                     assert_eq!(buf.cells[1], max_value);
                 }
@@ -1027,14 +1047,17 @@ mod tests {
                     let mut buf = TestHeaderObject::<$type>::new();
                     buf.with_mid_addr(|obj| {
                         let spec = HeaderMetadataSpec { bit_offset: 0, num_of_bits: $num_of_bits };
-                        let old_val = spec.load_atomic::<$type>(obj, None, Ordering::SeqCst);
+                        // SAFETY: `obj` points to `buf.cells[1]`, zero-initialized, aligned to
+                        // `$type`, and exclusively accessed in this single-threaded test.
+                        let old_val = unsafe { spec.load::<$type>(obj, None) };
                         assert_eq!(old_val, 0);
 
                         let max_value = max_value($num_of_bits) as $type;
                         let res = spec.compare_exchange::<$type>(obj, old_val, max_value, None, Ordering::SeqCst, Ordering::SeqCst);
                         assert!(res.is_ok());
                         assert_eq!(res.unwrap(), old_val);
-                        assert_eq!(spec.load_atomic::<$type>(obj, None, Ordering::SeqCst), max_value);
+                        // SAFETY: Sequential single-threaded read of `buf.cells[1]` after CAS.
+                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
                     })
                 }
 
@@ -1043,17 +1066,20 @@ mod tests {
                     let mut buf = TestHeaderObject::<$type>::new();
                     buf.with_mid_addr(|obj| {
                         let spec = HeaderMetadataSpec { bit_offset: 0, num_of_bits: $num_of_bits };
-                        let old_val = spec.load_atomic::<$type>(obj, None, Ordering::SeqCst);
+                        // SAFETY: `obj` points to `buf.cells[1]`, zero-initialized, aligned, unaliased.
+                        let old_val = unsafe { spec.load::<$type>(obj, None) };
                         assert_eq!(old_val, 0);
 
                         // Change the value
-                        spec.store_atomic::<$type>(obj, 1, None, Ordering::SeqCst);
+                        // SAFETY: Sequential single-threaded write to `buf.cells[1]`, unaliased.
+                        unsafe { spec.store::<$type>(obj, 1, None) };
 
                         let max_value = max_value($num_of_bits) as $type;
                         let res = spec.compare_exchange::<$type>(obj, old_val, max_value, None, Ordering::SeqCst, Ordering::SeqCst);
                         assert!(res.is_err());
                         assert_eq!(res.err().unwrap(), 1);
-                        assert_eq!(spec.load_atomic::<$type>(obj, None, Ordering::SeqCst), 1);
+                        // SAFETY: Sequential single-threaded read of `buf.cells[1]` after failed CAS.
+                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 1);
                     })
                 }
 
@@ -1065,12 +1091,14 @@ mod tests {
                             let spec = HeaderMetadataSpec { bit_offset, num_of_bits: $num_of_bits };
                             let max_value = max_value($num_of_bits) as $type;
 
-                            let old_val = spec.load_atomic::<$type>(obj, None, Ordering::SeqCst);
+                            // SAFETY: `obj` points into aligned, initialized `buf.cells[1]` without aliases.
+                            let old_val = unsafe { spec.load::<$type>(obj, None) };
                             assert_eq!(old_val, 0);
 
                             let old_val_from_fetch = spec.fetch_add::<$type>(obj, max_value, Ordering::SeqCst);
                             assert_eq!(old_val, old_val_from_fetch);
-                            assert_eq!(spec.load_atomic::<$type>(obj, None, Ordering::SeqCst), max_value);
+                            // SAFETY: Sequential single-threaded read of `buf.cells[1]` after `fetch_add`.
+                            assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
                         }
                     })
                 }
@@ -1083,13 +1111,16 @@ mod tests {
                         let max_value = max_value($num_of_bits) as $type;
 
                         buf.with_mid_addr(|obj| {
-                            spec.store_atomic::<$type>(obj, max_value, None, Ordering::SeqCst);
-                            let old_val = spec.load_atomic::<$type>(obj, None, Ordering::SeqCst);
+                            // SAFETY: Sequential single-threaded write to `buf.cells[1]`, unaliased.
+                            unsafe { spec.store::<$type>(obj, max_value, None) };
+                            // SAFETY: Sequential single-threaded read of `buf.cells[1]`, unaliased.
+                            let old_val = unsafe { spec.load::<$type>(obj, None) };
 
                             // add 1 will cause overflow
                             let old_val_from_fetch = spec.fetch_add::<$type>(obj, 1, Ordering::SeqCst);
                             assert_eq!(old_val, old_val_from_fetch);
-                            assert_eq!(spec.load_atomic::<$type>(obj, None, Ordering::SeqCst), 0);
+                            // SAFETY: Sequential single-threaded read of `buf.cells[1]` after `fetch_add`.
+                            assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
                         });
                         assert_eq!(buf.cells[1], 0); // we should not accidentally affect other bits
                     }
@@ -1102,13 +1133,16 @@ mod tests {
                         for bit_offset in (0isize..($type::BITS as isize)).step_by($num_of_bits) {
                             let spec = HeaderMetadataSpec { bit_offset, num_of_bits: $num_of_bits };
 
-                            spec.store_atomic::<$type>(obj, 1, None, Ordering::SeqCst);
-                            let old_val = spec.load_atomic::<$type>(obj, None, Ordering::SeqCst);
+                            // SAFETY: Sequential single-threaded write to `buf.cells[1]`, unaliased.
+                            unsafe { spec.store::<$type>(obj, 1, None) };
+                            // SAFETY: Sequential single-threaded read of `buf.cells[1]`, unaliased.
+                            let old_val = unsafe { spec.load::<$type>(obj, None) };
                             assert_eq!(old_val, 1);
 
                             let old_val_from_fetch = spec.fetch_sub::<$type>(obj, 1, Ordering::SeqCst);
                             assert_eq!(old_val, old_val_from_fetch);
-                            assert_eq!(spec.load_atomic::<$type>(obj, None, Ordering::SeqCst), 0);
+                            // SAFETY: Sequential single-threaded read of `buf.cells[1]` after `fetch_sub`.
+                            assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
                         }
                     })
                 }
@@ -1121,12 +1155,14 @@ mod tests {
                             let spec = HeaderMetadataSpec { bit_offset, num_of_bits: $num_of_bits };
                             let max_value = max_value($num_of_bits) as $type;
 
-                            let old_val = spec.load_atomic::<$type>(obj, None, Ordering::SeqCst);
+                            // SAFETY: Sequential single-threaded read of `buf.cells[1]`, unaliased.
+                            let old_val = unsafe { spec.load::<$type>(obj, None) };
                             assert_eq!(old_val, 0);
 
                             let old_val_from_fetch = spec.fetch_sub::<$type>(obj, 1, Ordering::SeqCst);
                             assert_eq!(old_val, old_val_from_fetch);
-                            assert_eq!(spec.load_atomic::<$type>(obj, None, Ordering::SeqCst), max_value);
+                            // SAFETY: Sequential single-threaded read of `buf.cells[1]` after `fetch_sub`.
+                            assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
                         }
                     })
                 }
@@ -1139,12 +1175,14 @@ mod tests {
                             let spec = HeaderMetadataSpec { bit_offset, num_of_bits: $num_of_bits };
                             let max_value = max_value($num_of_bits) as $type;
 
-                            let old_val = spec.load_atomic::<$type>(obj, None, Ordering::SeqCst);
+                            // SAFETY: Sequential single-threaded read of `buf.cells[1]`, unaliased.
+                            let old_val = unsafe { spec.load::<$type>(obj, None) };
                             assert_eq!(old_val, 0);
 
                             let old_val_from_fetch = spec.fetch_and::<$type>(obj, max_value, Ordering::SeqCst);
                             assert_eq!(old_val, old_val_from_fetch);
-                            assert_eq!(spec.load_atomic::<$type>(obj, None, Ordering::SeqCst), 0);
+                            // SAFETY: Sequential single-threaded read of `buf.cells[1]` after `fetch_and`.
+                            assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
                         }
                     })
                 }
@@ -1157,12 +1195,14 @@ mod tests {
                             let spec = HeaderMetadataSpec { bit_offset, num_of_bits: $num_of_bits };
                             let max_value = max_value($num_of_bits) as $type;
 
-                            let old_val = spec.load_atomic::<$type>(obj, None, Ordering::SeqCst);
+                            // SAFETY: Sequential single-threaded read of `buf.cells[1]`, unaliased.
+                            let old_val = unsafe { spec.load::<$type>(obj, None) };
                             assert_eq!(old_val, 0);
 
                             let old_val_from_fetch = spec.fetch_or::<$type>(obj, max_value, Ordering::SeqCst);
                             assert_eq!(old_val, old_val_from_fetch);
-                            assert_eq!(spec.load_atomic::<$type>(obj, None, Ordering::SeqCst), max_value);
+                            // SAFETY: Sequential single-threaded read of `buf.cells[1]` after `fetch_or`.
+                            assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
                         }
                     })
                 }
@@ -1175,13 +1215,15 @@ mod tests {
                             let spec = HeaderMetadataSpec { bit_offset, num_of_bits: $num_of_bits };
                             let max_value = max_value($num_of_bits) as $type;
 
-                            let old_val = spec.load_atomic::<$type>(obj, None, Ordering::SeqCst);
+                            // SAFETY: Sequential single-threaded read of `buf.cells[1]`, unaliased.
+                            let old_val = unsafe { spec.load::<$type>(obj, None) };
                             assert_eq!(old_val, 0);
 
                             let update_res = spec.fetch_update(obj, Ordering::SeqCst, Ordering::SeqCst, |_x: $type| Some(max_value));
                             assert!(update_res.is_ok());
                             assert_eq!(old_val, update_res.unwrap());
-                            assert_eq!(spec.load_atomic::<$type>(obj, None, Ordering::SeqCst), max_value);
+                            // SAFETY: Sequential single-threaded read of `buf.cells[1]` after `fetch_update`.
+                            assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
                         }
                     })
                 }
@@ -1193,13 +1235,15 @@ mod tests {
                         for bit_offset in (0isize..($type::BITS as isize)).step_by($num_of_bits) {
                             let spec = HeaderMetadataSpec { bit_offset, num_of_bits: $num_of_bits };
 
-                            let old_val = spec.load_atomic::<$type>(obj, None, Ordering::SeqCst);
+                            // SAFETY: Sequential single-threaded read of `buf.cells[1]`, unaliased.
+                            let old_val = unsafe { spec.load::<$type>(obj, None) };
                             assert_eq!(old_val, 0);
 
                             let update_res = spec.fetch_update(obj, Ordering::SeqCst, Ordering::SeqCst, |_x: $type| None);
                             assert!(update_res.is_err());
                             assert_eq!(old_val, update_res.err().unwrap());
-                            assert_eq!(spec.load_atomic::<$type>(obj, None, Ordering::SeqCst), 0);
+                            // SAFETY: Sequential single-threaded read of `buf.cells[1]` after `fetch_update`.
+                            assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
                         }
                     })
                 }
@@ -1225,4 +1269,125 @@ mod tests {
             unreachable!()
         }
     );
+
+    #[test]
+    #[should_panic(expected = "num_of_bits")]
+    fn test_spec_width_mismatch_panics() {
+        let spec = HeaderMetadataSpec {
+            bit_offset: 0,
+            num_of_bits: 8,
+        };
+        spec.assert_spec::<u64>();
+    }
+
+    #[test]
+    fn test_release_acqrel_orderings_on_subbyte_and_masked_specs() {
+        // Sub-byte 2-bit spec exercising `Release` / `AcqRel` emulated CAS/RMW paths while
+        // preserving adjacent bits in the same byte (`0b1000_0001`).
+        let mut sub_buf = TestHeaderObject::<u8>::new();
+        sub_buf.cells[1] = 0b1000_0001;
+        let sub_spec = HeaderMetadataSpec {
+            bit_offset: 2,
+            num_of_bits: 2,
+        };
+        sub_buf.with_mid_addr(|obj| {
+            sub_spec.store_atomic::<u8>(obj, 0b10, None, Ordering::Release);
+            assert_eq!(
+                sub_spec.load_atomic::<u8>(obj, None, Ordering::Acquire),
+                0b10
+            );
+
+            assert_eq!(
+                sub_spec.compare_exchange::<u8>(
+                    obj,
+                    0b10,
+                    0b01,
+                    None,
+                    Ordering::Release,
+                    Ordering::Relaxed
+                ),
+                Ok(0b10)
+            );
+            assert_eq!(
+                sub_spec.compare_exchange::<u8>(
+                    obj,
+                    0b10,
+                    0b11,
+                    None,
+                    Ordering::AcqRel,
+                    Ordering::Acquire
+                ),
+                Err(0b01)
+            );
+            assert_eq!(
+                sub_spec.compare_exchange::<u8>(
+                    obj,
+                    0b01,
+                    0b10,
+                    None,
+                    Ordering::AcqRel,
+                    Ordering::Acquire
+                ),
+                Ok(0b01)
+            );
+
+            assert_eq!(sub_spec.fetch_add::<u8>(obj, 1, Ordering::Release), 0b10);
+            assert_eq!(sub_spec.fetch_add::<u8>(obj, 1, Ordering::AcqRel), 0b11);
+            assert_eq!(sub_spec.fetch_sub::<u8>(obj, 1, Ordering::Release), 0b00);
+            assert_eq!(sub_spec.fetch_sub::<u8>(obj, 1, Ordering::AcqRel), 0b11);
+            assert_eq!(
+                sub_spec.load_atomic::<u8>(obj, None, Ordering::Acquire),
+                0b10
+            );
+        });
+        assert_eq!(sub_buf.cells[1], 0b1000_0001 | (0b10 << 2));
+
+        // Masked 16-bit spec exercising `Release` / `AcqRel` masked CAS/RMW paths while preserving
+        // unmasked low bits (`0b11`).
+        let mut word_buf = TestHeaderObject::<u16>::new();
+        word_buf.cells[1] = 0b11;
+        let word_spec = HeaderMetadataSpec {
+            bit_offset: 0,
+            num_of_bits: 16,
+        };
+        let mask: u16 = !0b11u16;
+        word_buf.with_mid_addr(|obj| {
+            word_spec.store_atomic::<u16>(obj, 0x1230, Some(mask), Ordering::Release);
+            assert_eq!(
+                word_spec.load_atomic::<u16>(obj, Some(mask), Ordering::Acquire),
+                0x1230
+            );
+            assert_eq!(
+                word_spec.load_atomic::<u16>(obj, None, Ordering::Acquire),
+                0x1233
+            );
+
+            assert_eq!(
+                word_spec.compare_exchange::<u16>(
+                    obj,
+                    0x1230,
+                    0x4560,
+                    Some(mask),
+                    Ordering::Release,
+                    Ordering::Relaxed
+                ),
+                Ok(0x1233)
+            );
+            assert_eq!(
+                word_spec.compare_exchange::<u16>(
+                    obj,
+                    0x4560,
+                    0x7890,
+                    Some(mask),
+                    Ordering::AcqRel,
+                    Ordering::Acquire
+                ),
+                Ok(0x4563)
+            );
+            assert_eq!(
+                word_spec.load_atomic::<u16>(obj, None, Ordering::Acquire),
+                0x7893
+            );
+        });
+    }
 }

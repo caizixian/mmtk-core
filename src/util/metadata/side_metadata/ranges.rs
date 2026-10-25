@@ -174,7 +174,9 @@ mod tests {
     use super::*;
 
     fn mk_addr(addr: usize) -> Address {
-        Address::ZERO + addr
+        // SAFETY: `mk_addr` constructs synthetic test addresses solely for `break_bit_range`
+        // address/bit interval partitioning tests; the returned `Address` is never dereferenced.
+        unsafe { Address::from_usize(addr) }
     }
 
     fn break_bit_range_wrapped(

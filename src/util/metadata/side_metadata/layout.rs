@@ -2,15 +2,27 @@
 use crate::util::heap::layout::vm_layout::VMLayout;
 #[cfg(target_pointer_width = "32")]
 use crate::util::heap::layout::vm_layout::BYTES_IN_CHUNK;
-#[cfg(target_pointer_width = "64")]
 use crate::util::metadata::side_metadata::side_metadata_offset_after;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::os::{HugePageSupport, MmapAnnotation};
 use crate::util::Address;
-use crate::util::{constants::LOG_BYTES_IN_PAGE, conversions::raw_align_up};
+use crate::util::{
+    constants::{BYTES_IN_WORD, LOG_BYTES_IN_PAGE},
+    conversions::raw_align_up,
+};
 use crate::MMAPPER;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::OnceLock;
+
+/// Minimum byte alignment for side-metadata spec base offsets, ensuring every spec base (including
+/// 64-bit `AtomicU64` side metadata on 32-bit targets where `BYTES_IN_WORD == 4`) is aligned to at
+/// least `max(BYTES_IN_WORD, align_of::<AtomicU64>())` (8 bytes).
+pub(crate) const SIDE_METADATA_SPEC_ALIGN: usize =
+    if BYTES_IN_WORD >= core::mem::align_of::<core::sync::atomic::AtomicU64>() {
+        BYTES_IN_WORD
+    } else {
+        core::mem::align_of::<core::sync::atomic::AtomicU64>()
+    };
 
 /// The compile-time base offset for global side metadata layout. We treat offsets as relative
 /// (starting from zero) and add the runtime base address when computing actual addresses.
@@ -19,9 +31,10 @@ pub(crate) const GLOBAL_SIDE_METADATA_BASE_OFFSET: usize = 0;
 /// The run-time base address for side metadata. This is initialized at startup by mmapping necessary memory address for side metadata,
 /// and should be used as the base when computing actual side metadata addresses.
 /// `SIDE_METADATA_BASE_ADDRESS` enforces single initialization and debug-build readiness checks, while
-/// `SIDE_METADATA_BASE_RAW` caches the raw address for single-instruction `Relaxed` hot-path loads without `OnceLock` state-check overhead or `unwrap_unchecked` UB.
+/// `SIDE_METADATA_BASE_PTR` caches the provenance-bearing base pointer (`Release` store paired with `Acquire` loads)
+/// for hot-path queries without `OnceLock` state-check overhead or `unwrap_unchecked` UB.
 static SIDE_METADATA_BASE_ADDRESS: OnceLock<Address> = OnceLock::new();
-static SIDE_METADATA_BASE_RAW: AtomicUsize = AtomicUsize::new(0);
+static SIDE_METADATA_BASE_PTR: AtomicPtr<u8> = AtomicPtr::new(std::ptr::null_mut());
 
 /// The upper bound for VM side metadata layout. We need to list all the VM side metadata specs, compute the upper bound, and store it here.
 static VM_SIDE_METADATA_UPPER_BOUND_OFFSET: OnceLock<usize> = OnceLock::new();
@@ -105,7 +118,7 @@ pub(super) fn initialize_side_metadata_base(
         SIDE_METADATA_BASE_ADDRESS.get().is_none(),
         "side metadata base address is already initialized"
     );
-    SIDE_METADATA_BASE_RAW.store(base.as_usize(), Ordering::Release);
+    SIDE_METADATA_BASE_PTR.store(base.to_mut_ptr::<u8>(), Ordering::Release);
     SIDE_METADATA_BASE_ADDRESS.set(base).unwrap();
 }
 
@@ -137,7 +150,7 @@ pub fn global_side_metadata_base_address() -> Address {
         );
     }
 
-    Address::ZERO + SIDE_METADATA_BASE_RAW.load(Ordering::Relaxed)
+    Address::from_mut_ptr(SIDE_METADATA_BASE_PTR.load(Ordering::Acquire))
 }
 
 // Local side metadata start address. This is derived from the end of global side metadata.
@@ -186,13 +199,16 @@ pub fn rc_table_start_address() -> Address {
 /// The base address for the global side metadata space available to VM bindings, to be used for the per-object metadata.
 /// VM bindings must use this to avoid overlap with core internal global side metadata.
 pub fn global_side_metadata_vm_base_address() -> Address {
-    super::spec_defs::LAST_GLOBAL_SIDE_METADATA_SPEC.upper_bound_address_for_contiguous()
+    global_side_metadata_base_address() + GLOBAL_SIDE_METADATA_VM_BASE_OFFSET
 }
 
-/// Total global side metadata bytes (independent of the runtime base address).
+/// Total global side metadata bytes (independent of the runtime base address, aligned up to `SIDE_METADATA_SPEC_ALIGN`).
 pub(crate) fn global_side_metadata_bytes() -> usize {
     let end = super::spec_defs::LAST_GLOBAL_SIDE_METADATA_SPEC.upper_bound_offset();
-    end.max(*VM_SIDE_METADATA_UPPER_BOUND_OFFSET.get().unwrap())
+    raw_align_up(
+        end.max(*VM_SIDE_METADATA_UPPER_BOUND_OFFSET.get().unwrap()),
+        SIDE_METADATA_SPEC_ALIGN,
+    )
 }
 
 // constants
@@ -220,12 +236,12 @@ pub(super) const LOCAL_SIDE_METADATA_PER_CHUNK: usize =
 
 /// The base offset for the global side metadata available to VM bindings.
 pub const GLOBAL_SIDE_METADATA_VM_BASE_OFFSET: usize =
-    super::spec_defs::LAST_GLOBAL_SIDE_METADATA_SPEC.upper_bound_offset();
+    side_metadata_offset_after(&super::spec_defs::LAST_GLOBAL_SIDE_METADATA_SPEC);
 
 /// The base address for the local side metadata space available to VM bindings, to be used for the per-object metadata.
 /// VM bindings must use this to avoid overlap with core internal local side metadata.
 pub const LOCAL_SIDE_METADATA_VM_BASE_OFFSET: usize =
-    super::spec_defs::LAST_LOCAL_SIDE_METADATA_SPEC.upper_bound_offset();
+    side_metadata_offset_after(&super::spec_defs::LAST_LOCAL_SIDE_METADATA_SPEC);
 
 #[cfg(target_pointer_width = "32")]
 pub(super) const LOCAL_SIDE_METADATA_BASE_OFFSET_FOR_LAYOUT: usize = 0;

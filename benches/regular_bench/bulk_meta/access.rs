@@ -25,11 +25,13 @@ const NUM_ADDRS: usize = 4096;
 const DATA_STRIDE: usize = 64;
 // Non-zero base ensures `address_to_meta_address` maps above page zero (`0x0040_0000` on 64-bit)
 // even when standalone benchmarks run without initializing `SIDE_METADATA_BASE_ADDRESS`.
-const BENCH_DATA_BASE: usize = 0x1000_0000;
+// SAFETY: Hardcoded synthetic benchmark data base address; only its mapped side-metadata pages are
+// ever dereferenced, never `BENCH_DATA_BASE` itself.
+const BENCH_DATA_BASE: Address = unsafe { Address::from_usize(0x1000_0000) };
 
 fn prepare_data_addrs() -> Vec<Address> {
     (0..NUM_ADDRS)
-        .map(|i| Address::ZERO + (BENCH_DATA_BASE + i * DATA_STRIDE))
+        .map(|i| BENCH_DATA_BASE + i * DATA_STRIDE)
         .collect()
 }
 

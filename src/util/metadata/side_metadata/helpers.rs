@@ -60,7 +60,9 @@ pub(super) fn contiguous_meta_address_to_address(
     let data_addr = (data_addr_intermediate << metadata_spec.log_bytes_in_region)
         + ((bit as usize) << data_addr_bit_shift);
 
-    Address::ZERO + data_addr
+    // SAFETY: `data_addr` is reconstructed inversely from a contiguous side-metadata offset and bit
+    // index; `Address::from_usize` marks raw integer-to-address conversion without dereferencing it.
+    unsafe { Address::from_usize(data_addr) }
 }
 
 /// Align an pair of a metadata address and a metadata bit offset to the start of this metadata value.
@@ -617,14 +619,22 @@ mod tests {
     }
 
     const TEST_ADDRESS_8B_REGION: [Address; 8] = [
-        Address::ZERO.add(0x8000_0000),
-        Address::ZERO.add(0x8000_0008),
-        Address::ZERO.add(0x8000_0010),
-        Address::ZERO.add(0x8000_0018),
-        Address::ZERO.add(0x8000_0020),
-        Address::ZERO.add(0x8001_0000),
-        Address::ZERO.add(0x8001_0008),
-        Address::ZERO.add(0xd000_0000),
+        // SAFETY: Hardcoded synthetic 8-byte-aligned test address; used only for pure address-translation arithmetic and never dereferenced.
+        unsafe { Address::from_usize(0x8000_0000) },
+        // SAFETY: Hardcoded synthetic 8-byte-aligned test address; never dereferenced.
+        unsafe { Address::from_usize(0x8000_0008) },
+        // SAFETY: Hardcoded synthetic 8-byte-aligned test address; never dereferenced.
+        unsafe { Address::from_usize(0x8000_0010) },
+        // SAFETY: Hardcoded synthetic 8-byte-aligned test address; never dereferenced.
+        unsafe { Address::from_usize(0x8000_0018) },
+        // SAFETY: Hardcoded synthetic 8-byte-aligned test address; never dereferenced.
+        unsafe { Address::from_usize(0x8000_0020) },
+        // SAFETY: Hardcoded synthetic 8-byte-aligned test address; never dereferenced.
+        unsafe { Address::from_usize(0x8001_0000) },
+        // SAFETY: Hardcoded synthetic 8-byte-aligned test address; never dereferenced.
+        unsafe { Address::from_usize(0x8001_0008) },
+        // SAFETY: Hardcoded synthetic 8-byte-aligned test address; never dereferenced.
+        unsafe { Address::from_usize(0xd000_0000) },
     ];
 
     #[test]
@@ -680,14 +690,22 @@ mod tests {
     }
 
     const TEST_ADDRESS_4KB_REGION: [Address; 8] = [
-        Address::ZERO.add(0x8000_0000),
-        Address::ZERO.add(0x8000_1000),
-        Address::ZERO.add(0x8000_2000),
-        Address::ZERO.add(0x8000_3000),
-        Address::ZERO.add(0x8000_4000),
-        Address::ZERO.add(0x8001_0000),
-        Address::ZERO.add(0x8001_1000),
-        Address::ZERO.add(0xd000_0000),
+        // SAFETY: Hardcoded synthetic 4KB-aligned test address; used only for pure address-translation arithmetic and never dereferenced.
+        unsafe { Address::from_usize(0x8000_0000) },
+        // SAFETY: Hardcoded synthetic 4KB-aligned test address; never dereferenced.
+        unsafe { Address::from_usize(0x8000_1000) },
+        // SAFETY: Hardcoded synthetic 4KB-aligned test address; never dereferenced.
+        unsafe { Address::from_usize(0x8000_2000) },
+        // SAFETY: Hardcoded synthetic 4KB-aligned test address; never dereferenced.
+        unsafe { Address::from_usize(0x8000_3000) },
+        // SAFETY: Hardcoded synthetic 4KB-aligned test address; never dereferenced.
+        unsafe { Address::from_usize(0x8000_4000) },
+        // SAFETY: Hardcoded synthetic 4KB-aligned test address; never dereferenced.
+        unsafe { Address::from_usize(0x8001_0000) },
+        // SAFETY: Hardcoded synthetic 4KB-aligned test address; never dereferenced.
+        unsafe { Address::from_usize(0x8001_1000) },
+        // SAFETY: Hardcoded synthetic 4KB-aligned test address; never dereferenced.
+        unsafe { Address::from_usize(0xd000_0000) },
     ];
 
     #[test]
@@ -729,8 +747,9 @@ mod tests {
             log_bytes_in_region: 3,
         };
 
-        const ADDR_1000: Address = Address::ZERO.add(0x1000);
-        const ADDR_1001: Address = Address::ZERO.add(0x1001);
+        // SAFETY: Hardcoded synthetic metadata address used purely for alignment arithmetic tests; never dereferenced.
+        const ADDR_1000: Address = unsafe { Address::from_usize(0x1000) };
+        const ADDR_1001: Address = ADDR_1000.add(1);
 
         let metadata_2bits = create_spec(1);
         assert_eq!(

@@ -61,6 +61,31 @@ impl_bitwise_ops_trait!(u32);
 impl_bitwise_ops_trait!(u64);
 impl_bitwise_ops_trait!(usize);
 
+/// Maps a store, RMW, or CAS `success_order` `Ordering` to the corresponding load/fetch
+/// `Ordering` (`Relaxed | Release => Relaxed`, `Acquire | AcqRel => Acquire`,
+/// `SeqCst => SeqCst`), ensuring emulated CAS/RMW loops never pass `Ordering::Release` or
+/// `Ordering::AcqRel` to `Atomic*::load` or `Atomic*::fetch_update`'s `fetch_order`.
+#[inline(always)]
+pub(crate) const fn load_order_for_rmw(order: Ordering) -> Ordering {
+    match order {
+        Ordering::Relaxed | Ordering::Release => Ordering::Relaxed,
+        Ordering::Acquire | Ordering::AcqRel => Ordering::Acquire,
+        Ordering::SeqCst => Ordering::SeqCst,
+        _ => Ordering::SeqCst,
+    }
+}
+
+/// Maximum byte alignment required across non-atomic and atomic accesses of `T` (notably 8 bytes
+/// for `u64` / `AtomicU64` even on 32-bit targets where `align_of::<u64>()` may be 4).
+#[inline(always)]
+pub(crate) const fn max_metadata_align<T: MetadataValue>() -> usize {
+    if T::ALIGN >= T::ATOMIC_ALIGN {
+        T::ALIGN
+    } else {
+        T::ATOMIC_ALIGN
+    }
+}
+
 /// The number type for accessing metadata.
 /// It requires a few traits from num-traits and a few traits we defined above.
 /// The methods in this trait are mostly about atomically accessing such types.
@@ -77,6 +102,13 @@ pub trait MetadataValue:
     + std::fmt::Display
     + std::fmt::Debug
 {
+    /// Required byte alignment for non-atomic `Self` accesses.
+    const ALIGN: usize = core::mem::align_of::<Self>();
+
+    /// Required byte alignment for atomic `Self` accesses (`align_of::<AtomicU64>() == 8` even on
+    /// 32-bit targets where `align_of::<u64>()` may be 4).
+    const ATOMIC_ALIGN: usize = core::mem::align_of::<Self>();
+
     /// Non-atomic load from `addr`.
     ///
     /// # Safety
@@ -208,6 +240,9 @@ pub trait MetadataValue:
 macro_rules! impl_metadata_value_trait {
     ($non_atomic: ty, $atomic: ty) => {
         impl MetadataValue for $non_atomic {
+            const ALIGN: usize = core::mem::align_of::<$non_atomic>();
+            const ATOMIC_ALIGN: usize = core::mem::align_of::<$atomic>();
+
             unsafe fn load(addr: Address) -> Self {
                 debug_assert!(!addr.is_zero());
                 debug_assert!(addr.is_aligned_to(core::mem::align_of::<$non_atomic>()));
