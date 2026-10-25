@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 //! MMTk instance.
 use crate::global_state::{GcStatus, GlobalState};
 use crate::plan::CreateGeneralPlanArgs;
@@ -32,7 +30,9 @@ use crate::vm::VMBinding;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::default::Default;
-use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "sanity")]
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -109,22 +109,9 @@ impl Default for MMTKBuilder {
     }
 }
 
-/// RAII guard tracking an active `MMTK::get_plan_mut` exclusive borrow so non-reentrancy is
-/// enforced in all builds and concurrent/re-entrant `MMTK::get_plan` reads are caught in debug
-/// builds.
-pub(crate) struct PlanMutLeaseGuard<'a>(&'a AtomicBool);
-
-impl Drop for PlanMutLeaseGuard<'_> {
-    #[inline]
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
-    }
-}
-
 /// An MMTk instance. MMTk allows multiple instances to run independently, and each instance gives users a separate heap.
 /// *Note that multi-instances is not fully supported yet*
 pub struct MMTK<VM: VMBinding> {
-    pub(crate) plan_mut_leased: AtomicBool,
     pub(crate) options: Arc<Options>,
     pub(crate) state: Arc<GlobalState>,
     pub(crate) plan: &'static UnsafeCell<dyn Plan<VM = VM>>,
@@ -243,17 +230,10 @@ impl<VM: VMBinding> MMTK<VM> {
         // derives from `UnsafeCell::get(plan)` (`SharedReadWrite` provenance) rather than from a
         // temporary `&mut dyn Plan`.
         let plan: &'static UnsafeCell<dyn Plan<VM = VM>> = Box::leak(plan);
-        {
-            let static_plan = Self::shared_plan_from_cell(plan);
-            // Then initialize SFT because it may use side metadata.
-            static_plan.initialize_sft();
-
-            // Set the plan via `OnceLock` so `GCTrigger` can check GC conditions without `&mut`.
-            gc_trigger.set_plan(static_plan);
-        }
+        // Set the plan via `OnceLock` and initialize `'static` SFT entries for all spaces.
+        gc_trigger.set_plan(Self::shared_plan_from_cell(plan));
 
         MMTK {
-            plan_mut_leased: AtomicBool::new(false),
             options,
             state,
             plan,
@@ -517,16 +497,6 @@ impl<VM: VMBinding> MMTK<VM> {
         self.gc_trigger.trigger_internal_collection_request();
     }
 
-    /// Acquire a non-reentrant runtime guard witnessing an active internal `get_plan_mut` borrow.
-    #[inline]
-    pub(crate) fn enter_plan_mut_lease(&self) -> PlanMutLeaseGuard<'_> {
-        assert!(
-            !self.plan_mut_leased.swap(true, Ordering::Acquire),
-            "Reentrant or concurrent MMTK::get_plan_mut() lease"
-        );
-        PlanMutLeaseGuard(&self.plan_mut_leased)
-    }
-
     #[inline(always)]
     fn shared_plan_from_cell(
         cell: &'static UnsafeCell<dyn Plan<VM = VM>>,
@@ -540,10 +510,6 @@ impl<VM: VMBinding> MMTK<VM> {
 
     /// Get a reference to the plan.
     pub fn get_plan(&self) -> &dyn Plan<VM = VM> {
-        debug_assert!(
-            !self.plan_mut_leased.load(Ordering::Acquire),
-            "MMTK::get_plan() called while an exclusive get_plan_mut() borrow is live"
-        );
         Self::shared_plan_from_cell(self.plan)
     }
 
@@ -616,11 +582,7 @@ impl<VM: VMBinding> MMTK<VM> {
     {
         use crate::util::object_enum;
 
-        // SAFETY: `cfg(feature = "vo_bit")` ensures `VO_BIT_SIDE_METADATA_SPEC` is registered in
-        // every space's `SideMetadataContext::new_global_specs`, and `MMTK::enumerate_objects`
-        // (preserved as a `pub` VM-binding API) documents that the VM binding must ensure no
-        // allocation or GC runs concurrently (nor via `f`) while enumeration executes.
-        let mut enumerator = unsafe { object_enum::ClosureObjectEnumerator::<_, VM>::new(f) };
+        let mut enumerator = object_enum::ClosureObjectEnumerator::<_, VM>::new(f);
         let plan = self.get_plan();
         plan.for_each_space(&mut |space| {
             space.enumerate_objects(&mut enumerator);

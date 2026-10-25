@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use super::block_allocation::BlockAllocation;
 use super::gc_work::nursery_sweeping::ReleaseLOSNursery;
 use super::gc_work::prepare::FastRCPrepare;
@@ -198,56 +196,12 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         &ALLOCATOR_MAPPING
     }
 
-    fn prepare(&mut self, _tls: VMWorkerThread) {
-        let pause = self.current_pause().unwrap();
-        if pause == Pause::RefCount {
-            self.prepare_fast_rc();
-            return;
-        }
-        if pause == Pause::FinalMark || pause == Pause::Full {
-            self.common.los.is_end_of_satb_or_full_gc = true;
-            // release nursery memory before mature evacuation, to reduce the chance of to-space overflow.
-            self.immix_space.scheduler().work_buckets[WorkBucketStage::Unconstrained]
-                .add(ReleaseLOSNursery);
-        }
-
-        let starts_mark_cycle = pause == Pause::Full || pause == Pause::InitialMark;
-        // Only do prepare if we start a new mark cycle. Otherwise, let thoe spaces have sticky mark bits.
-        if starts_mark_cycle {
-            // We have tested that the following spaces -- they are used by Julia
-            self.common.immortal.prepare();
-            #[cfg(feature = "vm_space")]
-            self.common.base.vm_space.prepare();
-            // TODO: We haven't tested these spaces. But ideally they should be handled in the same way here.
-            self.common.prepare_nonmoving_space(starts_mark_cycle);
-            #[cfg(feature = "code_space")]
-            self.common.base.code_space.prepare();
-            #[cfg(feature = "code_space")]
-            self.common.base.code_lo_space.prepare();
-            #[cfg(feature = "ro_space")]
-            self.common.base.ro_space.prepare();
-        }
-        // LOS is aware of LXR. Call its prepare unconditionally.
-        self.common.los.prepare(starts_mark_cycle);
-
-        if super::MATURE_EVACUATION && (pause == Pause::FinalMark || pause == Pause::Full) {
-            self.process_mature_evacuation_remset();
-        }
-        if super::MATURE_EVACUATION && (pause == Pause::InitialMark || pause == Pause::Full) {
-            // Select mature evacuation set
-            self.schedule_defrag_selection_packets();
-        }
-        self.num_clean_blocks_released_lazy
-            .store(0, Ordering::SeqCst);
-        self.immix_space.prepare_rc(pause);
-        self.block_allocation
-            .reset_block_mark_for_mutator_reused_blocks(pause);
+    fn prepare(&mut self, tls: VMWorkerThread) {
+        self.prepare_shared(tls);
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
-        self.release_before_plan_mut();
-        self.release_plan_local(tls);
-        self.release_after_plan_mut();
+        self.release_shared(tls);
     }
 
     fn get_collection_reserved_pages(&self) -> usize {
@@ -461,7 +415,7 @@ impl<VM: VMBinding> LXR<VM> {
         }))
     }
 
-    pub(in crate::plan) fn finish_pause(&mut self, tls: VMWorkerThread) -> bool {
+    pub(in crate::plan) fn finish_pause(&self, tls: VMWorkerThread) -> bool {
         super::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(false, Ordering::SeqCst);
         // self.immix_space.flush_page_resource();
         let pause = self.current_pause().unwrap();
@@ -484,7 +438,7 @@ impl<VM: VMBinding> LXR<VM> {
             .store(self.get_available_pages(), Ordering::SeqCst);
         HEAP_AFTER_GC.store(self.get_reserved_pages(), Ordering::SeqCst);
 
-        self.common_mut().on_pause_end(tls);
+        self.common.on_pause_end(tls);
 
         // Individual RC pauses that don't overlap with concurrent tracing consist of a GC cycle.
         // Concurrent tracing, including RC pauses in between, counts as one GC cycle.
@@ -494,18 +448,67 @@ impl<VM: VMBinding> LXR<VM> {
             || pause == Pause::Full
     }
 
-    pub(in crate::plan) fn release_before_plan_mut(&self) {
+    pub(in crate::plan) fn prepare_shared(&self, _tls: VMWorkerThread) {
+        let pause = self.current_pause().unwrap();
+        if pause == Pause::RefCount {
+            self.prepare_fast_rc();
+            return;
+        }
+        if pause == Pause::FinalMark || pause == Pause::Full {
+            self.common
+                .los
+                .is_end_of_satb_or_full_gc
+                .store(true, Ordering::Release);
+            // release nursery memory before mature evacuation, to reduce the chance of to-space overflow.
+            self.immix_space.scheduler().work_buckets[WorkBucketStage::Unconstrained]
+                .add(ReleaseLOSNursery);
+        }
+
+        let starts_mark_cycle = pause == Pause::Full || pause == Pause::InitialMark;
+        // Only do prepare if we start a new mark cycle. Otherwise, let thoe spaces have sticky mark bits.
+        if starts_mark_cycle {
+            // We have tested that the following spaces -- they are used by Julia
+            self.common.immortal.prepare();
+            #[cfg(feature = "vm_space")]
+            self.common.base.vm_space.prepare();
+            // TODO: We haven't tested these spaces. But ideally they should be handled in the same way here.
+            self.common.prepare_nonmoving_space(starts_mark_cycle);
+            #[cfg(feature = "code_space")]
+            self.common.base.code_space.prepare();
+            #[cfg(feature = "code_space")]
+            self.common.base.code_lo_space.prepare();
+            #[cfg(feature = "ro_space")]
+            self.common.base.ro_space.prepare();
+        }
+        // LOS is aware of LXR. Call its prepare unconditionally.
+        self.common.los.prepare(starts_mark_cycle);
+
+        if super::MATURE_EVACUATION && (pause == Pause::FinalMark || pause == Pause::Full) {
+            self.process_mature_evacuation_remset();
+        }
+        if super::MATURE_EVACUATION && (pause == Pause::InitialMark || pause == Pause::Full) {
+            // Select mature evacuation set
+            self.schedule_defrag_selection_packets();
+        }
+        self.num_clean_blocks_released_lazy
+            .store(0, Ordering::SeqCst);
+        self.immix_space.prepare_rc(pause);
+        self.block_allocation
+            .reset_block_mark_for_mutator_reused_blocks(pause);
+    }
+
+    pub(in crate::plan) fn release_shared(&self, tls: VMWorkerThread) {
         super::SURVIVAL_RATIO_PREDICTOR.update_ratios();
         let pause = self.current_pause().unwrap();
         if pause == Pause::FinalMark || pause == Pause::Full {
             VM::VMCollection::update_weak_processor(false);
         }
         <VM as VMBinding>::VMCollection::vm_release();
-    }
 
-    pub(in crate::plan) fn release_plan_local(&mut self, tls: VMWorkerThread) {
-        let pause = self.current_pause().unwrap();
-        self.common.los.is_end_of_satb_or_full_gc = false;
+        self.common
+            .los
+            .is_end_of_satb_or_full_gc
+            .store(false, Ordering::Release);
         self.common
             .release(tls, pause == Pause::Full || pause == Pause::FinalMark);
         let block_allocation = self.block_allocation;
@@ -523,10 +526,7 @@ impl<VM: VMBinding> LXR<VM> {
             debug_assert_ne!(pause, Pause::Full);
         }
         self.immix_space.release_rc();
-    }
 
-    pub(in crate::plan) fn release_after_plan_mut(&self) {
-        let pause = self.current_pause().unwrap();
         self.schedule_mature_sweeping(pause);
         // swap roots
         let mut prev_roots = self.prev_roots.write().unwrap();

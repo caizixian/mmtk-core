@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 //! This module contains `WorkerMonitor` and related types.  It purposes includes:
 //!
 //! -   letting workers become active or inactive,

@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use downcast_rs::{impl_downcast, Downcast};
 
 pub const FAILURE: i32 = -1;

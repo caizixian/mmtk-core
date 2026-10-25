@@ -1,7 +1,5 @@
 // This is a free list allocator written based on Microsoft's mimalloc allocator https://www.microsoft.com/en-us/research/publication/mimalloc-free-list-sharding-in-action/
 
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use std::sync::Arc;
 
 use super::allocator::AllocatorContext;

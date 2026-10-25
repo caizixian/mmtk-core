@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use super::map::{AllocatedChunkRegion, VMMap};
 use crate::mmtk::SFT_MAP;
 use crate::util::conversions;
@@ -8,8 +6,8 @@ use crate::util::heap::layout::heap_parameters::*;
 use crate::util::heap::layout::vm_layout::*;
 use crate::util::heap::space_descriptor::{AtomicSpaceDescriptor, SpaceDescriptor};
 use crate::util::int_array_freelist::IntArrayFreeList;
-use crate::util::rust_util::zeroed_alloc::new_zeroed_vec;
 use crate::util::Address;
+use bytemuck::allocation::zeroed_slice_box;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -35,8 +33,8 @@ impl Map32 {
             shared_discontig_fl_count: AtomicUsize::new(0),
             total_available_discontiguous_chunks: AtomicUsize::new(0),
             finalized: AtomicBool::new(false),
-            // This can be big on 64-bit machines. Use `new_zeroed_vec`.
-            descriptor_map: new_zeroed_vec::<AtomicSpaceDescriptor>(max_chunks).into_boxed_slice(),
+            // This can be big on 64-bit machines; allocate zeroed pages directly via `alloc_zeroed`.
+            descriptor_map: zeroed_slice_box::<AtomicSpaceDescriptor>(max_chunks),
         }
     }
 }

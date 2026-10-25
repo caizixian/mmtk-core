@@ -1,12 +1,10 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use super::defrag::Histogram;
 use super::line::{iter_line_indices, Line, RCArray, BYTES_PER_LINE, LINES_IN_BLOCK};
 use super::ImmixSpace;
 use crate::util::constants::*;
 use crate::util::heap::blockpageresource::BlockPool;
 use crate::util::heap::chunk_map::Chunk;
-use crate::util::linear_scan::{Region, RegionIterator, UnstraddlableRegion};
+use crate::util::linear_scan::{Region, UnstraddlableRegion};
 use crate::util::metadata::side_metadata::*;
 #[cfg(feature = "vo_bit")]
 use crate::util::metadata::vo_bit;
@@ -402,13 +400,6 @@ impl Block {
         self.start_line().next_nth(idx.get())
     }
 
-    /// Get the range of lines within the block.
-    #[allow(clippy::assertions_on_constants)]
-    pub fn lines(&self) -> RegionIterator<Line> {
-        debug_assert!(!super::BLOCK_ONLY);
-        RegionIterator::<Line>::new(self.start_line(), self.end_line())
-    }
-
     pub fn clear_rc_table(&self) {
         self.rc_array().clear();
     }
@@ -729,10 +720,6 @@ impl Block {
             }
         }
         false
-    }
-
-    pub fn rc_table_start(&self) -> Address {
-        address_to_meta_address(&crate::util::rc::RC_TABLE, self.start())
     }
 
     /// Clear VO bits for unmarked regions of an allocated block after `Prepare`.

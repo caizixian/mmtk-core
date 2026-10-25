@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use super::gc_work::GenCopyGCWorkContext;
 use super::gc_work::GenCopyNurseryGCWorkContext;
 use super::mutator::ALLOCATOR_MAPPING;
@@ -90,19 +88,7 @@ impl<VM: VMBinding> Plan for GenCopy<VM> {
     }
 
     fn prepare(&mut self, tls: VMWorkerThread) {
-        let full_heap = !self.gen.is_current_gc_nursery();
-        self.gen.prepare(tls);
-        if full_heap {
-            self.hi
-                .store(!self.hi.load(Ordering::SeqCst), Ordering::SeqCst); // flip the semi-spaces
-        }
-        let hi = self.hi.load(Ordering::SeqCst);
-        self.copyspace0.prepare(hi);
-        self.copyspace1.prepare(!hi);
-
-        self.fromspace_mut()
-            .set_copy_for_sft_trace(Some(CopySemantics::Mature));
-        self.tospace_mut().set_copy_for_sft_trace(None);
+        self.prepare_shared(tls);
     }
 
     fn prepare_worker(&self, worker: &mut GCWorker<Self::VM>) {
@@ -121,14 +107,7 @@ impl<VM: VMBinding> Plan for GenCopy<VM> {
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
-        let full_heap = !self.gen.is_current_gc_nursery();
-        self.gen.release(tls);
-        if full_heap {
-            if VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.is_on_side() {
-                self.fromspace().clear_side_log_bits();
-            }
-            self.fromspace().release();
-        }
+        self.release_shared(tls);
     }
 
     fn on_pause_end(&mut self, mmtk: &'static MMTK<VM>, tls: VMWorkerThread) {
@@ -255,14 +234,6 @@ impl<VM: VMBinding> GenCopy<VM> {
         }
     }
 
-    pub fn tospace_mut(&mut self) -> &mut CopySpace<VM> {
-        if self.hi.load(Ordering::SeqCst) {
-            &mut self.copyspace1
-        } else {
-            &mut self.copyspace0
-        }
-    }
-
     pub fn fromspace(&self) -> &CopySpace<VM> {
         if self.hi.load(Ordering::SeqCst) {
             &self.copyspace0
@@ -271,16 +242,35 @@ impl<VM: VMBinding> GenCopy<VM> {
         }
     }
 
-    pub fn fromspace_mut(&mut self) -> &mut CopySpace<VM> {
-        if self.hi.load(Ordering::SeqCst) {
-            &mut self.copyspace0
-        } else {
-            &mut self.copyspace1
+    pub(in crate::plan) fn prepare_shared(&self, tls: VMWorkerThread) {
+        let full_heap = !self.gen.is_current_gc_nursery();
+        self.gen.prepare(tls);
+        if full_heap {
+            self.hi
+                .store(!self.hi.load(Ordering::SeqCst), Ordering::SeqCst); // flip the semi-spaces
+        }
+        let hi = self.hi.load(Ordering::SeqCst);
+        self.copyspace0.prepare(hi);
+        self.copyspace1.prepare(!hi);
+
+        self.fromspace()
+            .set_copy_for_sft_trace(Some(CopySemantics::Mature));
+        self.tospace().set_copy_for_sft_trace(None);
+    }
+
+    pub(in crate::plan) fn release_shared(&self, tls: VMWorkerThread) {
+        let full_heap = !self.gen.is_current_gc_nursery();
+        self.gen.release(tls);
+        if full_heap {
+            if VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.is_on_side() {
+                self.fromspace().clear_side_log_bits();
+            }
+            self.fromspace().release();
         }
     }
 
     pub(in crate::plan) fn finish_pause(
-        &mut self,
+        &self,
         tls: VMWorkerThread,
         next_gc_full_heap: Option<bool>,
     ) -> bool {

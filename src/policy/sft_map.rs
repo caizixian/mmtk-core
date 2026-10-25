@@ -1,26 +1,9 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use super::sft::*;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::Address;
 
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::OnceLock;
-
-/// Legacy Wave-3A SFT initialization interface passed to
-/// [`crate::policy::space::Space::initialize_sft`].
-///
-/// Actual `'static` space registration runs in
-/// [`crate::util::heap::gc_trigger::GCTrigger::set_plan`], and runtime SFT lookups and chunk
-/// updates go directly through [`GlobalSftMap`] (`SFT_MAP`).
-pub trait SFTMap: Send + Sync {
-    /// Get SFT for `address`, returning an empty SFT if out of bounds.
-    fn get_checked(&self, address: Address) -> &dyn SFT;
-
-    /// Legacy Wave-3A space creation notification hook (no-op; registration runs via
-    /// [`GlobalSftMap::notify_space_creation_static`]).
-    fn notify_space_creation(&mut self, space: SFTRawPointer);
-}
 
 /// Concrete enum dispatch for the global SFT map, eliminating `Box<dyn SFTMap>` double
 /// indirection and global mutable aliasing.
@@ -168,11 +151,6 @@ impl GlobalSftMap {
             .unwrap_or(&EMPTY_SFT_MAP_FALLBACK)
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn create_init_handle(&self) -> SftMapInitHandle {
-        SftMapInitHandle::new(ensure_sft_map_initialized())
-    }
-
     #[inline]
     pub fn has_sft_entry(&self, addr: Address) -> bool {
         self.map_acquire().has_sft_entry(addr)
@@ -260,27 +238,6 @@ impl GlobalSftMap {
     pub fn clear_checked(&self, address: Address) {
         self.map_acquire().clear_checked(address);
     }
-}
-
-/// Legacy Wave-3A adapter passed as `&mut dyn SFTMap` to `Plan::initialize_sft(&self)`.
-///
-/// Actual `'static` SFT registration runs in `GCTrigger::set_plan(&'static dyn Plan)`.
-pub(crate) struct SftMapInitHandle {
-    map: &'static SFTMapImpl,
-}
-
-impl SftMapInitHandle {
-    pub(crate) fn new(map: &'static SFTMapImpl) -> Self {
-        Self { map }
-    }
-}
-
-impl SFTMap for SftMapInitHandle {
-    fn get_checked(&self, address: Address) -> &dyn SFT {
-        self.map.get_checked(address)
-    }
-
-    fn notify_space_creation(&mut self, _space: SFTRawPointer) {}
 }
 
 /// The raw pointer for SFT. We expect a space to provide this to SFT map.

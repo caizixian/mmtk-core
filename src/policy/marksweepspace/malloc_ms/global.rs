@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use super::metadata::*;
 use crate::global_state::GcStatus;
 use crate::plan::tracing::{ObjectQueue, OptionObjectQueue};
@@ -201,7 +199,7 @@ impl<VM: VMBinding> Space<VM> for MallocSpace<VM> {
         self.gc_trigger.as_ref()
     }
 
-    fn initialize_sft_static(&'static self) {
+    fn initialize_sft(&'static self) {
         let _ = self.sft_ref.set(self);
         crate::mmtk::SFT_MAP.notify_space_creation_static(self);
     }
@@ -552,13 +550,9 @@ impl<VM: VMBinding> MallocSpace<VM> {
         crate::util::metadata::vo_bit::is_vo_bit_set_for_addr(addr)
     }
 
-    pub(crate) fn prepare_shared(&self, _full_heap: bool) {}
+    pub fn prepare(&self, _full_heap: bool) {}
 
-    pub fn prepare(&mut self, full_heap: bool) {
-        self.prepare_shared(full_heap);
-    }
-
-    pub(crate) fn release_shared(&self) {
+    pub fn release(&self) {
         use crate::scheduler::WorkBucketStage;
 
         let space_descriptor = self.descriptor;
@@ -584,10 +578,6 @@ impl<VM: VMBinding> MallocSpace<VM> {
         }
 
         self.scheduler.work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
-    }
-
-    pub fn release(&mut self) {
-        self.release_shared();
     }
 
     pub fn end_of_gc(&self) {}
@@ -665,9 +655,10 @@ impl<VM: VMBinding> MallocSpace<VM> {
         //    `[vo_meta_start, vo_meta_start + VO_META_BYTES_PER_CHUNK)` is mapped (never unmapped
         //    for the process lifetime); `mapped_atomic_bytes_unchecked` additionally checks byte
         //    alignment, single-chunk containment, and bounds.
-        // 2. All safe `VO_BIT` operations (`vo_bit::{set_vo_bit, unset_vo_bit, is_vo_bit_set,
-        //    is_vo_bit_set_for_addr}`) access `VO_BIT_SIDE_METADATA_SPEC` via `AtomicU8`, and no
-        //    `&[u8]` / `&mut [u8]` slice is created over `VO_BIT` in `MallocSpace`.
+        // 2. All internal `VO_BIT` operations (`vo_bit::{set_vo_bit, unset_vo_bit*,
+        //    is_vo_bit_set*, bzero_vo_bit, bcopy_vo_bit_from_mark_bit, scan_vo_bits_atomic,
+        //    find_object_from_internal_pointer}`) access `VO_BIT_SIDE_METADATA_SPEC` exclusively
+        //    via `AtomicU8`, and no `&[u8]` / `&mut [u8]` slice is created over `VO_BIT`.
         unsafe {
             VO_BIT_SIDE_METADATA_SPEC
                 .mapped_atomic_bytes_unchecked::<VO_META_BYTES_PER_CHUNK>(chunk_start)

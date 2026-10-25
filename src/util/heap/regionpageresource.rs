@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use crate::util::constants::BYTES_IN_PAGE;
 use crate::util::heap::layout::VMMap;
 use crate::util::heap::pageresource::{CommonPageResource, PRAllocFail, PRAllocResult};
@@ -175,12 +173,7 @@ impl<VM: VMBinding, R: Region + 'static> RegionPageResource<VM, R> {
     pub fn enumerate(&self, enumerator: &mut dyn ObjectEnumerator) {
         let sync = self.sync.read().unwrap();
         for alloc in sync.all_regions.iter() {
-            // SAFETY: Each `alloc` in `self.sync.all_regions` was acquired via `RegionPageResource`
-            // with the owning space's `SideMetadataContext` mapped across `alloc.region`, and
-            // `[alloc.region.start(), alloc.cursor())` lies within `alloc.region`.
-            unsafe {
-                enumerator.visit_address_range(alloc.region.start(), alloc.cursor());
-            }
+            enumerator.visit_address_range(alloc.region.start(), alloc.cursor());
         }
     }
 

@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use super::*;
 use crate::util::constants::{BYTES_IN_PAGE, LOG_BITS_IN_BYTE};
 use crate::util::conversions::raw_align_up;
@@ -351,7 +349,6 @@ impl SideMetadataSpec {
     /// # Safety
     /// Same preconditions as [`Self::mapped_atomic_bytes_unchecked`] for `N = ROWS * COLS`
     /// contiguous side-metadata bytes.
-    #[allow(dead_code)] // Consumed by Wave 2B (`immix` `MappedBlock::rc_table`).
     #[inline(always)]
     pub(crate) unsafe fn mapped_atomic_byte_chunks_unchecked<
         'a,
@@ -374,36 +371,6 @@ impl SideMetadataSpec {
         // `ROWS * COLS`); the caller guarantees the range is mapped, initialized, valid for `'a`,
         // and accessed solely via `AtomicU8`.
         unsafe { &*meta_addr.to_ptr::<[[AtomicU8; COLS]; ROWS]>() }
-    }
-
-    /// Project the contiguous side-metadata bytes covering `[data_addr, data_addr + data_bytes)` as
-    /// an exclusive mutable byte slice `&'a mut [u8]`.
-    ///
-    /// # Safety
-    /// * `data_addr` and `data_addr + data_bytes` must both fall on exact byte boundaries in
-    ///   `self`'s side metadata without data or metadata range overflow (`meta_bytes <= isize::MAX as usize`),
-    ///   and if `data_bytes > 0 && self.uses_chunked_side_metadata()`, `[data_addr, data_addr + data_bytes)`
-    ///   must lie within a single `BYTES_IN_CHUNK` chunk.
-    /// * The `meta_bytes` bytes starting at `address_to_meta_address(self, data_addr)` must be
-    ///   mapped, writable, initialized, and remain mapped for `'a`.
-    /// * Exclusive aliasing invariant: for the entire lifetime `'a`, the caller must have unique
-    ///   access to `[meta_addr, meta_addr + meta_bytes)` — no other `&[u8]`, `&mut [u8]`,
-    ///   `&Atomic*`, or raw-pointer/`SideMetadataSpec` read/write/bzero may alias or access any
-    ///   byte in this range.
-    #[allow(dead_code)] // Consumed by Wave 2B (`malloc_ms` `MallocExclusiveChunk`).
-    #[inline]
-    pub(crate) unsafe fn mapped_bytes_mut_unchecked<'a>(
-        &self,
-        data_addr: Address,
-        data_bytes: usize,
-    ) -> &'a mut [u8] {
-        let (meta_addr, meta_bytes) = self.checked_mapped_byte_range(data_addr, data_bytes);
-        // SAFETY: `checked_mapped_byte_range` verified non-null `meta_addr` (`u8` has alignment 1),
-        // `meta_bytes <= isize::MAX as usize`, non-wrapping `meta_addr + meta_bytes`, and
-        // single-chunk containment; the caller guarantees `[meta_addr, meta_addr + meta_bytes)` is
-        // mapped, initialized, writable, and uniquely borrowed without any aliasing references or
-        // concurrent/interleaved raw-pointer accesses for `'a`.
-        unsafe { std::slice::from_raw_parts_mut(meta_addr.to_mut_ptr::<u8>(), meta_bytes) }
     }
 
     /// Check with the mmapper to see if side metadata is mapped for the spec for the data address.
@@ -2651,22 +2618,17 @@ mod tests {
                 .unwrap();
 
             {
-                // SAFETY: `spec` is mapped for `[data_addr, data_addr + four_pages)`, single-threaded,
-                // and exclusively borrowed within this inner block.
-                let bytes_mut = unsafe { spec.mapped_bytes_mut_unchecked(data_addr, four_pages) };
-                assert_eq!(bytes_mut.len(), 4);
-                bytes_mut.copy_from_slice(&[0x11, 0x22, 0x33, 0x44]);
-            }
-
-            {
-                // SAFETY: `bytes_mut` was dropped above; only `AtomicU8` references touch the 4
-                // mapped, initialized metadata bytes inside this block.
+                // SAFETY: `spec` is mapped for `[data_addr, data_addr + four_pages)`, and only
+                // `AtomicU8` references touch the 4 mapped, initialized metadata bytes here.
                 let (atomics, grid) = unsafe {
                     (
                         spec.mapped_atomic_bytes_unchecked::<4>(data_addr),
                         spec.mapped_atomic_byte_chunks_unchecked::<2, 2>(data_addr),
                     )
                 };
+                for (slot, val) in atomics.iter().zip([0x11, 0x22, 0x33, 0x44]) {
+                    slot.store(val, Ordering::Relaxed);
+                }
                 assert_eq!(atomics[0].load(Ordering::Relaxed), 0x11);
                 assert_eq!(atomics[1].load(Ordering::Relaxed), 0x22);
                 atomics[2].store(0x99, Ordering::Relaxed);

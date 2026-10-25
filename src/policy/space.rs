@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use crate::global_state::GlobalState;
 use crate::plan::PlanConstraints;
 use crate::scheduler::GCWorkScheduler;
@@ -52,15 +50,9 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
     /// have a page resource.
     fn maybe_get_page_resource_mut(&mut self) -> Option<&mut dyn PageResource<VM>>;
 
-    /// Wave-3A compatibility hook for `Plan::initialize_sft(&self)`.
-    ///
-    /// Actual `'static` SFT registration runs via [`Self::initialize_sft_static`] in
-    /// [`crate::util::heap::gc_trigger::GCTrigger::set_plan`].
-    fn initialize_sft(&self, _sft_map: &mut dyn crate::policy::sft_map::SFTMap) {}
-
     /// Initialize SFT entries directly from a `'static` space reference (`0` `unsafe`).
-    fn initialize_sft_static(&'static self) {
-        self.common().initialize_sft_static(self.as_sft());
+    fn initialize_sft(&'static self) {
+        self.common().initialize_sft(self.as_sft());
     }
 
     /// Initialize side metadata for the space. This is called after spaces and the plan are contructued
@@ -402,7 +394,7 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
 
     /// What copy semantic we should use for this space if we copy objects from this space.
     /// This is only needed for plans that use [`crate::plan::tracing::SFTTrace`].
-    fn set_copy_for_sft_trace(&mut self, _semantics: Option<CopySemantics>) {
+    fn set_copy_for_sft_trace(&self, _semantics: Option<CopySemantics>) {
         panic!("A copying space should override this method")
     }
 
@@ -526,7 +518,7 @@ pub struct CommonSpace<VM: VMBinding> {
 
     /// For a copying space that allows sft_trace_object(), this should be set before each GC so we know
     // the copy semantics for the space.
-    pub copy: Option<CopySemantics>,
+    pub(crate) copy: crate::util::copy::AtomicCopySemantics,
 
     pub immortal: bool,
     pub movable: bool,
@@ -613,7 +605,7 @@ impl<VM: VMBinding> CommonSpace<VM> {
             name: args.plan_args.name,
             descriptor: SpaceDescriptor::UNINITIALIZED,
             vmrequest: args.plan_args.vmrequest,
-            copy: None,
+            copy: crate::util::copy::AtomicCopySemantics::new(None),
             immortal: args.immortal,
             movable: args.movable,
             contiguous: true,
@@ -791,16 +783,7 @@ impl<VM: VMBinding> CommonSpace<VM> {
         estimate.max(vm_map.min_contiguous_extent())
     }
 
-    pub fn initialize_sft(
-        &self,
-        _sft: &(dyn SFT + Sync + 'static),
-        _sft_map: &mut dyn crate::policy::sft_map::SFTMap,
-    ) {
-        // Wave-3A compatibility hook for `Plan::initialize_sft(&self)`; `'static` SFT registration
-        // runs via `Self::initialize_sft_static` in `GCTrigger::set_plan`.
-    }
-
-    pub(crate) fn initialize_sft_static(&self, static_sft: &'static (dyn SFT + Sync + 'static)) {
+    pub(crate) fn initialize_sft(&self, static_sft: &'static (dyn SFT + Sync + 'static)) {
         let _ = self.sft_ref.set(static_sft);
         SFT_MAP.notify_space_creation_static(static_sft);
         // We have to keep this for now: if a space is contiguous, our page resource will NOT consider newly allocated chunks

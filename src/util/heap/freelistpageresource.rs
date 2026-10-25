@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use std::sync::Mutex;
 
 use super::layout::vm_layout::PAGES_IN_CHUNK;

@@ -58,13 +58,11 @@ impl<VM: VMBinding> Plan for MarkSweep<VM> {
     }
 
     fn prepare(&mut self, tls: VMWorkerThread) {
-        self.common.prepare(tls, true);
-        self.ms.prepare(true);
+        self.prepare_shared(tls);
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
-        self.ms.release();
-        self.common.release(tls, true);
+        self.release_shared(tls);
     }
 
     fn on_pause_end(&mut self, mmtk: &'static MMTK<VM>, tls: VMWorkerThread) {
@@ -128,7 +126,17 @@ impl<VM: VMBinding> MarkSweep<VM> {
         &self.ms
     }
 
-    pub(in crate::plan) fn finish_pause(&mut self, tls: VMWorkerThread) -> bool {
+    pub(in crate::plan) fn prepare_shared(&self, tls: VMWorkerThread) {
+        self.common.prepare(tls, true);
+        self.ms.prepare(true);
+    }
+
+    pub(in crate::plan) fn release_shared(&self, tls: VMWorkerThread) {
+        self.ms.release();
+        self.common.release(tls, true);
+    }
+
+    pub(in crate::plan) fn finish_pause(&self, tls: VMWorkerThread) -> bool {
         self.ms.end_of_gc();
         self.common.on_pause_end(tls);
         true

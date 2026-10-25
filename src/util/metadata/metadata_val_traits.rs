@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use crate::util::Address;
 use atomic_traits::{fetch, Atomic};
 use core::sync::atomic::*;

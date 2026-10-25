@@ -48,13 +48,11 @@ impl<VM: VMBinding> Plan for PageProtect<VM> {
     }
 
     fn prepare(&mut self, tls: VMWorkerThread) {
-        self.common.prepare(tls, true);
-        self.space.prepare(true);
+        self.prepare_shared(tls);
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
-        self.common.release(tls, true);
-        self.space.release(true);
+        self.release_shared(tls);
     }
 
     fn collection_required(&self, space_full: bool, _space: Option<SpaceStats<Self::VM>>) -> bool {
@@ -119,5 +117,15 @@ impl<VM: VMBinding> PageProtect<VM> {
             ),
             common: CommonPlan::new(plan_args),
         }
+    }
+
+    pub(in crate::plan) fn prepare_shared(&self, tls: VMWorkerThread) {
+        self.common.prepare(tls, true);
+        self.space.prepare(true);
+    }
+
+    pub(in crate::plan) fn release_shared(&self, tls: VMWorkerThread) {
+        self.common.release(tls, true);
+        self.space.release(true);
     }
 }

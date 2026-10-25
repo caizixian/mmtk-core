@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use super::mock_test_prelude::*;
 
 use crate::util::malloc::malloc_ms_util;

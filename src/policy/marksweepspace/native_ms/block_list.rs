@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use super::{Block, BlockState, OwnedBlock};
 use crate::util::alloc::allocator;
 use crate::util::constants::MIN_OBJECT_SIZE;

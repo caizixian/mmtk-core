@@ -204,7 +204,7 @@ impl<VM: VMBinding> Immix<VM> {
     /// Prepare with unlog-bit operation.
     /// Some Immix-derived plans may need to set/clear unlog bits when preparing.
     pub(in crate::plan) fn prepare_inner(
-        &mut self,
+        &self,
         tls: VMWorkerThread,
         unlog_bits_op: UnlogBitsOperation,
     ) {
@@ -219,7 +219,7 @@ impl<VM: VMBinding> Immix<VM> {
     /// Release with unlog-bit operation.
     /// Some Immix-derived plans may need to set/clear unlog bits when releasing.
     pub(in crate::plan) fn release_inner(
-        &mut self,
+        &self,
         tls: VMWorkerThread,
         unlog_bits_op: UnlogBitsOperation,
     ) {
@@ -228,7 +228,7 @@ impl<VM: VMBinding> Immix<VM> {
         self.immix_space.release(true, unlog_bits_op);
     }
 
-    pub(in crate::plan) fn finish_pause(&mut self, tls: VMWorkerThread) -> bool {
+    pub(in crate::plan) fn finish_pause(&self, tls: VMWorkerThread) -> bool {
         self.last_gc_was_defrag
             .store(self.immix_space.end_of_gc(), Ordering::Relaxed);
         self.common.on_pause_end(tls);

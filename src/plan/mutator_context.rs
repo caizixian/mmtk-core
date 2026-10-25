@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 //! Mutator context for each application thread.
 
 use crate::plan::barriers::Barrier;

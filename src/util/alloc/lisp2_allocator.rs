@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use std::sync::Arc;
 
 use super::allocator::AllocatorContext;

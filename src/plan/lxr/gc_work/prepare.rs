@@ -10,9 +10,6 @@ pub struct FastRCPrepare;
 
 impl<VM: VMBinding> GCWork<VM> for FastRCPrepare {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        // `FastRCPrepare` runs in `WorkBucketStage::RCProcessIncs` concurrently with `ProcessIncs`
-        // packets holding `&LXR<VM>`, so it must use shared `&LXR<VM>` access rather than
-        // `mmtk.get_plan_mut()`.
         let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         lxr.prepare_fast_rc();
     }

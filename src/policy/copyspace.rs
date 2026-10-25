@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use crate::plan::tracing::{ObjectQueue, OptionObjectQueue};
 use crate::policy::copy_context::PolicyCopyContext;
 use crate::policy::gc_work::TRACE_KIND_TRANSITIVE_PIN;
@@ -100,7 +98,7 @@ impl<VM: VMBinding> SFT for CopySpace<VM> {
         worker: GCWorkerMutRef,
     ) -> ObjectReference {
         let worker = worker.into_mut::<VM>();
-        self.trace_object(queue, object, self.common.copy, worker)
+        self.trace_object(queue, object, self.common.copy.load(), worker)
     }
 
     fn debug_print_object_info(&self, object: ObjectReference) {
@@ -134,8 +132,8 @@ impl<VM: VMBinding> Space<VM> for CopySpace<VM> {
         panic!("copyspace only releases pages enmasse")
     }
 
-    fn set_copy_for_sft_trace(&mut self, semantics: Option<CopySemantics>) {
-        self.common.copy = semantics;
+    fn set_copy_for_sft_trace(&self, semantics: Option<CopySemantics>) {
+        self.common.copy.store(semantics);
     }
 
     fn enumerate_objects(&self, enumerator: &mut dyn ObjectEnumerator) {

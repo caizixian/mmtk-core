@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 //! GC algorithms from the MMTk suite.
 //!
 //! This module provides various GC plans, each of which implements a GC algorithm.

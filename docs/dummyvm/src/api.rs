@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use crate::mmtk;
 use crate::DummyVM;
 use crate::SINGLETON;

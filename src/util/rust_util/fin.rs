@@ -3,7 +3,6 @@
 //!
 //! Consumed by Wave 2B tracks (`s2-ms` free-list size classes, `s2-immix-malloc`, and `s2-runtime`
 //! `SFTMap` / `WorkBucketStage` tables).
-#![deny(unsafe_op_in_unsafe_fn)]
 #![allow(dead_code)]
 
 use core::ops::{Index, IndexMut};

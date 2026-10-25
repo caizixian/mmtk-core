@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use super::gc_work::SSGCWorkContext;
 use crate::plan::global::CommonPlan;
 use crate::plan::global::CreateGeneralPlanArgs;
@@ -74,17 +72,7 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
     }
 
     fn prepare(&mut self, tls: VMWorkerThread) {
-        self.common.prepare(tls, true);
-
-        self.hi
-            .store(!self.hi.load(Ordering::SeqCst), Ordering::SeqCst); // flip the semi-spaces
-                                                                       // prepare each of the collected regions
-        let hi = self.hi.load(Ordering::SeqCst);
-        self.copyspace0.prepare(hi);
-        self.copyspace1.prepare(!hi);
-        self.fromspace_mut()
-            .set_copy_for_sft_trace(Some(CopySemantics::DefaultCopy));
-        self.tospace_mut().set_copy_for_sft_trace(None);
+        self.prepare_shared(tls);
     }
 
     fn prepare_worker(&self, worker: &mut GCWorker<VM>) {
@@ -103,9 +91,7 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
-        self.common.release(tls, true);
-        // release the collected region
-        self.fromspace().release();
+        self.release_shared(tls);
     }
 
     fn collection_required(&self, space_full: bool, _space: Option<SpaceStats<Self::VM>>) -> bool {
@@ -188,14 +174,6 @@ impl<VM: VMBinding> SemiSpace<VM> {
         }
     }
 
-    pub fn tospace_mut(&mut self) -> &mut CopySpace<VM> {
-        if self.hi.load(Ordering::SeqCst) {
-            &mut self.copyspace1
-        } else {
-            &mut self.copyspace0
-        }
-    }
-
     pub fn fromspace(&self) -> &CopySpace<VM> {
         if self.hi.load(Ordering::SeqCst) {
             &self.copyspace0
@@ -204,11 +182,23 @@ impl<VM: VMBinding> SemiSpace<VM> {
         }
     }
 
-    pub fn fromspace_mut(&mut self) -> &mut CopySpace<VM> {
-        if self.hi.load(Ordering::SeqCst) {
-            &mut self.copyspace0
-        } else {
-            &mut self.copyspace1
-        }
+    pub(in crate::plan) fn prepare_shared(&self, tls: VMWorkerThread) {
+        self.common.prepare(tls, true);
+
+        self.hi
+            .store(!self.hi.load(Ordering::SeqCst), Ordering::SeqCst); // flip the semi-spaces
+                                                                       // prepare each of the collected regions
+        let hi = self.hi.load(Ordering::SeqCst);
+        self.copyspace0.prepare(hi);
+        self.copyspace1.prepare(!hi);
+        self.fromspace()
+            .set_copy_for_sft_trace(Some(CopySemantics::DefaultCopy));
+        self.tospace().set_copy_for_sft_trace(None);
+    }
+
+    pub(in crate::plan) fn release_shared(&self, tls: VMWorkerThread) {
+        self.common.release(tls, true);
+        // release the collected region
+        self.fromspace().release();
     }
 }

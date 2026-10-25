@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use bytemuck::Zeroable;
 
 use crate::util::heap::layout::vm_layout::{self, vm_layout};

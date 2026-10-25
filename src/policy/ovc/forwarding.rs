@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use crate::util::constants::{BYTES_IN_PAGE, BYTES_IN_WORD, LOG_BITS_IN_BYTE, LOG_BYTES_IN_WORD};
 use crate::util::heap::layout::vm_layout::BYTES_IN_CHUNK;
 use crate::util::linear_scan::Region;

@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use std::collections::HashSet;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -472,11 +470,7 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
             .filter(|chunk| self.address_in_space(chunk.start()))
     }
 
-    pub fn prepare(&mut self, full_heap: bool) {
-        self.prepare_shared(full_heap);
-    }
-
-    pub(crate) fn prepare_shared(&self, _full_heap: bool) {
+    pub fn prepare(&self, _full_heap: bool) {
         #[cfg(debug_assertions)]
         self.abandoned_in_gc.lock().unwrap().assert_empty();
 
@@ -493,11 +487,7 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
         self.scheduler.work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
     }
 
-    pub fn release(&mut self) {
-        self.release_shared();
-    }
-
-    pub(crate) fn release_shared(&self) {
+    pub fn release(&self) {
         let num_mutators = VM::VMActivePlan::number_of_mutators();
         self.pending_release_packets
             .store(num_mutators + 1, Ordering::SeqCst);

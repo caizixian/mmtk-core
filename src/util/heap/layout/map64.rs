@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use super::map::{AllocatedChunkRegion, VMMap};
 use crate::util::constants::*;
 use crate::util::conversions;

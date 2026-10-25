@@ -2,8 +2,6 @@
 //! customize the layout of slots and the behavior of loading and updating object references in
 //! slots.
 
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::{fmt::Debug, ops::Range};

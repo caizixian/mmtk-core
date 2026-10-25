@@ -87,7 +87,5 @@ mod int_array_freelist;
 mod raw_memory_freelist;
 
 pub use self::address::Address;
-pub use self::address::AlignedAddress;
-pub use self::address::NonZeroAddress;
 pub use self::address::ObjectReference;
 pub use self::opaque_pointer::*;

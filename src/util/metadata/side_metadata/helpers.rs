@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use super::ranges::BitOffset;
 use super::SideMetadataSpec;
 use crate::util::constants::LOG_BYTES_IN_PAGE;
@@ -510,6 +508,32 @@ pub(super) fn scan_non_zero_bits_in_slice(
     }
 }
 
+#[inline(always)]
+fn load_masked_atomic_byte(atom: &core::sync::atomic::AtomicU8, mask: u8) -> Option<u8> {
+    use core::sync::atomic::Ordering;
+    if atom.load(Ordering::Relaxed) & mask != 0 {
+        let b = atom.load(Ordering::Acquire) & mask;
+        if b != 0 {
+            return Some(b);
+        }
+    }
+    None
+}
+
+#[inline(always)]
+fn chunk8_any_relaxed(chunk: &[core::sync::atomic::AtomicU8]) -> bool {
+    use core::sync::atomic::Ordering;
+    (chunk[0].load(Ordering::Relaxed)
+        | chunk[1].load(Ordering::Relaxed)
+        | chunk[2].load(Ordering::Relaxed)
+        | chunk[3].load(Ordering::Relaxed)
+        | chunk[4].load(Ordering::Relaxed)
+        | chunk[5].load(Ordering::Relaxed)
+        | chunk[6].load(Ordering::Relaxed)
+        | chunk[7].load(Ordering::Relaxed))
+        != 0
+}
+
 /// Pure-safe forward atomic search over `&[AtomicU8]`, fast-skipping 8-byte zero runs with
 /// `Ordering::Relaxed` `AtomicU8` loads (never mixing atomic widths) and returning
 /// `(byte_offset, masked_acquire_byte)` for the first non-zero byte so the caller can drop `slice`
@@ -520,73 +544,96 @@ pub(crate) fn find_first_non_zero_atomic_byte(
     first_mask: u8,
     last_mask: u8,
 ) -> Option<(usize, u8)> {
-    use core::sync::atomic::Ordering;
     let len = slice.len();
     if len == 0 {
         return None;
     }
     if len == 1 {
-        let mask = first_mask & last_mask;
-        if slice[0].load(Ordering::Relaxed) & mask != 0 {
-            let b = slice[0].load(Ordering::Acquire) & mask;
-            if b != 0 {
-                return Some((0, b));
-            }
-        }
-        return None;
+        return load_masked_atomic_byte(&slice[0], first_mask & last_mask).map(|b| (0, b));
     }
-
     let start = if first_mask != 0xff {
-        if slice[0].load(Ordering::Relaxed) & first_mask != 0 {
-            let b = slice[0].load(Ordering::Acquire) & first_mask;
-            if b != 0 {
-                return Some((0, b));
-            }
+        if let Some(b) = load_masked_atomic_byte(&slice[0], first_mask) {
+            return Some((0, b));
         }
         1
     } else {
         0
     };
     let end = if last_mask != 0xff { len - 1 } else { len };
-
     let mid = &slice[start..end];
     let chunks = mid.chunks_exact(8);
     let rem = chunks.remainder();
     let rem_start = start + mid.len() - rem.len();
     for (chunk_idx, chunk) in chunks.enumerate() {
-        let any = chunk[0].load(Ordering::Relaxed)
-            | chunk[1].load(Ordering::Relaxed)
-            | chunk[2].load(Ordering::Relaxed)
-            | chunk[3].load(Ordering::Relaxed)
-            | chunk[4].load(Ordering::Relaxed)
-            | chunk[5].load(Ordering::Relaxed)
-            | chunk[6].load(Ordering::Relaxed)
-            | chunk[7].load(Ordering::Relaxed);
-        if any != 0 {
+        if chunk8_any_relaxed(chunk) {
             let base = start + chunk_idx * 8;
             for (i, atom) in chunk.iter().enumerate() {
-                if atom.load(Ordering::Relaxed) != 0 {
-                    let b = atom.load(Ordering::Acquire);
-                    if b != 0 {
-                        return Some((base + i, b));
-                    }
+                if let Some(b) = load_masked_atomic_byte(atom, 0xff) {
+                    return Some((base + i, b));
                 }
             }
         }
     }
     for (i, atom) in rem.iter().enumerate() {
-        if atom.load(Ordering::Relaxed) != 0 {
-            let b = atom.load(Ordering::Acquire);
-            if b != 0 {
-                return Some((rem_start + i, b));
+        if let Some(b) = load_masked_atomic_byte(atom, 0xff) {
+            return Some((rem_start + i, b));
+        }
+    }
+    if last_mask != 0xff {
+        if let Some(b) = load_masked_atomic_byte(&slice[len - 1], last_mask) {
+            return Some((len - 1, b));
+        }
+    }
+    None
+}
+
+/// Pure-safe backward atomic search over `&[AtomicU8]`, fast-skipping 8-byte zero runs in reverse
+/// with `Ordering::Relaxed` `AtomicU8` loads (never mixing atomic widths) and returning
+/// `(byte_offset, masked_acquire_byte)` for the highest-address non-zero byte so the caller can
+/// drop `slice` before invoking any callbacks or object-model queries.
+#[inline]
+pub(crate) fn find_last_non_zero_atomic_byte(
+    slice: &[core::sync::atomic::AtomicU8],
+    first_mask: u8,
+    last_mask: u8,
+) -> Option<(usize, u8)> {
+    let len = slice.len();
+    if len == 0 {
+        return None;
+    }
+    if len == 1 {
+        return load_masked_atomic_byte(&slice[0], first_mask & last_mask).map(|b| (0, b));
+    }
+    let end = if last_mask != 0xff {
+        if let Some(b) = load_masked_atomic_byte(&slice[len - 1], last_mask) {
+            return Some((len - 1, b));
+        }
+        len - 1
+    } else {
+        len
+    };
+    let start = if first_mask != 0xff { 1 } else { 0 };
+    let mid = &slice[start..end];
+    let rchunks = mid.rchunks_exact(8);
+    let rem = rchunks.remainder();
+    for (rev_idx, chunk) in rchunks.enumerate() {
+        if chunk8_any_relaxed(chunk) {
+            let chunk_start = end - (rev_idx + 1) * 8;
+            for (i, atom) in chunk.iter().enumerate().rev() {
+                if let Some(b) = load_masked_atomic_byte(atom, 0xff) {
+                    return Some((chunk_start + i, b));
+                }
             }
         }
     }
-
-    if last_mask != 0xff && slice[len - 1].load(Ordering::Relaxed) & last_mask != 0 {
-        let b = slice[len - 1].load(Ordering::Acquire) & last_mask;
-        if b != 0 {
-            return Some((len - 1, b));
+    for (i, atom) in rem.iter().enumerate().rev() {
+        if let Some(b) = load_masked_atomic_byte(atom, 0xff) {
+            return Some((start + i, b));
+        }
+    }
+    if first_mask != 0xff {
+        if let Some(b) = load_masked_atomic_byte(&slice[0], first_mask) {
+            return Some((0, b));
         }
     }
     None
@@ -826,6 +873,39 @@ mod tests {
             });
             assert_eq!(visited, vec![(0, 2), (0, 5), (11, 3), (29, 6)]);
         }
+
+        let atoms: [core::sync::atomic::AtomicU8; 32] =
+            core::array::from_fn(|i| core::sync::atomic::AtomicU8::new(buf[i]));
+        assert_eq!(find_first_non_zero_atomic_byte(&[], 0xff, 0xff), None);
+        assert_eq!(find_last_non_zero_atomic_byte(&[], 0xff, 0xff), None);
+        assert_eq!(
+            find_first_non_zero_atomic_byte(&atoms[..1], 0xff, 0b0000_0111),
+            Some((0, 0b0000_0101))
+        );
+        assert_eq!(
+            find_last_non_zero_atomic_byte(&atoms[..1], 0xff, 0b0000_0111),
+            Some((0, 0b0000_0101))
+        );
+        assert_eq!(
+            find_last_non_zero_atomic_byte(&atoms[..1], 0b1000_0000, 0xff),
+            None
+        );
+        assert_eq!(
+            find_first_non_zero_atomic_byte(&atoms[..30], 0b1111_1000, 0b0011_1111),
+            Some((0, 0b0010_0000))
+        );
+        assert_eq!(
+            find_last_non_zero_atomic_byte(&atoms[..30], 0b1111_1000, 0b0011_1111),
+            Some((11, 0b0000_1000))
+        );
+        assert_eq!(
+            find_last_non_zero_atomic_byte(&atoms[..30], 0b1111_1000, 0xff),
+            Some((29, 0b0100_0000))
+        );
+        assert_eq!(
+            find_last_non_zero_atomic_byte(&atoms[..11], 0b0010_0100, 0xff),
+            Some((0, 0b0010_0100))
+        );
     }
 
     #[test]

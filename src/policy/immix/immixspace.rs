@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use super::defrag::StatsForDefrag;
 use super::line::*;
 use super::{block::*, defrag::Defrag};
@@ -280,7 +278,7 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
     fn release_multiple_pages(&mut self, _start: Address) {
         panic!("immixspace only releases pages enmasse")
     }
-    fn set_copy_for_sft_trace(&mut self, _semantics: Option<CopySemantics>) {
+    fn set_copy_for_sft_trace(&self, _semantics: Option<CopySemantics>) {
         panic!("We do not use SFT to trace objects for Immix. set_copy_context() cannot be used.")
     }
 
@@ -564,7 +562,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.hooks.get().copied()
     }
 
-    pub(crate) fn prepare_rc_shared(&self, pause: Pause) {
+    pub fn prepare_rc(&self, pause: Pause) {
         // Initialize mark state for tracing
         if pause == Pause::Full || pause == Pause::InitialMark {
             // Update mark_state
@@ -593,11 +591,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
-    pub fn prepare_rc(&mut self, pause: Pause) {
-        self.prepare_rc_shared(pause);
-    }
-
-    pub(crate) fn release_rc_shared(&self) {
+    pub fn release_rc(&self) {
         self.flush_page_resource();
         self.rc.reset_inc_buffer_size();
         self.is_end_of_satb_or_full_gc
@@ -605,11 +599,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.reused_lines_consumed.store(0, Ordering::Relaxed);
     }
 
-    pub fn release_rc(&mut self) {
-        self.release_rc_shared();
-    }
-
-    pub(crate) fn prepare_shared(
+    pub(crate) fn prepare(
         &self,
         major_gc: bool,
         plan_stats: Option<StatsForDefrag>,
@@ -702,17 +692,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
-    pub(crate) fn prepare(
-        &mut self,
-        major_gc: bool,
-        plan_stats: Option<StatsForDefrag>,
-        unlog_bits_op: UnlogBitsOperation,
-    ) {
-        self.prepare_shared(major_gc, plan_stats, unlog_bits_op);
-    }
-
-    /// Release for the immix space using shared `&self` access.
-    pub(crate) fn release_shared(&self, major_gc: bool, unlog_bits_op: UnlogBitsOperation) {
+    /// Release for the immix space.
+    pub(crate) fn release(&self, major_gc: bool, unlog_bits_op: UnlogBitsOperation) {
         debug_assert!(!self.rc_enabled);
         if major_gc && !super::BLOCK_ONLY {
             // Update line_unavail_state for hole searching after this GC.
@@ -729,11 +710,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
         let work_packets = self.generate_sweep_tasks(unlog_bits_op);
         self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
-    }
-
-    /// Release for the immix space.
-    pub(crate) fn release(&mut self, major_gc: bool, unlog_bits_op: UnlogBitsOperation) {
-        self.release_shared(major_gc, unlog_bits_op);
     }
 
     /// This is called when a GC finished.

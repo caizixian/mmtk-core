@@ -117,42 +117,11 @@ impl<VM: VMBinding> Plan for StickyImmix<VM> {
     }
 
     fn prepare(&mut self, tls: crate::util::VMWorkerThread) {
-        if self.is_current_gc_nursery() {
-            // Prepare both large object space and immix space
-            self.immix.immix_space.prepare(
-                false,
-                Some(StatsForDefrag::new(self)),
-                // We don't do anything special to unlog bits during nursery GC
-                // because ProcessModBuf will set the unlog bits back.
-                UnlogBitsOperation::NoOp,
-            );
-            self.immix.common.los.prepare(false);
-        } else {
-            self.full_heap_gc_count.lock().unwrap().inc();
-            self.immix.prepare_inner(
-                tls,
-                // We will reconstruct unlog bits during tracing.
-                UnlogBitsOperation::BulkClear,
-            );
-        }
+        self.prepare_shared(tls);
     }
 
     fn release(&mut self, tls: crate::util::VMWorkerThread) {
-        if self.is_current_gc_nursery() {
-            self.immix.immix_space.release(
-                false,
-                // We don't do anything special to unlog bits during nursery GC
-                // because ProcessModBuf has set the unlog bits back.
-                UnlogBitsOperation::NoOp,
-            );
-            self.immix.common.los.release(false);
-        } else {
-            self.immix.release_inner(
-                tls,
-                // We reconstructred unlog bits during tracing.  Keep them.
-                UnlogBitsOperation::NoOp,
-            );
-        }
+        self.release_shared(tls);
     }
 
     fn on_pause_end(
@@ -394,8 +363,47 @@ impl<VM: VMBinding> StickyImmix<VM> {
         &self.immix.immix_space
     }
 
+    pub(in crate::plan) fn prepare_shared(&self, tls: crate::util::VMWorkerThread) {
+        if self.is_current_gc_nursery() {
+            // Prepare both large object space and immix space
+            self.immix.immix_space.prepare(
+                false,
+                Some(StatsForDefrag::new(self)),
+                // We don't do anything special to unlog bits during nursery GC
+                // because ProcessModBuf will set the unlog bits back.
+                UnlogBitsOperation::NoOp,
+            );
+            self.immix.common.los.prepare(false);
+        } else {
+            self.full_heap_gc_count.lock().unwrap().inc();
+            self.immix.prepare_inner(
+                tls,
+                // We will reconstruct unlog bits during tracing.
+                UnlogBitsOperation::BulkClear,
+            );
+        }
+    }
+
+    pub(in crate::plan) fn release_shared(&self, tls: crate::util::VMWorkerThread) {
+        if self.is_current_gc_nursery() {
+            self.immix.immix_space.release(
+                false,
+                // We don't do anything special to unlog bits during nursery GC
+                // because ProcessModBuf has set the unlog bits back.
+                UnlogBitsOperation::NoOp,
+            );
+            self.immix.common.los.release(false);
+        } else {
+            self.immix.release_inner(
+                tls,
+                // We reconstructred unlog bits during tracing.  Keep them.
+                UnlogBitsOperation::NoOp,
+            );
+        }
+    }
+
     pub(in crate::plan) fn finish_pause(
-        &mut self,
+        &self,
         tls: crate::util::opaque_pointer::VMWorkerThread,
         next_gc_full_heap: Option<bool>,
     ) -> bool {

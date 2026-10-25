@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use super::layout::vm_layout::{BYTES_IN_CHUNK, LOG_BYTES_IN_CHUNK, PAGES_IN_CHUNK};
 use super::layout::VMMap;
 use super::pageresource::{CommonPageResource, PRAllocFail, PRAllocResult};

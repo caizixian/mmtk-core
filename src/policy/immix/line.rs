@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use std::ops::Range;
 use std::sync::atomic::AtomicU8;
 

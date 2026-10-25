@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::conversions::raw_is_aligned;
 use crate::util::heap::layout::vm_layout::*;
