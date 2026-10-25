@@ -45,31 +45,7 @@ const VO_META_BYTES_PER_CHUNK: usize = BYTES_IN_CHUNK >> (VO_REGION_SHIFT + 3);
 const _: () = assert!((1usize << VO_REGION_SHIFT) == ObjectReference::ALIGNMENT);
 const _: () = assert!(VO_META_BYTES_PER_CHUNK % 16 == 0);
 
-struct ChunkSweepLease<'a> {
-    sweeping_chunks: &'a Mutex<HashSet<Chunk>>,
-    chunk: Chunk,
-}
-
-impl<'a> ChunkSweepLease<'a> {
-    fn acquire(sweeping_chunks: &'a Mutex<HashSet<Chunk>>, chunk: Chunk) -> Self {
-        let inserted = sweeping_chunks.lock().unwrap().insert(chunk);
-        assert!(
-            inserted,
-            "Concurrent sweep attempted on MallocSpace chunk {:?}",
-            chunk
-        );
-        Self {
-            sweeping_chunks,
-            chunk,
-        }
-    }
-}
-
-impl Drop for ChunkSweepLease<'_> {
-    fn drop(&mut self) {
-        self.sweeping_chunks.lock().unwrap().remove(&self.chunk);
-    }
-}
+use super::super::ChunkSweepLease;
 
 /// This space uses malloc to get new memory, and performs mark-sweep for the memory.
 pub struct MallocSpace<VM: VMBinding> {
@@ -672,7 +648,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
             GcStatus::InPause,
             "MallocSpace::sweep_allocated_chunk must execute during a STW GC pause"
         );
-        let _lease = ChunkSweepLease::acquire(&self.sweeping_chunks, chunk);
+        let _lease = ChunkSweepLease::acquire(&self.sweeping_chunks, chunk, "MallocSpace");
 
         let chunk_start = chunk.start();
         let chunk_end = chunk_start + BYTES_IN_CHUNK;
@@ -744,11 +720,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
                     // `unset_vo_bit(object)` cleared the VO bit first so `obj_start` can never be
                     // visited or freed again.
                     unsafe {
-                        if is_offset {
-                            offset_free(obj_start);
-                        } else {
-                            free(obj_start.to_mut_ptr());
-                        }
+                        free_allocation(obj_start, is_offset);
                     }
                     self.active_bytes.fetch_sub(bytes, Ordering::SeqCst);
                     #[cfg(debug_assertions)]

@@ -353,8 +353,7 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
 
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
             .add(StopMutators::<ConcurrentImmixGCWorkContext<VM>>::new());
-        scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(Prepare::<ConcurrentImmixGCWorkContext<VM>>::new(self));
+        Prepare::<ConcurrentImmixGCWorkContext<VM>>::schedule(scheduler);
     }
 
     fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
@@ -364,8 +363,7 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
             .add(StopMutators::<ConcurrentImmixGCWorkContext<VM>>::new_no_scan_roots());
 
-        scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<ConcurrentImmixGCWorkContext<VM>>::new(self));
+        Release::<ConcurrentImmixGCWorkContext<VM>>::schedule(scheduler);
 
         // Sanity
         #[cfg(feature = "sanity")]

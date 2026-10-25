@@ -12,7 +12,9 @@ pub fn set_vma_name(start: Address, size: usize, annotation: &MmapAnnotation) {
     // formatted `anno_cstr` being longer than 80 bytes including the trailing `'\0'`.  But
     // since this prctl is used for debugging, we log the error instead of panicking.
     let anno_str = annotation.to_string();
-    let anno_cstr = std::ffi::CString::new(anno_str).unwrap();
+    let Ok(anno_cstr) = std::ffi::CString::new(anno_str) else {
+        return;
+    };
     let result = unix_common::wrap_libc_call(
         // SAFETY: `PR_SET_VMA` + `PR_SET_VMA_ANON_NAME` expects `(unsigned long start,
         // unsigned long size, const char *name)`. `anno_cstr` is a valid NUL-terminated `CString`

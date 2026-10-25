@@ -47,10 +47,6 @@ impl<VM: VMBinding> BucketQueue<VM> {
         self.active_queue().len()
     }
 
-    pub(super) fn steal(&self) -> Steal<Box<dyn GCWork<VM>>> {
-        self.active_queue().steal()
-    }
-
     fn steal_batch_and_pop(
         &self,
         dest: &Worker<Box<dyn GCWork<VM>>>,
@@ -393,15 +389,6 @@ impl<VM: VMBinding> WorkBucket<VM> {
         } else {
             false
         }
-    }
-
-    pub fn update(&self, scheduler: &GCWorkScheduler<VM>) -> bool {
-        if self.can_open(scheduler) {
-            debug!("Opening work bucket: {:?}", self.stage);
-            self.open();
-            return true;
-        }
-        false
     }
 
     pub fn maybe_schedule_sentinel(&self) -> bool {

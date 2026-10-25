@@ -68,16 +68,16 @@ impl<VM: VMBinding> GCWork<VM> for ScheduleCollection {
 
 /// The global GC Preparation Work.
 ///
-/// Constructing `Prepare::<C>::new(plan)` registers a pre-open hook on
-/// [`WorkBucketStage::Prepare`] so `Plan::prepare` executes inside `WorkerMonitor` while all
-/// workers are parked right before `WorkBucketStage::Prepare` opens.
+/// [`Prepare::schedule`] registers a pre-open hook on [`WorkBucketStage::Prepare`] and enqueues
+/// the marker packet so `Plan::prepare` executes inside `WorkerMonitor` while all workers are
+/// parked right before `WorkBucketStage::Prepare` opens.
 pub struct Prepare<C: GCWorkContext> {
     _p: PhantomData<fn() -> C>,
 }
 
 impl<C: GCWorkContext> Prepare<C> {
-    pub fn new(plan: &C::PlanType) -> Self {
-        plan.base().scheduler.work_buckets[WorkBucketStage::Prepare].set_pre_open_hook(
+    pub(crate) fn schedule(scheduler: &GCWorkScheduler<C::VM>) {
+        scheduler.work_buckets[WorkBucketStage::Prepare].set_pre_open_hook(
             move |mmtk, tls, parked| {
                 trace!("Prepare Global");
                 crate::plan::prepare_global::<C::VM>(mmtk, tls, parked);
@@ -103,7 +103,7 @@ impl<C: GCWorkContext> Prepare<C> {
                 }
             },
         );
-        Self { _p: PhantomData }
+        scheduler.work_buckets[WorkBucketStage::Prepare].add(Self { _p: PhantomData });
     }
 }
 
@@ -145,16 +145,16 @@ impl<VM: VMBinding> GCWork<VM> for PrepareCollector {
 
 /// The global GC release Work.
 ///
-/// Constructing `Release::<C>::new(plan)` registers a pre-open hook on
-/// [`WorkBucketStage::Release`] so `Plan::release` executes inside `WorkerMonitor` while all
-/// workers are parked right before `WorkBucketStage::Release` opens.
+/// [`Release::schedule`] registers a pre-open hook on [`WorkBucketStage::Release`] and enqueues
+/// the marker packet so `Plan::release` executes inside `WorkerMonitor` while all workers are
+/// parked right before `WorkBucketStage::Release` opens.
 pub struct Release<C: GCWorkContext> {
     _p: PhantomData<fn() -> C>,
 }
 
 impl<C: GCWorkContext> Release<C> {
-    pub fn new(plan: &C::PlanType) -> Self {
-        plan.base().scheduler.work_buckets[WorkBucketStage::Release].set_pre_open_hook(
+    pub(crate) fn schedule(scheduler: &GCWorkScheduler<C::VM>) {
+        scheduler.work_buckets[WorkBucketStage::Release].set_pre_open_hook(
             move |mmtk, tls, parked| {
                 trace!("Release Global");
                 mmtk.gc_trigger.policy.on_gc_release(mmtk);
@@ -176,11 +176,11 @@ impl<C: GCWorkContext> Release<C> {
                 }
             },
         );
-        Self { _p: PhantomData }
+        scheduler.work_buckets[WorkBucketStage::Release].add(Self { _p: PhantomData });
     }
 }
 
-impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
+impl<C: GCWorkContext> GCWork<C::VM> for Release<C> {
     fn do_work(&mut self, _worker: &mut GCWorker<C::VM>, _mmtk: &'static MMTK<C::VM>) {}
 }
 

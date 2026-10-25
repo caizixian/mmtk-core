@@ -29,13 +29,7 @@ struct MonotonePageResourceSync {
 }
 
 pub enum MonotonePageResourceConditional {
-    Contiguous {
-        start: Address,
-        /// Current frontier of zeroing, in a separate zeroing thread.
-        zeroing_cursor: Address,
-        /// Current limit of zeroing. If zeroingCursor < zeroingSentinel, zeroing is still happening.
-        zeroing_sentinel: Address,
-    },
+    Contiguous { start: Address },
     Discontiguous,
 }
 
@@ -158,11 +152,7 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
                 cursor: start,
                 current_chunk: chunk_align_down(start),
                 sentinel,
-                conditional: MonotonePageResourceConditional::Contiguous {
-                    start,
-                    zeroing_cursor: sentinel,
-                    zeroing_sentinel: start,
-                },
+                conditional: MonotonePageResourceConditional::Contiguous { start },
             }),
             _p: PhantomData,
         }

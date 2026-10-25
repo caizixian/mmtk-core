@@ -153,11 +153,7 @@ impl<VM: VMBinding> Trace for SFTTrace<VM> {
         let worker = GCWorkerMutRef::new(worker);
 
         // Invoke trace object on sft
-        // SAFETY: `SFTTrace` only runs during GC after `MMTK::new` has initialized `SFT_MAP`, and
-        // `object` is a valid heap `ObjectReference` whose raw address lies within the mapped
-        // address range covered by `SFT_MAP` (which is only updated when spaces map new chunks
-        // outside tracing or under space synchronization).
-        let sft = unsafe { crate::mmtk::SFT_MAP.get_unchecked(object.to_raw_address()) };
+        let sft = crate::mmtk::SFT_MAP.get_checked(object.to_raw_address());
 
         // Because `sft.sft_trace_object` cannot have generic parameters, we can't pass `queue`
         // directly to it.  Instead we let `sft_trace_object` enqueue to this `tmp_queue` and

@@ -201,6 +201,14 @@ impl<VM: VMBinding> Immix<VM> {
         self.last_gc_was_defrag.store(defrag, order)
     }
 
+    pub(in crate::plan) fn prepare_shared(&self, tls: VMWorkerThread) {
+        self.prepare_inner(tls, UnlogBitsOperation::NoOp);
+    }
+
+    pub(in crate::plan) fn release_shared(&self, tls: VMWorkerThread) {
+        self.release_inner(tls, UnlogBitsOperation::NoOp);
+    }
+
     /// Prepare with unlog-bit operation.
     /// Some Immix-derived plans may need to set/clear unlog bits when preparing.
     pub(in crate::plan) fn prepare_inner(

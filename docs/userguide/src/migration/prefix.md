@@ -32,6 +32,30 @@ Notes for the mmtk-core developers:
 
 ## 0.34.0
 
+### `SideMetadataSpec::{load_byte, scan_non_zero_values}` are now `unsafe fn`
+
+```admonish tldr
+`util::metadata::side_metadata::SideMetadataSpec::load_byte` and
+`SideMetadataSpec::scan_non_zero_values` are now `pub unsafe fn`, matching
+`SideMetadataSpec::{load, store, find_prev_non_zero_value, find_next_non_zero_value}`. VM bindings
+that call either non-atomic method directly must wrap calls in `unsafe` after ensuring the target
+side-metadata range is mapped and free of concurrent mutations, or use `SideMetadataSpec`'s atomic
+accessors (`load_atomic`, `store_atomic`) where concurrent access is possible.
+```
+
+API changes:
+
+*   struct `util::metadata::side_metadata::SideMetadataSpec`
+    -   `load_byte(&self, data_addr: Address) -> u8` is now `pub unsafe fn`.
+        +   Callers must ensure the side-metadata byte for `data_addr` is mapped, initialized, and
+            not concurrently modified (including adjacent regions sharing the byte).
+        +   Prefer `load_atomic::<u8>(data_addr, order)` when reading a single spec entry
+            concurrently.
+    -   `scan_non_zero_values<T>(&self, data_start_addr: Address, data_end_addr: Address, visit_data: &mut impl FnMut(Address))` is now `pub unsafe fn`.
+        +   Callers must ensure the side-metadata entries covering `[data_start_addr, data_end_addr)`
+            are mapped, initialized, and not mutated concurrently (including from inside
+            `visit_data`).
+
 ### `#[repr(C)]` struct layout updates in `FreeListAllocator` and `BlockList`
 
 ```admonish tldr

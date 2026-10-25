@@ -88,8 +88,7 @@ impl<VM: VMBinding> Plan for OVC<VM> {
             .add(StopMutators::<OVCWorkContext<VM>>::new());
 
         // Prepare global/collectors/mutators
-        scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(Prepare::<OVCWorkContext<VM>>::new(self));
+        Prepare::<OVCWorkContext<VM>>::schedule(scheduler);
 
         scheduler.work_buckets[WorkBucketStage::CalculateForwarding].add(GenerateWork::new(
             &self.ovc_space,
@@ -109,8 +108,7 @@ impl<VM: VMBinding> Plan for OVC<VM> {
         ));
 
         // Release global/collectors/mutators
-        scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<OVCWorkContext<VM>>::new(self));
+        Release::<OVCWorkContext<VM>>::schedule(scheduler);
 
         // Reference processing
         if !*self.base().options.no_reference_types {

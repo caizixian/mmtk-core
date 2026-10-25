@@ -31,13 +31,19 @@ pub(crate) fn unreachable_prepare_func<VM: VMBinding>(
 /// An mutator prepare implementation for plans that use [`crate::plan::global::CommonPlan`].
 #[allow(unused_variables)]
 pub(crate) fn common_prepare_func<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
-    // Prepare the free list allocator used for non moving
+    // Non-moving spaces in `CommonPlan` are only prepared/released on full-heap collections.
     #[cfg(feature = "marksweep_as_nonmoving")]
-    mutator
-        .allocator_downcast_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(
-            AllocationSemantics::NonMoving,
-        )
-        .prepare();
+    if !mutator
+        .plan
+        .generational()
+        .is_some_and(|g| g.is_current_gc_nursery())
+    {
+        mutator
+            .allocator_downcast_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(
+                AllocationSemantics::NonMoving,
+            )
+            .prepare();
+    }
 }
 
 /// A place-holder implementation for `MutatorConfig::release_func` that should not be called.
@@ -54,21 +60,33 @@ pub(crate) fn unreachable_release_func<VM: VMBinding>(
 pub(crate) fn common_release_func<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
     cfg_if::cfg_if! {
         if #[cfg(feature = "marksweep_as_nonmoving")] {
-            // Release the free list allocator used for non moving
-            mutator
-                .allocator_downcast_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(
-                    AllocationSemantics::NonMoving,
-                )
-                .release();
+            // Release the free list allocator used for non moving on full-heap collections.
+            if !mutator
+                .plan
+                .generational()
+                .is_some_and(|g| g.is_current_gc_nursery())
+            {
+                mutator
+                    .allocator_downcast_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(
+                        AllocationSemantics::NonMoving,
+                    )
+                    .release();
+            }
         } else if #[cfg(feature = "immortal_as_nonmoving")] {
-            // Do nothig for the bump pointer allocator
+            // Do nothing for the bump pointer allocator
         } else {
             // Reset the Immix allocator
-            mutator
-                .allocator_downcast_mut_for_semantic::<crate::util::alloc::ImmixAllocator<VM>>(
-                    AllocationSemantics::NonMoving,
-                )
-                .reset();
+            if !mutator
+                .plan
+                .generational()
+                .is_some_and(|g| g.is_current_gc_nursery())
+            {
+                mutator
+                    .allocator_downcast_mut_for_semantic::<crate::util::alloc::ImmixAllocator<VM>>(
+                        AllocationSemantics::NonMoving,
+                    )
+                    .reset();
+            }
         }
     }
 }

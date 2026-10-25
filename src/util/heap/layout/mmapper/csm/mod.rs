@@ -1,5 +1,5 @@
 use crate::util::constants::LOG_BYTES_IN_PAGE;
-use crate::util::conversions::raw_is_aligned;
+use crate::util::conversions::{self, raw_is_aligned};
 use crate::util::heap::layout::vm_layout::*;
 use crate::util::heap::layout::Mmapper;
 use crate::util::os::*;
@@ -16,16 +16,25 @@ type ChosenMapStateStorage = byte_map_storage::ByteMapStateStorage;
 #[cfg(target_pointer_width = "64")]
 type ChosenMapStateStorage = two_level_storage::TwoLevelStateStorage;
 
-/// A range of whole chunks.  Always aligned.
+/// A range of whole chunks (`[start_chunk, start_chunk + chunk_count)`), indexed by chunk number
+/// so ranges reaching the top of a 32-bit address space (`2^32`, chunk `1023`) never overflow
+/// `Address` / `usize`.
 ///
 /// This type is used internally by the chunk state mmapper and its storage backends.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ChunkRange {
-    start: Address,
-    bytes: usize,
+    start_chunk: usize,
+    chunk_count: usize,
 }
 
 impl ChunkRange {
+    fn new(start_chunk: usize, chunk_count: usize) -> Self {
+        Self {
+            start_chunk,
+            chunk_count,
+        }
+    }
+
     fn new_aligned(start: Address, bytes: usize) -> Self {
         debug_assert!(
             start.is_aligned_to(BYTES_IN_CHUNK),
@@ -35,35 +44,69 @@ impl ChunkRange {
             raw_is_aligned(bytes, BYTES_IN_CHUNK),
             "bytes 0x{bytes:x} is not a multiple of chunks"
         );
-        Self { start, bytes }
+        if bytes > 0 {
+            assert!(
+                start.as_usize().checked_add(bytes - 1).is_some(),
+                "ChunkRange::new_aligned address range overflow: {start} + 0x{bytes:x}"
+            );
+        }
+        Self {
+            start_chunk: start.chunk_index(),
+            chunk_count: bytes >> LOG_BYTES_IN_CHUNK,
+        }
     }
 
     fn new_unaligned(start: Address, bytes: usize) -> Self {
-        let start_aligned = start.align_down(BYTES_IN_CHUNK);
-        let end_aligned = (start + bytes).align_up(BYTES_IN_CHUNK);
-        Self::new_aligned(start_aligned, end_aligned - start_aligned)
+        if bytes == 0 {
+            return Self {
+                start_chunk: start.chunk_index(),
+                chunk_count: 0,
+            };
+        }
+        let last_byte = start
+            .as_usize()
+            .checked_add(bytes - 1)
+            .expect("ChunkRange::new_unaligned address range overflow");
+        let start_chunk = start.chunk_index();
+        let last_chunk = last_byte >> LOG_BYTES_IN_CHUNK;
+        Self {
+            start_chunk,
+            chunk_count: last_chunk - start_chunk + 1,
+        }
     }
 
-    fn limit(&self) -> Address {
-        self.start + self.bytes
+    fn start_address(&self) -> Address {
+        conversions::chunk_index_to_address(self.start_chunk)
     }
 
-    fn is_within_limit(&self, limit: Address) -> bool {
-        self.limit() <= limit
+    fn bytes(&self) -> usize {
+        self.chunk_count
+            .checked_mul(BYTES_IN_CHUNK)
+            .expect("ChunkRange::bytes overflowed usize")
+    }
+
+    fn end_chunk(&self) -> usize {
+        self.start_chunk + self.chunk_count
+    }
+
+    fn is_within_limit(&self, max_chunks: usize) -> bool {
+        self.end_chunk() <= max_chunks
     }
 
     fn is_empty(&self) -> bool {
-        self.bytes == 0
+        self.chunk_count == 0
     }
 
     fn is_single_chunk(&self) -> bool {
-        self.bytes == BYTES_IN_CHUNK
+        self.chunk_count == 1
     }
 }
 
 impl std::fmt::Display for ChunkRange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}-{}", self.start, self.limit())
+        let start = (self.start_chunk as u64) << LOG_BYTES_IN_CHUNK;
+        let limit = (self.end_chunk() as u64) << LOG_BYTES_IN_CHUNK;
+        write!(f, "{start:#x}-{limit:#x}")
     }
 }
 
@@ -128,8 +171,7 @@ impl ChunkStateMmapper {
         anno: &MmapAnnotation,
     ) -> MmapResult<()> {
         let range = ChunkRange::new_aligned(start, bytes);
-        let mappable_limit = self.mappable_limit();
-        if !range.is_within_limit(mappable_limit) {
+        if !range.is_within_limit(self.mappable_chunks()) {
             let _ = OS::munmap(start, bytes);
             return Err(MmapError::new(
                 start,
@@ -151,16 +193,8 @@ impl ChunkStateMmapper {
             })
     }
 
-    fn mappable_limit(&self) -> Address {
-        let log_mappable = self.storage.log_mappable_bytes() as u32;
-        if log_mappable < usize::BITS {
-            // SAFETY: `log_mappable < usize::BITS` guarantees `1usize << log_mappable` does not
-            // overflow, and `Address::from_usize` only constructs the exclusive upper-bound
-            // virtual address sentinel for range comparisons without dereferencing it.
-            unsafe { Address::from_usize(1usize << log_mappable) }
-        } else {
-            Address::MAX
-        }
+    fn mappable_chunks(&self) -> usize {
+        1usize << (self.storage.log_mappable_bytes() as usize - LOG_BYTES_IN_CHUNK)
     }
 
     #[cfg(test)]
@@ -199,8 +233,8 @@ impl Mmapper for ChunkStateMmapper {
 
         self.storage
             .bulk_transition_state(range, |group_range, state| {
-                let group_start: Address = group_range.start;
-                let group_bytes = group_range.bytes;
+                let group_start = group_range.start_address();
+                let group_bytes = group_range.bytes();
 
                 match state {
                     MapState::Unmapped => {
@@ -279,8 +313,8 @@ impl Mmapper for ChunkStateMmapper {
 
         self.storage
             .bulk_transition_state(range, |group_range, state| {
-                let group_start: Address = group_range.start;
-                let group_bytes = group_range.bytes;
+                let group_start = group_range.start_address();
+                let group_bytes = group_range.bytes();
 
                 match state {
                     MapState::Unmapped => {

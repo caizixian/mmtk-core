@@ -814,8 +814,7 @@ impl<VM: VMBinding> LXR<VM> {
         // Prepare global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(FastRCPrepare);
         // Release global/collectors/mutators
-        scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<LXRGCWorkContext<VM>>::new(self));
+        Release::<LXRGCWorkContext<VM>>::schedule(scheduler);
     }
 
     fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
@@ -824,10 +823,8 @@ impl<VM: VMBinding> LXR<VM> {
         self.process_prev_roots(scheduler);
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
             .add(StopMutators::<LXRGCWorkContext<VM>>::new_with_flush());
-        scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(Prepare::<LXRGCWorkContext<VM>>::new(self));
-        scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<LXRGCWorkContext<VM>>::new(self));
+        Prepare::<LXRGCWorkContext<VM>>::schedule(scheduler);
+        Release::<LXRGCWorkContext<VM>>::schedule(scheduler);
     }
 
     fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
@@ -837,10 +834,8 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
             .add(StopMutators::<LXRGCWorkContext<VM>>::new_with_flush());
 
-        scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(Prepare::<LXRGCWorkContext<VM>>::new(self));
-        scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<LXRGCWorkContext<VM>>::new(self));
+        Prepare::<LXRGCWorkContext<VM>>::schedule(scheduler);
+        Release::<LXRGCWorkContext<VM>>::schedule(scheduler);
     }
 
     fn schedule_emergency_full_heap_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
@@ -853,11 +848,9 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
             .add(StopMutators::<LXRGCWorkContext<VM>>::new_with_flush());
         // Prepare global/collectors/mutators
-        scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(Prepare::<LXRGCWorkContext<VM>>::new(self));
+        Prepare::<LXRGCWorkContext<VM>>::schedule(scheduler);
         // Release global/collectors/mutators
-        scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<LXRGCWorkContext<VM>>::new(self));
+        Release::<LXRGCWorkContext<VM>>::schedule(scheduler);
     }
 
     fn process_prev_roots(&self, scheduler: &GCWorkScheduler<VM>) {

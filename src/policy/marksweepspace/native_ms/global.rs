@@ -35,31 +35,7 @@ use crate::{
 #[cfg(feature = "vo_bit")]
 use crate::util::Address;
 
-struct ChunkSweepLease<'a> {
-    sweeping_chunks: &'a Mutex<HashSet<Chunk>>,
-    chunk: Chunk,
-}
-
-impl<'a> ChunkSweepLease<'a> {
-    fn acquire(sweeping_chunks: &'a Mutex<HashSet<Chunk>>, chunk: Chunk) -> Self {
-        let inserted = sweeping_chunks.lock().unwrap().insert(chunk);
-        assert!(
-            inserted,
-            "Concurrent sweep attempted on MarkSweepSpace chunk {:?}",
-            chunk
-        );
-        Self {
-            sweeping_chunks,
-            chunk,
-        }
-    }
-}
-
-impl Drop for ChunkSweepLease<'_> {
-    fn drop(&mut self) {
-        self.sweeping_chunks.lock().unwrap().remove(&self.chunk);
-    }
-}
+use super::super::ChunkSweepLease;
 
 /// The result for `MarkSweepSpace.acquire_block()`. `MarkSweepSpace` will attempt
 /// to allocate from abandoned blocks first. If none found, it will get a new block
@@ -665,7 +641,7 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
             0,
             "MarkSweepSpace::sweep_allocated_chunk requires all release packets to finish first"
         );
-        let _lease = ChunkSweepLease::acquire(&self.sweeping_chunks, chunk);
+        let _lease = ChunkSweepLease::acquire(&self.sweeping_chunks, chunk, "MarkSweepSpace");
         assert!(
             self.chunk_map.is_allocated_checked(chunk) && self.chunk_map.get(chunk).is_some(),
             "MarkSweepSpace::sweep_allocated_chunk: chunk {:?} is not allocated in space {}",

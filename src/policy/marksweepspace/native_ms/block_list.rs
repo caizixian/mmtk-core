@@ -402,28 +402,11 @@ pub(crate) fn new_empty_block_lists() -> BlockLists {
     BlockLists::new()
 }
 
-/// Returns how many OS pages the block lists use.
-#[allow(unused)]
-pub(crate) fn pages_used_by_blocklists(lists: &BlockLists) -> usize {
-    let mut pages = 0;
-    for bin in 1..=MAX_BIN {
-        for _block in lists[bin].iter() {
-            pages += Block::BYTES >> crate::util::constants::LOG_BYTES_IN_PAGE;
-        }
-    }
-    pages
-}
-
 /// Align a byte size to a size in machine words
 /// i.e. byte size == `wsize*sizeof(void*)`
 /// adapted from _mi_wsize_from_size in mimalloc
 fn mi_wsize_from_size(size: usize) -> usize {
     size.div_ceil(MI_INTPTR_SIZE)
-}
-
-pub fn mi_bin<VM: VMBinding>(size: usize, align: usize) -> usize {
-    let size = allocator::get_maximum_aligned_size::<VM>(size, align);
-    mi_bin_from_size(size)
 }
 
 /// Compute the bounded [`BinIndex`] (`Fin<49>`, `1 <= bin <= MAX_BIN`) for `(size, align)`,

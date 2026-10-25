@@ -267,29 +267,20 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 // benignly overset unlog bits for adjacent slots in the same 64-byte window.
                 let heap_bytes_per_unlog_byte =
                     VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC.heap_bytes_per_unlog_byte();
-                let aligned_start = start.align_down(heap_bytes_per_unlog_byte);
+                let mut cursor = start.align_down(heap_bytes_per_unlog_byte);
                 let aligned_end = (start + size).align_up(heap_bytes_per_unlog_byte);
-                let mut meta = crate::util::metadata::side_metadata::address_to_meta_address(
-                    &Self::UNLOG_BITS,
-                    aligned_start,
-                );
-                let meta_end = crate::util::metadata::side_metadata::address_to_meta_address(
-                    &Self::UNLOG_BITS,
-                    aligned_end,
-                );
-                while meta < meta_end {
-                    // SAFETY: `o` resides in a single mapped Immix block (`Block::BYTES >= 32 KiB`,
-                    // a multiple of `heap_bytes_per_unlog_byte`), so every side-metadata byte in
-                    // `[meta, meta_end)` is mapped and 1-byte aligned for `AtomicU8`. Mutators are
-                    // stopped during `ProcessIncs`, and all concurrent `ProcessIncs` updates to
-                    // Immix `UNLOG_BITS` (`in_place_promotion` and `unlog_and_load_rc_object`) use
-                    // `AtomicU8` stores of `0xff`, avoiding both data races and mixed-size atomic
-                    // accesses even when nursery objects occupy recycled lines adjacent to mature
-                    // objects.
+                while cursor < aligned_end {
+                    // SAFETY: `Self::UNLOG_BITS` has `log_num_of_bits == 0 < 3`, and `o` resides in
+                    // a single mapped Immix block (`Block::BYTES >= 32 KiB`, a multiple of
+                    // `heap_bytes_per_unlog_byte`), so every side-metadata byte covering
+                    // `[cursor, aligned_end)` is non-null, mapped, and initialized. Mutators are
+                    // stopped during `ProcessIncs`, all concurrent `ProcessIncs` updates to Immix
+                    // `UNLOG_BITS` use `AtomicU8` (`set_raw_byte_atomic`), and over-setting
+                    // adjacent slot bits in the same byte to `1` (`UNLOGGED_VALUE`) is benign.
                     unsafe {
-                        meta.atomic_store::<std::sync::atomic::AtomicU8>(0xffu8, Ordering::Relaxed);
+                        Self::UNLOG_BITS.set_raw_byte_atomic(cursor, Ordering::Relaxed);
                     }
-                    meta += 1usize;
+                    cursor += heap_bytes_per_unlog_byte;
                 }
             }
         }

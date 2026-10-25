@@ -306,31 +306,31 @@ impl<B: Region> BlockPool<B> {
         if self.is_empty() {
             return None;
         }
-        let head_global_freed_blocks = self.head_global_freed_blocks.upgradeable_read();
-        if let Some(block) = head_global_freed_blocks.as_ref().and_then(|q| q.pop()) {
-            self.count.fetch_sub(1, Ordering::SeqCst);
-            Some(block)
-        } else {
-            let mut global_freed_blocks = self.global_freed_blocks.write();
-            // Retry fast-alloc
+        {
+            let head_global_freed_blocks = self.head_global_freed_blocks.read();
             if let Some(block) = head_global_freed_blocks.as_ref().and_then(|q| q.pop()) {
                 self.count.fetch_sub(1, Ordering::SeqCst);
                 return Some(block);
             }
-            // Get a new list of blocks for allocation
-            let blocks = global_freed_blocks.pop()?;
-            let block = blocks.pop().unwrap();
-            if !blocks.is_empty() {
-                let mut head_global_freed_blocks = head_global_freed_blocks.upgrade();
-                debug_assert!(head_global_freed_blocks
-                    .as_ref()
-                    .map(|blocks| blocks.is_empty())
-                    .unwrap_or(true));
-                *head_global_freed_blocks = Some(blocks);
-            }
-            self.count.fetch_sub(1, Ordering::SeqCst);
-            Some(block)
         }
+        let mut head_global_freed_blocks = self.head_global_freed_blocks.write();
+        // Retry fast-alloc in case another thread refilled `head_global_freed_blocks` first.
+        if let Some(block) = head_global_freed_blocks.as_ref().and_then(|q| q.pop()) {
+            self.count.fetch_sub(1, Ordering::SeqCst);
+            return Some(block);
+        }
+        // Get a new list of blocks for allocation
+        let blocks = self.global_freed_blocks.write().pop()?;
+        let block = blocks.pop().unwrap();
+        if !blocks.is_empty() {
+            debug_assert!(head_global_freed_blocks
+                .as_ref()
+                .map(|blocks| blocks.is_empty())
+                .unwrap_or(true));
+            *head_global_freed_blocks = Some(blocks);
+        }
+        self.count.fetch_sub(1, Ordering::SeqCst);
+        Some(block)
     }
 
     /// Flush a given thread-local queue to the global pool
