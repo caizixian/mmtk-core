@@ -3,18 +3,12 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use atomic::Ordering;
-use core::sync::atomic::AtomicU8;
 use std::fmt;
 
 use crate::util::constants::{BITS_IN_BYTE, LOG_BITS_IN_BYTE};
 use crate::util::metadata::metadata_val_traits::*;
 use crate::util::Address;
 use num_traits::FromPrimitive;
-
-enum ResolvedHeaderAtomic<'a, T: MetadataValue> {
-    SubByte { atomic: &'a AtomicU8 },
-    FullWord { atomic: &'a T::Atomic },
-}
 
 #[allow(dead_code)]
 const LOG_BITS_IN_U16: usize = 4;
@@ -113,24 +107,26 @@ impl HeaderMetadataSpec {
     ///   non-atomic Rust references (`&` or `&mut`), and all concurrent accesses must use atomic
     ///   operations of the same width (`AtomicU8` when `self.num_of_bits < 8`, or `T::Atomic`).
     #[inline(always)]
-    unsafe fn resolve_atomic<'a, T: MetadataValue>(
-        &self,
-        header: Address,
-    ) -> ResolvedHeaderAtomic<'a, T> {
+    unsafe fn resolve_atomic<'a, T: MetadataValue>(&self, header: Address) -> AtomicMetaRef<'a, T> {
         self.assert_spec::<T>();
         let addr = self.meta_addr(header);
-        if self.num_of_bits < 8 {
-            // SAFETY: Caller guarantees `addr` is mapped, initialized, and accessed solely via
-            // `AtomicU8` for `'a` (`u8::atomic_ref` unconditionally checks `!addr.is_zero()`).
-            let atomic = unsafe { <u8 as MetadataValue>::atomic_ref(addr) };
-            ResolvedHeaderAtomic::SubByte { atomic }
-        } else {
-            // SAFETY: `assert_spec::<T>()` verified `self.num_of_bits == T::BITS` and `bit_offset`
-            // alignment, `T::atomic_ref` unconditionally checks `!addr.is_zero()` and
-            // `addr.is_aligned_to(T::ATOMIC_ALIGN)`, and caller guarantees mapped, initialized
-            // header memory accessed solely via `T::Atomic` for `'a`.
-            let atomic = unsafe { T::atomic_ref(addr) };
-            ResolvedHeaderAtomic::FullWord { atomic }
+        // SAFETY: `assert_spec::<T>()` verified sub-byte containment (`num_of_bits < 8`) or
+        // `num_of_bits == T::BITS` with `bit_offset` alignment, `assert_atomic_align`
+        // unconditionally checks non-null and `ATOMIC_ALIGN`, and caller guarantees `addr` is
+        // mapped, initialized, and accessed solely via the corresponding atomic width for `'a`.
+        unsafe {
+            if self.num_of_bits < 8 {
+                assert_atomic_align::<u8>(addr);
+                let (shift, mask) = self.get_shift_and_mask_for_bits();
+                AtomicMetaRef::SubByte {
+                    byte: addr.as_ref::<core::sync::atomic::AtomicU8>(),
+                    shift: shift as u8,
+                    mask,
+                }
+            } else {
+                assert_atomic_align::<T>(addr);
+                AtomicMetaRef::Full(addr.as_ref::<T::Atomic>())
+            }
         }
     }
 
@@ -166,12 +162,6 @@ impl HeaderMetadataSpec {
         (raw_byte & !mask) | (set_val << bit_shift)
     }
 
-    /// Truncate a value based on the spec.
-    fn truncate_bits_in_u8(&self, val: u8) -> u8 {
-        debug_assert!(self.num_of_bits < BITS_IN_BYTE);
-        val & ((1 << self.num_of_bits) - 1)
-    }
-
     /// This function provides a default implementation for the `load_metadata` method from the `ObjectModel` trait.
     ///
     /// # Safety
@@ -187,18 +177,17 @@ impl HeaderMetadataSpec {
         self.assert_spec::<T>();
 
         let addr = self.meta_addr(header);
-        // Metadata smaller than 8-bits is packed into a single byte and requires shift and mask.
-        let res: T = if self.num_of_bits < 8 {
-            // SAFETY: Caller guarantees `addr` (`header + byte_offset`) is non-null, points to an
-            // initialized header byte (`u8` has alignment 1), and has no racing writes or `&mut` aliases.
-            let byte_val = unsafe { <u8 as MetadataValue>::load(addr) };
-            FromPrimitive::from_u8(self.get_bits_from_u8(byte_val)).unwrap()
-        } else {
-            // SAFETY: Caller guarantees `header` is properly aligned and `assert_spec` verified
-            // `num_of_bits == T::BITS` and `bit_offset` alignment for `T`, so `addr` is non-null,
-            // aligned to `T`, points to initialized header memory for `size_of::<T>()` bytes, and
-            // has no racing writes or `&mut` aliases.
-            unsafe { T::load(addr) }
+        // SAFETY: `assert_spec` verified sub-byte containment (`num_of_bits < 8`, align 1) or
+        // `num_of_bits == T::BITS` with `bit_offset` alignment, `MetadataValue::load` checks
+        // non-null and `T::ALIGN`, and caller guarantees `addr` points to mapped, initialized
+        // header memory without racing writes or `&mut` aliases.
+        let res: T = unsafe {
+            if self.num_of_bits < 8 {
+                let byte_val = <u8 as MetadataValue>::load(addr);
+                FromPrimitive::from_u8(self.get_bits_from_u8(byte_val)).unwrap()
+            } else {
+                T::load(addr)
+            }
         };
 
         if let Some(mask) = optional_mask {
@@ -220,18 +209,7 @@ impl HeaderMetadataSpec {
         // VM bindings), `header` is a live object's header base address whose metadata cell at
         // `self.meta_addr(header)` is mapped, initialized, and accessed atomically without
         // conflicting non-atomic writes or `&mut` aliases.
-        let res: T = match unsafe { self.resolve_atomic::<T>(header) } {
-            ResolvedHeaderAtomic::SubByte { atomic } => {
-                FromPrimitive::from_u8(self.get_bits_from_u8(atomic.load(ordering))).unwrap()
-            }
-            ResolvedHeaderAtomic::FullWord { atomic } => atomic.load_val(ordering),
-        };
-
-        if let Some(mask) = optional_mask {
-            res.bitand(mask)
-        } else {
-            res
-        }
+        unsafe { self.resolve_atomic::<T>(header) }.load(optional_mask, ordering)
     }
 
     /// This function provides a default implementation for the `store_metadata` method from the `ObjectModel` trait.
@@ -255,31 +233,19 @@ impl HeaderMetadataSpec {
         self.assert_mask::<T>(optional_mask);
         self.assert_spec::<T>();
 
-        if self.num_of_bits < 8 {
-            let val_u8 = val.to_u8().unwrap();
-            let byte_addr = self.meta_addr(header);
-            // SAFETY: Caller guarantees `byte_addr` is non-null, points to an initialized writable
-            // header byte, and is exclusively accessed without concurrent readers, writers, or
-            // aliasing Rust references.
-            let old_byte_val = unsafe { <u8 as MetadataValue>::load(byte_addr) };
-            let new_byte_val = self.set_bits_to_u8(old_byte_val, val_u8);
-            // SAFETY: Same exclusive, non-null, 1-byte-aligned header byte as loaded above.
-            unsafe {
-                <u8 as MetadataValue>::store(byte_addr, new_byte_val);
-            }
-        } else {
-            let addr = self.meta_addr(header);
-            let val = if let Some(mask) = optional_mask {
-                // SAFETY: Caller guarantees `addr` is non-null, aligned to `T` (checked by
-                // `assert_spec`), initialized, and exclusively accessed without aliasing references.
-                let old_val = unsafe { T::load(addr) };
-                old_val.bitand(mask.inv()).bitor(val.bitand(mask))
+        let addr = self.meta_addr(header);
+        // SAFETY: `assert_spec` verified bit-width and `T` alignment; `MetadataValue::{load,store}`
+        // unconditionally check non-null and `T::ALIGN`; caller guarantees `addr` points to mapped,
+        // writable (and initialized for sub-byte/masked RMW) header memory with exclusive access.
+        unsafe {
+            if self.num_of_bits < 8 {
+                let old_byte = <u8 as MetadataValue>::load(addr);
+                let new_byte = self.set_bits_to_u8(old_byte, val.to_u8().unwrap());
+                <u8 as MetadataValue>::store(addr, new_byte);
+            } else if let Some(mask) = optional_mask {
+                let old_val = T::load(addr);
+                T::store(addr, old_val.bitand(mask.inv()).bitor(val.bitand(mask)));
             } else {
-                val
-            };
-            // SAFETY: Caller guarantees `addr` is non-null, aligned to `T` (checked by `assert_spec`),
-            // writable for `size_of::<T>()` bytes, and exclusively accessed without aliasing references.
-            unsafe {
                 T::store(addr, val);
             }
         }
@@ -299,25 +265,7 @@ impl HeaderMetadataSpec {
         // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `self.meta_addr(header)` is a
         // mapped, initialized, writable header metadata cell accessed atomically without
         // conflicting non-atomic accesses or live non-atomic Rust references.
-        match unsafe { self.resolve_atomic::<T>(header) } {
-            ResolvedHeaderAtomic::SubByte { atomic } => {
-                let val_u8 = val.to_u8().unwrap();
-                let fetch_order = load_order_for_rmw(ordering);
-                let _ = atomic.fetch_update_val(ordering, fetch_order, |old_val: u8| {
-                    Some(self.set_bits_to_u8(old_val, val_u8))
-                });
-            }
-            ResolvedHeaderAtomic::FullWord { atomic } => {
-                if let Some(mask) = optional_mask {
-                    let fetch_order = load_order_for_rmw(ordering);
-                    let _ = atomic.fetch_update_val(ordering, fetch_order, |old_val: T| {
-                        Some(old_val.bitand(mask.inv()).bitor(val.bitand(mask)))
-                    });
-                } else {
-                    atomic.store_val(val, ordering);
-                }
-            }
-        }
+        unsafe { self.resolve_atomic::<T>(header) }.store(val, optional_mask, ordering);
     }
 
     /// This function provides a default implementation for the `compare_exchange_metadata` method from the `ObjectModel` trait.
@@ -336,126 +284,41 @@ impl HeaderMetadataSpec {
         // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `self.meta_addr(header)` is a
         // mapped, initialized, writable header metadata cell accessed atomically without
         // conflicting non-atomic accesses or live non-atomic Rust references.
-        match unsafe { self.resolve_atomic::<T>(header) } {
-            ResolvedHeaderAtomic::SubByte { atomic } => {
-                let load_order = load_order_for_rmw(success_order);
-                let real_old_byte = atomic.load(load_order);
-                let expected_old_byte =
-                    self.set_bits_to_u8(real_old_byte, old_metadata.to_u8().unwrap());
-                let expected_new_byte =
-                    self.set_bits_to_u8(expected_old_byte, new_metadata.to_u8().unwrap());
-                atomic
-                    .compare_exchange(
-                        expected_old_byte,
-                        expected_new_byte,
-                        success_order,
-                        failure_order,
-                    )
-                    .map(|x| FromPrimitive::from_u8(self.get_bits_from_u8(x)).unwrap())
-                    .map_err(|x| FromPrimitive::from_u8(self.get_bits_from_u8(x)).unwrap())
-            }
-            ResolvedHeaderAtomic::FullWord { atomic } => {
-                let (old_metadata, new_metadata) = if let Some(mask) = optional_mask {
-                    let load_order = load_order_for_rmw(success_order);
-                    let old_byte = atomic.load_val(load_order);
-                    let expected_new_byte = old_byte.bitand(mask.inv()).bitor(new_metadata);
-                    let expected_old_byte = old_byte.bitand(mask.inv()).bitor(old_metadata);
-                    (expected_old_byte, expected_new_byte)
-                } else {
-                    (old_metadata, new_metadata)
-                };
-
-                atomic.compare_exchange_val(
-                    old_metadata,
-                    new_metadata,
-                    success_order,
-                    failure_order,
-                )
-            }
-        }
-    }
-
-    /// Inner helper for `fetch_add`/`fetch_sub` on sub-byte (`< 8` bits) header metadata.
-    fn fetch_ops_on_bits<F: Fn(u8) -> u8>(
-        &self,
-        atomic: &AtomicU8,
-        set_order: Ordering,
-        fetch_order: Ordering,
-        update: F,
-    ) -> u8 {
-        let old_raw_byte = atomic
-            .fetch_update_val(set_order, fetch_order, |raw_byte: u8| {
-                let old_metadata = self.get_bits_from_u8(raw_byte);
-                let new_metadata = self.truncate_bits_in_u8(update(old_metadata));
-                let new_byte = self.set_bits_to_u8(raw_byte, new_metadata);
-                Some(new_byte)
-            })
-            .unwrap();
-        self.get_bits_from_u8(old_raw_byte)
+        unsafe { self.resolve_atomic::<T>(header) }.compare_exchange(
+            old_metadata,
+            new_metadata,
+            optional_mask,
+            success_order,
+            failure_order,
+        )
     }
 
     /// This function provides a default implementation for the `fetch_add` method from the `ObjectModel` trait.
     pub fn fetch_add<T: MetadataValue>(&self, header: Address, val: T, order: Ordering) -> T {
         // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `self.meta_addr(header)` is a
         // mapped, initialized, writable header metadata cell accessed solely via atomics.
-        match unsafe { self.resolve_atomic::<T>(header) } {
-            ResolvedHeaderAtomic::SubByte { atomic } => {
-                let fetch_order = load_order_for_rmw(order);
-                let old_bits = self.fetch_ops_on_bits(atomic, order, fetch_order, |x: u8| {
-                    x.wrapping_add(val.to_u8().unwrap())
-                });
-                FromPrimitive::from_u8(old_bits).unwrap()
-            }
-            ResolvedHeaderAtomic::FullWord { atomic } => atomic.fetch_add_val(val, order),
-        }
+        unsafe { self.resolve_atomic::<T>(header) }.fetch_add(val, order)
     }
 
     /// This function provides a default implementation for the `fetch_sub` method from the `ObjectModel` trait.
     pub fn fetch_sub<T: MetadataValue>(&self, header: Address, val: T, order: Ordering) -> T {
         // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `self.meta_addr(header)` is a
         // mapped, initialized, writable header metadata cell accessed solely via atomics.
-        match unsafe { self.resolve_atomic::<T>(header) } {
-            ResolvedHeaderAtomic::SubByte { atomic } => {
-                let fetch_order = load_order_for_rmw(order);
-                let old_bits = self.fetch_ops_on_bits(atomic, order, fetch_order, |x: u8| {
-                    x.wrapping_sub(val.to_u8().unwrap())
-                });
-                FromPrimitive::from_u8(old_bits).unwrap()
-            }
-            ResolvedHeaderAtomic::FullWord { atomic } => atomic.fetch_sub_val(val, order),
-        }
+        unsafe { self.resolve_atomic::<T>(header) }.fetch_sub(val, order)
     }
 
     /// This function provides a default implementation for the `fetch_and` method from the `ObjectModel` trait.
     pub fn fetch_and<T: MetadataValue>(&self, header: Address, val: T, order: Ordering) -> T {
         // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `self.meta_addr(header)` is a
         // mapped, initialized, writable header metadata cell accessed solely via atomics.
-        match unsafe { self.resolve_atomic::<T>(header) } {
-            ResolvedHeaderAtomic::SubByte { atomic } => {
-                let (lshift, mask) = self.get_shift_and_mask_for_bits();
-                let new_val = (val.to_u8().unwrap() << lshift) | !mask;
-                let old_raw_byte = atomic.fetch_and(new_val, order);
-                let old_val = self.get_bits_from_u8(old_raw_byte);
-                FromPrimitive::from_u8(old_val).unwrap()
-            }
-            ResolvedHeaderAtomic::FullWord { atomic } => atomic.fetch_and_val(val, order),
-        }
+        unsafe { self.resolve_atomic::<T>(header) }.fetch_and(val, order)
     }
 
     /// This function provides a default implementation for the `fetch_or` method from the `ObjectModel` trait.
     pub fn fetch_or<T: MetadataValue>(&self, header: Address, val: T, order: Ordering) -> T {
         // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `self.meta_addr(header)` is a
         // mapped, initialized, writable header metadata cell accessed solely via atomics.
-        match unsafe { self.resolve_atomic::<T>(header) } {
-            ResolvedHeaderAtomic::SubByte { atomic } => {
-                let (lshift, mask) = self.get_shift_and_mask_for_bits();
-                let new_val = (val.to_u8().unwrap() << lshift) & mask;
-                let old_raw_byte = atomic.fetch_or(new_val, order);
-                let old_val = self.get_bits_from_u8(old_raw_byte);
-                FromPrimitive::from_u8(old_val).unwrap()
-            }
-            ResolvedHeaderAtomic::FullWord { atomic } => atomic.fetch_or_val(val, order),
-        }
+        unsafe { self.resolve_atomic::<T>(header) }.fetch_or(val, order)
     }
 
     /// This function provides a default implementation for the `fetch_update` method from the `ObjectModel` trait.
@@ -465,28 +328,12 @@ impl HeaderMetadataSpec {
         header: Address,
         set_order: Ordering,
         fetch_order: Ordering,
-        mut f: F,
+        f: F,
     ) -> std::result::Result<T, T> {
         // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `self.meta_addr(header)` is a
         // mapped, initialized, writable header metadata cell accessed solely via atomics across
         // the `fetch_update` loop.
-        match unsafe { self.resolve_atomic::<T>(header) } {
-            ResolvedHeaderAtomic::SubByte { atomic } => atomic
-                .fetch_update_val(set_order, fetch_order, |raw_byte: u8| {
-                    let old_metadata = self.get_bits_from_u8(raw_byte);
-                    f(FromPrimitive::from_u8(old_metadata).unwrap()).map(|new_val| {
-                        let new_metadata = self.truncate_bits_in_u8(new_val.to_u8().unwrap());
-                        self.set_bits_to_u8(raw_byte, new_metadata)
-                    })
-                })
-                .map(|raw_byte| FromPrimitive::from_u8(self.get_bits_from_u8(raw_byte)).unwrap())
-                .map_err(|raw_byte| {
-                    FromPrimitive::from_u8(self.get_bits_from_u8(raw_byte)).unwrap()
-                }),
-            ResolvedHeaderAtomic::FullWord { atomic } => {
-                atomic.fetch_update_val(set_order, fetch_order, f)
-            }
-        }
+        unsafe { self.resolve_atomic::<T>(header) }.fetch_update(set_order, fetch_order, f)
     }
 }
 
@@ -731,21 +578,57 @@ mod tests {
     /// (`cells[0..3]`, offsets `-size_of::<T>()` through `+2 * size_of::<T>()`) without any live
     /// aliasing Rust reference during `f`.
     #[repr(C, align(8))]
-    struct TestHeaderObject<T: Copy + Default> {
+    struct TestHeaderObject<T: MetadataValue + Default> {
         cells: [T; 3],
     }
 
-    impl<T: Copy + Default> TestHeaderObject<T> {
+    impl<T: MetadataValue + Default> TestHeaderObject<T> {
         fn new() -> Self {
             Self {
                 cells: [T::default(); 3],
             }
         }
 
+        fn assert_in_bounds(&self, spec: &HeaderMetadataSpec) {
+            spec.assert_spec::<T>();
+            let cell_bytes = core::mem::size_of::<T>();
+            let total_bytes = 3 * cell_bytes;
+            let width = if spec.num_of_bits < 8 { 1 } else { cell_bytes };
+            let start = (cell_bytes as isize)
+                .checked_add(spec.byte_offset())
+                .expect("header byte offset overflow");
+            assert!(
+                start >= 0 && (start as usize) + width <= total_bytes,
+                "spec {:?} out of bounds for 3-cell TestHeaderObject ({} bytes)",
+                spec,
+                total_bytes
+            );
+        }
+
         fn with_mid_addr<R>(&mut self, f: impl FnOnce(Address) -> R) -> R {
             let base_ptr = self.cells.as_mut_ptr();
             let mid_addr = Address::from_mut_ptr(base_ptr) + core::mem::size_of::<T>();
             f(mid_addr)
+        }
+
+        fn load(&mut self, spec: &HeaderMetadataSpec, mask: Option<T>) -> T {
+            self.assert_in_bounds(spec);
+            self.with_mid_addr(|obj| {
+                // SAFETY: `assert_in_bounds` verified `spec` accesses initialized bytes within
+                // `self.cells[0..3]` at valid alignment for `T` (`TestHeaderObject` is 8-byte
+                // aligned), and `&mut self` guarantees exclusive access without aliasing references.
+                unsafe { spec.load::<T>(obj, mask) }
+            })
+        }
+
+        fn store(&mut self, spec: &HeaderMetadataSpec, val: T, mask: Option<T>) {
+            self.assert_in_bounds(spec);
+            self.with_mid_addr(|obj| {
+                // SAFETY: `assert_in_bounds` verified `spec` accesses writable, initialized bytes
+                // within `self.cells[0..3]` at valid alignment for `T`, and `&mut self` guarantees
+                // exclusive access without aliasing references.
+                unsafe { spec.store::<T>(obj, val, mask) }
+            });
         }
     }
 
@@ -760,18 +643,10 @@ mod tests {
                 fn [<$tname _load>]() {
                     let mut buf = TestHeaderObject::<$type>::new();
                     let spec = HeaderMetadataSpec { bit_offset: 0, num_of_bits: $num_of_bits };
-                    buf.with_mid_addr(|obj| {
-                        // SAFETY: `obj` points to `buf.cells[1]`, which is zero-initialized, aligned
-                        // to `$type`, and exclusively accessed by this single-threaded test.
-                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
-                    });
+                    assert_eq!(buf.load(&spec, None), 0);
                     let max_value = max_value($num_of_bits) as $type;
                     buf.cells[1] = max_value;
-                    buf.with_mid_addr(|obj| {
-                        // SAFETY: `obj` points to `buf.cells[1]`, initialized above to `max_value`,
-                        // aligned to `$type`, with no aliasing references during `with_mid_addr`.
-                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
-                    });
+                    assert_eq!(buf.load(&spec, None), max_value);
                 }
 
                 #[test]
@@ -792,73 +667,44 @@ mod tests {
                 fn [<$tname _load_next>]() {
                     let mut buf = TestHeaderObject::<$type>::new();
                     let spec = HeaderMetadataSpec { bit_offset: $num_of_bits, num_of_bits: $num_of_bits };
-                    buf.with_mid_addr(|obj| {
-                        // SAFETY: `obj` has provenance over `buf.cells[0..3]`; `spec` accesses either
-                        // `buf.cells[1]` (`$num_of_bits < 8`) or `buf.cells[2]` (`>= 8`), both
-                        // zero-initialized, aligned to `$type`, and exclusively accessed here.
-                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
-                    });
+                    assert_eq!(buf.load(&spec, None), 0);
                     let max_value = max_value($num_of_bits) as $type;
                     if $num_of_bits < 8 {
                         buf.cells[1] = max_value << spec.bit_offset;
                     } else {
                         buf.cells[2] = max_value;
                     }
-                    buf.with_mid_addr(|obj| {
-                        // SAFETY: `obj` has provenance over `buf.cells[0..3]`; the target cell is
-                        // initialized, aligned to `$type`, and unaliased during `with_mid_addr`.
-                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
-                    });
+                    assert_eq!(buf.load(&spec, None), max_value);
                 }
 
                 #[test]
                 fn [<$tname _load_prev>]() {
                     let mut buf = TestHeaderObject::<$type>::new();
                     let spec = HeaderMetadataSpec { bit_offset: -$num_of_bits, num_of_bits: $num_of_bits };
-                    buf.with_mid_addr(|obj| {
-                        // SAFETY: `obj` is derived from `buf.cells.as_mut_ptr()`, so negative offset
-                        // `-$num_of_bits` resolves in-bounds to `buf.cells[0]`, which is initialized,
-                        // aligned to `$type`, and unaliased during `with_mid_addr`.
-                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
-                    });
+                    assert_eq!(buf.load(&spec, None), 0);
                     let max_value = max_value($num_of_bits) as $type;
                     if $num_of_bits < 8 {
                         buf.cells[0] = max_value << (BITS_IN_BYTE as isize + spec.bit_offset);
                     } else {
                         buf.cells[0] = max_value;
                     }
-                    buf.with_mid_addr(|obj| {
-                        // SAFETY: `obj` has full-array provenance over `buf.cells[0..3]`; `buf.cells[0]`
-                        // is initialized, aligned to `$type`, and unaliased during `with_mid_addr`.
-                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
-                    });
+                    assert_eq!(buf.load(&spec, None), max_value);
                 }
 
                 #[test]
                 fn [<$tname _load_mask>]() {
-                    // The test only runs for metadata no smaller than 1 byte
                     if $num_of_bits < 8 {
                         return;
                     }
 
                     let mut buf = TestHeaderObject::<$type>::new();
                     let spec = HeaderMetadataSpec { bit_offset: 0, num_of_bits: $num_of_bits };
-                    buf.with_mid_addr(|obj| {
-                        // SAFETY: `obj` points to `buf.cells[1]`, which is zero-initialized, aligned
-                        // to `$type`, and unaliased during `with_mid_addr`.
-                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
-                    });
+                    assert_eq!(buf.load(&spec, None), 0);
                     let max_value = max_value($num_of_bits) as $type;
                     buf.cells[1] = max_value;
-                    buf.with_mid_addr(|obj| {
-                        // SAFETY: `obj` points to `buf.cells[1]`, initialized to `max_value`, aligned
-                        // to `$type`, and unaliased during `with_mid_addr`.
-                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
-                        // SAFETY: Same valid, initialized, unaliased `buf.cells[1]` cell as above.
-                        assert_eq!(unsafe { spec.load::<$type>(obj, Some(0)) }, 0);
-                        // SAFETY: Same valid, initialized, unaliased `buf.cells[1]` cell as above.
-                        assert_eq!(unsafe { spec.load::<$type>(obj, Some(0b101)) }, 0b101);
-                    });
+                    assert_eq!(buf.load(&spec, None), max_value);
+                    assert_eq!(buf.load(&spec, Some(0)), 0);
+                    assert_eq!(buf.load(&spec, Some(0b101)), 0b101);
                 }
 
                 #[test]
@@ -866,16 +712,9 @@ mod tests {
                     let mut buf = TestHeaderObject::<$type>::new();
                     let spec = HeaderMetadataSpec { bit_offset: 0, num_of_bits: $num_of_bits };
                     let max_value = max_value($num_of_bits) as $type;
-                    buf.with_mid_addr(|obj| {
-                        // SAFETY: `obj` points to `buf.cells[1]`, zero-initialized, aligned to `$type`,
-                        // and exclusively accessed in this single-threaded test.
-                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
-                        // SAFETY: `obj` points to `buf.cells[1]`, writable, initialized, aligned to
-                        // `$type`, and exclusively accessed without aliasing Rust references.
-                        unsafe { spec.store::<$type>(obj, max_value, None) };
-                        // SAFETY: `buf.cells[1]` remains valid, initialized, and exclusively accessed.
-                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
-                    });
+                    assert_eq!(buf.load(&spec, None), 0);
+                    buf.store(&spec, max_value, None);
+                    assert_eq!(buf.load(&spec, None), max_value);
                     assert_eq!(buf.cells[1], max_value);
                 }
 
@@ -884,15 +723,11 @@ mod tests {
                     let mut buf = TestHeaderObject::<$type>::new();
                     let spec = HeaderMetadataSpec { bit_offset: 0, num_of_bits: $num_of_bits };
                     let max_value = max_value($num_of_bits) as $type;
+                    assert_eq!(buf.load(&spec, None), 0);
                     buf.with_mid_addr(|obj| {
-                        // SAFETY: `obj` points to `buf.cells[1]`, zero-initialized, aligned to
-                        // `$type`, and exclusively accessed in this single-threaded test.
-                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
                         spec.store_atomic::<$type>(obj, max_value, None, Ordering::SeqCst);
-                        // SAFETY: `store_atomic` completed on this thread; `buf.cells[1]` remains
-                        // valid, initialized, aligned, and unaliased for cross-checking via `load`.
-                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
                     });
+                    assert_eq!(buf.load(&spec, None), max_value);
                     assert_eq!(buf.cells[1], max_value);
                 }
 
@@ -901,16 +736,9 @@ mod tests {
                     let mut buf = TestHeaderObject::<$type>::new();
                     let spec = HeaderMetadataSpec { bit_offset: $num_of_bits, num_of_bits: $num_of_bits };
                     let max_value = max_value($num_of_bits) as $type;
-                    buf.with_mid_addr(|obj| {
-                        // SAFETY: `obj` has full provenance over `buf.cells[0..3]`; target cell
-                        // (`cells[1]` or `cells[2]`) is initialized, aligned, and unaliased.
-                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
-                        // SAFETY: Target cell in `buf.cells[1..=2]` is writable, initialized, aligned
-                        // to `$type`, and exclusively accessed during `with_mid_addr`.
-                        unsafe { spec.store::<$type>(obj, max_value, None) };
-                        // SAFETY: Target cell remains initialized, aligned, and exclusively accessed.
-                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
-                    });
+                    assert_eq!(buf.load(&spec, None), 0);
+                    buf.store(&spec, max_value, None);
+                    assert_eq!(buf.load(&spec, None), max_value);
                     if $num_of_bits < 8 {
                         assert_eq!(buf.cells[1], max_value << spec.bit_offset);
                     } else {
@@ -923,16 +751,9 @@ mod tests {
                     let mut buf = TestHeaderObject::<$type>::new();
                     let spec = HeaderMetadataSpec { bit_offset: -$num_of_bits, num_of_bits: $num_of_bits };
                     let max_value = max_value($num_of_bits) as $type;
-                    buf.with_mid_addr(|obj| {
-                        // SAFETY: `obj` has full provenance over `buf.cells[0..3]`; negative offset
-                        // resolves in-bounds to `buf.cells[0]`, which is initialized, aligned, and unaliased.
-                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
-                        // SAFETY: `buf.cells[0]` is writable, initialized, aligned to `$type`, and
-                        // exclusively accessed without aliasing Rust references during `with_mid_addr`.
-                        unsafe { spec.store::<$type>(obj, max_value, None) };
-                        // SAFETY: `buf.cells[0]` remains initialized, aligned, and exclusively accessed.
-                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
-                    });
+                    assert_eq!(buf.load(&spec, None), 0);
+                    buf.store(&spec, max_value, None);
+                    assert_eq!(buf.load(&spec, None), max_value);
                     if $num_of_bits < 8 {
                         assert_eq!(buf.cells[0], max_value << (BITS_IN_BYTE as isize + spec.bit_offset));
                     } else {
@@ -942,7 +763,6 @@ mod tests {
 
                 #[test]
                 fn [<$tname _store_mask>]() {
-                    // The test only runs for metadata no smaller than 1 byte
                     if $num_of_bits < 8 {
                         return;
                     }
@@ -950,89 +770,65 @@ mod tests {
                     let mut buf = TestHeaderObject::<$type>::new();
                     let spec = HeaderMetadataSpec { bit_offset: 0, num_of_bits: $num_of_bits };
                     let max_value = max_value($num_of_bits) as $type;
-                    buf.with_mid_addr(|obj| {
-                        // SAFETY: `obj` points to `buf.cells[1]`, zero-initialized, aligned to `$type`,
-                        // and exclusively accessed during `with_mid_addr`.
-                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
+                    assert_eq!(buf.load(&spec, None), 0);
 
-                        // set to max with mask of all 1s
-                        // SAFETY: `obj` points to `buf.cells[1]`, writable, initialized, aligned, unaliased.
-                        unsafe { spec.store::<$type>(obj, max_value, Some(max_value)) };
-                        // SAFETY: `obj` points to `buf.cells[1]`, initialized, aligned, unaliased.
-                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
+                    buf.store(&spec, max_value, Some(max_value));
+                    assert_eq!(buf.load(&spec, None), max_value);
 
-                        // set to 0
-                        // SAFETY: `obj` points to `buf.cells[1]`, writable, initialized, aligned, unaliased.
-                        unsafe { spec.store::<$type>(obj, 0, None) };
-
-                        // set to max with mask of 1 bit
-                        // SAFETY: `obj` points to `buf.cells[1]`, writable, initialized, aligned, unaliased.
-                        unsafe { spec.store::<$type>(obj, max_value, Some(0b10)) };
-                        // SAFETY: `obj` points to `buf.cells[1]`, initialized, aligned, unaliased.
-                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0b10);
-                    });
+                    buf.store(&spec, 0, None);
+                    buf.store(&spec, max_value, Some(0b10));
+                    assert_eq!(buf.load(&spec, None), 0b10);
                     assert_eq!(buf.cells[1], 0b10);
                 }
 
                 #[test]
                 fn [<$tname _compare_exchange_success>]() {
                     let mut buf = TestHeaderObject::<$type>::new();
-                    buf.with_mid_addr(|obj| {
-                        let spec = HeaderMetadataSpec { bit_offset: 0, num_of_bits: $num_of_bits };
-                        // SAFETY: `obj` points to `buf.cells[1]`, zero-initialized, aligned to
-                        // `$type`, and exclusively accessed in this single-threaded test.
-                        let old_val = unsafe { spec.load::<$type>(obj, None) };
-                        assert_eq!(old_val, 0);
+                    let spec = HeaderMetadataSpec { bit_offset: 0, num_of_bits: $num_of_bits };
+                    let old_val = buf.load(&spec, None);
+                    assert_eq!(old_val, 0);
 
-                        let max_value = max_value($num_of_bits) as $type;
-                        let res = spec.compare_exchange::<$type>(obj, old_val, max_value, None, Ordering::SeqCst, Ordering::SeqCst);
-                        assert!(res.is_ok());
-                        assert_eq!(res.unwrap(), old_val);
-                        // SAFETY: Sequential single-threaded read of `buf.cells[1]` after CAS.
-                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
-                    })
+                    let max_value = max_value($num_of_bits) as $type;
+                    let res = buf.with_mid_addr(|obj| {
+                        spec.compare_exchange::<$type>(obj, old_val, max_value, None, Ordering::SeqCst, Ordering::SeqCst)
+                    });
+                    assert_eq!(res, Ok(old_val));
+                    assert_eq!(buf.load(&spec, None), max_value);
                 }
 
                 #[test]
                 fn [<$tname _compare_exchange_fail>]() {
                     let mut buf = TestHeaderObject::<$type>::new();
-                    buf.with_mid_addr(|obj| {
-                        let spec = HeaderMetadataSpec { bit_offset: 0, num_of_bits: $num_of_bits };
-                        // SAFETY: `obj` points to `buf.cells[1]`, zero-initialized, aligned, unaliased.
-                        let old_val = unsafe { spec.load::<$type>(obj, None) };
-                        assert_eq!(old_val, 0);
+                    let spec = HeaderMetadataSpec { bit_offset: 0, num_of_bits: $num_of_bits };
+                    let old_val = buf.load(&spec, None);
+                    assert_eq!(old_val, 0);
 
-                        // Change the value
-                        // SAFETY: Sequential single-threaded write to `buf.cells[1]`, unaliased.
-                        unsafe { spec.store::<$type>(obj, 1, None) };
+                    buf.store(&spec, 1, None);
 
-                        let max_value = max_value($num_of_bits) as $type;
-                        let res = spec.compare_exchange::<$type>(obj, old_val, max_value, None, Ordering::SeqCst, Ordering::SeqCst);
-                        assert!(res.is_err());
-                        assert_eq!(res.err().unwrap(), 1);
-                        // SAFETY: Sequential single-threaded read of `buf.cells[1]` after failed CAS.
-                        assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 1);
-                    })
+                    let max_value = max_value($num_of_bits) as $type;
+                    let res = buf.with_mid_addr(|obj| {
+                        spec.compare_exchange::<$type>(obj, old_val, max_value, None, Ordering::SeqCst, Ordering::SeqCst)
+                    });
+                    assert_eq!(res, Err(1));
+                    assert_eq!(buf.load(&spec, None), 1);
                 }
 
                 #[test]
                 fn [<$tname _fetch_add>]() {
                     let mut buf = TestHeaderObject::<$type>::new();
-                    buf.with_mid_addr(|obj| {
-                        for bit_offset in (0isize..($type::BITS as isize)).step_by($num_of_bits) {
-                            let spec = HeaderMetadataSpec { bit_offset, num_of_bits: $num_of_bits };
-                            let max_value = max_value($num_of_bits) as $type;
+                    for bit_offset in (0isize..($type::BITS as isize)).step_by($num_of_bits) {
+                        let spec = HeaderMetadataSpec { bit_offset, num_of_bits: $num_of_bits };
+                        let max_value = max_value($num_of_bits) as $type;
 
-                            // SAFETY: `obj` points into aligned, initialized `buf.cells[1]` without aliases.
-                            let old_val = unsafe { spec.load::<$type>(obj, None) };
-                            assert_eq!(old_val, 0);
+                        let old_val = buf.load(&spec, None);
+                        assert_eq!(old_val, 0);
 
-                            let old_val_from_fetch = spec.fetch_add::<$type>(obj, max_value, Ordering::SeqCst);
-                            assert_eq!(old_val, old_val_from_fetch);
-                            // SAFETY: Sequential single-threaded read of `buf.cells[1]` after `fetch_add`.
-                            assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
-                        }
-                    })
+                        let old_val_from_fetch = buf.with_mid_addr(|obj| {
+                            spec.fetch_add::<$type>(obj, max_value, Ordering::SeqCst)
+                        });
+                        assert_eq!(old_val, old_val_from_fetch);
+                        assert_eq!(buf.load(&spec, None), max_value);
+                    }
                 }
 
                 #[test]
@@ -1042,18 +838,15 @@ mod tests {
                         let spec = HeaderMetadataSpec { bit_offset, num_of_bits: $num_of_bits };
                         let max_value = max_value($num_of_bits) as $type;
 
-                        buf.with_mid_addr(|obj| {
-                            // SAFETY: Sequential single-threaded write to `buf.cells[1]`, unaliased.
-                            unsafe { spec.store::<$type>(obj, max_value, None) };
-                            // SAFETY: Sequential single-threaded read of `buf.cells[1]`, unaliased.
-                            let old_val = unsafe { spec.load::<$type>(obj, None) };
+                        buf.store(&spec, max_value, None);
+                        let old_val = buf.load(&spec, None);
 
-                            // add 1 will cause overflow
-                            let old_val_from_fetch = spec.fetch_add::<$type>(obj, 1, Ordering::SeqCst);
-                            assert_eq!(old_val, old_val_from_fetch);
-                            // SAFETY: Sequential single-threaded read of `buf.cells[1]` after `fetch_add`.
-                            assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
+                        // add 1 will cause overflow
+                        let old_val_from_fetch = buf.with_mid_addr(|obj| {
+                            spec.fetch_add::<$type>(obj, 1, Ordering::SeqCst)
                         });
+                        assert_eq!(old_val, old_val_from_fetch);
+                        assert_eq!(buf.load(&spec, None), 0);
                         assert_eq!(buf.cells[1], 0); // we should not accidentally affect other bits
                     }
                 }
@@ -1061,123 +854,108 @@ mod tests {
                 #[test]
                 fn [<$tname _fetch_sub>]() {
                     let mut buf = TestHeaderObject::<$type>::new();
-                    buf.with_mid_addr(|obj| {
-                        for bit_offset in (0isize..($type::BITS as isize)).step_by($num_of_bits) {
-                            let spec = HeaderMetadataSpec { bit_offset, num_of_bits: $num_of_bits };
+                    for bit_offset in (0isize..($type::BITS as isize)).step_by($num_of_bits) {
+                        let spec = HeaderMetadataSpec { bit_offset, num_of_bits: $num_of_bits };
 
-                            // SAFETY: Sequential single-threaded write to `buf.cells[1]`, unaliased.
-                            unsafe { spec.store::<$type>(obj, 1, None) };
-                            // SAFETY: Sequential single-threaded read of `buf.cells[1]`, unaliased.
-                            let old_val = unsafe { spec.load::<$type>(obj, None) };
-                            assert_eq!(old_val, 1);
+                        buf.store(&spec, 1, None);
+                        let old_val = buf.load(&spec, None);
+                        assert_eq!(old_val, 1);
 
-                            let old_val_from_fetch = spec.fetch_sub::<$type>(obj, 1, Ordering::SeqCst);
-                            assert_eq!(old_val, old_val_from_fetch);
-                            // SAFETY: Sequential single-threaded read of `buf.cells[1]` after `fetch_sub`.
-                            assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
-                        }
-                    })
+                        let old_val_from_fetch = buf.with_mid_addr(|obj| {
+                            spec.fetch_sub::<$type>(obj, 1, Ordering::SeqCst)
+                        });
+                        assert_eq!(old_val, old_val_from_fetch);
+                        assert_eq!(buf.load(&spec, None), 0);
+                    }
                 }
 
                 #[test]
                 fn [<$tname _fetch_sub_overflow>]() {
                     let mut buf = TestHeaderObject::<$type>::new();
-                    buf.with_mid_addr(|obj| {
-                        for bit_offset in (0isize..($type::BITS as isize)).step_by($num_of_bits) {
-                            let spec = HeaderMetadataSpec { bit_offset, num_of_bits: $num_of_bits };
-                            let max_value = max_value($num_of_bits) as $type;
+                    for bit_offset in (0isize..($type::BITS as isize)).step_by($num_of_bits) {
+                        let spec = HeaderMetadataSpec { bit_offset, num_of_bits: $num_of_bits };
+                        let max_value = max_value($num_of_bits) as $type;
 
-                            // SAFETY: Sequential single-threaded read of `buf.cells[1]`, unaliased.
-                            let old_val = unsafe { spec.load::<$type>(obj, None) };
-                            assert_eq!(old_val, 0);
+                        let old_val = buf.load(&spec, None);
+                        assert_eq!(old_val, 0);
 
-                            let old_val_from_fetch = spec.fetch_sub::<$type>(obj, 1, Ordering::SeqCst);
-                            assert_eq!(old_val, old_val_from_fetch);
-                            // SAFETY: Sequential single-threaded read of `buf.cells[1]` after `fetch_sub`.
-                            assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
-                        }
-                    })
+                        let old_val_from_fetch = buf.with_mid_addr(|obj| {
+                            spec.fetch_sub::<$type>(obj, 1, Ordering::SeqCst)
+                        });
+                        assert_eq!(old_val, old_val_from_fetch);
+                        assert_eq!(buf.load(&spec, None), max_value);
+                    }
                 }
 
                 #[test]
                 fn [<$tname _fetch_and>]() {
                     let mut buf = TestHeaderObject::<$type>::new();
-                    buf.with_mid_addr(|obj| {
-                        for bit_offset in (0isize..($type::BITS as isize)).step_by($num_of_bits) {
-                            let spec = HeaderMetadataSpec { bit_offset, num_of_bits: $num_of_bits };
-                            let max_value = max_value($num_of_bits) as $type;
+                    for bit_offset in (0isize..($type::BITS as isize)).step_by($num_of_bits) {
+                        let spec = HeaderMetadataSpec { bit_offset, num_of_bits: $num_of_bits };
+                        let max_value = max_value($num_of_bits) as $type;
 
-                            // SAFETY: Sequential single-threaded read of `buf.cells[1]`, unaliased.
-                            let old_val = unsafe { spec.load::<$type>(obj, None) };
-                            assert_eq!(old_val, 0);
+                        let old_val = buf.load(&spec, None);
+                        assert_eq!(old_val, 0);
 
-                            let old_val_from_fetch = spec.fetch_and::<$type>(obj, max_value, Ordering::SeqCst);
-                            assert_eq!(old_val, old_val_from_fetch);
-                            // SAFETY: Sequential single-threaded read of `buf.cells[1]` after `fetch_and`.
-                            assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
-                        }
-                    })
+                        let old_val_from_fetch = buf.with_mid_addr(|obj| {
+                            spec.fetch_and::<$type>(obj, max_value, Ordering::SeqCst)
+                        });
+                        assert_eq!(old_val, old_val_from_fetch);
+                        assert_eq!(buf.load(&spec, None), 0);
+                    }
                 }
 
                 #[test]
                 fn [<$tname _fetch_or>]() {
                     let mut buf = TestHeaderObject::<$type>::new();
-                    buf.with_mid_addr(|obj| {
-                        for bit_offset in (0isize..($type::BITS as isize)).step_by($num_of_bits) {
-                            let spec = HeaderMetadataSpec { bit_offset, num_of_bits: $num_of_bits };
-                            let max_value = max_value($num_of_bits) as $type;
+                    for bit_offset in (0isize..($type::BITS as isize)).step_by($num_of_bits) {
+                        let spec = HeaderMetadataSpec { bit_offset, num_of_bits: $num_of_bits };
+                        let max_value = max_value($num_of_bits) as $type;
 
-                            // SAFETY: Sequential single-threaded read of `buf.cells[1]`, unaliased.
-                            let old_val = unsafe { spec.load::<$type>(obj, None) };
-                            assert_eq!(old_val, 0);
+                        let old_val = buf.load(&spec, None);
+                        assert_eq!(old_val, 0);
 
-                            let old_val_from_fetch = spec.fetch_or::<$type>(obj, max_value, Ordering::SeqCst);
-                            assert_eq!(old_val, old_val_from_fetch);
-                            // SAFETY: Sequential single-threaded read of `buf.cells[1]` after `fetch_or`.
-                            assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
-                        }
-                    })
+                        let old_val_from_fetch = buf.with_mid_addr(|obj| {
+                            spec.fetch_or::<$type>(obj, max_value, Ordering::SeqCst)
+                        });
+                        assert_eq!(old_val, old_val_from_fetch);
+                        assert_eq!(buf.load(&spec, None), max_value);
+                    }
                 }
 
                 #[test]
                 fn [<$tname _fetch_update_success>]() {
                     let mut buf = TestHeaderObject::<$type>::new();
-                    buf.with_mid_addr(|obj| {
-                        for bit_offset in (0isize..($type::BITS as isize)).step_by($num_of_bits) {
-                            let spec = HeaderMetadataSpec { bit_offset, num_of_bits: $num_of_bits };
-                            let max_value = max_value($num_of_bits) as $type;
+                    for bit_offset in (0isize..($type::BITS as isize)).step_by($num_of_bits) {
+                        let spec = HeaderMetadataSpec { bit_offset, num_of_bits: $num_of_bits };
+                        let max_value = max_value($num_of_bits) as $type;
 
-                            // SAFETY: Sequential single-threaded read of `buf.cells[1]`, unaliased.
-                            let old_val = unsafe { spec.load::<$type>(obj, None) };
-                            assert_eq!(old_val, 0);
+                        let old_val = buf.load(&spec, None);
+                        assert_eq!(old_val, 0);
 
-                            let update_res = spec.fetch_update(obj, Ordering::SeqCst, Ordering::SeqCst, |_x: $type| Some(max_value));
-                            assert!(update_res.is_ok());
-                            assert_eq!(old_val, update_res.unwrap());
-                            // SAFETY: Sequential single-threaded read of `buf.cells[1]` after `fetch_update`.
-                            assert_eq!(unsafe { spec.load::<$type>(obj, None) }, max_value);
-                        }
-                    })
+                        let update_res = buf.with_mid_addr(|obj| {
+                            spec.fetch_update(obj, Ordering::SeqCst, Ordering::SeqCst, |_x: $type| Some(max_value))
+                        });
+                        assert_eq!(update_res, Ok(old_val));
+                        assert_eq!(buf.load(&spec, None), max_value);
+                    }
                 }
 
                 #[test]
                 fn [<$tname _fetch_update_fail>]() {
                     let mut buf = TestHeaderObject::<$type>::new();
-                    buf.with_mid_addr(|obj| {
-                        for bit_offset in (0isize..($type::BITS as isize)).step_by($num_of_bits) {
-                            let spec = HeaderMetadataSpec { bit_offset, num_of_bits: $num_of_bits };
+                    for bit_offset in (0isize..($type::BITS as isize)).step_by($num_of_bits) {
+                        let spec = HeaderMetadataSpec { bit_offset, num_of_bits: $num_of_bits };
 
-                            // SAFETY: Sequential single-threaded read of `buf.cells[1]`, unaliased.
-                            let old_val = unsafe { spec.load::<$type>(obj, None) };
-                            assert_eq!(old_val, 0);
+                        let old_val = buf.load(&spec, None);
+                        assert_eq!(old_val, 0);
 
-                            let update_res = spec.fetch_update(obj, Ordering::SeqCst, Ordering::SeqCst, |_x: $type| None);
-                            assert!(update_res.is_err());
-                            assert_eq!(old_val, update_res.err().unwrap());
-                            // SAFETY: Sequential single-threaded read of `buf.cells[1]` after `fetch_update`.
-                            assert_eq!(unsafe { spec.load::<$type>(obj, None) }, 0);
-                        }
-                    })
+                        let update_res = buf.with_mid_addr(|obj| {
+                            spec.fetch_update(obj, Ordering::SeqCst, Ordering::SeqCst, |_x: $type| None)
+                        });
+                        assert_eq!(update_res, Err(old_val));
+                        assert_eq!(buf.load(&spec, None), 0);
+                    }
                 }
             }
         }

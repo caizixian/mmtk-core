@@ -3,7 +3,7 @@ use crate::util::ObjectReference;
 use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
 use crate::vm::VMLocalMarkBitSpec;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 impl VMLocalMarkBitSpec {
     /// Set the mark bit for the object to 1
@@ -38,16 +38,22 @@ pub struct MarkState {
     /// This value represents the marked state. If the mark bit is this value, the object is considered as marked.
     /// If the mark bit is on side, we always use 1 as the marked state. We do bulk zeroing to reset mark bits before GCs
     /// If the mark bit is in header, we flip the marked state in every GC, so we do not need to reset the mark bit for live objects.
-    state: u8,
+    state: AtomicU8,
 }
 
 impl MarkState {
     pub fn new() -> Self {
-        Self { state: 1 }
+        Self {
+            state: AtomicU8::new(1),
+        }
+    }
+
+    fn current_state(&self) -> u8 {
+        self.state.load(Ordering::Relaxed)
     }
 
     fn unmarked_state(&self) -> u8 {
-        self.state ^ 1
+        self.current_state() ^ 1
     }
 
     /// Check if the object is marked
@@ -57,19 +63,20 @@ impl MarkState {
             None,
             Ordering::SeqCst,
         );
-        state == self.state
+        state == self.current_state()
     }
 
     /// Attempt to mark an object. If the object is marked by this invocation, return true.
     /// Otherwise return false -- the object was marked by others.
     pub fn test_and_mark<VM: VMBinding>(&self, object: ObjectReference) -> bool {
+        let marked = self.current_state();
         loop {
             let old_value = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(
                 object,
                 None,
                 Ordering::SeqCst,
             );
-            if old_value == self.state {
+            if old_value == marked {
                 return false;
             }
 
@@ -77,7 +84,7 @@ impl MarkState {
                 .compare_exchange_metadata::<VM, u8>(
                     object,
                     old_value,
-                    self.state,
+                    marked,
                     None,
                     Ordering::SeqCst,
                     Ordering::SeqCst,
@@ -104,7 +111,7 @@ impl MarkState {
     }
 
     /// This has to be called in the global preparation of a space
-    pub fn on_global_prepare<VM: VMBinding>(&mut self) {}
+    pub fn on_global_prepare<VM: VMBinding>(&self) {}
 
     /// This has to be called when a space resets its memory regions. This can be either called before the GC tracing, or
     /// after a GC tracing (eagerly). This method will reset the mark bit. The policy should not use the mark bit before
@@ -118,10 +125,10 @@ impl MarkState {
     }
 
     /// This has to be called in the global release of a space
-    pub fn on_global_release<VM: VMBinding>(&mut self) {
+    pub fn on_global_release<VM: VMBinding>(&self) {
         if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_in_header() {
             // If it is in header, we flip it. In this case, we do not need to reset the bits for marked objects
-            self.state = self.unmarked_state()
+            self.state.fetch_xor(1, Ordering::Relaxed);
         }
     }
 }

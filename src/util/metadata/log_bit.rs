@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use crate::util::constants::LOG_BITS_IN_BYTE;
 use crate::util::Address;
 use crate::util::ObjectReference;

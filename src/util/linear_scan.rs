@@ -248,6 +248,10 @@ mod tests {
     use crate::util::constants::LOG_BYTES_IN_PAGE;
 
     const PAGE_SIZE: usize = 1 << LOG_BYTES_IN_PAGE;
+    const _: () = assert!(PAGE_SIZE == 4096);
+
+    #[repr(align(4096))]
+    struct AlignedPages([[u8; PAGE_SIZE]; 6]);
 
     #[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
     struct Page(Address);
@@ -267,40 +271,35 @@ mod tests {
 
     #[test]
     fn test_region_methods() {
-        // SAFETY: Synthetic non-dereferenced `Address` used only to test pure `Region` arithmetic.
-        let addr4k = unsafe { Address::from_usize(PAGE_SIZE) };
-        // SAFETY: Synthetic non-dereferenced `Address` used only to test pure `Region` arithmetic.
-        let addr4k1 = unsafe { Address::from_usize(PAGE_SIZE + 1) };
+        let backing = Box::new(AlignedPages([[0u8; PAGE_SIZE]; 6]));
+        let addr4k = Address::from_ref(&*backing);
+        let addr4k1 = addr4k + 1usize;
 
         // align
-        debug_assert_eq!(Page::align(addr4k), addr4k);
-        debug_assert_eq!(Page::align(addr4k1), addr4k);
-        debug_assert!(Page::is_aligned(addr4k));
-        debug_assert!(!Page::is_aligned(addr4k1));
+        assert_eq!(Page::align(addr4k), addr4k);
+        assert_eq!(Page::align(addr4k1), addr4k);
+        assert!(Page::is_aligned(addr4k));
+        assert!(!Page::is_aligned(addr4k1));
 
         let page = Page::from_aligned_address(addr4k);
         // start/end
-        debug_assert_eq!(page.start(), addr4k);
-        debug_assert_eq!(page.end(), addr4k + PAGE_SIZE);
+        assert_eq!(page.start(), addr4k);
+        assert_eq!(page.end(), addr4k + PAGE_SIZE);
         // next
-        debug_assert_eq!(page.next().start(), addr4k + PAGE_SIZE);
-        debug_assert_eq!(page.next_nth(1).start(), addr4k + PAGE_SIZE);
-        debug_assert_eq!(page.next_nth(2).start(), addr4k + 2 * PAGE_SIZE);
+        assert_eq!(page.next().start(), addr4k + PAGE_SIZE);
+        assert_eq!(page.next_nth(1).start(), addr4k + PAGE_SIZE);
+        assert_eq!(page.next_nth(2).start(), addr4k + 2 * PAGE_SIZE);
     }
 
     #[test]
     fn test_region_iterator_normal() {
-        // SAFETY: Synthetic non-dereferenced `Address` used only to test `RegionIterator` stepping.
-        let addr4k = unsafe { Address::from_usize(PAGE_SIZE) };
+        let backing = Box::new(AlignedPages([[0u8; PAGE_SIZE]; 6]));
+        let addr4k = Address::from_ref(&*backing);
         let page = Page::from_aligned_address(addr4k);
         let end_page = page.next_nth(5);
 
-        let mut results = vec![];
-        let iter = RegionIterator::new(page, end_page);
-        for p in iter {
-            results.push(p);
-        }
-        debug_assert_eq!(
+        let results: Vec<Page> = RegionIterator::new(page, end_page).collect();
+        assert_eq!(
             results,
             vec![
                 page,
@@ -314,30 +313,22 @@ mod tests {
 
     #[test]
     fn test_region_iterator_same_start_end() {
-        // SAFETY: Synthetic non-dereferenced `Address` used only to test `RegionIterator` bounds.
-        let addr4k = unsafe { Address::from_usize(PAGE_SIZE) };
+        let backing = Box::new(AlignedPages([[0u8; PAGE_SIZE]; 6]));
+        let addr4k = Address::from_ref(&*backing);
         let page = Page::from_aligned_address(addr4k);
 
-        let mut results = vec![];
-        let iter = RegionIterator::new(page, page);
-        for p in iter {
-            results.push(p);
-        }
-        debug_assert_eq!(results, vec![]);
+        let results: Vec<Page> = RegionIterator::new(page, page).collect();
+        assert_eq!(results, vec![]);
     }
 
     #[test]
     fn test_region_iterator_smaller_end() {
-        // SAFETY: Synthetic non-dereferenced `Address` used only to test `RegionIterator` bounds.
-        let addr4k = unsafe { Address::from_usize(PAGE_SIZE) };
+        let backing = Box::new(AlignedPages([[0u8; PAGE_SIZE]; 6]));
+        let addr4k = Address::from_ref(&*backing);
         let page = Page::from_aligned_address(addr4k + PAGE_SIZE);
         let end = Page::from_aligned_address(addr4k);
 
-        let mut results = vec![];
-        let iter = RegionIterator::new(page, end);
-        for p in iter {
-            results.push(p);
-        }
+        let results: Vec<Page> = RegionIterator::new(page, end).collect();
         assert_eq!(results, vec![]);
     }
 
@@ -350,8 +341,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "must be non-zero and aligned")]
     fn test_region_unaligned_address_panics() {
-        // SAFETY: Synthetic non-dereferenced `Address` used only to test alignment panic.
-        let unaligned = unsafe { Address::from_usize(PAGE_SIZE + 1) };
+        let backing = Box::new(AlignedPages([[0u8; PAGE_SIZE]; 6]));
+        let unaligned = Address::from_ref(&*backing) + 1usize;
         let _ = Page::from_aligned_address(unaligned);
     }
 
