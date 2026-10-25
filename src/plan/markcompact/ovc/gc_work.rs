@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use super::global::OVC;
 use crate::plan::tracing::{PlanTrace, UnsupportedTrace};
 use crate::policy::largeobjectspace::LargeObjectSpace;

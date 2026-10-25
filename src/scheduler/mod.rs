@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 //! A general scheduler implementation. MMTk uses it to schedule GC-related work.
 
 /// This constant used to be the default capacity of work packets that process slots, such as

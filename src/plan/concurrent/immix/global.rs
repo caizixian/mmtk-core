@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use crate::plan::concurrent::global::ConcurrentPlan;
 use crate::plan::concurrent::immix::gc_work::ConcurrentImmixGCWorkContext;
 use crate::plan::concurrent::immix::gc_work::ConcurrentImmixSTWGCWorkContext;
@@ -184,62 +182,11 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
     }
 
     fn prepare(&mut self, tls: VMWorkerThread) {
-        let pause = self.current_pause().unwrap();
-        match pause {
-            Pause::Full => {
-                self.common.prepare(tls, true);
-                self.immix_space.prepare(
-                    true,
-                    Some(StatsForDefrag::new(self)),
-                    // Ignore unlog bits in full GCs because unlog bits should be all 0.
-                    UnlogBitsOperation::NoOp,
-                );
-            }
-            Pause::InitialMark => {
-                self.immix_space.prepare(
-                    true,
-                    Some(StatsForDefrag::new(self)),
-                    // Bulk set log bits so SATB barrier will be triggered on the existing objects.
-                    UnlogBitsOperation::BulkSet,
-                );
-
-                self.common.prepare(tls, true);
-                // Bulk set log bits so SATB barrier will be triggered on the existing objects.
-                self.common
-                    .schedule_unlog_bits_op(UnlogBitsOperation::BulkSet);
-            }
-            Pause::FinalMark => (),
-            Pause::RefCount => unreachable!(),
-        }
+        self.prepare_shared(tls);
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
-        let pause = self.current_pause().unwrap();
-        match pause {
-            Pause::InitialMark => (),
-            Pause::Full | Pause::FinalMark => {
-                self.immix_space.release(
-                    true,
-                    // Bulk clear log bits so SATB barrier will not be triggered.
-                    UnlogBitsOperation::BulkClear,
-                );
-
-                self.common.release(tls, true);
-
-                if pause == Pause::FinalMark {
-                    // Bulk clear log bits so SATB barrier will not be triggered.
-                    self.common
-                        .schedule_unlog_bits_op(UnlogBitsOperation::BulkClear);
-                } else {
-                    // Full pauses didn't set unlog bits in the first place,
-                    // so there is no need to clear them.
-                    // TODO: Currently InitialMark must be followed by a FinalMark.
-                    // If we allow upgrading a concurrent GC to a full STW GC,
-                    // we will need to clear the unlog bits at an appropriate place.
-                }
-            }
-            Pause::RefCount => unreachable!(),
-        }
+        self.release_shared(tls);
     }
 
     fn on_pause_end(&mut self, mmtk: &'static MMTK<VM>, _tls: VMWorkerThread) {
@@ -497,7 +444,66 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
             .concurrent_immix_disable_concurrent_marking
     }
 
-    pub(in crate::plan) fn finish_pause(&mut self, mmtk: &'static MMTK<VM>) -> bool {
+    pub(in crate::plan) fn prepare_shared(&self, tls: VMWorkerThread) {
+        let pause = self.current_pause().unwrap();
+        match pause {
+            Pause::Full => {
+                self.common.prepare(tls, true);
+                self.immix_space.prepare(
+                    true,
+                    Some(StatsForDefrag::new(self)),
+                    // Ignore unlog bits in full GCs because unlog bits should be all 0.
+                    UnlogBitsOperation::NoOp,
+                );
+            }
+            Pause::InitialMark => {
+                self.immix_space.prepare(
+                    true,
+                    Some(StatsForDefrag::new(self)),
+                    // Bulk set log bits so SATB barrier will be triggered on the existing objects.
+                    UnlogBitsOperation::BulkSet,
+                );
+
+                self.common.prepare(tls, true);
+                // Bulk set log bits so SATB barrier will be triggered on the existing objects.
+                self.common
+                    .schedule_unlog_bits_op(UnlogBitsOperation::BulkSet);
+            }
+            Pause::FinalMark => (),
+            Pause::RefCount => unreachable!(),
+        }
+    }
+
+    pub(in crate::plan) fn release_shared(&self, tls: VMWorkerThread) {
+        let pause = self.current_pause().unwrap();
+        match pause {
+            Pause::InitialMark => (),
+            Pause::Full | Pause::FinalMark => {
+                self.immix_space.release(
+                    true,
+                    // Bulk clear log bits so SATB barrier will not be triggered.
+                    UnlogBitsOperation::BulkClear,
+                );
+
+                self.common.release(tls, true);
+
+                if pause == Pause::FinalMark {
+                    // Bulk clear log bits so SATB barrier will not be triggered.
+                    self.common
+                        .schedule_unlog_bits_op(UnlogBitsOperation::BulkClear);
+                } else {
+                    // Full pauses didn't set unlog bits in the first place,
+                    // so there is no need to clear them.
+                    // TODO: Currently InitialMark must be followed by a FinalMark.
+                    // If we allow upgrading a concurrent GC to a full STW GC,
+                    // we will need to clear the unlog bits at an appropriate place.
+                }
+            }
+            Pause::RefCount => unreachable!(),
+        }
+    }
+
+    pub(in crate::plan) fn finish_pause(&self, mmtk: &'static MMTK<VM>) -> bool {
         self.last_gc_was_defrag
             .store(self.immix_space.end_of_gc(), Ordering::Relaxed);
 

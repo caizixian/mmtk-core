@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use crate::util::metadata::vo_bit;
 use crate::util::Address;
 use crate::util::ObjectReference;
@@ -12,9 +10,8 @@ use std::marker::PhantomData;
 // In the future, we should let Lisp2 do linear scanning using its local metadata instead.
 
 /// Iterate over an address range, and find each object by VO bit.
-/// ATOMIC_LOAD_VO_BIT can be set to false if it is known that loading VO bit
-/// non-atomically is correct (e.g. a single thread is scanning this address range, and
-/// it is the only thread that accesses VO bit).
+/// `ATOMIC_LOAD_VO_BIT` selects `Ordering::SeqCst` when `true`, or `Ordering::Relaxed` when `false`
+/// (e.g. when a single thread is scanning an already-synchronized address range).
 pub struct ObjectIterator<VM: VMBinding, S: LinearScanObjectSize, const ATOMIC_LOAD_VO_BIT: bool> {
     start: Address,
     end: Address,
@@ -58,16 +55,12 @@ impl<VM: VMBinding, S: LinearScanObjectSize, const ATOMIC_LOAD_VO_BIT: bool> std
 
     fn next(&mut self) -> Option<<Self as Iterator>::Item> {
         while self.cursor < self.end {
-            let is_object = if ATOMIC_LOAD_VO_BIT {
-                vo_bit::is_vo_bit_set_for_addr(self.cursor)
+            let order = if ATOMIC_LOAD_VO_BIT {
+                atomic::Ordering::SeqCst
             } else {
-                // SAFETY: `self.cursor` is maintained aligned to `ObjectReference::ALIGNMENT`
-                // (`new` asserts `start` is word-aligned and every step aligns up to or adds
-                // `ObjectReference::ALIGNMENT`), `is_vo_bit_set_unsafe` checks `is_mapped` before
-                // loading, and `ObjectIterator<..., false>`'s type-level contract requires that no
-                // other thread concurrently mutates VO-bit side metadata covering `[start, end)`.
-                unsafe { vo_bit::is_vo_bit_set_unsafe(self.cursor) }
+                atomic::Ordering::Relaxed
             };
+            let is_object = vo_bit::is_vo_bit_set_for_addr_order(self.cursor, order);
 
             // VO bits can only be set at addresses aligned to `ObjectReference::ALIGNMENT`.
             if let Some(object) = is_object {

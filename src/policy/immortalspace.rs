@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use atomic::Ordering;
 
 use crate::policy::sft::SFT;
@@ -177,7 +175,7 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
         }
     }
 
-    pub fn prepare(&mut self) {
+    pub fn prepare(&self) {
         self.mark_state.on_global_prepare::<VM>();
         // Reset the mark bit for the allocated regions.
         for (addr, size) in self.pr.iterate_allocated_regions() {
@@ -191,7 +189,7 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
         }
     }
 
-    pub fn release(&mut self) {
+    pub fn release(&self) {
         self.mark_state.on_global_release::<VM>();
     }
 

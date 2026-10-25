@@ -7,8 +7,6 @@
 //! * a counted version: the allocated/freed bytes are calculated into MMTk's heap. So extra arguments
 //!   are needed to maintain allocated bytes properly. The API is inspired by Julia's counted malloc.
 //!   The counted version is only available with the feature `malloc_counted_size`.
-#![deny(unsafe_op_in_unsafe_fn)]
-
 /// Malloc provided by libraries
 pub(crate) mod library;
 /// Using malloc as mark sweep free-list allocator.

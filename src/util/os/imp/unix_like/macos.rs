@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use crate::util::address::Address;
 use crate::util::os::imp::unix_like::unix_common;
 use crate::util::os::*;

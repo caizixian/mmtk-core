@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use super::global::Lisp2;
 use crate::plan::tracing::{PlanTrace, UnsupportedTrace};
 use crate::plan::Plan;
@@ -63,22 +61,9 @@ impl<VM: VMBinding> UpdateReferences<VM> {
                         crate::global_state::GcStatus::InPause,
                         "Lisp2 UpdateReferences requires GcStatus::InPause"
                     );
-                    let _plan_lease = mmtk.enter_plan_mut_lease();
-                    // SAFETY:
-                    // 1. `parked` witnesses `mmtk.scheduler.worker_monitor` with
-                    //    `WorkerMonitor::sync` held and all `0..worker_count` GC workers parked,
-                    //    and `mmtk.get_gc_status() == GcStatus::InPause` guarantees all mutators
-                    //    are stopped at GC safepoints.
-                    // 2. `prepare_for_roots_re_scanning` ran above before acquiring `plan_mut`,
-                    //    `_plan_lease` enforces non-reentrancy on this thread,
-                    //    `common.{release, prepare}` performs only internal space updates without
-                    //    calling `mmtk.get_plan()`, and `plan_mut` is dropped at the end of this
-                    //    block.
-                    let plan_mut = unsafe { mmtk.get_plan_mut() }
-                        .downcast_mut::<Lisp2<VM>>()
-                        .unwrap();
-                    plan_mut.common.release(tls, true);
-                    plan_mut.common.prepare(tls, true);
+                    let plan = mmtk.get_plan().downcast_ref::<Lisp2<VM>>().unwrap();
+                    plan.common.release(tls, true);
+                    plan.common.prepare(tls, true);
                 }
                 #[cfg(feature = "extreme_assertions")]
                 mmtk.slot_logger.reset();

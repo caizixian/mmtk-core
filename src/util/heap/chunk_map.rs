@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use crate::scheduler::GCWork;
 use crate::util::linear_scan::Region;
 use crate::util::linear_scan::RegionIterator;

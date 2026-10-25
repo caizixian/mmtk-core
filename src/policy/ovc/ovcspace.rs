@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use crate::plan::tracing::OptionObjectQueue;
 use crate::policy::gc_work::{TraceKind, TRACE_KIND_TRANSITIVE_PIN};
 use crate::policy::largeobjectspace::LargeObjectSpace;
@@ -36,7 +34,7 @@ impl<F: FnMut(ObjectReference)> ObjectEnumerator for LosObjectVisitor<F> {
         (self.0)(object);
     }
 
-    unsafe fn visit_address_range(&mut self, _start: Address, _end: Address) {
+    fn visit_address_range(&mut self, _start: Address, _end: Address) {
         unreachable!("LargeObjectSpace::enumerate_to_space_objects never visits address ranges")
     }
 }

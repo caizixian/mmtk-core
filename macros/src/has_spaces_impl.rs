@@ -56,7 +56,8 @@ pub(crate) fn generate_impl_items<'a>(
         space_visitors_mut.push(visitor_mut);
     }
 
-    let (parent_visitor, parent_visitor_mut) = if let Some(f) = parent_field {
+    let (parent_visitor, parent_visitor_mut, parent_visitor_static) = if let Some(f) = parent_field
+    {
         let f_ident = f.ident.as_ref().unwrap();
         let visitor = quote! {
             self.#f_ident.for_each_space(__func)
@@ -64,9 +65,12 @@ pub(crate) fn generate_impl_items<'a>(
         let visitor_mut = quote! {
             self.#f_ident.for_each_space_mut(__func)
         };
-        (visitor, visitor_mut)
+        let visitor_static = quote! {
+            self.#f_ident.for_each_space_static(__func)
+        };
+        (visitor, visitor_mut, visitor_static)
     } else {
-        (quote! {}, quote! {})
+        (quote! {}, quote! {}, quote! {})
     };
 
     quote! {
@@ -78,6 +82,11 @@ pub(crate) fn generate_impl_items<'a>(
         fn for_each_space_mut(&mut self, __func: &mut dyn FnMut(&mut dyn Space<VM>)) {
             #(#space_visitors_mut)*
             #parent_visitor_mut
+        }
+
+        fn for_each_space_static(&'static self, __func: &mut dyn FnMut(&'static dyn Space<VM>)) {
+            #(#space_visitors)*
+            #parent_visitor_static
         }
     }
 }

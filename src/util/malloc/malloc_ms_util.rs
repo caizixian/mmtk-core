@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use crate::util::constants::BYTES_IN_ADDRESS;
 use crate::util::malloc::library::*;
 use crate::util::Address;

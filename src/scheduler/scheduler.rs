@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use self::worker::PollResult;
 
 use super::gc_work::ScheduleCollection;

@@ -86,6 +86,9 @@ built = { version = "0.8.0", features = ["git2"] }
 # We can remove this dependency when we use MSRV 1.87+.
 yoke-derive = "=0.8.2"
 
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
 [lints.clippy]
 # Allow this. Clippy suggests we should use Sft, Mmtk, rather than SFT and MMTK.
 # According to its documentation (https://rust-lang.github.io/rust-clippy/master/index.html#upper_case_acronyms),
@@ -101,6 +104,9 @@ upper_case_acronyms = "allow"
 # It was upgraded again in Rust 1.88, and downgraded again in Rust 1.89. We disable this lint to avoid warnings in affected versions.
 # See https://github.com/mmtk/mmtk-core/issues/1334.
 uninlined_format_args = "allow"
+undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"
+unnecessary_safety_doc = "deny"
 
 [[bench]]
 name = "main"

@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 mod barrier;
 mod block_allocation;
 mod gc_work;

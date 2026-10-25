@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use atomic::Ordering;
 
 use crate::plan::tracing::{ObjectQueue, OptionObjectQueue};
@@ -37,7 +35,7 @@ impl<F: FnMut(ObjectReference)> ObjectEnumerator for TreadMillObjectVisitor<F> {
         (self.0)(object);
     }
 
-    unsafe fn visit_address_range(&mut self, _start: Address, _end: Address) {
+    fn visit_address_range(&mut self, _start: Address, _end: Address) {
         unreachable!("TreadMill::enumerate_objects only visits individual objects")
     }
 }
@@ -141,7 +139,7 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     pub num_pages_released_lazy: AtomicUsize,
     pub rc_enabled: bool,
     pub(crate) rc: RefCountHelper<VM>,
-    pub is_end_of_satb_or_full_gc: bool,
+    pub is_end_of_satb_or_full_gc: AtomicBool,
     /// Whether newly allocated LOS objects should bump `LOS_PAGE_REUSE_COUNT` on their pages, so
     /// remembered-set entries recorded against a page's previous occupant are invalidated. Only
     /// needed while concurrent marking can be validating a remembered set; set/cleared by the
@@ -155,7 +153,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
     }
     fn is_live(&self, object: ObjectReference) -> bool {
         if self.rc_enabled {
-            if self.is_end_of_satb_or_full_gc {
+            if self.is_end_of_satb_or_full_gc.load(Ordering::Acquire) {
                 return self.is_marked(object) && self.rc.count(object) > 0;
             }
             return self.rc.count(object) > 0;
@@ -484,7 +482,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             num_pages_released_lazy: Default::default(),
             rc_enabled: false,
             rc: RefCountHelper::NEW,
-            is_end_of_satb_or_full_gc: false,
+            is_end_of_satb_or_full_gc: AtomicBool::new(false),
             bump_page_reuse_count: AtomicBool::new(false),
         }
     }
@@ -520,8 +518,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn prepare_shared(&self, full_heap: bool) {
+    pub fn prepare(&self, full_heap: bool) {
         if full_heap {
             let old = self.mark_state.load(Ordering::Relaxed);
             self.mark_state.store(MARK_BIT - old, Ordering::Relaxed);
@@ -534,12 +531,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         self.in_nursery_gc.store(!full_heap, Ordering::Relaxed);
     }
 
-    pub fn prepare(&mut self, full_heap: bool) {
-        self.prepare_shared(full_heap);
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn release_shared(&self, full_heap: bool) {
+    pub fn release(&self, full_heap: bool) {
         if self.rc_enabled {
             self.release_rc_nursery_objects();
             return;
@@ -555,10 +547,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             self.sweep_large_pages(false);
             debug_assert!(self.treadmill.read().unwrap().is_from_space_empty());
         }
-    }
-
-    pub fn release(&mut self, full_heap: bool) {
-        self.release_shared(full_heap);
     }
 
     // Allow nested-if for this function to make it clear that test_and_mark() is only executed

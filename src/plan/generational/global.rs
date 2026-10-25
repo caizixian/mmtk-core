@@ -60,7 +60,7 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
     }
 
     /// Prepare Gen. This should be called by a single thread in GC prepare work.
-    pub fn prepare(&mut self, tls: VMWorkerThread) {
+    pub fn prepare(&self, tls: VMWorkerThread) {
         let full_heap = !self.is_current_gc_nursery();
 
         // Only in case of full heap collection we prepare other spaces for collection that are not generational e.g NonMoving.
@@ -78,7 +78,7 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
     }
 
     /// Release Gen. This should be called by a single thread in GC release work.
-    pub fn release(&mut self, tls: VMWorkerThread) {
+    pub fn release(&self, tls: VMWorkerThread) {
         let full_heap = !self.is_current_gc_nursery();
 
         // In case of full heap collection we will release all spaces, even non generational ones like NonMoving.
@@ -91,7 +91,7 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
         self.nursery.release();
     }
 
-    pub fn on_pause_end(&mut self, tls: VMWorkerThread, next_gc_full_heap: bool) {
+    pub fn on_pause_end(&self, tls: VMWorkerThread, next_gc_full_heap: bool) {
         self.set_next_gc_full_heap(next_gc_full_heap);
         self.common.on_pause_end(tls);
     }

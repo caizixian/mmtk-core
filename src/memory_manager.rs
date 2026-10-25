@@ -10,8 +10,6 @@
 //! A VM binding can borrow a mutable reference directly from `Box<Mutator>`, and call `alloc()`. Alternatively,
 //! it can turn the `Box` pointer to a native pointer (`*mut Mutator`), and forge a mut reference from the native
 //! pointer. Either way, the VM binding code needs to guarantee the safety.
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use crate::global_state::GcStatus;
 use crate::mmtk::MMTKBuilder;
 use crate::mmtk::MMTK;

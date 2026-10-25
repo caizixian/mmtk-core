@@ -68,13 +68,11 @@ impl<VM: VMBinding> Plan for OVC<VM> {
     }
 
     fn prepare(&mut self, tls: VMWorkerThread) {
-        self.common.prepare(tls, true);
-        self.ovc_space.prepare();
+        self.prepare_shared(tls);
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
-        self.common.release(tls, true);
-        self.ovc_space.release();
+        self.release_shared(tls);
     }
 
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
@@ -196,5 +194,15 @@ impl<VM: VMBinding> OVC<VM> {
             )),
             common: CommonPlan::new(plan_args),
         }
+    }
+
+    pub(in crate::plan) fn prepare_shared(&self, tls: VMWorkerThread) {
+        self.common.prepare(tls, true);
+        self.ovc_space.prepare();
+    }
+
+    pub(in crate::plan) fn release_shared(&self, tls: VMWorkerThread) {
+        self.common.release(tls, true);
+        self.ovc_space.release();
     }
 }

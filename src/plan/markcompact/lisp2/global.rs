@@ -68,14 +68,12 @@ impl<VM: VMBinding> Plan for Lisp2<VM> {
         &mut self.common
     }
 
-    fn prepare(&mut self, _tls: VMWorkerThread) {
-        self.common.prepare(_tls, true);
-        self.lisp2_space.prepare();
+    fn prepare(&mut self, tls: VMWorkerThread) {
+        self.prepare_shared(tls);
     }
 
-    fn release(&mut self, _tls: VMWorkerThread) {
-        self.common.release(_tls, true);
-        self.lisp2_space.release();
+    fn release(&mut self, tls: VMWorkerThread) {
+        self.release_shared(tls);
     }
 
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
@@ -212,5 +210,15 @@ impl<VM: VMBinding> Lisp2<VM> {
 impl<VM: VMBinding> Lisp2<VM> {
     pub fn lisp2_space(&self) -> &Lisp2Space<VM> {
         &self.lisp2_space
+    }
+
+    pub(in crate::plan) fn prepare_shared(&self, tls: VMWorkerThread) {
+        self.common.prepare(tls, true);
+        self.lisp2_space.prepare();
+    }
+
+    pub(in crate::plan) fn release_shared(&self, tls: VMWorkerThread) {
+        self.common.release(tls, true);
+        self.lisp2_space.release();
     }
 }

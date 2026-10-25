@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use std::mem::{offset_of, size_of};
 use std::sync::Arc;
 

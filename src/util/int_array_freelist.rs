@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use super::freelist::*;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;

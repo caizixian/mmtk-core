@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use crate::util::address::Address;
 use crate::util::constants::BYTES_IN_PAGE;
 use crate::util::os::*;

@@ -124,37 +124,11 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
     }
 
     fn prepare(&mut self, tls: VMWorkerThread) {
-        let full_heap = !self.gen.is_current_gc_nursery();
-        self.gen.prepare(tls);
-        if full_heap {
-            self.immix_space.prepare(
-                full_heap,
-                Some(StatsForDefrag::new(self)),
-                // Bulk clear unlog bits so that we will reconstruct them.
-                UnlogBitsOperation::BulkClear,
-            );
-        } else {
-            // We don't do anything special to unlog bits during nursery GC
-            // because ProcessModBuf will set the unlog bits back.
-        }
+        self.prepare_shared(tls);
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
-        let full_heap = !self.gen.is_current_gc_nursery();
-        self.gen.release(tls);
-        if full_heap {
-            self.immix_space.release(
-                full_heap,
-                // We reconstructred unlog bits during tracing.  Keep them.
-                UnlogBitsOperation::NoOp,
-            );
-        } else {
-            // We don't do anything special to unlog bits during nursery GC
-            // because ProcessModBuf has set the unlog bits back.
-        }
-
-        self.last_gc_was_full_heap
-            .store(full_heap, Ordering::Relaxed);
+        self.release_shared(tls);
     }
 
     fn on_pause_end(&mut self, mmtk: &'static MMTK<VM>, tls: VMWorkerThread) {
@@ -281,8 +255,42 @@ impl<VM: VMBinding> GenImmix<VM> {
         self.gen.requires_full_heap_collection(self)
     }
 
+    pub(in crate::plan) fn prepare_shared(&self, tls: VMWorkerThread) {
+        let full_heap = !self.gen.is_current_gc_nursery();
+        self.gen.prepare(tls);
+        if full_heap {
+            self.immix_space.prepare(
+                full_heap,
+                Some(StatsForDefrag::new(self)),
+                // Bulk clear unlog bits so that we will reconstruct them.
+                UnlogBitsOperation::BulkClear,
+            );
+        } else {
+            // We don't do anything special to unlog bits during nursery GC
+            // because ProcessModBuf will set the unlog bits back.
+        }
+    }
+
+    pub(in crate::plan) fn release_shared(&self, tls: VMWorkerThread) {
+        let full_heap = !self.gen.is_current_gc_nursery();
+        self.gen.release(tls);
+        if full_heap {
+            self.immix_space.release(
+                full_heap,
+                // We reconstructred unlog bits during tracing.  Keep them.
+                UnlogBitsOperation::NoOp,
+            );
+        } else {
+            // We don't do anything special to unlog bits during nursery GC
+            // because ProcessModBuf has set the unlog bits back.
+        }
+
+        self.last_gc_was_full_heap
+            .store(full_heap, Ordering::Relaxed);
+    }
+
     pub(in crate::plan) fn finish_pause(
-        &mut self,
+        &self,
         tls: VMWorkerThread,
         next_gc_full_heap: Option<bool>,
     ) -> bool {

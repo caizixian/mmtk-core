@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use super::worker_monitor::{WorkerMonitor, WorkersParked};
 use super::*;
 use crate::mmtk::MMTK;

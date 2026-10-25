@@ -28,3 +28,11 @@ atomic = "0.6"
 default = []
 vo_bit = ["mmtk/vo_bit"]
 malloc_counted_size = ["mmtk/malloc_counted_size"]
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"
+unnecessary_safety_doc = "deny"

@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use crate::mmtk::SFT_MAP;
 use crate::plan::tracing::OptionObjectQueue;
 use crate::plan::ObjectQueue;
@@ -112,7 +110,7 @@ impl<VM: VMBinding> Space<VM> for VMSpace<VM> {
         &self.common
     }
 
-    fn initialize_sft_static(&'static self) {
+    fn initialize_sft(&'static self) {
         let _ = self.common.sft_ref.set(self);
         SFT_MAP.notify_space_creation_static(self);
         self.initialize_vm_regions_sft();
@@ -148,11 +146,7 @@ impl<VM: VMBinding> Space<VM> for VMSpace<VM> {
     fn enumerate_objects(&self, enumerator: &mut dyn ObjectEnumerator) {
         let external_pages = self.pr.get_external_pages();
         for ep in external_pages.iter() {
-            // SAFETY: Every registered external range `ep` in `self.pr.get_external_pages()` has
-            // its side metadata mapped and initialized by `VMSpace::set_vm_space` / `initialize_side_metadata`.
-            unsafe {
-                enumerator.visit_address_range(ep.start, ep.end);
-            }
+            enumerator.visit_address_range(ep.start, ep.end);
         }
     }
 
@@ -342,7 +336,7 @@ impl<VM: VMBinding> VMSpace<VM> {
         }
     }
 
-    pub fn prepare(&mut self) {
+    pub fn prepare(&self) {
         self.mark_state.on_global_prepare::<VM>();
         for external_pages in self.pr.get_external_pages().iter() {
             self.mark_state.on_block_reset::<VM>(
@@ -352,7 +346,7 @@ impl<VM: VMBinding> VMSpace<VM> {
         }
     }
 
-    pub fn release(&mut self) {
+    pub fn release(&self) {
         self.mark_state.on_global_release::<VM>();
     }
 

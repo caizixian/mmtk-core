@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use super::work_bucket::WorkBucketStage;
 use super::*;
 use crate::vm::*;
@@ -79,11 +77,10 @@ pub struct Prepare<C: GCWorkContext> {
 
 impl<C: GCWorkContext> Prepare<C> {
     pub fn new(plan: &C::PlanType) -> Self {
-        let plan_addr = plan as *const C::PlanType as usize;
         plan.base().scheduler.work_buckets[WorkBucketStage::Prepare].set_pre_open_hook(
             move |mmtk, tls, parked| {
                 trace!("Prepare Global");
-                crate::plan::prepare_global::<C::PlanType>(mmtk, tls, parked, plan_addr);
+                crate::plan::prepare_global::<C::VM>(mmtk, tls, parked);
 
                 let needs_prepare_mutator = mmtk.get_plan().constraints().needs_prepare_mutator;
                 if needs_prepare_mutator
@@ -157,12 +154,11 @@ pub struct Release<C: GCWorkContext> {
 
 impl<C: GCWorkContext> Release<C> {
     pub fn new(plan: &C::PlanType) -> Self {
-        let plan_addr = plan as *const C::PlanType as usize;
         plan.base().scheduler.work_buckets[WorkBucketStage::Release].set_pre_open_hook(
             move |mmtk, tls, parked| {
                 trace!("Release Global");
                 mmtk.gc_trigger.policy.on_gc_release(mmtk);
-                crate::plan::release_global::<C::PlanType>(mmtk, tls, parked, plan_addr);
+                crate::plan::release_global::<C::VM>(mmtk, tls, parked);
 
                 let release_mutator_packets = <C::VM as VMBinding>::VMActivePlan::mutators()
                     .map(|mutator| Box::new(ReleaseMutator::<C::VM>::new(mutator)) as _)

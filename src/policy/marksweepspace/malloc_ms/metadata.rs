@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use crate::util::conversions;
 use crate::util::malloc::library::BYTES_IN_MALLOC_PAGE;
 use crate::util::metadata::side_metadata::SideMetadataSpec;

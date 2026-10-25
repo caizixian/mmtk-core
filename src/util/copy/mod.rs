@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use std::sync::Arc;
 
 use crate::plan::PlanConstraints;
@@ -324,6 +322,51 @@ impl CopySemantics {
     /// Are we copying to a mature space?
     pub fn is_mature(&self) -> bool {
         matches!(self, CopySemantics::PromoteToMature | CopySemantics::Mature)
+    }
+}
+
+/// Lock-free atomic cell storing `Option<CopySemantics>` for `CommonSpace::copy`.
+pub(crate) struct AtomicCopySemantics(std::sync::atomic::AtomicU8);
+
+impl AtomicCopySemantics {
+    const NONE: u8 = 0;
+    const DEFAULT_COPY: u8 = 1;
+    const NURSERY: u8 = 2;
+    const PROMOTE_TO_MATURE: u8 = 3;
+    const MATURE: u8 = 4;
+
+    pub(crate) const fn new(semantics: Option<CopySemantics>) -> Self {
+        Self(std::sync::atomic::AtomicU8::new(Self::encode(semantics)))
+    }
+
+    const fn encode(semantics: Option<CopySemantics>) -> u8 {
+        match semantics {
+            None => Self::NONE,
+            Some(CopySemantics::DefaultCopy) => Self::DEFAULT_COPY,
+            Some(CopySemantics::Nursery) => Self::NURSERY,
+            Some(CopySemantics::PromoteToMature) => Self::PROMOTE_TO_MATURE,
+            Some(CopySemantics::Mature) => Self::MATURE,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn load(&self) -> Option<CopySemantics> {
+        match self.0.load(std::sync::atomic::Ordering::Acquire) {
+            Self::NONE => None,
+            Self::DEFAULT_COPY => Some(CopySemantics::DefaultCopy),
+            Self::NURSERY => Some(CopySemantics::Nursery),
+            Self::PROMOTE_TO_MATURE => Some(CopySemantics::PromoteToMature),
+            Self::MATURE => Some(CopySemantics::Mature),
+            other => unreachable!("Invalid AtomicCopySemantics tag: {other}"),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn store(&self, semantics: Option<CopySemantics>) {
+        self.0.store(
+            Self::encode(semantics),
+            std::sync::atomic::Ordering::Release,
+        );
     }
 }
 

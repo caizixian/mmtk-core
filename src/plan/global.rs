@@ -1,6 +1,4 @@
 //! The global part of a plan implementation.
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use super::PlanConstraints;
 use crate::global_state::GlobalState;
 use crate::mmtk::MMTK;
@@ -151,54 +149,120 @@ fn assert_stw_parked<VM: VMBinding>(mmtk: &'static MMTK<VM>, parked: &WorkersPar
     );
 }
 
-/// Execute `Plan::prepare` during `WorkBucketStage::Prepare`'s pre-open hook while all mutators
+/// Execute plan preparation during `WorkBucketStage::Prepare`'s pre-open hook while all mutators
 /// are paused and all GC workers are parked.
-pub(crate) fn prepare_global<P: Plan>(
-    mmtk: &'static MMTK<P::VM>,
+pub(crate) fn prepare_global<VM: VMBinding>(
+    mmtk: &'static MMTK<VM>,
     tls: VMWorkerThread,
     parked: &mut WorkersParked<'_>,
-    expected_plan_addr: usize,
 ) {
     assert_stw_parked(mmtk, parked);
-    let _plan_lease = mmtk.enter_plan_mut_lease();
-    // SAFETY:
-    // 1. `assert_stw_parked` verified that `parked` witnesses `mmtk.scheduler.worker_monitor` with
-    //    `WorkerMonitor::sync` held and all `0..worker_count` GC workers parked, and that
-    //    `mmtk.get_gc_status() == GcStatus::InPause` (all mutators stopped at GC safepoints).
-    // 2. `_plan_lease` enforces non-reentrancy on the calling thread, `Plan::prepare` performs
-    //    only internal plan/space preparation without calling `mmtk.get_plan()` or VM callbacks
-    //    (with `WorkerMonitor::notify_work_available` suppressed on this thread while `sync` is
-    //    held), and `plan_mut` is dropped before returning.
-    let plan_mut: &mut P = unsafe { mmtk.get_plan_mut() }.downcast_mut::<P>().unwrap();
-    debug_assert_eq!(expected_plan_addr, plan_mut as *const P as usize);
-    plan_mut.prepare(tls);
+    let plan = mmtk.get_plan();
+    match *mmtk.options.plan {
+        PlanSelector::NoGC => unreachable!("GC triggered in nogc"),
+        PlanSelector::SemiSpace => plan
+            .downcast_ref::<crate::plan::semispace::SemiSpace<VM>>()
+            .unwrap()
+            .prepare_shared(tls),
+        PlanSelector::GenCopy => plan
+            .downcast_ref::<crate::plan::generational::copying::GenCopy<VM>>()
+            .unwrap()
+            .prepare_shared(tls),
+        PlanSelector::GenImmix => plan
+            .downcast_ref::<crate::plan::generational::immix::GenImmix<VM>>()
+            .unwrap()
+            .prepare_shared(tls),
+        PlanSelector::MarkSweep => plan
+            .downcast_ref::<crate::plan::marksweep::MarkSweep<VM>>()
+            .unwrap()
+            .prepare_shared(tls),
+        PlanSelector::Immix => plan
+            .downcast_ref::<crate::plan::immix::Immix<VM>>()
+            .unwrap()
+            .prepare_inner(tls, UnlogBitsOperation::NoOp),
+        PlanSelector::PageProtect => plan
+            .downcast_ref::<crate::plan::pageprotect::PageProtect<VM>>()
+            .unwrap()
+            .prepare_shared(tls),
+        PlanSelector::Lisp2 => plan
+            .downcast_ref::<crate::plan::markcompact::lisp2::Lisp2<VM>>()
+            .unwrap()
+            .prepare_shared(tls),
+        PlanSelector::StickyImmix => plan
+            .downcast_ref::<crate::plan::sticky::immix::StickyImmix<VM>>()
+            .unwrap()
+            .prepare_shared(tls),
+        PlanSelector::LXR => plan
+            .downcast_ref::<crate::plan::lxr::LXR<VM>>()
+            .unwrap()
+            .prepare_shared(tls),
+        PlanSelector::ConcurrentImmix => plan
+            .downcast_ref::<crate::plan::concurrent::immix::ConcurrentImmix<VM>>()
+            .unwrap()
+            .prepare_shared(tls),
+        PlanSelector::OVC => plan
+            .downcast_ref::<crate::plan::markcompact::ovc::OVC<VM>>()
+            .unwrap()
+            .prepare_shared(tls),
+    }
 }
 
-/// Execute `Plan::release` during `WorkBucketStage::Release`'s pre-open hook while all mutators
-/// are paused and all GC workers are parked.
-pub(crate) fn release_global<P: Plan>(
-    mmtk: &'static MMTK<P::VM>,
+/// Execute plan release during `WorkBucketStage::Release`'s pre-open hook while all mutators are
+/// paused and all GC workers are parked.
+pub(crate) fn release_global<VM: VMBinding>(
+    mmtk: &'static MMTK<VM>,
     tls: VMWorkerThread,
     parked: &mut WorkersParked<'_>,
-    expected_plan_addr: usize,
 ) {
-    release_before_plan_mut(mmtk.get_plan());
-    {
-        assert_stw_parked(mmtk, parked);
-        let _plan_lease = mmtk.enter_plan_mut_lease();
-        // SAFETY:
-        // 1. `assert_stw_parked` verified that `parked` witnesses `mmtk.scheduler.worker_monitor`
-        //    with `WorkerMonitor::sync` held and all `0..worker_count` GC workers parked, and that
-        //    `mmtk.get_gc_status() == GcStatus::InPause` (all mutators stopped at GC safepoints).
-        // 2. `release_before_plan_mut` ran above before acquiring `plan_mut`, `_plan_lease`
-        //    enforces non-reentrancy on the calling thread, `release_plan_local` performs only
-        //    internal plan/space release updates, and `plan_mut` is dropped at the end of this
-        //    block before `release_after_plan_mut` runs.
-        let plan_mut: &mut P = unsafe { mmtk.get_plan_mut() }.downcast_mut::<P>().unwrap();
-        debug_assert_eq!(expected_plan_addr, plan_mut as *const P as usize);
-        release_plan_local::<P>(plan_mut, tls);
+    assert_stw_parked(mmtk, parked);
+    let plan = mmtk.get_plan();
+    match *mmtk.options.plan {
+        PlanSelector::NoGC => unreachable!("GC triggered in nogc"),
+        PlanSelector::SemiSpace => plan
+            .downcast_ref::<crate::plan::semispace::SemiSpace<VM>>()
+            .unwrap()
+            .release_shared(tls),
+        PlanSelector::GenCopy => plan
+            .downcast_ref::<crate::plan::generational::copying::GenCopy<VM>>()
+            .unwrap()
+            .release_shared(tls),
+        PlanSelector::GenImmix => plan
+            .downcast_ref::<crate::plan::generational::immix::GenImmix<VM>>()
+            .unwrap()
+            .release_shared(tls),
+        PlanSelector::MarkSweep => plan
+            .downcast_ref::<crate::plan::marksweep::MarkSweep<VM>>()
+            .unwrap()
+            .release_shared(tls),
+        PlanSelector::Immix => plan
+            .downcast_ref::<crate::plan::immix::Immix<VM>>()
+            .unwrap()
+            .release_inner(tls, UnlogBitsOperation::NoOp),
+        PlanSelector::PageProtect => plan
+            .downcast_ref::<crate::plan::pageprotect::PageProtect<VM>>()
+            .unwrap()
+            .release_shared(tls),
+        PlanSelector::Lisp2 => plan
+            .downcast_ref::<crate::plan::markcompact::lisp2::Lisp2<VM>>()
+            .unwrap()
+            .release_shared(tls),
+        PlanSelector::StickyImmix => plan
+            .downcast_ref::<crate::plan::sticky::immix::StickyImmix<VM>>()
+            .unwrap()
+            .release_shared(tls),
+        PlanSelector::LXR => plan
+            .downcast_ref::<crate::plan::lxr::LXR<VM>>()
+            .unwrap()
+            .release_shared(tls),
+        PlanSelector::ConcurrentImmix => plan
+            .downcast_ref::<crate::plan::concurrent::immix::ConcurrentImmix<VM>>()
+            .unwrap()
+            .release_shared(tls),
+        PlanSelector::OVC => plan
+            .downcast_ref::<crate::plan::markcompact::ovc::OVC<VM>>()
+            .unwrap()
+            .release_shared(tls),
     }
-    release_after_plan_mut(mmtk.get_plan());
 }
 
 /// Execute end-of-pause `Plan` bookkeeping at the end of `GCWorkScheduler::on_gc_finished` while
@@ -208,31 +272,18 @@ pub(crate) fn finish_pause_global<VM: VMBinding>(
     tls: VMWorkerThread,
     parked: &mut WorkersParked<'_>,
 ) {
-    let next_gc_full_heap = compute_next_gc_full_heap(mmtk.get_plan());
-    let gc_ended = {
-        assert_stw_parked(mmtk, parked);
-        let _plan_lease = mmtk.enter_plan_mut_lease();
-        // SAFETY:
-        // 1. `assert_stw_parked` verified that `parked` witnesses `mmtk.scheduler.worker_monitor`
-        //    with `WorkerMonitor::sync` held and all `0..worker_count` GC workers parked, and that
-        //    `mmtk.get_gc_status() == GcStatus::InPause` (all mutators stopped at GC safepoints).
-        // 2. `next_gc_full_heap` was computed above before acquiring `plan_mut`, `_plan_lease`
-        //    enforces non-reentrancy on the calling thread, `finish_plan_pause` performs only
-        //    plan-local updates, and `plan_mut` is dropped at the end of this block before
-        //    `gc_trigger.policy.on_gc_end` runs.
-        let plan_mut: &mut dyn Plan<VM = VM> = unsafe { mmtk.get_plan_mut() };
-        finish_plan_pause(plan_mut, mmtk, tls, next_gc_full_heap)
-    };
-    if gc_ended {
+    assert_stw_parked(mmtk, parked);
+    let plan = mmtk.get_plan();
+    let next_gc_full_heap = compute_next_gc_full_heap(plan);
+    if finish_plan_pause(plan, mmtk, tls, next_gc_full_heap) {
         mmtk.gc_trigger.policy.on_gc_end(mmtk);
     }
 }
 
-/// Perform plan-local pause-end mutations while `&mut dyn Plan<VM = VM>` is held, returning
-/// `true` if the pause also ended the GC cycle so the caller should invoke
-/// `mmtk.gc_trigger.policy.on_gc_end(mmtk)` *after* dropping `&mut dyn Plan<VM = VM>`.
+/// Perform plan-local pause-end updates on `&dyn Plan<VM = VM>`, returning `true` if the pause
+/// also ended the GC cycle so the caller should invoke `mmtk.gc_trigger.policy.on_gc_end(mmtk)`.
 fn finish_plan_pause<VM: VMBinding>(
-    plan: &mut dyn Plan<VM = VM>,
+    plan: &dyn Plan<VM = VM>,
     mmtk: &'static MMTK<VM>,
     tls: VMWorkerThread,
     next_gc_full_heap: Option<bool>,
@@ -243,7 +294,7 @@ fn finish_plan_pause<VM: VMBinding>(
         | PlanSelector::PageProtect
         | PlanSelector::Lisp2
         | PlanSelector::OVC => {
-            plan.common_mut().on_pause_end(tls);
+            plan.common().on_pause_end(tls);
             assert!(
                 plan.concurrent().is_none(),
                 "ConcurrentPlan must override on_pause_end"
@@ -251,31 +302,31 @@ fn finish_plan_pause<VM: VMBinding>(
             true
         }
         PlanSelector::MarkSweep => plan
-            .downcast_mut::<crate::plan::marksweep::MarkSweep<VM>>()
+            .downcast_ref::<crate::plan::marksweep::MarkSweep<VM>>()
             .unwrap()
             .finish_pause(tls),
         PlanSelector::Immix => plan
-            .downcast_mut::<crate::plan::immix::Immix<VM>>()
+            .downcast_ref::<crate::plan::immix::Immix<VM>>()
             .unwrap()
             .finish_pause(tls),
         PlanSelector::GenCopy => plan
-            .downcast_mut::<crate::plan::generational::copying::GenCopy<VM>>()
+            .downcast_ref::<crate::plan::generational::copying::GenCopy<VM>>()
             .unwrap()
             .finish_pause(tls, next_gc_full_heap),
         PlanSelector::GenImmix => plan
-            .downcast_mut::<crate::plan::generational::immix::GenImmix<VM>>()
+            .downcast_ref::<crate::plan::generational::immix::GenImmix<VM>>()
             .unwrap()
             .finish_pause(tls, next_gc_full_heap),
         PlanSelector::StickyImmix => plan
-            .downcast_mut::<crate::plan::sticky::immix::StickyImmix<VM>>()
+            .downcast_ref::<crate::plan::sticky::immix::StickyImmix<VM>>()
             .unwrap()
             .finish_pause(tls, next_gc_full_heap),
         PlanSelector::ConcurrentImmix => plan
-            .downcast_mut::<crate::plan::concurrent::immix::ConcurrentImmix<VM>>()
+            .downcast_ref::<crate::plan::concurrent::immix::ConcurrentImmix<VM>>()
             .unwrap()
             .finish_pause(mmtk),
         PlanSelector::LXR => plan
-            .downcast_mut::<crate::plan::lxr::LXR<VM>>()
+            .downcast_ref::<crate::plan::lxr::LXR<VM>>()
             .unwrap()
             .finish_pause(tls),
     }
@@ -292,27 +343,6 @@ fn compute_next_gc_full_heap<VM: VMBinding>(plan: &dyn Plan<VM = VM>) -> Option<
     plan.generational().map(|_| {
         crate::plan::generational::global::CommonGenPlan::should_next_gc_be_full_heap(plan)
     })
-}
-
-fn release_before_plan_mut<VM: VMBinding>(plan: &dyn Plan<VM = VM>) {
-    if let Some(lxr) = plan.downcast_ref::<crate::plan::lxr::LXR<VM>>() {
-        lxr.release_before_plan_mut();
-    }
-}
-
-fn release_plan_local<P: Plan>(plan_mut: &mut P, tls: VMWorkerThread) {
-    let plan_any: &mut dyn Plan<VM = P::VM> = plan_mut;
-    if let Some(lxr) = plan_any.downcast_mut::<crate::plan::lxr::LXR<P::VM>>() {
-        lxr.release_plan_local(tls);
-    } else {
-        plan_mut.release(tls);
-    }
-}
-
-fn release_after_plan_mut<VM: VMBinding>(plan: &dyn Plan<VM = VM>) {
-    if let Some(lxr) = plan.downcast_ref::<crate::plan::lxr::LXR<VM>>() {
-        lxr.release_after_plan_mut();
-    }
 }
 
 /// Create thread local GC worker.
@@ -445,7 +475,7 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     /// the proper timing for the plan, such as calling `CommonPlan::on_pause_end`, and selectively
     /// call `GCTriggerPolicy::on_gc_end` if the pause is the end of a GC.
     fn on_pause_end(&mut self, mmtk: &'static MMTK<Self::VM>, tls: VMWorkerThread) {
-        self.common_mut().on_pause_end(tls);
+        self.common().on_pause_end(tls);
         assert!(
             self.concurrent().is_none(),
             "ConcurrentPlan must override on_pause_end"
@@ -594,21 +624,9 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
         })
     }
 
-    /// Call `space.initialize_sft` for all spaces in this plan, and notify the SFT map about the creation of each space.
-    /// This method should only be called after 1. side metadata is initialized (as some SFT maps may use side metadata), 2. the plan is created in the heap and won't be moved,
-    /// and 3. the side metadata sanity is initialized (otherwise we may try access side metadata and trigger sanity check before side metadata sanity is initialized)
-    fn initialize_sft(&self) {
-        use crate::policy::sft_map::{ensure_sft_map_initialized, SFTMap, SftMapInitHandle};
-        assert!(
-            !self.base().sft_initialized.swap(true, Ordering::AcqRel),
-            "Plan::initialize_sft may only be called once per Plan instance"
-        );
-        let mut sft_map = SftMapInitHandle::new(ensure_sft_map_initialized());
-        self.for_each_space(&mut |s| {
-            sft_map.notify_space_creation(s.as_sft());
-            s.initialize_sft(&mut sft_map);
-        });
-    }
+    /// Legacy hook retained for `Plan` trait compatibility; `'static` space SFT registration runs
+    /// automatically in `GCTrigger::set_plan`.
+    fn initialize_sft(&self) {}
 
     /// Call `space.initialize_side_metadata` for all spaces in this plan.
     /// This is called after the plan is created in the heap and won't be moved, and after side metadata is initialized.
@@ -629,7 +647,6 @@ pub struct BasePlan<VM: VMBinding> {
     pub options: Arc<Options>,
     pub gc_trigger: Arc<GCTrigger<VM>>,
     pub scheduler: Arc<GCWorkScheduler<VM>>,
-    pub(crate) sft_initialized: std::sync::atomic::AtomicBool,
 
     // Spaces in base plan
     #[cfg(feature = "code_space")]
@@ -833,7 +850,6 @@ impl<VM: VMBinding> BasePlan<VM> {
             gc_trigger: args.global_args.gc_trigger,
             options: args.global_args.options,
             scheduler: args.global_args.scheduler,
-            sft_initialized: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -864,7 +880,7 @@ impl<VM: VMBinding> BasePlan<VM> {
         pages
     }
 
-    pub fn prepare(&mut self, _tls: VMWorkerThread, _full_heap: bool) {
+    pub fn prepare(&self, _tls: VMWorkerThread, _full_heap: bool) {
         #[cfg(feature = "code_space")]
         self.code_space.prepare();
         #[cfg(feature = "code_space")]
@@ -875,7 +891,7 @@ impl<VM: VMBinding> BasePlan<VM> {
         self.vm_space.prepare();
     }
 
-    pub fn release(&mut self, _tls: VMWorkerThread, _full_heap: bool) {
+    pub fn release(&self, _tls: VMWorkerThread, _full_heap: bool) {
         #[cfg(feature = "code_space")]
         self.code_space.release();
         #[cfg(feature = "code_space")]
@@ -908,7 +924,7 @@ impl<VM: VMBinding> BasePlan<VM> {
         self.vm_space.set_side_log_bits();
     }
 
-    pub fn on_pause_end(&mut self, _tls: VMWorkerThread) {
+    pub fn on_pause_end(&self, _tls: VMWorkerThread) {
         // Do nothing here. None of the spaces needs on_pause_end.
     }
 
@@ -1001,21 +1017,21 @@ impl<VM: VMBinding> CommonPlan<VM> {
             + self.base.get_used_pages()
     }
 
-    pub fn prepare(&mut self, tls: VMWorkerThread, full_heap: bool) {
+    pub fn prepare(&self, tls: VMWorkerThread, full_heap: bool) {
         self.immortal.prepare();
         self.los.prepare(full_heap);
         self.prepare_nonmoving_space(full_heap);
         self.base.prepare(tls, full_heap)
     }
 
-    pub fn release(&mut self, tls: VMWorkerThread, full_heap: bool) {
+    pub fn release(&self, tls: VMWorkerThread, full_heap: bool) {
         self.immortal.release();
         self.los.release(full_heap);
         self.release_nonmoving_space(full_heap);
         self.base.release(tls, full_heap)
     }
 
-    pub(crate) fn schedule_unlog_bits_op(&mut self, unlog_bits_op: UnlogBitsOperation) {
+    pub(crate) fn schedule_unlog_bits_op(&self, unlog_bits_op: UnlogBitsOperation) {
         if VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.is_on_side() {
             match unlog_bits_op {
                 UnlogBitsOperation::NoOp => {}
@@ -1043,7 +1059,7 @@ impl<VM: VMBinding> CommonPlan<VM> {
         self.base.set_side_log_bits();
     }
 
-    pub fn on_pause_end(&mut self, tls: VMWorkerThread) {
+    pub fn on_pause_end(&self, tls: VMWorkerThread) {
         self.end_of_gc_nonmoving_space();
         self.base.on_pause_end(tls);
     }
@@ -1079,7 +1095,7 @@ impl<VM: VMBinding> CommonPlan<VM> {
     }
 
     #[allow(clippy::needless_return)]
-    pub(crate) fn prepare_nonmoving_space(&mut self, _full_heap: bool) {
+    pub(crate) fn prepare_nonmoving_space(&self, _full_heap: bool) {
         // FIXME: We need to handle nonmoving space properly.
         // Nonmoving space is a bit special for LXR, as it could be a second ImmixSpace (as opposed to the default ImmixSpace).
         // It is arguable whether we should use an LXR ImmixSpace here, or use a normal Immix space.
@@ -1103,7 +1119,7 @@ impl<VM: VMBinding> CommonPlan<VM> {
     }
 
     #[allow(clippy::needless_return)]
-    pub(crate) fn release_nonmoving_space(&mut self, _full_heap: bool) {
+    pub(crate) fn release_nonmoving_space(&self, _full_heap: bool) {
         // FIXME: We need to handle nonmoving space properly.
         // See comments in prepare_non_moving_space
         if *self.base.options.plan == PlanSelector::LXR {
@@ -1122,7 +1138,7 @@ impl<VM: VMBinding> CommonPlan<VM> {
     }
 
     #[allow(clippy::needless_return)]
-    pub(crate) fn end_of_gc_nonmoving_space(&mut self) {
+    pub(crate) fn end_of_gc_nonmoving_space(&self) {
         // FIXME: We need to handle nonmoving space properly.
         // See comments in prepare_non_moving_space
         if *self.base.options.plan == PlanSelector::LXR {
@@ -1172,6 +1188,12 @@ pub trait HasSpaces {
     /// If `Self` contains nested fields that contain more spaces, this method shall visit spaces
     /// in the outer struct first.
     fn for_each_space_mut(&mut self, func: &mut dyn FnMut(&mut dyn Space<Self::VM>));
+
+    /// Visit each space field with `'static` lifetime when `self` is `'static`.
+    ///
+    /// If `Self` contains nested fields that contain more spaces, this method shall visit spaces
+    /// in the outer struct first.
+    fn for_each_space_static(&'static self, func: &mut dyn FnMut(&'static dyn Space<Self::VM>));
 }
 
 /// A plan that uses [`PlanTrace`] needs to provide an implementation for this trait.

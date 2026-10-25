@@ -1,7 +1,5 @@
 //! This module provides a default implementation of the access functions for in-header metadata.
 
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use atomic::Ordering;
 use std::fmt;
 

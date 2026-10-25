@@ -1,6 +1,4 @@
 //! The module defines virutal memory layout parameters.
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use std::sync::OnceLock;
 
 use super::heap_parameters::*;

@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use std::marker::PhantomData;
 use std::sync::Mutex;
 

@@ -1,5 +1,3 @@
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use atomic::Atomic;
 
 use std::sync::atomic::Ordering;
@@ -129,7 +127,7 @@ impl<VM: VMBinding> Space<VM> for LockFreeImmortalSpace<VM> {
         panic!("immortalspace only releases pages enmasse")
     }
 
-    fn initialize_sft_static(&'static self) {
+    fn initialize_sft(&'static self) {
         crate::mmtk::SFT_MAP.notify_space_creation_static(self);
         crate::mmtk::SFT_MAP.eager_initialize_static(self, self.start, self.total_bytes);
     }
@@ -192,11 +190,7 @@ impl<VM: VMBinding> Space<VM> for LockFreeImmortalSpace<VM> {
     }
 
     fn enumerate_objects(&self, enumerator: &mut dyn ObjectEnumerator) {
-        // SAFETY: `LockFreeImmortalSpace::initialize_side_metadata` eagerly maps `self.metadata`
-        // across `[self.start, self.start + self.total_bytes)` during space initialization.
-        unsafe {
-            enumerator.visit_address_range(self.start, self.start + self.total_bytes);
-        }
+        enumerator.visit_address_range(self.start, self.start + self.total_bytes);
     }
 
     fn clear_side_log_bits(&self) {

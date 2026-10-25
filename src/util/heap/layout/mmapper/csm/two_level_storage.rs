@@ -2,17 +2,15 @@
 //! designed to work well on 64-bit machines.  Currently it supports 48-bit address spaces, and many
 //! constants and data structures (such as [`Slab`]) are larger than `i32::MAX`.  For this reason,
 //! this module is only available on 64-bit machines.
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use super::MapState;
 use crate::util::heap::layout::mmapper::csm::{ChunkRange, MapStateStorage};
 use crate::util::heap::layout::vm_layout::*;
 use crate::util::os::MmapResult;
 use crate::util::rust_util::atomic_box::OnceOptionBox;
 use crate::util::rust_util::rev_group::RevisitableGroupByForIterator;
-use crate::util::rust_util::zeroed_alloc::new_zeroed_vec;
 use crate::util::Address;
 use atomic::{Atomic, Ordering};
+use bytemuck::allocation::zeroed_vec;
 use std::fmt;
 
 /// Logarithm of the address space size that [`TwoLevelStateStorage`] is able to handle.
@@ -166,7 +164,7 @@ impl MapStateStorage for TwoLevelStateStorage {
 impl TwoLevelStateStorage {
     pub fn new() -> Self {
         Self {
-            slabs: new_zeroed_vec(MAX_SLABS),
+            slabs: zeroed_vec(MAX_SLABS),
         }
     }
 
