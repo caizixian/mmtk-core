@@ -11,9 +11,12 @@ pub(crate) mod ranges;
 mod sanity;
 mod side_metadata_tests;
 pub(crate) mod spec_defs;
+pub(crate) mod typed;
 
 pub use global::*;
 pub use layout::*;
+#[allow(unused_imports)]
+pub(crate) use typed::*;
 
 use crate::util::options::Options;
 use crate::vm::ObjectModel;

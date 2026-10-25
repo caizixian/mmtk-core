@@ -292,8 +292,8 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
             .align_down(BYTES_IN_PAGE);
         while cur_page >= low_page {
             if cur_page < mapped_grain {
-                if !cur_page.is_mapped() {
-                    // If the page start is not mapped, there can't be an object in it.
+                if !cur_page.is_mapped() || !vo_bit::VO_BIT_SIDE_METADATA_SPEC.is_mapped(cur_page) {
+                    // If the page start or its VO-bit side metadata is not mapped, there can't be an object in it.
                     return None;
                 }
                 // This is mapped. No need to check for this chunk.
@@ -303,7 +303,12 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
             // In almost all the cases, it should be sufficient.
             // However, if the raw address of ObjectReference is not in the first 512 bytes, this won't work.
             // We assert this when we set VO bit for LOS.
-            if vo_bit::get_raw_vo_bit_word(cur_page) != 0 {
+            // SAFETY: Both `cur_page.is_mapped()` and `VO_BIT_SIDE_METADATA_SPEC.is_mapped(cur_page)`
+            // were verified for the current `mmap_granularity` grain above (and `VO_BIT` is mapped
+            // at chunk granularity >= page/word size, so the aligned metadata word for `cur_page`
+            // is fully mapped and initialized). Per MMTk's VO-bit availability contract during
+            // stack/internal-pointer scanning, VO-bit metadata is quiescent with no racing writes.
+            if unsafe { vo_bit::get_raw_vo_bit_word(cur_page) } != 0 {
                 // Find the exact word-aligned address that has VO bit set
                 for offset in (0..vo_bit::VO_BIT_WORD_TO_REGION).step_by(ObjectReference::ALIGNMENT)
                 {
@@ -394,18 +399,27 @@ impl<VM: VMBinding> Space<VM> for LargeObjectSpace<VM> {
     }
 
     fn clear_side_log_bits(&self) {
-        let mut enumerator = ClosureObjectEnumerator::<_, VM>::new(|object| {
-            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.clear::<VM>(object, Ordering::SeqCst);
-        });
+        // SAFETY: `Treadmill::enumerate_objects` only invokes `ObjectEnumerator::visit_object` on
+        // explicit treadmill cells and never invokes `visit_address_range`.
+        let mut enumerator = unsafe {
+            ClosureObjectEnumerator::<_, VM>::new(|object| {
+                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.clear::<VM>(object, Ordering::SeqCst);
+            })
+        };
         // Visit all objects.  It can be ordered arbitrarily with `Self::Release` which sweeps dead
         // objects (removing them from the treadmill) and clears their unlog bits, too.
         self.treadmill.enumerate_objects(&mut enumerator, true);
     }
 
     fn set_side_log_bits(&self) {
-        let mut enumerator = ClosureObjectEnumerator::<_, VM>::new(|object| {
-            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
-        });
+        // SAFETY: `Treadmill::enumerate_objects` only invokes `ObjectEnumerator::visit_object` on
+        // explicit treadmill cells and never invokes `visit_address_range`.
+        let mut enumerator = unsafe {
+            ClosureObjectEnumerator::<_, VM>::new(|object| {
+                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                    .mark_as_unlogged::<VM>(object, Ordering::SeqCst);
+            })
+        };
         // Visit all objects.
         self.treadmill.enumerate_objects(&mut enumerator, true);
     }

@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use crate::util::metadata::vo_bit;
 use crate::util::Address;
 use crate::util::ObjectReference;
@@ -26,12 +28,17 @@ impl<VM: VMBinding, S: LinearScanObjectSize, const ATOMIC_LOAD_VO_BIT: bool>
     /// Create an iterator for the address range. The caller must ensure
     /// that the VO bit metadata is mapped for the address range.
     pub fn new(start: Address, end: Address) -> Self {
+        assert!(!start.is_zero(), "ObjectIterator start must be non-zero");
+        assert!(
+            start <= end,
+            "ObjectIterator start ({start}) must be <= end ({end})"
+        );
         debug_assert!(start < end);
-        debug_assert!(
+        assert!(
             start.is_aligned_to(ObjectReference::ALIGNMENT),
             "start is not word-aligned: {start}"
         );
-        debug_assert!(
+        assert!(
             end.is_aligned_to(ObjectReference::ALIGNMENT),
             "end is not word-aligned: {end}"
         );
@@ -105,32 +112,63 @@ pub trait Region: Copy + PartialEq + PartialOrd {
     /// Return the start address of the region. For performance, this method should always be inlined.
     fn start(&self) -> Address;
 
-    /// Create a region from an arbitrary address.
+    /// Assert unconditionally (including in release builds) that `address` is non-zero and aligned
+    /// to [`Self::BYTES`].
+    #[inline(always)]
+    fn assert_aligned_non_zero(address: Address) {
+        assert!(
+            !address.is_zero() && address.is_aligned_to(Self::BYTES),
+            "Region address {address} must be non-zero and aligned to {:#x} bytes",
+            Self::BYTES
+        );
+    }
+
+    /// Create a region from an arbitrary address (panicking unconditionally if the aligned region
+    /// start would be `Address::ZERO`).
+    #[inline(always)]
     fn from_unaligned_address(address: Address) -> Self {
-        Self::from_aligned_address(Self::align(address))
+        let aligned = Self::align(address);
+        Self::assert_aligned_non_zero(aligned);
+        Self::from_aligned_address(aligned)
     }
 
     /// Align the address to the region.
+    #[inline(always)]
     fn align(address: Address) -> Address {
         address.align_down(Self::BYTES)
     }
     /// Check if an address is aligned to the region.
+    #[inline(always)]
     fn is_aligned(address: Address) -> bool {
         address.is_aligned_to(Self::BYTES)
     }
 
     /// Return the end address of the region. Note that the end address is not in the region.
+    #[inline(always)]
     fn end(&self) -> Address {
         self.start() + Self::BYTES
     }
     /// Return the next region after this one.
+    #[inline(always)]
     fn next(&self) -> Self {
         self.next_nth(1)
     }
-    /// Return the next nth region after this one.
+    /// Return the next nth region after this one (panicking unconditionally on shift or address
+    /// overflow).
+    #[inline(always)]
     fn next_nth(&self, n: usize) -> Self {
-        debug_assert!(self.start().as_usize() < usize::MAX - (n << Self::LOG_BYTES));
-        Self::from_aligned_address(self.start() + (n << Self::LOG_BYTES))
+        let byte_offset = n
+            .checked_shl(Self::LOG_BYTES as u32)
+            .expect("Region::next_nth shift overflow");
+        assert!(
+            self.start().as_usize().checked_add(byte_offset).is_some(),
+            "Region::next_nth address overflow from {} + {:#x}",
+            self.start(),
+            byte_offset
+        );
+        let next_addr = self.start() + byte_offset;
+        Self::assert_aligned_non_zero(next_addr);
+        Self::from_aligned_address(next_addr)
     }
     /// Get the number of lines between the given two lines.
     fn steps_between(start: &Self, end: &Self) -> Option<usize> {
@@ -218,7 +256,7 @@ mod tests {
         const LOG_BYTES: usize = LOG_BYTES_IN_PAGE as usize;
 
         fn from_aligned_address(address: Address) -> Self {
-            debug_assert!(address.is_aligned_to(Self::BYTES));
+            Self::assert_aligned_non_zero(address);
             Self(address)
         }
 
@@ -292,14 +330,36 @@ mod tests {
     fn test_region_iterator_smaller_end() {
         // SAFETY: Synthetic non-dereferenced `Address` used only to test `RegionIterator` bounds.
         let addr4k = unsafe { Address::from_usize(PAGE_SIZE) };
-        let page = Page::from_aligned_address(addr4k);
-        let end = Page::from_aligned_address(Address::ZERO);
+        let page = Page::from_aligned_address(addr4k + PAGE_SIZE);
+        let end = Page::from_aligned_address(addr4k);
 
         let mut results = vec![];
         let iter = RegionIterator::new(page, end);
         for p in iter {
             results.push(p);
         }
-        debug_assert_eq!(results, vec![]);
+        assert_eq!(results, vec![]);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be non-zero and aligned")]
+    fn test_region_zero_address_panics() {
+        let _ = Page::from_aligned_address(Address::ZERO);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be non-zero and aligned")]
+    fn test_region_unaligned_address_panics() {
+        // SAFETY: Synthetic non-dereferenced `Address` used only to test alignment panic.
+        let unaligned = unsafe { Address::from_usize(PAGE_SIZE + 1) };
+        let _ = Page::from_aligned_address(unaligned);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be non-zero and aligned")]
+    fn test_region_unaligned_below_first_region_panics() {
+        // SAFETY: Synthetic non-dereferenced `Address` below `PAGE_SIZE` aligns down to `ZERO`.
+        let sub_page = unsafe { Address::from_usize(16) };
+        let _ = Page::from_unaligned_address(sub_page);
     }
 }

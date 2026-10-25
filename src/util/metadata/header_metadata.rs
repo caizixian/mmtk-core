@@ -1,12 +1,20 @@
 //! This module provides a default implementation of the access functions for in-header metadata.
 
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use atomic::Ordering;
+use core::sync::atomic::AtomicU8;
 use std::fmt;
 
 use crate::util::constants::{BITS_IN_BYTE, LOG_BITS_IN_BYTE};
 use crate::util::metadata::metadata_val_traits::*;
 use crate::util::Address;
 use num_traits::FromPrimitive;
+
+enum ResolvedHeaderAtomic<'a, T: MetadataValue> {
+    SubByte { atomic: &'a AtomicU8 },
+    FullWord { atomic: &'a T::Atomic },
+}
 
 #[allow(dead_code)]
 const LOG_BITS_IN_U16: usize = 4;
@@ -51,11 +59,10 @@ impl HeaderMetadataSpec {
     /// a forwarding pointer is pointer-size, but its last 2 bits could be used as forwarding bits. In that case, all accesses to the forwarding pointer
     /// spec should be used with a mask to make sure that we exclude the forwarding bits.
     #[inline(always)]
-    fn assert_mask<T: MetadataValue>(&self, mask: Option<T>) {
+    pub(crate) const fn assert_mask<T: MetadataValue>(&self, mask: Option<T>) {
         assert!(
             mask.is_none() || self.num_of_bits >= 8,
-            "optional_mask is only supported for 8X-bits in-header metadata. Problematic MetadataSpec: ({:?})",
-            self
+            "optional_mask is only supported for 8X-bits in-header metadata."
         );
     }
 
@@ -63,44 +70,68 @@ impl HeaderMetadataSpec {
     /// Because real `HeaderMetadataSpec` values are `const`, LLVM constant-folds these checks to
     /// zero instructions in release builds while preventing UB on arbitrary `pub`-field specs.
     #[inline(always)]
-    fn assert_spec<T: MetadataValue>(&self) {
+    pub(crate) const fn assert_spec<T: MetadataValue>(&self) {
         if self.num_of_bits == 0 {
             panic!("Metadata of 0 bits is not allowed.");
         } else if self.num_of_bits < 8 {
+            let Some(last_bit) = self.bit_offset.checked_add(self.num_of_bits as isize - 1) else {
+                panic!("Metadata << 8-bits: bit_offset + num_of_bits overflows isize!");
+            };
             assert!(
-                (self.bit_offset >> LOG_BITS_IN_BYTE)
-                    == ((self.bit_offset + self.num_of_bits as isize - 1) >> LOG_BITS_IN_BYTE),
-                "Metadata << 8-bits: ({:?}) stretches over two bytes!",
-                self
+                (self.bit_offset >> LOG_BITS_IN_BYTE) == (last_bit >> LOG_BITS_IN_BYTE),
+                "Metadata << 8-bits stretches over two bytes!"
             );
         } else if self.num_of_bits <= 64 {
-            assert_eq!(
-                self.num_of_bits,
-                T::BITS as usize,
-                "{:?}: num_of_bits ({}) must equal T::BITS ({})",
-                self,
-                self.num_of_bits,
-                T::BITS
+            assert!(
+                self.num_of_bits == T::BITS as usize,
+                "HeaderMetadataSpec num_of_bits must equal T::BITS for >= 8-bit metadata"
             );
             let req_align_bits = (max_metadata_align::<T>() * BITS_IN_BYTE) as isize;
             assert!(
                 self.bit_offset.rem_euclid(req_align_bits) == 0,
-                "{:?}: bit_offset must be aligned to {}",
-                self,
-                req_align_bits
+                "HeaderMetadataSpec bit_offset must be aligned to max_metadata_align::<T>()"
             );
         } else {
             // num_of_bits larger than 64
-            unreachable!("Metadata that is larger than 64-bits is not supported")
+            panic!("Metadata that is larger than 64-bits is not supported");
         }
     }
 
-    fn byte_offset(&self) -> isize {
+    const fn byte_offset(&self) -> isize {
         self.bit_offset >> LOG_BITS_IN_BYTE
     }
 
     fn meta_addr(&self, header: Address) -> Address {
         header + self.byte_offset()
+    }
+
+    /// Validate `self` for `T` and project the underlying atomic metadata cell at `header`.
+    ///
+    /// # Safety
+    /// * `self.meta_addr(header)` must point to mapped, initialized, readable/writable
+    ///   object-header memory valid for `'a`, with no concurrent non-atomic accesses or live
+    ///   non-atomic Rust references (`&` or `&mut`), and all concurrent accesses must use atomic
+    ///   operations of the same width (`AtomicU8` when `self.num_of_bits < 8`, or `T::Atomic`).
+    #[inline(always)]
+    unsafe fn resolve_atomic<'a, T: MetadataValue>(
+        &self,
+        header: Address,
+    ) -> ResolvedHeaderAtomic<'a, T> {
+        self.assert_spec::<T>();
+        let addr = self.meta_addr(header);
+        if self.num_of_bits < 8 {
+            // SAFETY: Caller guarantees `addr` is mapped, initialized, and accessed solely via
+            // `AtomicU8` for `'a` (`u8::atomic_ref` unconditionally checks `!addr.is_zero()`).
+            let atomic = unsafe { <u8 as MetadataValue>::atomic_ref(addr) };
+            ResolvedHeaderAtomic::SubByte { atomic }
+        } else {
+            // SAFETY: `assert_spec::<T>()` verified `self.num_of_bits == T::BITS` and `bit_offset`
+            // alignment, `T::atomic_ref` unconditionally checks `!addr.is_zero()` and
+            // `addr.is_aligned_to(T::ATOMIC_ALIGN)`, and caller guarantees mapped, initialized
+            // header memory accessed solely via `T::Atomic` for `'a`.
+            let atomic = unsafe { T::atomic_ref(addr) };
+            ResolvedHeaderAtomic::FullWord { atomic }
+        }
     }
 
     // Some common methods for header metadata that is smaller than 1 byte.
@@ -185,25 +216,15 @@ impl HeaderMetadataSpec {
         ordering: Ordering,
     ) -> T {
         self.assert_mask::<T>(optional_mask);
-        self.assert_spec::<T>();
-
-        let addr = self.meta_addr(header);
-        // Metadata smaller than 8-bits is special in that more than one metadata value may be
-        // included in one AtomicU8 operation, and extra shift and mask is required.
-        let res: T = if self.num_of_bits < 8 {
-            // SAFETY: By MMTk's `ObjectModel` header-metadata contract (preserved as a `pub` API for
-            // VM bindings), `header` is a live object's header base address, so `addr` is non-null,
-            // 1-byte aligned for `AtomicU8`, and points to mapped, initialized header memory accessed
-            // atomically without conflicting non-atomic writes or `&mut` references.
-            let byte_val = unsafe { <u8 as MetadataValue>::load_atomic(addr, ordering) };
-            FromPrimitive::from_u8(self.get_bits_from_u8(byte_val)).unwrap()
-        } else {
-            // SAFETY: By MMTk's `ObjectModel` header-metadata contract and unconditional `assert_spec`
-            // (`num_of_bits == T::BITS` and `bit_offset` aligned to `max_metadata_align::<T>()`),
-            // `addr` is non-null, aligned to `T`'s atomic counterpart, and points to mapped,
-            // initialized header memory of `size_of::<T>()` bytes with no conflicting non-atomic
-            // accesses or `&mut` aliases.
-            unsafe { T::load_atomic(addr, ordering) }
+        // SAFETY: By MMTk's `ObjectModel` header-metadata contract (preserved as a `pub` API for
+        // VM bindings), `header` is a live object's header base address whose metadata cell at
+        // `self.meta_addr(header)` is mapped, initialized, and accessed atomically without
+        // conflicting non-atomic writes or `&mut` aliases.
+        let res: T = match unsafe { self.resolve_atomic::<T>(header) } {
+            ResolvedHeaderAtomic::SubByte { atomic } => {
+                FromPrimitive::from_u8(self.get_bits_from_u8(atomic.load(ordering))).unwrap()
+            }
+            ResolvedHeaderAtomic::FullWord { atomic } => atomic.load_val(ordering),
         };
 
         if let Some(mask) = optional_mask {
@@ -275,46 +296,25 @@ impl HeaderMetadataSpec {
         ordering: Ordering,
     ) {
         self.assert_mask::<T>(optional_mask);
-        self.assert_spec::<T>();
-
-        // Metadata smaller than 8-bits is special in that more than one metadata value may be
-        // included in one AtomicU8 operation, requiring shift, mask, and `fetch_update`.
-        if self.num_of_bits < 8 {
-            let val_u8 = val.to_u8().unwrap();
-            let byte_addr = self.meta_addr(header);
-            let fetch_order = load_order_for_rmw(ordering);
-            // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `byte_addr` is non-null,
-            // 1-byte aligned for `AtomicU8`, and points to mapped, initialized, writable header
-            // memory without non-atomic races, and `load_order_for_rmw(ordering)` maps `Release` /
-            // `AcqRel` to a valid load ordering for `fetch_update`.
-            let _ = unsafe {
-                <u8 as MetadataValue>::fetch_update(
-                    byte_addr,
-                    ordering,
-                    fetch_order,
-                    |old_val: u8| Some(self.set_bits_to_u8(old_val, val_u8)),
-                )
-            };
-        } else {
-            let addr = self.meta_addr(header);
-            // If the optional mask is provided (e.g. for forwarding pointer), we need compare-exchange.
-            if let Some(mask) = optional_mask {
+        // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `self.meta_addr(header)` is a
+        // mapped, initialized, writable header metadata cell accessed atomically without
+        // conflicting non-atomic accesses or live non-atomic Rust references.
+        match unsafe { self.resolve_atomic::<T>(header) } {
+            ResolvedHeaderAtomic::SubByte { atomic } => {
+                let val_u8 = val.to_u8().unwrap();
                 let fetch_order = load_order_for_rmw(ordering);
-                // SAFETY: By MMTk's `ObjectModel` header-metadata contract and unconditional
-                // `assert_spec`, `addr` is non-null, aligned to `T`'s atomic counterpart, and points
-                // to mapped, initialized, writable header memory without non-atomic races;
-                // `load_order_for_rmw(ordering)` guarantees a valid `fetch_order`.
-                let _ = unsafe {
-                    T::fetch_update(addr, ordering, fetch_order, |old_val: T| {
+                let _ = atomic.fetch_update_val(ordering, fetch_order, |old_val: u8| {
+                    Some(self.set_bits_to_u8(old_val, val_u8))
+                });
+            }
+            ResolvedHeaderAtomic::FullWord { atomic } => {
+                if let Some(mask) = optional_mask {
+                    let fetch_order = load_order_for_rmw(ordering);
+                    let _ = atomic.fetch_update_val(ordering, fetch_order, |old_val: T| {
                         Some(old_val.bitand(mask.inv()).bitor(val.bitand(mask)))
-                    })
-                };
-            } else {
-                // SAFETY: By MMTk's `ObjectModel` header-metadata contract and unconditional
-                // `assert_spec`, `addr` is non-null, aligned to `T`'s atomic counterpart, and points
-                // to mapped, initialized, writable header memory without non-atomic races.
-                unsafe {
-                    T::store_atomic(addr, val, ordering);
+                    });
+                } else {
+                    atomic.store_val(val, ordering);
                 }
             }
         }
@@ -333,57 +333,39 @@ impl HeaderMetadataSpec {
         failure_order: Ordering,
     ) -> Result<T, T> {
         self.assert_mask::<T>(optional_mask);
-        self.assert_spec::<T>();
-        // Metadata smaller than 8-bits is special in that more than one metadata value may be
-        // included in one AtomicU8 operation, and extra shift and mask is required.
-        if self.num_of_bits < 8 {
-            let byte_addr = self.meta_addr(header);
-            let load_order = load_order_for_rmw(success_order);
-            // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `byte_addr` is non-null,
-            // 1-byte aligned for `AtomicU8`, and points to mapped, initialized header memory
-            // without conflicting non-atomic accesses or `&mut` aliases, and `load_order_for_rmw`
-            // maps `Release` / `AcqRel` to a valid load ordering.
-            let real_old_byte =
-                unsafe { <u8 as MetadataValue>::load_atomic(byte_addr, load_order) };
-            let expected_old_byte =
-                self.set_bits_to_u8(real_old_byte, old_metadata.to_u8().unwrap());
-            let expected_new_byte =
-                self.set_bits_to_u8(expected_old_byte, new_metadata.to_u8().unwrap());
-            // SAFETY: `byte_addr` satisfies the same `AtomicU8` validity, initialization, and
-            // atomic-only concurrency invariants as the load above.
-            unsafe {
-                <u8 as MetadataValue>::compare_exchange(
-                    byte_addr,
-                    expected_old_byte,
-                    expected_new_byte,
-                    success_order,
-                    failure_order,
-                )
-            }
-            .map(|x| FromPrimitive::from_u8(self.get_bits_from_u8(x)).unwrap())
-            .map_err(|x| FromPrimitive::from_u8(self.get_bits_from_u8(x)).unwrap())
-        } else {
-            let addr = self.meta_addr(header);
-            let (old_metadata, new_metadata) = if let Some(mask) = optional_mask {
+        // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `self.meta_addr(header)` is a
+        // mapped, initialized, writable header metadata cell accessed atomically without
+        // conflicting non-atomic accesses or live non-atomic Rust references.
+        match unsafe { self.resolve_atomic::<T>(header) } {
+            ResolvedHeaderAtomic::SubByte { atomic } => {
                 let load_order = load_order_for_rmw(success_order);
-                // SAFETY: By MMTk's `ObjectModel` header-metadata contract and unconditional
-                // `assert_spec`, `addr` is non-null, aligned to `T`'s atomic type, and points to
-                // mapped, initialized header memory without non-atomic data races;
-                // `load_order_for_rmw` maps `Release` / `AcqRel` to a valid load ordering.
-                let old_byte = unsafe { T::load_atomic(addr, load_order) };
-                let expected_new_byte = old_byte.bitand(mask.inv()).bitor(new_metadata);
-                let expected_old_byte = old_byte.bitand(mask.inv()).bitor(old_metadata);
-                (expected_old_byte, expected_new_byte)
-            } else {
-                (old_metadata, new_metadata)
-            };
+                let real_old_byte = atomic.load(load_order);
+                let expected_old_byte =
+                    self.set_bits_to_u8(real_old_byte, old_metadata.to_u8().unwrap());
+                let expected_new_byte =
+                    self.set_bits_to_u8(expected_old_byte, new_metadata.to_u8().unwrap());
+                atomic
+                    .compare_exchange(
+                        expected_old_byte,
+                        expected_new_byte,
+                        success_order,
+                        failure_order,
+                    )
+                    .map(|x| FromPrimitive::from_u8(self.get_bits_from_u8(x)).unwrap())
+                    .map_err(|x| FromPrimitive::from_u8(self.get_bits_from_u8(x)).unwrap())
+            }
+            ResolvedHeaderAtomic::FullWord { atomic } => {
+                let (old_metadata, new_metadata) = if let Some(mask) = optional_mask {
+                    let load_order = load_order_for_rmw(success_order);
+                    let old_byte = atomic.load_val(load_order);
+                    let expected_new_byte = old_byte.bitand(mask.inv()).bitor(new_metadata);
+                    let expected_old_byte = old_byte.bitand(mask.inv()).bitor(old_metadata);
+                    (expected_old_byte, expected_new_byte)
+                } else {
+                    (old_metadata, new_metadata)
+                };
 
-            // SAFETY: By MMTk's `ObjectModel` header-metadata contract and unconditional
-            // `assert_spec`, `addr` is non-null, aligned to `T`'s atomic type, and points to
-            // mapped, initialized, writable header memory without non-atomic races.
-            unsafe {
-                T::compare_exchange(
-                    addr,
+                atomic.compare_exchange_val(
                     old_metadata,
                     new_metadata,
                     success_order,
@@ -393,129 +375,86 @@ impl HeaderMetadataSpec {
         }
     }
 
-    /// Inner method for `fetch_add`/`fetch_sub` on sub-byte (`< 8` bits) header metadata.
-    ///
-    /// # Safety
-    /// * `self.num_of_bits` must be in `1..8` without crossing a byte boundary.
-    /// * `self.meta_addr(header)` must be non-null and point to a mapped, initialized, writable
-    ///   object-header byte accessed only via atomic operations for the duration of this call.
-    /// * `set_order` and `fetch_order` must be valid orderings for `AtomicU8::fetch_update`
-    ///   (`fetch_order` may not be `Ordering::Release` or `Ordering::AcqRel`).
-    unsafe fn fetch_ops_on_bits<F: Fn(u8) -> u8>(
+    /// Inner helper for `fetch_add`/`fetch_sub` on sub-byte (`< 8` bits) header metadata.
+    fn fetch_ops_on_bits<F: Fn(u8) -> u8>(
         &self,
-        header: Address,
+        atomic: &AtomicU8,
         set_order: Ordering,
         fetch_order: Ordering,
         update: F,
     ) -> u8 {
-        let byte_addr = self.meta_addr(header);
-        // SAFETY: Caller guarantees `byte_addr` is non-null, points to a mapped, initialized,
-        // writable header byte (`AtomicU8`, alignment 1) with no conflicting non-atomic accesses,
-        // and `set_order`/`fetch_order` are valid for `fetch_update`.
-        let old_raw_byte = unsafe {
-            <u8 as MetadataValue>::fetch_update(
-                byte_addr,
-                set_order,
-                fetch_order,
-                |raw_byte: u8| {
-                    let old_metadata = self.get_bits_from_u8(raw_byte);
-                    let new_metadata = self.truncate_bits_in_u8(update(old_metadata));
-                    let new_byte = self.set_bits_to_u8(raw_byte, new_metadata);
-                    Some(new_byte)
-                },
-            )
-        }
-        .unwrap();
+        let old_raw_byte = atomic
+            .fetch_update_val(set_order, fetch_order, |raw_byte: u8| {
+                let old_metadata = self.get_bits_from_u8(raw_byte);
+                let new_metadata = self.truncate_bits_in_u8(update(old_metadata));
+                let new_byte = self.set_bits_to_u8(raw_byte, new_metadata);
+                Some(new_byte)
+            })
+            .unwrap();
         self.get_bits_from_u8(old_raw_byte)
     }
 
     /// This function provides a default implementation for the `fetch_add` method from the `ObjectModel` trait.
     pub fn fetch_add<T: MetadataValue>(&self, header: Address, val: T, order: Ordering) -> T {
-        self.assert_spec::<T>();
-        if self.num_of_bits < 8 {
-            let fetch_order = load_order_for_rmw(order);
-            // SAFETY: `self.num_of_bits < 8` holds (single-byte verified by `assert_spec`),
-            // `self.meta_addr(header)` is a valid, mapped, initialized header byte accessed
-            // atomically without non-atomic races, and `load_order_for_rmw(order)` yields a valid
-            // `fetch_order`.
-            let old_bits = unsafe {
-                self.fetch_ops_on_bits(header, order, fetch_order, |x: u8| {
+        // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `self.meta_addr(header)` is a
+        // mapped, initialized, writable header metadata cell accessed solely via atomics.
+        match unsafe { self.resolve_atomic::<T>(header) } {
+            ResolvedHeaderAtomic::SubByte { atomic } => {
+                let fetch_order = load_order_for_rmw(order);
+                let old_bits = self.fetch_ops_on_bits(atomic, order, fetch_order, |x: u8| {
                     x.wrapping_add(val.to_u8().unwrap())
-                })
-            };
-            FromPrimitive::from_u8(old_bits).unwrap()
-        } else {
-            // SAFETY: By MMTk's `ObjectModel` header-metadata contract and unconditional
-            // `assert_spec`, `self.meta_addr(header)` is non-null, aligned to `T`'s atomic type,
-            // and points to mapped, initialized, writable header memory.
-            unsafe { T::fetch_add(self.meta_addr(header), val, order) }
+                });
+                FromPrimitive::from_u8(old_bits).unwrap()
+            }
+            ResolvedHeaderAtomic::FullWord { atomic } => atomic.fetch_add_val(val, order),
         }
     }
 
     /// This function provides a default implementation for the `fetch_sub` method from the `ObjectModel` trait.
     pub fn fetch_sub<T: MetadataValue>(&self, header: Address, val: T, order: Ordering) -> T {
-        self.assert_spec::<T>();
-        if self.num_of_bits < 8 {
-            let fetch_order = load_order_for_rmw(order);
-            // SAFETY: `self.num_of_bits < 8` holds (single-byte verified by `assert_spec`),
-            // `self.meta_addr(header)` is a valid, mapped, initialized header byte accessed
-            // atomically without non-atomic races, and `load_order_for_rmw(order)` yields a valid
-            // `fetch_order`.
-            let old_bits = unsafe {
-                self.fetch_ops_on_bits(header, order, fetch_order, |x: u8| {
+        // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `self.meta_addr(header)` is a
+        // mapped, initialized, writable header metadata cell accessed solely via atomics.
+        match unsafe { self.resolve_atomic::<T>(header) } {
+            ResolvedHeaderAtomic::SubByte { atomic } => {
+                let fetch_order = load_order_for_rmw(order);
+                let old_bits = self.fetch_ops_on_bits(atomic, order, fetch_order, |x: u8| {
                     x.wrapping_sub(val.to_u8().unwrap())
-                })
-            };
-            FromPrimitive::from_u8(old_bits).unwrap()
-        } else {
-            // SAFETY: By MMTk's `ObjectModel` header-metadata contract and unconditional
-            // `assert_spec`, `self.meta_addr(header)` is non-null, aligned to `T`'s atomic type,
-            // and points to mapped, initialized, writable header memory.
-            unsafe { T::fetch_sub(self.meta_addr(header), val, order) }
+                });
+                FromPrimitive::from_u8(old_bits).unwrap()
+            }
+            ResolvedHeaderAtomic::FullWord { atomic } => atomic.fetch_sub_val(val, order),
         }
     }
 
     /// This function provides a default implementation for the `fetch_and` method from the `ObjectModel` trait.
     pub fn fetch_and<T: MetadataValue>(&self, header: Address, val: T, order: Ordering) -> T {
-        self.assert_spec::<T>();
-        if self.num_of_bits < 8 {
-            let (lshift, mask) = self.get_shift_and_mask_for_bits();
-            let new_val = (val.to_u8().unwrap() << lshift) | !mask;
-            // We do not need to use fetch_ops_on_bits(), we can just set irrelevant bits to 1, and do fetch_and
-            // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `self.meta_addr(header)` is
-            // non-null, 1-byte aligned for `AtomicU8`, and points to mapped, initialized, writable
-            // header memory accessed atomically without non-atomic races.
-            let old_raw_byte =
-                unsafe { <u8 as MetadataValue>::fetch_and(self.meta_addr(header), new_val, order) };
-            let old_val = self.get_bits_from_u8(old_raw_byte);
-            FromPrimitive::from_u8(old_val).unwrap()
-        } else {
-            // SAFETY: By MMTk's `ObjectModel` header-metadata contract and unconditional
-            // `assert_spec`, `self.meta_addr(header)` is non-null, aligned to `T`'s atomic type,
-            // and points to mapped, initialized, writable header memory.
-            unsafe { T::fetch_and(self.meta_addr(header), val, order) }
+        // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `self.meta_addr(header)` is a
+        // mapped, initialized, writable header metadata cell accessed solely via atomics.
+        match unsafe { self.resolve_atomic::<T>(header) } {
+            ResolvedHeaderAtomic::SubByte { atomic } => {
+                let (lshift, mask) = self.get_shift_and_mask_for_bits();
+                let new_val = (val.to_u8().unwrap() << lshift) | !mask;
+                let old_raw_byte = atomic.fetch_and(new_val, order);
+                let old_val = self.get_bits_from_u8(old_raw_byte);
+                FromPrimitive::from_u8(old_val).unwrap()
+            }
+            ResolvedHeaderAtomic::FullWord { atomic } => atomic.fetch_and_val(val, order),
         }
     }
 
     /// This function provides a default implementation for the `fetch_or` method from the `ObjectModel` trait.
     pub fn fetch_or<T: MetadataValue>(&self, header: Address, val: T, order: Ordering) -> T {
-        self.assert_spec::<T>();
-        if self.num_of_bits < 8 {
-            let (lshift, mask) = self.get_shift_and_mask_for_bits();
-            let new_val = (val.to_u8().unwrap() << lshift) & mask;
-            // We do not need to use fetch_ops_on_bits(), we can just set irrelevant bits to 0, and do fetch_or
-            // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `self.meta_addr(header)` is
-            // non-null, 1-byte aligned for `AtomicU8`, and points to mapped, initialized, writable
-            // header memory accessed atomically without non-atomic races.
-            let old_raw_byte =
-                unsafe { <u8 as MetadataValue>::fetch_or(self.meta_addr(header), new_val, order) };
-            let old_val = self.get_bits_from_u8(old_raw_byte);
-            FromPrimitive::from_u8(old_val).unwrap()
-        } else {
-            // SAFETY: By MMTk's `ObjectModel` header-metadata contract and unconditional
-            // `assert_spec`, `self.meta_addr(header)` is non-null, aligned to `T`'s atomic type,
-            // and points to mapped, initialized, writable header memory.
-            unsafe { T::fetch_or(self.meta_addr(header), val, order) }
+        // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `self.meta_addr(header)` is a
+        // mapped, initialized, writable header metadata cell accessed solely via atomics.
+        match unsafe { self.resolve_atomic::<T>(header) } {
+            ResolvedHeaderAtomic::SubByte { atomic } => {
+                let (lshift, mask) = self.get_shift_and_mask_for_bits();
+                let new_val = (val.to_u8().unwrap() << lshift) & mask;
+                let old_raw_byte = atomic.fetch_or(new_val, order);
+                let old_val = self.get_bits_from_u8(old_raw_byte);
+                FromPrimitive::from_u8(old_val).unwrap()
+            }
+            ResolvedHeaderAtomic::FullWord { atomic } => atomic.fetch_or_val(val, order),
         }
     }
 
@@ -528,33 +467,25 @@ impl HeaderMetadataSpec {
         fetch_order: Ordering,
         mut f: F,
     ) -> std::result::Result<T, T> {
-        self.assert_spec::<T>();
-        if self.num_of_bits < 8 {
-            let byte_addr = self.meta_addr(header);
-            // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `byte_addr` is non-null,
-            // 1-byte aligned for `AtomicU8`, and points to mapped, initialized, writable header
-            // memory accessed atomically without non-atomic races across the `fetch_update` loop.
-            unsafe {
-                <u8 as MetadataValue>::fetch_update(
-                    byte_addr,
-                    set_order,
-                    fetch_order,
-                    |raw_byte: u8| {
-                        let old_metadata = self.get_bits_from_u8(raw_byte);
-                        f(FromPrimitive::from_u8(old_metadata).unwrap()).map(|new_val| {
-                            let new_metadata = self.truncate_bits_in_u8(new_val.to_u8().unwrap());
-                            self.set_bits_to_u8(raw_byte, new_metadata)
-                        })
-                    },
-                )
+        // SAFETY: By MMTk's `ObjectModel` header-metadata contract, `self.meta_addr(header)` is a
+        // mapped, initialized, writable header metadata cell accessed solely via atomics across
+        // the `fetch_update` loop.
+        match unsafe { self.resolve_atomic::<T>(header) } {
+            ResolvedHeaderAtomic::SubByte { atomic } => atomic
+                .fetch_update_val(set_order, fetch_order, |raw_byte: u8| {
+                    let old_metadata = self.get_bits_from_u8(raw_byte);
+                    f(FromPrimitive::from_u8(old_metadata).unwrap()).map(|new_val| {
+                        let new_metadata = self.truncate_bits_in_u8(new_val.to_u8().unwrap());
+                        self.set_bits_to_u8(raw_byte, new_metadata)
+                    })
+                })
+                .map(|raw_byte| FromPrimitive::from_u8(self.get_bits_from_u8(raw_byte)).unwrap())
+                .map_err(|raw_byte| {
+                    FromPrimitive::from_u8(self.get_bits_from_u8(raw_byte)).unwrap()
+                }),
+            ResolvedHeaderAtomic::FullWord { atomic } => {
+                atomic.fetch_update_val(set_order, fetch_order, f)
             }
-            .map(|raw_byte| FromPrimitive::from_u8(self.get_bits_from_u8(raw_byte)).unwrap())
-            .map_err(|raw_byte| FromPrimitive::from_u8(self.get_bits_from_u8(raw_byte)).unwrap())
-        } else {
-            // SAFETY: By MMTk's `ObjectModel` header-metadata contract and unconditional
-            // `assert_spec`, `self.meta_addr(header)` is non-null, aligned to `T`'s atomic type,
-            // and points to mapped, initialized, writable header memory.
-            unsafe { T::fetch_update(self.meta_addr(header), set_order, fetch_order, f) }
         }
     }
 }
@@ -571,7 +502,7 @@ impl fmt::Debug for HeaderMetadataSpec {
     }
 }
 
-#[cfg(all(test, debug_assertions))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::util::address::Address;
@@ -782,6 +713,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic]
     fn test_set_bits_to_u8_exceeds_bits() {
         let spec = HeaderMetadataSpec {

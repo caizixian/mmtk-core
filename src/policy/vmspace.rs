@@ -160,7 +160,11 @@ impl<VM: VMBinding> Space<VM> for VMSpace<VM> {
     fn enumerate_objects(&self, enumerator: &mut dyn ObjectEnumerator) {
         let external_pages = self.pr.get_external_pages();
         for ep in external_pages.iter() {
-            enumerator.visit_address_range(ep.start, ep.end);
+            // SAFETY: Every registered external range `ep` in `self.pr.get_external_pages()` has
+            // its side metadata mapped and initialized by `VMSpace::set_vm_space` / `initialize_side_metadata`.
+            unsafe {
+                enumerator.visit_address_range(ep.start, ep.end);
+            }
         }
     }
 

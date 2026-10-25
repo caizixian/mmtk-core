@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use atomic_traits::Atomic;
 use bytemuck::NoUninit;
 
@@ -5,6 +7,7 @@ use std::fmt;
 use std::mem;
 use std::num::NonZeroUsize;
 use std::ops::*;
+use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 
 use crate::mmtk::{MMAPPER, SFT_MAP};
@@ -140,19 +143,22 @@ impl Address {
     /// The highest possible address.
     pub const MAX: Self = Address(usize::MAX);
 
-    /// creates Address from a pointer
+    /// creates Address from a pointer (exposing provenance for round-trip `to_ptr`/`to_mut_ptr`)
+    #[inline(always)]
     pub fn from_ptr<T>(ptr: *const T) -> Address {
-        Address(ptr as usize)
+        Address(ptr.expose_provenance())
     }
 
-    /// creates Address from a Rust reference
+    /// creates Address from a Rust reference (exposing provenance for round-trip `to_ptr`)
+    #[inline(always)]
     pub fn from_ref<T>(r: &T) -> Address {
-        Address(r as *const T as usize)
+        Address((r as *const T).expose_provenance())
     }
 
-    /// creates Address from a mutable pointer
+    /// creates Address from a mutable pointer (exposing provenance for round-trip `to_mut_ptr`)
+    #[inline(always)]
     pub fn from_mut_ptr<T>(ptr: *mut T) -> Address {
-        Address(ptr as usize)
+        Address(ptr.expose_provenance())
     }
 
     /// creates a null Address (0)
@@ -355,14 +361,16 @@ impl Address {
         conversions::raw_is_aligned(self.0, align)
     }
 
-    /// converts the Address to a pointer
+    /// converts the Address to a pointer (reconstituting exposed provenance)
+    #[inline(always)]
     pub fn to_ptr<T>(self) -> *const T {
-        self.0 as *const T
+        std::ptr::with_exposed_provenance(self.0)
     }
 
-    /// converts the Address to a mutable pointer
+    /// converts the Address to a mutable pointer (reconstituting exposed provenance)
+    #[inline(always)]
     pub fn to_mut_ptr<T>(self) -> *mut T {
-        self.0 as *mut T
+        std::ptr::with_exposed_provenance_mut(self.0)
     }
 
     /// converts the Address to a Rust reference
@@ -494,9 +502,222 @@ impl std::str::FromStr for Address {
     }
 }
 
+/// A non-zero [`Address`] backed by [`NonNull<u8>`] (`BP 6.1`).
+///
+/// Thanks to `#[repr(transparent)]` over `NonNull<u8>`, `Option<NonZeroAddress>` occupies a single
+/// pointer word via Rust's null-pointer optimization (NPO) while preserving pointer provenance on
+/// `Address <-> NonZeroAddress` round-trips in 100% safe Rust (`0` `unsafe` blocks).
+///
+/// Following VEE '09 (*Demystifying Magic*), `NonZeroAddress` can only be refined from an existing
+/// [`Address`], [`ObjectReference`], or [`NonNull<T>`] — never forged from a raw `usize` in safe
+/// code.
+#[repr(transparent)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct NonZeroAddress(NonNull<u8>);
+
+// SAFETY: Like `Address` and `ObjectReference`, `NonZeroAddress` is a pure non-owning address
+// value with no safe dereference operations; sending or sharing it across threads performs no
+// memory access and cannot introduce data races.
+unsafe impl Send for NonZeroAddress {}
+// SAFETY: See `Send` impl above — `NonZeroAddress` exposes no interior mutability or safe
+// dereference methods.
+unsafe impl Sync for NonZeroAddress {}
+
+impl NonZeroAddress {
+    /// Refine an [`Address`] into `Some(NonZeroAddress)` iff `!addr.is_zero()` (`0` `unsafe`,
+    /// preserves provenance).
+    #[inline(always)]
+    pub fn try_from_address(addr: Address) -> Option<Self> {
+        NonNull::new(addr.to_mut_ptr::<u8>()).map(Self)
+    }
+
+    /// Refine a non-zero [`Address`] into `NonZeroAddress`, panicking if `addr.is_zero()`.
+    #[inline(always)]
+    pub fn from_address(addr: Address) -> Self {
+        Self::try_from_address(addr).expect("NonZeroAddress::from_address received Address::ZERO")
+    }
+
+    /// Construct a `NonZeroAddress` from a [`NonNull<T>`] while preserving exact pointer
+    /// provenance (`0` `unsafe`).
+    #[inline(always)]
+    pub const fn from_non_null<T>(ptr: NonNull<T>) -> Self {
+        Self(ptr.cast::<u8>())
+    }
+
+    /// Extract the non-zero raw [`Address`] of an [`ObjectReference`] (`0` `unsafe`).
+    #[inline(always)]
+    pub fn from_object_ref(object: ObjectReference) -> Self {
+        Self::try_from_address(object.to_raw_address())
+            .expect("ObjectReference raw address is non-zero")
+    }
+
+    /// Recover the underlying [`Address`] (`0` `unsafe`, preserves provenance).
+    #[inline(always)]
+    pub fn to_address(self) -> Address {
+        Address::from_mut_ptr(self.0.as_ptr())
+    }
+
+    /// Return the underlying [`NonNull<u8>`] pointer.
+    #[inline(always)]
+    pub const fn as_non_null(self) -> NonNull<u8> {
+        self.0
+    }
+
+    /// Return the integer representation of the address without exposing provenance.
+    #[inline(always)]
+    pub fn as_usize(self) -> usize {
+        self.0.as_ptr().addr()
+    }
+}
+
+impl fmt::UpperHex for NonZeroAddress {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:X}", self.as_usize())
+    }
+}
+
+impl fmt::LowerHex for NonZeroAddress {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:x}", self.as_usize())
+    }
+}
+
+impl fmt::Display for NonZeroAddress {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:#x}", self.as_usize())
+    }
+}
+
+impl fmt::Debug for NonZeroAddress {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:#x}", self.as_usize())
+    }
+}
+
+/// A non-zero [`Address`] statically guaranteed to be aligned to `1usize << LOG_ALIGN` bytes
+/// (`BP 6.1`).
+///
+/// Backed by `#[repr(transparent)] NonNull<u8>` so `Option<AlignedAddress<LOG_ALIGN>>` is 1 word
+/// (NPO) and `to_address()` recovers `Address` in **0 `unsafe`** while preserving provenance.
+///
+/// Type invariant: `self.0` is non-null AND `(self.as_usize() & (Self::ALIGN - 1)) == 0`.
+#[repr(transparent)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct AlignedAddress<const LOG_ALIGN: u32>(NonNull<u8>);
+
+// SAFETY: Like `Address`, `ObjectReference`, and `NonZeroAddress`, `AlignedAddress` is a pure
+// non-owning address value with no safe dereference methods; moving it across threads performs no
+// memory access and cannot cause data races.
+unsafe impl<const LOG_ALIGN: u32> Send for AlignedAddress<LOG_ALIGN> {}
+// SAFETY: See `Send` impl above — `AlignedAddress` exposes no interior mutability or safe
+// dereference methods.
+unsafe impl<const LOG_ALIGN: u32> Sync for AlignedAddress<LOG_ALIGN> {}
+
+impl<const LOG_ALIGN: u32> AlignedAddress<LOG_ALIGN> {
+    /// Log2 of the required alignment in bytes.
+    pub const LOG_BYTES: u32 = LOG_ALIGN;
+
+    /// Required alignment in bytes (`1usize << LOG_ALIGN`). Fails at compile time if
+    /// `LOG_ALIGN >= usize::BITS`.
+    pub const ALIGN: usize = {
+        assert!(
+            LOG_ALIGN < usize::BITS,
+            "AlignedAddress LOG_ALIGN must be < usize::BITS"
+        );
+        1usize << LOG_ALIGN
+    };
+
+    /// Refine an existing [`Address`] into `Some(AlignedAddress)` iff `!addr.is_zero()` and
+    /// `addr.is_aligned_to(Self::ALIGN)` (`0` `unsafe`, preserves provenance).
+    #[inline(always)]
+    pub fn try_from_address(addr: Address) -> Option<Self> {
+        let align = const { Self::ALIGN };
+        if addr.is_aligned_to(align) {
+            NonNull::new(addr.to_mut_ptr::<u8>()).map(Self)
+        } else {
+            None
+        }
+    }
+
+    /// Refine an existing [`Address`] into `AlignedAddress`, panicking unconditionally if `addr`
+    /// is zero or not aligned to [`Self::ALIGN`].
+    #[inline(always)]
+    pub fn from_aligned_address(addr: Address) -> Self {
+        Self::try_from_address(addr).unwrap_or_else(|| {
+            panic!(
+                "AlignedAddress::<{LOG_ALIGN}>::from_aligned_address: {addr} is zero or not aligned to {:#x}",
+                Self::ALIGN
+            )
+        })
+    }
+
+    /// Align `addr` down to [`Self::ALIGN`] and return `Some(AlignedAddress)` iff the aligned
+    /// result is non-zero (`0` `unsafe`, preserves provenance).
+    #[inline(always)]
+    pub fn align_down_from(addr: Address) -> Option<Self> {
+        let align = const { Self::ALIGN };
+        Self::try_from_address(addr.align_down(align))
+    }
+
+    /// Recover the underlying [`Address`] (`0` `unsafe`, preserves provenance).
+    #[inline(always)]
+    pub fn to_address(self) -> Address {
+        Address::from_mut_ptr(self.0.as_ptr())
+    }
+
+    /// Widen to [`NonZeroAddress`] (`0` `unsafe`).
+    #[inline(always)]
+    pub const fn to_non_zero(self) -> NonZeroAddress {
+        NonZeroAddress(self.0)
+    }
+
+    /// Return the underlying [`NonNull<u8>`] pointer.
+    #[inline(always)]
+    pub const fn as_non_null(self) -> NonNull<u8> {
+        self.0
+    }
+
+    /// Return the integer representation of the address without exposing provenance.
+    #[inline(always)]
+    pub fn as_usize(self) -> usize {
+        self.0.as_ptr().addr()
+    }
+}
+
+impl<const LOG_ALIGN: u32> fmt::UpperHex for AlignedAddress<LOG_ALIGN> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:X}", self.as_usize())
+    }
+}
+
+impl<const LOG_ALIGN: u32> fmt::LowerHex for AlignedAddress<LOG_ALIGN> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:x}", self.as_usize())
+    }
+}
+
+impl<const LOG_ALIGN: u32> fmt::Display for AlignedAddress<LOG_ALIGN> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:#x}", self.as_usize())
+    }
+}
+
+impl<const LOG_ALIGN: u32> fmt::Debug for AlignedAddress<LOG_ALIGN> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:#x}", self.as_usize())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Address;
+    use super::{Address, AlignedAddress, NonZeroAddress, ObjectReference};
+    use static_assertions::{assert_eq_size, assert_impl_all};
+
+    assert_eq_size!(Option<NonZeroAddress>, Address);
+    assert_eq_size!(Option<AlignedAddress<0>>, Address);
+    assert_eq_size!(Option<AlignedAddress<16>>, Address);
+    assert_impl_all!(NonZeroAddress: Copy, Clone, Send, Sync, Eq, Ord, std::hash::Hash);
+    assert_impl_all!(AlignedAddress<16>: Copy, Clone, Send, Sync, Eq, Ord, std::hash::Hash);
 
     #[test]
     fn align_up() {
@@ -539,6 +760,55 @@ mod tests {
             Address(0b1111_1111_1100usize) | 0b1000_0000_1010usize,
             0b1111_1111_1110usize
         );
+    }
+
+    #[test]
+    fn non_zero_and_aligned_address_round_trip_and_provenance() {
+        #[repr(align(64))]
+        struct AlignedBuf([u64; 8]);
+
+        let mut buf = AlignedBuf([0u64; 8]);
+        let base = Address::from_mut_ptr(buf.0.as_mut_ptr());
+
+        assert_eq!(NonZeroAddress::try_from_address(Address::ZERO), None);
+        assert_eq!(AlignedAddress::<6>::try_from_address(Address::ZERO), None);
+
+        let nz = NonZeroAddress::try_from_address(base).unwrap();
+        assert_eq!(nz.to_address(), base);
+        assert_eq!(nz.as_usize(), base.as_usize());
+
+        let aligned = AlignedAddress::<6>::try_from_address(base).unwrap();
+        assert_eq!(aligned.to_address(), base);
+        assert_eq!(aligned.to_non_zero(), nz);
+        assert_eq!(AlignedAddress::<6>::try_from_address(base + 8usize), None);
+        assert_eq!(
+            AlignedAddress::<6>::align_down_from(base + 24usize),
+            Some(aligned)
+        );
+        assert_eq!(AlignedAddress::<6>::align_down_from(Address(16usize)), None);
+
+        let obj = ObjectReference::from_raw_address(base).unwrap();
+        assert_eq!(NonZeroAddress::from_object_ref(obj), nz);
+
+        // Verify round-trip write through `AlignedAddress -> Address` preserves valid provenance.
+        let recovered = aligned.to_address();
+        // SAFETY: `recovered` points to `buf.0[0]`, aligned to `u64`, writable, and unaliased.
+        unsafe {
+            recovered.store::<u64>(0xdead_beef_cafe_babe);
+        }
+        assert_eq!(buf.0[0], 0xdead_beef_cafe_babe);
+    }
+
+    #[test]
+    #[should_panic(expected = "is zero or not aligned")]
+    fn aligned_address_from_unaligned_panics() {
+        let _ = AlignedAddress::<4>::from_aligned_address(Address(0x18));
+    }
+
+    #[test]
+    #[should_panic(expected = "is zero or not aligned")]
+    fn aligned_address_from_zero_panics() {
+        let _ = AlignedAddress::<4>::from_aligned_address(Address::ZERO);
     }
 }
 

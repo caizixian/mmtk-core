@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use super::ranges::BitOffset;
 use super::SideMetadataSpec;
 use crate::util::constants::LOG_BYTES_IN_PAGE;
@@ -497,7 +499,16 @@ where
     }
 }
 
-pub fn scan_non_zero_bits_in_metadata_bytes(
+/// Scan `[meta_start, meta_end)` and invoke `visit_bit(byte_or_word_addr, bit_offset)` for every
+/// non-zero bit in the side-metadata range.
+///
+/// # Safety
+/// * `[meta_start, meta_end)` must be non-null (whenever `meta_start < meta_end`), mapped,
+///   readable, and initialized side-metadata memory.
+/// * Neither another thread nor `visit_bit` may concurrently write to or atomically modify any
+///   byte in `[meta_start, meta_end)` for the duration of this scan, and no live `&mut` reference
+///   may alias `[meta_start, meta_end)`.
+pub unsafe fn scan_non_zero_bits_in_metadata_bytes(
     meta_start: Address,
     meta_end: Address,
     visit_bit: &mut impl FnMut(Address, BitOffset),
@@ -506,21 +517,19 @@ pub fn scan_non_zero_bits_in_metadata_bytes(
 
     let mut cursor = meta_start;
     while cursor < meta_end && !cursor.is_aligned_to(BYTES_IN_ADDRESS) {
-        // SAFETY: `scan_non_zero_bits_in_metadata_bytes` (preserved with its cross-slice signature
-        // for `test_private`) requires `[meta_start, meta_end)` to be mapped, initialized metadata
-        // memory not concurrently mutated during scanning (and `visit_bit` only observes data
-        // addresses without mutating this bitmap). `cursor < meta_end` is in-bounds and `u8` has
-        // alignment 1.
+        // SAFETY: Caller guarantees `[meta_start, meta_end)` is non-null, mapped, initialized,
+        // and not concurrently mutated (including by `visit_bit`). `cursor < meta_end` is
+        // in-bounds and `u8` has alignment 1.
         let byte = unsafe { cursor.load::<u8>() };
         scan_non_zero_bits_in_metadata_word(cursor, byte as usize, visit_bit);
         cursor += 1usize;
     }
 
-    while cursor + BYTES_IN_ADDRESS < meta_end {
-        // SAFETY: Loop prefix established `cursor.is_aligned_to(BYTES_IN_ADDRESS)` (maintained by
-        // stepping `BYTES_IN_ADDRESS` each iteration), and `cursor + BYTES_IN_ADDRESS < meta_end`
-        // keeps all `BYTES_IN_ADDRESS` bytes in-bounds of the mapped, initialized, quiescent
-        // metadata range `[meta_start, meta_end)`.
+    while cursor < meta_end && meta_end - cursor >= BYTES_IN_ADDRESS {
+        // SAFETY: Prefix loop established `cursor.is_aligned_to(BYTES_IN_ADDRESS)` (maintained by
+        // stepping `BYTES_IN_ADDRESS` each iteration), and `meta_end - cursor >= BYTES_IN_ADDRESS`
+        // keeps `[cursor, cursor + BYTES_IN_ADDRESS)` in-bounds of the mapped, initialized,
+        // quiescent metadata range `[meta_start, meta_end)` without address overflow.
         let word = unsafe { cursor.load::<usize>() };
         scan_non_zero_bits_in_metadata_word(cursor, word, visit_bit);
         cursor += BYTES_IN_ADDRESS;

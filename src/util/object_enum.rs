@@ -1,5 +1,7 @@
 //! Helper types for object enumeration
 
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use std::marker::PhantomData;
 
 use crate::vm::VMBinding;
@@ -17,8 +19,13 @@ use super::{
 pub trait ObjectEnumerator {
     /// Visit a single object.
     fn visit_object(&mut self, object: ObjectReference);
-    /// Visit an address range that may contain objects.
-    fn visit_address_range(&mut self, start: Address, end: Address);
+
+    /// Visit an allocated space address range `[start, end)` that may contain objects.
+    ///
+    /// # Safety
+    /// * `[start, end)` must be a valid allocated subrange of a space whose `SideMetadataContext`
+    ///   (including `VO_BIT` when enabled) is mapped and initialized across `[start, end)`.
+    unsafe fn visit_address_range(&mut self, start: Address, end: Address);
 }
 
 /// An implementation of `ObjectEnumerator` that wraps a callback.
@@ -36,7 +43,14 @@ where
     F: FnMut(ObjectReference),
     VM: VMBinding,
 {
-    pub fn new(object_callback: F) -> Self {
+    /// Construct an `ObjectEnumerator` that scans `VO_BIT` across visited address ranges.
+    ///
+    /// # Safety
+    /// * Whenever [`ObjectEnumerator::visit_address_range`] may be invoked on the returned
+    ///   enumerator, `VO_BIT` must be enabled in every visited space's `SideMetadataContext`
+    ///   (e.g. `cfg(feature = "vo_bit")`), and neither another thread (via mutator allocation or
+    ///   GC) nor `object_callback` may mutate `VO_BIT` while enumeration is in progress.
+    pub(crate) unsafe fn new(object_callback: F) -> Self {
         Self {
             object_callback,
             phantom_data: PhantomData,
@@ -53,11 +67,17 @@ where
         (self.object_callback)(object);
     }
 
-    fn visit_address_range(&mut self, start: Address, end: Address) {
-        VO_BIT.scan_non_zero_values::<u8>(start, end, &mut |address| {
-            let object = vo_bit::get_object_ref_for_vo_addr(address);
-            (self.object_callback)(object);
-        })
+    unsafe fn visit_address_range(&mut self, start: Address, end: Address) {
+        // SAFETY: `visit_address_range`'s caller guarantees `[start, end)` is an allocated space
+        // range with its `SideMetadataContext` mapped and initialized, and `ClosureObjectEnumerator::new`'s
+        // safety invariant guarantees `VO_BIT` is included in that context and remains quiescent
+        // (neither mutated by concurrent threads nor by `self.object_callback`) during enumeration.
+        unsafe {
+            VO_BIT.scan_non_zero_values::<u8>(start, end, &mut |address| {
+                let object = vo_bit::get_object_ref_for_vo_addr(address);
+                (self.object_callback)(object);
+            });
+        }
     }
 }
 
@@ -84,7 +104,12 @@ pub(crate) fn enumerate_blocks_from_chunk_map<B>(
     for chunk in chunk_map.all_chunks() {
         for block in chunk.iter_region::<B>() {
             if block.may_have_objects() {
-                enumerator.visit_address_range(block.start(), block.end());
+                // SAFETY: `chunk` is an allocated chunk in `chunk_map` and `block.may_have_objects()`
+                // holds, so `[block.start(), block.end())` is an allocated space block with its
+                // `SideMetadataContext` mapped and initialized.
+                unsafe {
+                    enumerator.visit_address_range(block.start(), block.end());
+                }
             }
         }
     }
@@ -97,6 +122,10 @@ pub(crate) fn enumerate_blocks_from_monotonic_page_resource<VM>(
     VM: VMBinding,
 {
     for (start, size) in pr.iterate_allocated_regions() {
-        enumerator.visit_address_range(start, start + size);
+        // SAFETY: `(start, size)` is yielded by `pr.iterate_allocated_regions()`, which only
+        // returns regions acquired and mapped with the owning space's `SideMetadataContext`.
+        unsafe {
+            enumerator.visit_address_range(start, start + size);
+        }
     }
 }

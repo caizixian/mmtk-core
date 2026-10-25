@@ -40,6 +40,8 @@
 //! during tracing because both the VM and the GC algorithm may break this guarantee.  See:
 //! [`crate::plan::PlanConstraints::may_trace_duplicate_edges`])*
 
+#![deny(unsafe_op_in_unsafe_fn)]
+
 // FIXME: The entire vo_bit module should only be available if the "vo_bit" feature is enabled.
 // However, the malloc-based MarkSweepSpace and Lisp2Space depends on the VO bits regardless
 // of the "vo_bit" feature.
@@ -191,13 +193,17 @@ pub(crate) const VO_BIT_WORD_TO_REGION: usize = 1
         + LOG_BYTES_IN_ADDRESS as usize
         - VO_BIT_SIDE_METADATA_SPEC.log_num_of_bits);
 
-/// Bulk check if a VO bit word. Return true if there is any bit set in the word.
-pub(crate) fn get_raw_vo_bit_word(addr: Address) -> usize {
-    // SAFETY: Cross-slice `pub(crate)` helper called on mapped space pages (e.g. `LargeObjectSpace`
-    // page scan during quiescent VO-bit phases). `VO_BIT_SIDE_METADATA_SPEC` is chunk-mapped (4 MiB
-    // chunks => >= 8 KiB contiguous metadata per chunk, word-aligned), so aligning the metadata
-    // byte address down to `BYTES_IN_ADDRESS` stays within the same mapped metadata page, and VO
-    // bits are not concurrently mutated during internal-pointer / VO-bit scanning phases.
+/// Non-atomically load the word-aligned VO-bit side-metadata word covering `addr`.
+///
+/// # Safety
+/// * The `BYTES_IN_ADDRESS`-aligned VO-bit side-metadata word containing `addr`'s metadata entry
+///   must be non-null, mapped, and initialized across all `BYTES_IN_ADDRESS` bytes.
+/// * No other thread may concurrently write to or atomically modify any byte in that VO-bit
+///   side-metadata word for the duration of this call, and no live `&mut` reference may alias it.
+pub(crate) unsafe fn get_raw_vo_bit_word(addr: Address) -> usize {
+    // SAFETY: Caller guarantees the `BYTES_IN_ADDRESS`-aligned VO-bit metadata word covering
+    // `addr` is non-null, mapped, initialized, and free of concurrent writes, atomic
+    // modifications, or live `&mut` aliases.
     unsafe { VO_BIT_SIDE_METADATA_SPEC.load_raw_word(addr) }
 }
 

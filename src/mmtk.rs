@@ -602,7 +602,11 @@ impl<VM: VMBinding> MMTK<VM> {
     {
         use crate::util::object_enum;
 
-        let mut enumerator = object_enum::ClosureObjectEnumerator::<_, VM>::new(f);
+        // SAFETY: `cfg(feature = "vo_bit")` ensures `VO_BIT_SIDE_METADATA_SPEC` is registered in
+        // every space's `SideMetadataContext::new_global_specs`, and `MMTK::enumerate_objects`
+        // (preserved as a `pub` VM-binding API) documents that the VM binding must ensure no
+        // allocation or GC runs concurrently (nor via `f`) while enumeration executes.
+        let mut enumerator = unsafe { object_enum::ClosureObjectEnumerator::<_, VM>::new(f) };
         let plan = self.get_plan();
         plan.for_each_space(&mut |space| {
             space.enumerate_objects(&mut enumerator);

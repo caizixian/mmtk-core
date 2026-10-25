@@ -306,24 +306,38 @@ impl<VM: VMBinding> OVCSpace<VM> {
 
     pub fn add_offset_vector_tasks(&'static self) {
         let offset_vector_packets: Vec<Box<dyn GCWork<VM>>> = self.generate_tasks(&mut |r, _| {
-            Box::new(CalculateOffsetVector::<VM>::new(self, r.region, r.cursor()))
+            // SAFETY: `r` comes from `self.pr.enumerate_regions`, so `r.region` is an allocated
+            // `OVCSpace` region with `MARK_SPEC` and `OFFSET_VECTOR_SPEC` mapped, `r.cursor()` is
+            // page-aligned (`>= Block::BYTES`) in `[r.region.start(), r.region.end()]`, and the
+            // packet is queued exclusively into STW `WorkBucketStage::CalculateForwarding` after
+            // all marking into `MARK_SPEC` has finished.
+            Box::new(unsafe { CalculateOffsetVector::<VM>::new(self, r.region, r.cursor()) })
         });
         self.scheduler.work_buckets[WorkBucketStage::CalculateForwarding]
             .bulk_add(offset_vector_packets);
     }
 
-    pub fn calculate_offset_vector_for_region(
+    /// # Safety
+    /// Same preconditions as [`forwarding::ForwardingMetadata::calculate_offset_vector`].
+    unsafe fn calculate_offset_vector_for_region(
         &self,
         region: forwarding::OVCRegion,
         cursor: Address,
     ) {
-        self.forwarding.calculate_offset_vector(region, cursor);
+        // SAFETY: Caller upholds `ForwardingMetadata::calculate_offset_vector` preconditions.
+        unsafe {
+            self.forwarding.calculate_offset_vector(region, cursor);
+        }
     }
 
     pub fn forward(&self, object: ObjectReference, _vo_bit_valid: bool) -> ObjectReference {
         if !self.in_space(object) {
             return object;
         }
+        assert!(
+            self.forwarding.has_calculated_forwarding_addresses(),
+            "OVCSpace::forward called before offset vector calculation"
+        );
         // We can't expect the VO bit to be valid whilst compacting the heap.
         // If we are fixing a reference to an object which was moved before the referent,
         // the relevant VO bit will have been cleared, and this assertion would fail.
@@ -336,7 +350,15 @@ impl<VM: VMBinding> OVCSpace<VM> {
                 object
             );
         }
-        ObjectReference::from_raw_address(self.forwarding.forward(object.to_raw_address())).unwrap()
+        // SAFETY: `self.in_space(object)` verified `object` resides in an allocated, mapped
+        // `OVCSpace` region (with `MARK_SPEC` and `OFFSET_VECTOR_SPEC` mapped), and
+        // `has_calculated_forwarding_addresses()` (`Acquire` load) is only `true` during the STW
+        // forwarding/compaction window after `CalculateForwarding` and before `release()`, when
+        // `MARK_SPEC` is completely quiescent.
+        ObjectReference::from_raw_address(unsafe {
+            self.forwarding.forward(object.to_raw_address())
+        })
+        .unwrap()
     }
 
     fn update_references(&self, worker: &mut GCWorker<VM>, object: ObjectReference) {
@@ -354,12 +376,19 @@ impl<VM: VMBinding> OVCSpace<VM> {
     }
 
     pub fn add_compact_tasks(&'static self) {
-        let compact_packets: Vec<Box<dyn GCWork<VM>>> =
-            self.generate_tasks(&mut |_, i| Box::new(Compact::<VM>::new(self, i)));
+        let compact_packets: Vec<Box<dyn GCWork<VM>>> = self.generate_tasks(&mut |_, i| {
+            // SAFETY: Each `i` is a unique allocated region index from `self.pr.enumerate_regions`,
+            // and `Compact` is queued exclusively into STW `WorkBucketStage::Compact` after
+            // `CalculateForwarding` and `SecondRoots`, when `MARK_SPEC` is quiescent.
+            Box::new(unsafe { Compact::<VM>::new(self, i) })
+        });
         self.scheduler.work_buckets[WorkBucketStage::Compact].bulk_add(compact_packets);
     }
 
-    pub fn compact_region(&self, worker: &mut GCWorker<VM>, index: usize) {
+    /// # Safety
+    /// `index` must identify a uniquely assigned allocated region in `self.pr` during STW
+    /// `WorkBucketStage::Compact` while `MARK_SPEC` is quiescent.
+    unsafe fn compact_region(&self, worker: &mut GCWorker<VM>, index: usize) {
         self.pr.with_regions(&mut |regions| {
             let r = &regions[index];
             let start = r.region.start();
@@ -367,42 +396,54 @@ impl<VM: VMBinding> OVCSpace<VM> {
             #[cfg(feature = "vo_bit")]
             {
                 #[cfg(debug_assertions)]
-                self.forwarding
-                    .scan_marked_objects(start, end, &mut |object: ObjectReference| {
-                        debug_assert!(
-                            crate::util::metadata::vo_bit::is_vo_bit_set(object),
-                            "{:x}: VO bit not set",
-                            object
-                        );
-                    });
+                // SAFETY: `[start, end)` is an allocated `OVCSpace` region with mapped, quiescent
+                // `MARK_SPEC`, and `is_vo_bit_set` only reads `VO_BIT`.
+                unsafe {
+                    self.forwarding.scan_marked_objects(
+                        start,
+                        end,
+                        &mut |object: ObjectReference| {
+                            debug_assert!(
+                                crate::util::metadata::vo_bit::is_vo_bit_set(object),
+                                "{:x}: VO bit not set",
+                                object
+                            );
+                        },
+                    );
+                }
                 crate::util::metadata::vo_bit::bzero_vo_bit(start, end - start);
             }
             let mut to = start;
-            self.forwarding
-                .scan_marked_objects(start, end, &mut |obj: ObjectReference| {
-                    // We set the end bits based on the sizes of objects when they are
-                    // marked, and we compute the live data and thus the forwarding
-                    // addresses based on those sizes. The forwarding addresses would be
-                    // incorrect if the sizes of objects were to change.
-                    let copied_size = VM::VMObjectModel::get_size_when_copied(obj);
-                    debug_assert!(copied_size == VM::VMObjectModel::get_current_size(obj));
-                    let new_object = self.forward(obj, false);
-                    debug_assert!(
-                        new_object.to_raw_address() >= to,
-                        "whilst forwarding {obj}, the new address {0} should be after the end of the last object {to}",
-                        new_object.to_raw_address()
-                    );
-                    // copy object
-                    trace!(" copy from {} to {}", obj, new_object);
-                    let end_of_new_object =
-                        VM::VMObjectModel::copy_to(obj, new_object, Address::ZERO);
-                    // update VO bit
-                    #[cfg(feature = "vo_bit")]
-                    vo_bit::set_vo_bit(new_object);
-                    to = new_object.to_object_start::<VM>() + copied_size;
-                    debug_assert_eq!(end_of_new_object, to);
-                    self.update_references(worker, new_object);
-                });
+            // SAFETY: `[start, end)` is an allocated `OVCSpace` region with mapped, quiescent
+            // `MARK_SPEC` uniquely compacted by this packet; copying objects, updating `VO_BIT`,
+            // and forwarding object slots never mutate `MARK_SPEC`.
+            unsafe {
+                self.forwarding
+                    .scan_marked_objects(start, end, &mut |obj: ObjectReference| {
+                        // We set the end bits based on the sizes of objects when they are
+                        // marked, and we compute the live data and thus the forwarding
+                        // addresses based on those sizes. The forwarding addresses would be
+                        // incorrect if the sizes of objects were to change.
+                        let copied_size = VM::VMObjectModel::get_size_when_copied(obj);
+                        debug_assert!(copied_size == VM::VMObjectModel::get_current_size(obj));
+                        let new_object = self.forward(obj, false);
+                        debug_assert!(
+                            new_object.to_raw_address() >= to,
+                            "whilst forwarding {obj}, the new address {0} should be after the end of the last object {to}",
+                            new_object.to_raw_address()
+                        );
+                        // copy object
+                        trace!(" copy from {} to {}", obj, new_object);
+                        let end_of_new_object =
+                            VM::VMObjectModel::copy_to(obj, new_object, Address::ZERO);
+                        // update VO bit
+                        #[cfg(feature = "vo_bit")]
+                        vo_bit::set_vo_bit(new_object);
+                        to = new_object.to_object_start::<VM>() + copied_size;
+                        debug_assert_eq!(end_of_new_object, to);
+                        self.update_references(worker, new_object);
+                    });
+            }
             self.pr.reset_cursor(r, to);
         });
     }
@@ -410,11 +451,15 @@ impl<VM: VMBinding> OVCSpace<VM> {
     pub fn after_compact(&self, worker: &mut GCWorker<VM>, los: &LargeObjectSpace<VM>) {
         self.pr.reset_allocator();
         // Update references from the LOS to OVC too.
-        los.enumerate_to_space_objects(&mut object_enum::ClosureObjectEnumerator::<_, VM>::new(
-            &mut |o: ObjectReference| {
+        // SAFETY: `after_compact` runs during the STW `WorkBucketStage::Compact` sentinel when
+        // mutators are paused, and `LargeObjectSpace::enumerate_to_space_objects` enumerates
+        // treadmill objects via `visit_object` (never calling `visit_address_range`).
+        let mut enumerator = unsafe {
+            object_enum::ClosureObjectEnumerator::<_, VM>::new(|o: ObjectReference| {
                 self.update_references(worker, o);
-            },
-        ));
+            })
+        };
+        los.enumerate_to_space_objects(&mut enumerator);
     }
 }
 
@@ -427,13 +472,21 @@ pub struct CalculateOffsetVector<VM: VMBinding> {
 
 impl<VM: VMBinding> GCWork<VM> for CalculateOffsetVector<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        self.ovc_space
-            .calculate_offset_vector_for_region(self.region, self.cursor);
+        // SAFETY: `CalculateOffsetVector` is constructed solely in `OVCSpace::add_offset_vector_tasks`
+        // for an allocated `OVCSpace` region and executed during STW `CalculateForwarding` while
+        // `MARK_SPEC` is quiescent.
+        unsafe {
+            self.ovc_space
+                .calculate_offset_vector_for_region(self.region, self.cursor);
+        }
     }
 }
 
 impl<VM: VMBinding> CalculateOffsetVector<VM> {
-    pub fn new(
+    /// # Safety
+    /// `region` and `cursor` must satisfy [`forwarding::ForwardingMetadata::calculate_offset_vector`]
+    /// when `do_work` executes in `WorkBucketStage::CalculateForwarding`.
+    unsafe fn new(
         ovc_space: &'static OVCSpace<VM>,
         region: forwarding::OVCRegion,
         cursor: Address,
@@ -454,12 +507,18 @@ pub struct Compact<VM: VMBinding> {
 
 impl<VM: VMBinding> GCWork<VM> for Compact<VM> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        self.ovc_space.compact_region(worker, self.index);
+        // SAFETY: `Compact` is constructed solely in `OVCSpace::add_compact_tasks` with a unique
+        // region index and executed during STW `WorkBucketStage::Compact` while `MARK_SPEC` is quiescent.
+        unsafe {
+            self.ovc_space.compact_region(worker, self.index);
+        }
     }
 }
 
 impl<VM: VMBinding> Compact<VM> {
-    pub fn new(ovc_space: &'static OVCSpace<VM>, index: usize) -> Self {
+    /// # Safety
+    /// `index` must be a uniquely assigned region in `ovc_space` compacted during STW `Compact`.
+    unsafe fn new(ovc_space: &'static OVCSpace<VM>, index: usize) -> Self {
         Self { ovc_space, index }
     }
 }

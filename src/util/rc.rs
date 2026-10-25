@@ -200,8 +200,17 @@ impl<VM: VMBinding> RefCountHelper<VM> {
 
     /// Returns `true` if the RC table entry at `o`'s address is zero. Used for both individual
     /// objects and line-granularity entries (e.g. straddle line markers), which share the same table.
-    pub fn object_or_line_is_dead(&self, o: ObjectReference) -> bool {
-        RC_TABLE.load_byte(o.to_raw_address()) == 0
+    ///
+    /// # Safety
+    /// * `o` must reside in a space whose `RC_TABLE` side metadata is mapped, readable, and
+    ///   initialized.
+    /// * Because this performs a non-atomic [`SideMetadataSpec::load_byte`], no other thread may
+    ///   concurrently write to or atomically modify `RC_TABLE` at `o.to_raw_address()` for the
+    ///   duration of this call, and no live `&mut` reference may alias that metadata byte.
+    pub unsafe fn object_or_line_is_dead(&self, o: ObjectReference) -> bool {
+        // SAFETY: Caller guarantees `RC_TABLE` for `o` is mapped, initialized, and free of
+        // concurrent writes, atomic modifications, or live `&mut` aliases.
+        unsafe { RC_TABLE.load_byte(o.to_raw_address()) == 0 }
     }
 
     /// Returns a slice view over the raw RC table memory covering block `b`, reinterpreted as an

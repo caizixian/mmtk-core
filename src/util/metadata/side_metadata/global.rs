@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use super::*;
 use crate::util::constants::{BYTES_IN_PAGE, LOG_BITS_IN_BYTE};
 use crate::util::conversions::raw_align_up;
@@ -12,7 +14,18 @@ use crate::MMAPPER;
 use num_traits::FromPrimitive;
 use ranges::BitByteRange;
 use std::fmt;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU8, Ordering};
+
+enum ResolvedSideAtomic<'a, T: MetadataValue> {
+    SubByte {
+        atomic: &'a AtomicU8,
+        lshift: u8,
+        mask: u8,
+    },
+    FullWord {
+        atomic: &'a T::Atomic,
+    },
+}
 
 /// This struct stores the specification of a side metadata bit-set.
 /// It is used as an input to the (inline) functions provided by the side metadata module.
@@ -119,39 +132,288 @@ impl SideMetadataSpec {
         (a1, s1) != (a2, s2)
     }
 
+    /// Unconditionally validate `self`'s region shift, bit-width, and byte offset alignment for `T`.
+    ///
+    /// Because real `SideMetadataSpec` definitions are `const`, LLVM constant-folds these checks to
+    /// zero instructions in `--release` while preventing misaligned-atomic or shift-overflow UB on
+    /// dynamically constructed `SideMetadataSpec` literals (`pub` fields).
+    #[inline(always)]
+    pub(crate) const fn assert_spec<T: MetadataValue>(&self) {
+        assert!(
+            self.log_bytes_in_region < usize::BITS as usize,
+            "SideMetadataSpec log_bytes_in_region must be < usize::BITS"
+        );
+        match self.log_num_of_bits {
+            0..=2 => {
+                assert!(
+                    T::LOG2 == 3,
+                    "Sub-byte SideMetadataSpec requires u8 (T::LOG2 == 3)"
+                );
+            }
+            3..=6 => {
+                assert!(
+                    T::LOG2 == self.log_num_of_bits as u32,
+                    "SideMetadataSpec log_num_of_bits must equal T::LOG2"
+                );
+                let req_align = max_metadata_align::<T>();
+                assert!(
+                    self.offset % req_align == 0,
+                    "SideMetadataSpec offset must be aligned to max_metadata_align::<T>()"
+                );
+            }
+            _ => panic!("SideMetadataSpec > 64-bits is not supported"),
+        }
+    }
+
     /// Assert that `T` and `self.offset` alignment match `self`'s bit-width unconditionally (zero
     /// instructions in release builds when `self` is `const`), and check runtime `val` range in
     /// debug builds.
     #[inline(always)]
     #[allow(unused_variables)]
     fn assert_value_type<T: MetadataValue>(&self, val: Option<T>) {
-        let log_b = self.log_num_of_bits;
-        match log_b {
-            _ if log_b < 3 => {
-                assert_eq!(T::LOG2, 3);
-                #[cfg(debug_assertions)]
-                if let Some(v) = val {
-                    assert!(
-                        v.to_u8().unwrap() < (1 << (1 << log_b)),
-                        "Input value {:?} is invalid for the spec {:?}",
-                        v,
-                        self
-                    );
-                }
-            }
-            3..=6 => {
-                assert_eq!(T::LOG2, log_b as u32);
-                let req_align = max_metadata_align::<T>();
+        self.assert_spec::<T>();
+        #[cfg(debug_assertions)]
+        if self.log_num_of_bits < 3 {
+            if let Some(v) = val {
                 assert!(
-                    self.offset % req_align == 0,
-                    "SideMetadataSpec offset 0x{:x} must be aligned to {} bytes: {:?}",
-                    self.offset,
-                    req_align,
+                    v.to_u8().unwrap() < (1 << (1 << self.log_num_of_bits)),
+                    "Input value {:?} is invalid for the spec {:?}",
+                    v,
                     self
                 );
             }
-            _ => unreachable!("side metadata > {}-bits is not supported", 1 << log_b),
         }
+    }
+
+    /// Validate `self` for `T` and project the underlying atomic side-metadata cell for `data_addr`.
+    ///
+    /// # Safety
+    /// * `address_to_meta_address(self, data_addr)` must point to mapped, initialized,
+    ///   readable/writable side-metadata memory valid for `'a`.
+    /// * No concurrent non-atomic accesses or live non-atomic Rust references (`&` or `&mut`) may
+    ///   alias that cell during `'a`, and all concurrent accesses must use atomic operations of the
+    ///   same width (`AtomicU8` when `self.log_num_of_bits < 3`, or `T::Atomic` otherwise).
+    #[inline(always)]
+    unsafe fn resolve_atomic<'a, T: MetadataValue>(
+        &self,
+        data_addr: Address,
+    ) -> ResolvedSideAtomic<'a, T> {
+        self.assert_spec::<T>();
+        let meta_addr = address_to_meta_address(self, data_addr);
+        if self.log_num_of_bits < 3 {
+            let lshift = meta_byte_lshift(self, data_addr);
+            let mask = meta_byte_mask(self) << lshift;
+            // SAFETY: Caller guarantees `meta_addr` is mapped, initialized, and accessed solely via
+            // `AtomicU8` for `'a` (`u8::atomic_ref` unconditionally checks `!meta_addr.is_zero()`).
+            let atomic = unsafe { <u8 as MetadataValue>::atomic_ref(meta_addr) };
+            ResolvedSideAtomic::SubByte {
+                atomic,
+                lshift,
+                mask,
+            }
+        } else {
+            // SAFETY: `assert_spec::<T>()` verified `T::LOG2 == self.log_num_of_bits`,
+            // `self.log_bytes_in_region < usize::BITS`, and `self.offset % max_metadata_align::<T>() == 0`;
+            // `T::atomic_ref` unconditionally checks `!meta_addr.is_zero()` and
+            // `meta_addr.is_aligned_to(T::ATOMIC_ALIGN)`; caller guarantees mapped, initialized
+            // side-metadata memory accessed solely via `T::Atomic` for `'a`.
+            let atomic = unsafe { T::atomic_ref(meta_addr) };
+            ResolvedSideAtomic::FullWord { atomic }
+        }
+    }
+
+    /// Validate that `[data_addr, data_addr + data_bytes)` maps to a contiguous, byte-aligned
+    /// side-metadata range of `meta_bytes` bytes (within a single chunk if chunked), returning
+    /// `(meta_addr, meta_bytes)`.
+    #[inline]
+    fn checked_mapped_byte_range(&self, data_addr: Address, data_bytes: usize) -> (Address, usize) {
+        assert!(
+            self.log_num_of_bits <= 6 && self.log_bytes_in_region < usize::BITS as usize,
+            "Invalid SideMetadataSpec geometry: {:?}",
+            self
+        );
+        let _end = data_addr
+            .as_usize()
+            .checked_add(data_bytes)
+            .expect("SideMetadataSpec slice data range overflow");
+        let region_bytes = 1usize << self.log_bytes_in_region;
+        assert!(
+            data_addr.is_aligned_to(region_bytes) && (data_bytes & (region_bytes - 1)) == 0,
+            "data_addr ({}) and data_bytes (0x{:x}) must be aligned to region_bytes (0x{:x})",
+            data_addr,
+            data_bytes,
+            region_bytes
+        );
+        assert_eq!(
+            meta_byte_lshift(self, data_addr),
+            0,
+            "data_addr ({}) does not start on a side-metadata byte boundary for {:?}",
+            data_addr,
+            self
+        );
+
+        let regions = data_bytes >> self.log_bytes_in_region;
+        let meta_bytes = if self.log_num_of_bits >= LOG_BITS_IN_BYTE as usize {
+            let bytes_per_region_shift = self.log_num_of_bits - LOG_BITS_IN_BYTE as usize;
+            regions
+                .checked_mul(1usize << bytes_per_region_shift)
+                .expect("SideMetadataSpec slice byte length overflow")
+        } else {
+            let regions_per_byte_shift = LOG_BITS_IN_BYTE as usize - self.log_num_of_bits;
+            let regions_per_byte = 1usize << regions_per_byte_shift;
+            assert_eq!(
+                regions & (regions_per_byte - 1),
+                0,
+                "data_bytes (0x{:x}) does not cover an integral number of metadata bytes for {:?}",
+                data_bytes,
+                self
+            );
+            regions >> regions_per_byte_shift
+        };
+
+        if data_bytes > 0 && self.uses_chunked_side_metadata() {
+            let last_byte = data_addr + (data_bytes - 1);
+            assert_eq!(
+                data_addr.align_down(BYTES_IN_CHUNK),
+                last_byte.align_down(BYTES_IN_CHUNK),
+                "Chunked side-metadata slice for {:?} cannot span multiple chunks",
+                self
+            );
+        }
+
+        let meta_addr = address_to_meta_address(self, data_addr);
+        assert!(
+            !meta_addr.is_zero(),
+            "SideMetadataSpec slice resolved to null metadata address"
+        );
+        #[cfg(all(debug_assertions, feature = "extreme_assertions"))]
+        if meta_bytes > 0 {
+            self.assert_metadata_mapped(data_addr);
+        }
+        (meta_addr, meta_bytes)
+    }
+
+    /// Project the contiguous `N`-byte side-metadata range starting at `data_addr` as
+    /// `&'a [AtomicU8; N]`.
+    ///
+    /// # Safety
+    /// * `self.log_num_of_bits <= 3`, `data_addr` must fall on a byte boundary in `self`'s side
+    ///   metadata, and if `N > 0 && self.uses_chunked_side_metadata()`, the covered data range
+    ///   `[data_addr, data_addr + meta_to_data_size(self, N))` must lie within a single
+    ///   `BYTES_IN_CHUNK` chunk.
+    /// * The `N` side-metadata bytes starting at `address_to_meta_address(self, data_addr)` must be
+    ///   mapped, initialized, and remain mapped for `'a`.
+    /// * For the entire lifetime `'a`, no thread may perform non-atomic reads/writes or mixed-width
+    ///   atomic accesses (wider than `AtomicU8`), and no live non-atomic Rust reference (`&[u8]` or
+    ///   `&mut [u8]`) may alias `[meta_addr, meta_addr + N)`.
+    #[allow(dead_code)] // Consumed by Wave 2B (`immix` `MappedBlock::line_mark_table`).
+    #[inline(always)]
+    pub(crate) unsafe fn mapped_atomic_bytes_unchecked<'a, const N: usize>(
+        &self,
+        data_addr: Address,
+    ) -> &'a [AtomicU8; N] {
+        assert!(
+            self.log_num_of_bits <= LOG_BITS_IN_BYTE as usize,
+            "mapped_atomic_bytes_unchecked requires <= 8-bit side metadata: {:?}",
+            self
+        );
+        let data_bytes = meta_to_data_size(self, N);
+        let (meta_addr, meta_bytes) = self.checked_mapped_byte_range(data_addr, data_bytes);
+        debug_assert_eq!(meta_bytes, N);
+        // SAFETY: `checked_mapped_byte_range` verified byte alignment, chunk containment, and
+        // `!meta_addr.is_zero()` (`AtomicU8` has alignment 1), and the caller guarantees `[meta_addr, meta_addr + N)`
+        // is mapped, initialized, valid for `'a`, and accessed solely via `AtomicU8`.
+        unsafe { &*meta_addr.to_ptr::<[AtomicU8; N]>() }
+    }
+
+    /// Project the contiguous `ROWS * COLS`-byte side-metadata range starting at `data_addr` as a
+    /// 2D array `&'a [[AtomicU8; COLS]; ROWS]` (e.g. Immix `MappedBlock::rc_table`
+    /// `&[[AtomicU8; BYTES_PER_LINE]; Block::LINES]` on Rust 1.84 without `<[T]>::as_chunks`).
+    ///
+    /// # Safety
+    /// Same preconditions as [`Self::mapped_atomic_bytes_unchecked`] for `N = ROWS * COLS`
+    /// contiguous side-metadata bytes.
+    #[allow(dead_code)] // Consumed by Wave 2B (`immix` `MappedBlock::rc_table`).
+    #[inline(always)]
+    pub(crate) unsafe fn mapped_atomic_byte_chunks_unchecked<
+        'a,
+        const ROWS: usize,
+        const COLS: usize,
+    >(
+        &self,
+        data_addr: Address,
+    ) -> &'a [[AtomicU8; COLS]; ROWS] {
+        assert!(
+            self.log_num_of_bits <= LOG_BITS_IN_BYTE as usize,
+            "mapped_atomic_byte_chunks_unchecked requires <= 8-bit side metadata: {:?}",
+            self
+        );
+        let total_meta_bytes = ROWS
+            .checked_mul(COLS)
+            .expect("mapped_atomic_byte_chunks_unchecked ROWS * COLS overflow");
+        let data_bytes = meta_to_data_size(self, total_meta_bytes);
+        let (meta_addr, meta_bytes) = self.checked_mapped_byte_range(data_addr, data_bytes);
+        debug_assert_eq!(meta_bytes, total_meta_bytes);
+        // SAFETY: `checked_mapped_byte_range` verified byte alignment, chunk containment, and
+        // `!meta_addr.is_zero()` (`[[AtomicU8; COLS]; ROWS]` has alignment 1 and size `ROWS * COLS`),
+        // and the caller guarantees the range is mapped, initialized, valid for `'a`, and accessed
+        // solely via `AtomicU8`.
+        unsafe { &*meta_addr.to_ptr::<[[AtomicU8; COLS]; ROWS]>() }
+    }
+
+    /// Project the contiguous side-metadata bytes covering `[data_addr, data_addr + data_bytes)` as
+    /// a shared byte slice `&'a [u8]`.
+    ///
+    /// # Safety
+    /// * `data_addr` and `data_addr + data_bytes` must both fall on exact byte boundaries in
+    ///   `self`'s side metadata, `data_addr.as_usize() + data_bytes` must not overflow, and if
+    ///   `data_bytes > 0 && self.uses_chunked_side_metadata()`, `[data_addr, data_addr + data_bytes)`
+    ///   must lie within a single `BYTES_IN_CHUNK` chunk.
+    /// * The `meta_bytes` bytes starting at `address_to_meta_address(self, data_addr)` must be
+    ///   mapped, initialized, and remain mapped for `'a`.
+    /// * For the entire lifetime `'a`, no thread may mutate (atomically or non-atomically) any byte
+    ///   in `[meta_addr, meta_addr + meta_bytes)`, and no `&mut` reference may alias that range.
+    #[allow(dead_code)] // Consumed by Wave 2B (`malloc_ms` `MallocExclusiveChunk`).
+    #[inline]
+    pub(crate) unsafe fn mapped_bytes_unchecked<'a>(
+        &self,
+        data_addr: Address,
+        data_bytes: usize,
+    ) -> &'a [u8] {
+        let (meta_addr, meta_bytes) = self.checked_mapped_byte_range(data_addr, data_bytes);
+        // SAFETY: `checked_mapped_byte_range` verified non-null `meta_addr` (`u8` has alignment 1)
+        // and single-chunk containment, and caller guarantees `[meta_addr, meta_addr + meta_bytes)`
+        // is mapped, initialized, and immutable without `&mut` or atomic-write aliases for `'a`.
+        unsafe { std::slice::from_raw_parts(meta_addr.to_ptr::<u8>(), meta_bytes) }
+    }
+
+    /// Project the contiguous side-metadata bytes covering `[data_addr, data_addr + data_bytes)` as
+    /// an exclusive mutable byte slice `&'a mut [u8]`.
+    ///
+    /// # Safety
+    /// * `data_addr` and `data_addr + data_bytes` must both fall on exact byte boundaries in
+    ///   `self`'s side metadata, `data_addr.as_usize() + data_bytes` must not overflow, and if
+    ///   `data_bytes > 0 && self.uses_chunked_side_metadata()`, `[data_addr, data_addr + data_bytes)`
+    ///   must lie within a single `BYTES_IN_CHUNK` chunk.
+    /// * The `meta_bytes` bytes starting at `address_to_meta_address(self, data_addr)` must be
+    ///   mapped, writable, initialized, and remain mapped for `'a`.
+    /// * Exclusive aliasing invariant: for the entire lifetime `'a`, the caller must have unique
+    ///   access to `[meta_addr, meta_addr + meta_bytes)` — no other `&[u8]`, `&mut [u8]`,
+    ///   `&Atomic*`, or raw-pointer/`SideMetadataSpec` read/write/bzero may alias or access any
+    ///   byte in this range.
+    #[allow(dead_code)] // Consumed by Wave 2B (`malloc_ms` `MallocExclusiveChunk`).
+    #[inline]
+    pub(crate) unsafe fn mapped_bytes_mut_unchecked<'a>(
+        &self,
+        data_addr: Address,
+        data_bytes: usize,
+    ) -> &'a mut [u8] {
+        let (meta_addr, meta_bytes) = self.checked_mapped_byte_range(data_addr, data_bytes);
+        // SAFETY: `checked_mapped_byte_range` verified non-null `meta_addr` (`u8` has alignment 1)
+        // and single-chunk containment, and caller guarantees `[meta_addr, meta_addr + meta_bytes)`
+        // is mapped, initialized, writable, and uniquely borrowed without any aliasing references
+        // or concurrent/interleaved raw-pointer accesses for `'a`.
+        unsafe { std::slice::from_raw_parts_mut(meta_addr.to_mut_ptr::<u8>(), meta_bytes) }
     }
 
     /// Check with the mmapper to see if side metadata is mapped for the spec for the data address.
@@ -611,11 +873,17 @@ impl SideMetadataSpec {
     /// Non-atomically load a raw byte from the side metadata byte that is mapped to the data address.
     /// Unlike [`SideMetadataSpec::load`], this always reads a whole byte regardless of the number of
     /// bits used by this spec, and does not mask/shift out unrelated bits sharing that byte.
-    pub fn load_byte(&self, data_addr: Address) -> u8 {
+    ///
+    /// # Safety
+    ///
+    /// * `self`'s side-metadata byte for `data_addr` must be non-null, mapped, readable, and
+    ///   initialized.
+    /// * No other thread may concurrently write to or atomically modify that metadata byte for the
+    ///   duration of this call, and no live `&mut` reference may alias it.
+    pub unsafe fn load_byte(&self, data_addr: Address) -> u8 {
         let meta_addr = address_to_meta_address(self, data_addr);
-        // SAFETY: `load_byte` (preserved with its public signature) requires `self`'s side
-        // metadata for `data_addr` to be mapped, initialized, non-null (`u8` has alignment 1), and
-        // not concurrently mutated during this non-atomic read.
+        // SAFETY: Caller guarantees `meta_addr` is non-null, mapped, initialized (`u8` has
+        // alignment 1), and free of concurrent writes, atomic modifications, or live `&mut` aliases.
         unsafe { meta_addr.load::<u8>() }
     }
 
@@ -643,24 +911,17 @@ impl SideMetadataSpec {
             data_addr,
             None,
             || {
-                let meta_addr = address_to_meta_address(self, data_addr);
-                let bits_num_log = self.log_num_of_bits;
-                if bits_num_log < 3 {
-                    let lshift = meta_byte_lshift(self, data_addr);
-                    let mask = meta_byte_mask(self) << lshift;
-                    // SAFETY: For valid `SideMetadataSpec` and mapped `data_addr` (`assert_metadata_mapped`),
-                    // `meta_addr` is non-null, mapped, initialized (`AtomicU8` has alignment 1), and
-                    // accessed atomically without concurrent non-atomic writes or `&mut` aliases.
-                    let byte_val = unsafe { <u8 as MetadataValue>::load_atomic(meta_addr, order) };
-                    FromPrimitive::from_u8((byte_val & mask) >> lshift).unwrap()
-                } else {
-                    // SAFETY: `base` is page/8-byte-aligned, unconditional `assert_value_type`
-                    // verified `T::LOG2 == bits_num_log` and `self.offset % max_metadata_align::<T>() == 0`,
-                    // and the region byte offset `(data_addr >> log_bytes_in_region) << (bits_num_log - 3)`
-                    // is a multiple of `size_of::<T>()`, so `meta_addr` is non-null, aligned to
-                    // `T`'s atomic type (including 8-byte `AtomicU64` on 32-bit), mapped,
-                    // initialized, and free of concurrent non-atomic writes or `&mut` aliases.
-                    unsafe { T::load_atomic(meta_addr, order) }
+                // SAFETY: By `SideMetadataSpec`'s mapped-region contract (checked under
+                // `extreme_assertions`) and unconditional `assert_spec`, `data_addr`'s metadata
+                // cell is mapped, initialized, aligned, and accessed atomically without non-atomic
+                // write races or `&mut` aliases.
+                match unsafe { self.resolve_atomic::<T>(data_addr) } {
+                    ResolvedSideAtomic::SubByte {
+                        atomic,
+                        lshift,
+                        mask,
+                    } => FromPrimitive::from_u8((atomic.load(order) & mask) >> lshift).unwrap(),
+                    ResolvedSideAtomic::FullWord { atomic } => atomic.load_val(order),
                 }
             },
             |_v| {
@@ -677,34 +938,22 @@ impl SideMetadataSpec {
             data_addr,
             Some(metadata),
             || {
-                let meta_addr = address_to_meta_address(self, data_addr);
-                let bits_num_log = self.log_num_of_bits;
-                if bits_num_log < 3 {
-                    let lshift = meta_byte_lshift(self, data_addr);
-                    let mask = meta_byte_mask(self) << lshift;
-                    let metadata_u8 = metadata.to_u8().unwrap();
-                    let fetch_order = load_order_for_rmw(order);
-                    // SAFETY: `meta_addr` is non-null, mapped, initialized (`AtomicU8` has
-                    // alignment 1), and updated via atomic CAS without concurrent non-atomic
-                    // accesses or live non-atomic Rust references; `load_order_for_rmw(order)`
-                    // maps `Release` / `AcqRel` to a valid `fetch_order`.
-                    let _ = unsafe {
-                        <u8 as MetadataValue>::fetch_update(
-                            meta_addr,
-                            order,
-                            fetch_order,
-                            |v: u8| Some((v & !mask) | (metadata_u8 << lshift)),
-                        )
-                    };
-                } else {
-                    // SAFETY: `base` is page/8-byte-aligned, unconditional `assert_value_type`
-                    // verified `T::LOG2 == bits_num_log` and `self.offset % max_metadata_align::<T>() == 0`,
-                    // and the region byte offset is a multiple of `size_of::<T>()`, so `meta_addr`
-                    // is non-null, aligned to `T`'s atomic type, mapped, initialized, and free of
-                    // non-atomic races.
-                    unsafe {
-                        T::store_atomic(meta_addr, metadata, order);
+                // SAFETY: By `SideMetadataSpec`'s mapped-region contract and unconditional
+                // `assert_spec`, `data_addr`'s metadata cell is mapped, initialized, writable, and
+                // accessed atomically without non-atomic races or live non-atomic references.
+                match unsafe { self.resolve_atomic::<T>(data_addr) } {
+                    ResolvedSideAtomic::SubByte {
+                        atomic,
+                        lshift,
+                        mask,
+                    } => {
+                        let metadata_u8 = metadata.to_u8().unwrap();
+                        let fetch_order = load_order_for_rmw(order);
+                        let _ = atomic.fetch_update_val(order, fetch_order, |v: u8| {
+                            Some((v & !mask) | (metadata_u8 << lshift))
+                        });
                     }
+                    ResolvedSideAtomic::FullWord { atomic } => atomic.store_val(metadata, order),
                 }
             },
             |_| {
@@ -866,52 +1115,38 @@ impl SideMetadataSpec {
             data_addr,
             Some(new_metadata),
             || {
-                let meta_addr = address_to_meta_address(self, data_addr);
-                let bits_num_log = self.log_num_of_bits;
-                if bits_num_log < 3 {
-                    let lshift = meta_byte_lshift(self, data_addr);
-                    let mask = meta_byte_mask(self) << lshift;
-                    let load_order = load_order_for_rmw(success_order);
+                // SAFETY: By `SideMetadataSpec`'s mapped-region contract and unconditional
+                // `assert_spec`, `data_addr`'s metadata cell is mapped, initialized, writable, and
+                // accessed atomically without non-atomic races or live non-atomic references.
+                match unsafe { self.resolve_atomic::<T>(data_addr) } {
+                    ResolvedSideAtomic::SubByte {
+                        atomic,
+                        lshift,
+                        mask,
+                    } => {
+                        let load_order = load_order_for_rmw(success_order);
+                        let real_old_byte = atomic.load(load_order);
+                        let expected_old_byte =
+                            (real_old_byte & !mask) | ((old_metadata.to_u8().unwrap()) << lshift);
+                        let expected_new_byte = (expected_old_byte & !mask)
+                            | ((new_metadata.to_u8().unwrap()) << lshift);
 
-                    // SAFETY: `meta_addr` is non-null, mapped, initialized (`AtomicU8` has
-                    // alignment 1), and accessed without concurrent non-atomic writes or `&mut`
-                    // aliases; `load_order_for_rmw(success_order)` maps `Release` / `AcqRel` to a
-                    // valid load ordering.
-                    let real_old_byte =
-                        unsafe { <u8 as MetadataValue>::load_atomic(meta_addr, load_order) };
-                    let expected_old_byte =
-                        (real_old_byte & !mask) | ((old_metadata.to_u8().unwrap()) << lshift);
-                    let expected_new_byte =
-                        (expected_old_byte & !mask) | ((new_metadata.to_u8().unwrap()) << lshift);
-
-                    // SAFETY: `meta_addr` satisfies the same `AtomicU8` validity, initialization,
-                    // and atomic-only concurrency invariants as the load above.
-                    unsafe {
-                        <u8 as MetadataValue>::compare_exchange(
-                            meta_addr,
-                            expected_old_byte,
-                            expected_new_byte,
-                            success_order,
-                            failure_order,
-                        )
+                        atomic
+                            .compare_exchange(
+                                expected_old_byte,
+                                expected_new_byte,
+                                success_order,
+                                failure_order,
+                            )
+                            .map(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
+                            .map_err(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
                     }
-                    .map(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
-                    .map_err(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
-                } else {
-                    // SAFETY: `base` is page/8-byte-aligned, unconditional `assert_value_type`
-                    // verified `T::LOG2 == bits_num_log` and `self.offset % max_metadata_align::<T>() == 0`,
-                    // and the region byte offset is a multiple of `size_of::<T>()`, so `meta_addr`
-                    // is non-null, aligned to `T`'s atomic type, mapped, initialized, and free of
-                    // non-atomic races.
-                    unsafe {
-                        T::compare_exchange(
-                            meta_addr,
-                            old_metadata,
-                            new_metadata,
-                            success_order,
-                            failure_order,
-                        )
-                    }
+                    ResolvedSideAtomic::FullWord { atomic } => atomic.compare_exchange_val(
+                        old_metadata,
+                        new_metadata,
+                        success_order,
+                        failure_order,
+                    ),
                 }
             },
             |_res| {
@@ -923,44 +1158,23 @@ impl SideMetadataSpec {
         )
     }
 
-    /// This is used to implement fetch_add/sub for bits.
-    /// For fetch_and/or, we don't necessarily need this method. We could directly do fetch_and/or on the u8.
-    ///
-    /// # Safety
-    /// * `meta_addr` must be non-null and point to a mapped, initialized, writable side-metadata
-    ///   byte corresponding to `data_addr` under `self` (`self.log_num_of_bits < 3`).
-    /// * `set_order` and `fetch_order` must be valid orderings for `AtomicU8::fetch_update`
-    ///   (`fetch_order` may not be `Ordering::Release` or `Ordering::AcqRel`).
-    /// * All concurrent accesses to `meta_addr` must be atomic byte operations, with no live
-    ///   non-atomic Rust references aliasing `meta_addr`.
-    unsafe fn fetch_ops_on_bits<F: Fn(u8) -> u8>(
-        &self,
-        data_addr: Address,
-        meta_addr: Address,
+    /// Safe helper for `fetch_add_atomic`/`fetch_sub_atomic` on sub-byte (`< 8` bits) side metadata.
+    fn fetch_ops_on_bits<F: Fn(u8) -> u8>(
+        atomic: &AtomicU8,
+        lshift: u8,
+        mask: u8,
         set_order: Ordering,
         fetch_order: Ordering,
         update: F,
     ) -> u8 {
-        let lshift = meta_byte_lshift(self, data_addr);
-        let mask = meta_byte_mask(self) << lshift;
-
-        // SAFETY: Caller guarantees `meta_addr` is non-null, mapped, initialized (`AtomicU8` has
-        // alignment 1), and free of concurrent non-atomic accesses or non-atomic Rust references,
-        // and that `set_order` / `fetch_order` are valid for `fetch_update`.
-        let old_raw_byte = unsafe {
-            <u8 as MetadataValue>::fetch_update(
-                meta_addr,
-                set_order,
-                fetch_order,
-                |raw_byte: u8| {
-                    let old_val = (raw_byte & mask) >> lshift;
-                    let new_val = update(old_val);
-                    let new_raw_byte = (raw_byte & !mask) | ((new_val << lshift) & mask);
-                    Some(new_raw_byte)
-                },
-            )
-        }
-        .unwrap();
+        let old_raw_byte = atomic
+            .fetch_update_val(set_order, fetch_order, |raw_byte: u8| {
+                let old_val = (raw_byte & mask) >> lshift;
+                let new_val = update(old_val);
+                let new_raw_byte = (raw_byte & !mask) | ((new_val << lshift) & mask);
+                Some(new_raw_byte)
+            })
+            .unwrap();
         (old_raw_byte & mask) >> lshift
     }
 
@@ -977,24 +1191,27 @@ impl SideMetadataSpec {
             data_addr,
             Some(val),
             || {
-                let meta_addr = address_to_meta_address(self, data_addr);
-                let bits_num_log = self.log_num_of_bits;
-                if bits_num_log < 3 {
-                    let fetch_order = load_order_for_rmw(order);
-                    // SAFETY: `meta_addr` is the mapped, initialized, non-null side-metadata byte
-                    // for `data_addr` (`AtomicU8` has alignment 1), accessed solely via atomics,
-                    // and `load_order_for_rmw(order)` yields a valid `fetch_order`.
-                    let prev = unsafe {
-                        self.fetch_ops_on_bits(data_addr, meta_addr, order, fetch_order, |x: u8| {
-                            x.wrapping_add(val.to_u8().unwrap())
-                        })
-                    };
-                    FromPrimitive::from_u8(prev).unwrap()
-                } else {
-                    // SAFETY: `meta_addr` is non-null, aligned to `T`'s atomic type (verified by
-                    // unconditional `assert_value_type`), mapped, initialized, and free of
-                    // concurrent non-atomic accesses or references.
-                    unsafe { T::fetch_add(meta_addr, val, order) }
+                // SAFETY: By `SideMetadataSpec`'s mapped-region contract and unconditional
+                // `assert_spec`, `data_addr`'s metadata cell is mapped, initialized, writable, and
+                // accessed solely via atomics.
+                match unsafe { self.resolve_atomic::<T>(data_addr) } {
+                    ResolvedSideAtomic::SubByte {
+                        atomic,
+                        lshift,
+                        mask,
+                    } => {
+                        let fetch_order = load_order_for_rmw(order);
+                        let prev = Self::fetch_ops_on_bits(
+                            atomic,
+                            lshift,
+                            mask,
+                            order,
+                            fetch_order,
+                            |x| x.wrapping_add(val.to_u8().unwrap()),
+                        );
+                        FromPrimitive::from_u8(prev).unwrap()
+                    }
+                    ResolvedSideAtomic::FullWord { atomic } => atomic.fetch_add_val(val, order),
                 }
             },
             |_old_val| {
@@ -1017,23 +1234,27 @@ impl SideMetadataSpec {
             data_addr,
             Some(val),
             || {
-                let meta_addr = address_to_meta_address(self, data_addr);
-                if self.log_num_of_bits < 3 {
-                    let fetch_order = load_order_for_rmw(order);
-                    // SAFETY: `meta_addr` is the mapped, initialized, non-null side-metadata byte
-                    // for `data_addr` (`AtomicU8` has alignment 1), accessed solely via atomics,
-                    // and `load_order_for_rmw(order)` yields a valid `fetch_order`.
-                    let prev = unsafe {
-                        self.fetch_ops_on_bits(data_addr, meta_addr, order, fetch_order, |x: u8| {
-                            x.wrapping_sub(val.to_u8().unwrap())
-                        })
-                    };
-                    FromPrimitive::from_u8(prev).unwrap()
-                } else {
-                    // SAFETY: `meta_addr` is non-null, aligned to `T`'s atomic type (verified by
-                    // unconditional `assert_value_type`), mapped, initialized, and free of
-                    // concurrent non-atomic accesses or references.
-                    unsafe { T::fetch_sub(meta_addr, val, order) }
+                // SAFETY: By `SideMetadataSpec`'s mapped-region contract and unconditional
+                // `assert_spec`, `data_addr`'s metadata cell is mapped, initialized, writable, and
+                // accessed solely via atomics.
+                match unsafe { self.resolve_atomic::<T>(data_addr) } {
+                    ResolvedSideAtomic::SubByte {
+                        atomic,
+                        lshift,
+                        mask,
+                    } => {
+                        let fetch_order = load_order_for_rmw(order);
+                        let prev = Self::fetch_ops_on_bits(
+                            atomic,
+                            lshift,
+                            mask,
+                            order,
+                            fetch_order,
+                            |x| x.wrapping_sub(val.to_u8().unwrap()),
+                        );
+                        FromPrimitive::from_u8(prev).unwrap()
+                    }
+                    ResolvedSideAtomic::FullWord { atomic } => atomic.fetch_sub_val(val, order),
                 }
             },
             |_old_val| {
@@ -1056,23 +1277,20 @@ impl SideMetadataSpec {
             data_addr,
             Some(val),
             || {
-                let meta_addr = address_to_meta_address(self, data_addr);
-                if self.log_num_of_bits < 3 {
-                    let lshift = meta_byte_lshift(self, data_addr);
-                    let mask = meta_byte_mask(self) << lshift;
-                    // We do not need to use fetch_ops_on_bits(), we can just set irrelavent bits to 1, and do fetch_and
-                    let rhs = (val.to_u8().unwrap() << lshift) | !mask;
-                    // SAFETY: `meta_addr` is non-null, mapped, initialized (`AtomicU8` has
-                    // alignment 1), and free of concurrent non-atomic accesses or references.
-                    let old_raw_byte =
-                        unsafe { <u8 as MetadataValue>::fetch_and(meta_addr, rhs, order) };
-                    let old_val = (old_raw_byte & mask) >> lshift;
-                    FromPrimitive::from_u8(old_val).unwrap()
-                } else {
-                    // SAFETY: `meta_addr` is non-null, aligned to `T`'s atomic type (verified by
-                    // unconditional `assert_value_type`), mapped, initialized, and free of
-                    // concurrent non-atomic accesses or references.
-                    unsafe { T::fetch_and(meta_addr, val, order) }
+                // SAFETY: By `SideMetadataSpec`'s mapped-region contract and unconditional
+                // `assert_spec`, `data_addr`'s metadata cell is mapped, initialized, writable, and
+                // accessed solely via atomics.
+                match unsafe { self.resolve_atomic::<T>(data_addr) } {
+                    ResolvedSideAtomic::SubByte {
+                        atomic,
+                        lshift,
+                        mask,
+                    } => {
+                        let rhs = (val.to_u8().unwrap() << lshift) | !mask;
+                        let old_raw_byte = atomic.fetch_and(rhs, order);
+                        FromPrimitive::from_u8((old_raw_byte & mask) >> lshift).unwrap()
+                    }
+                    ResolvedSideAtomic::FullWord { atomic } => atomic.fetch_and_val(val, order),
                 }
             },
             |_old_val| {
@@ -1095,23 +1313,20 @@ impl SideMetadataSpec {
             data_addr,
             Some(val),
             || {
-                let meta_addr = address_to_meta_address(self, data_addr);
-                if self.log_num_of_bits < 3 {
-                    let lshift = meta_byte_lshift(self, data_addr);
-                    let mask = meta_byte_mask(self) << lshift;
-                    // We do not need to use fetch_ops_on_bits(), we can just set irrelavent bits to 0, and do fetch_or
-                    let rhs = (val.to_u8().unwrap() << lshift) & mask;
-                    // SAFETY: `meta_addr` is non-null, mapped, initialized (`AtomicU8` has
-                    // alignment 1), and free of concurrent non-atomic accesses or references.
-                    let old_raw_byte =
-                        unsafe { <u8 as MetadataValue>::fetch_or(meta_addr, rhs, order) };
-                    let old_val = (old_raw_byte & mask) >> lshift;
-                    FromPrimitive::from_u8(old_val).unwrap()
-                } else {
-                    // SAFETY: `meta_addr` is non-null, aligned to `T`'s atomic type (verified by
-                    // unconditional `assert_value_type`), mapped, initialized, and free of
-                    // concurrent non-atomic accesses or references.
-                    unsafe { T::fetch_or(meta_addr, val, order) }
+                // SAFETY: By `SideMetadataSpec`'s mapped-region contract and unconditional
+                // `assert_spec`, `data_addr`'s metadata cell is mapped, initialized, writable, and
+                // accessed solely via atomics.
+                match unsafe { self.resolve_atomic::<T>(data_addr) } {
+                    ResolvedSideAtomic::SubByte {
+                        atomic,
+                        lshift,
+                        mask,
+                    } => {
+                        let rhs = (val.to_u8().unwrap() << lshift) & mask;
+                        let old_raw_byte = atomic.fetch_or(rhs, order);
+                        FromPrimitive::from_u8((old_raw_byte & mask) >> lshift).unwrap()
+                    }
+                    ResolvedSideAtomic::FullWord { atomic } => atomic.fetch_or_val(val, order),
                 }
             },
             |_old_val| {
@@ -1143,38 +1358,28 @@ impl SideMetadataSpec {
             data_addr,
             None,
             move || -> std::result::Result<T, T> {
-                let meta_addr = address_to_meta_address(self, data_addr);
-                if self.log_num_of_bits < 3 {
-                    let lshift = meta_byte_lshift(self, data_addr);
-                    let mask = meta_byte_mask(self) << lshift;
-
-                    // SAFETY: `meta_addr` is non-null, mapped, initialized (`AtomicU8` has
-                    // alignment 1), and free of concurrent non-atomic accesses or references.
-                    unsafe {
-                        <u8 as MetadataValue>::fetch_update(
-                            meta_addr,
-                            set_order,
-                            fetch_order,
-                            |raw_byte: u8| {
-                                let old_val = (raw_byte & mask) >> lshift;
-                                let new_val = f(FromPrimitive::from_u8(old_val).unwrap());
-                                #[cfg(feature = "extreme_assertions")]
-                                last_new_val_ref.set(new_val);
-                                new_val.map(|new_val| {
-                                    (raw_byte & !mask)
-                                        | ((new_val.to_u8().unwrap() << lshift) & mask)
-                                })
-                            },
-                        )
-                    }
-                    .map(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
-                    .map_err(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
-                } else {
-                    // SAFETY: `meta_addr` is non-null, aligned to `T`'s atomic type (verified by
-                    // unconditional `assert_value_type`), mapped, initialized, and free of
-                    // concurrent non-atomic accesses or references.
-                    unsafe {
-                        T::fetch_update(meta_addr, set_order, fetch_order, |old_val| {
+                // SAFETY: By `SideMetadataSpec`'s mapped-region contract and unconditional
+                // `assert_spec`, `data_addr`'s metadata cell is mapped, initialized, writable, and
+                // accessed solely via atomics across the `fetch_update` loop.
+                match unsafe { self.resolve_atomic::<T>(data_addr) } {
+                    ResolvedSideAtomic::SubByte {
+                        atomic,
+                        lshift,
+                        mask,
+                    } => atomic
+                        .fetch_update_val(set_order, fetch_order, |raw_byte: u8| {
+                            let old_val = (raw_byte & mask) >> lshift;
+                            let new_val = f(FromPrimitive::from_u8(old_val).unwrap());
+                            #[cfg(feature = "extreme_assertions")]
+                            last_new_val_ref.set(new_val);
+                            new_val.map(|new_val| {
+                                (raw_byte & !mask) | ((new_val.to_u8().unwrap() << lshift) & mask)
+                            })
+                        })
+                        .map(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap())
+                        .map_err(|x| FromPrimitive::from_u8((x & mask) >> lshift).unwrap()),
+                    ResolvedSideAtomic::FullWord { atomic } => {
+                        atomic.fetch_update_val(set_order, fetch_order, |old_val| {
                             let new_val = f(old_val);
                             #[cfg(feature = "extreme_assertions")]
                             last_new_val_ref.set(new_val);
@@ -1598,7 +1803,16 @@ impl SideMetadataSpec {
     /// For each data region that has non-zero side metadata, `visit_data` is called with the lowest
     /// address of that region.  Note that it may not be the original address used to set the
     /// metadata bits.
-    pub fn scan_non_zero_values<T: MetadataValue>(
+    ///
+    /// # Safety
+    ///
+    /// * The side-metadata entries covering `[data_start_addr, data_end_addr)` under `self` must be
+    ///   non-null (whenever `data_start_addr < data_end_addr`), fully mapped, readable,
+    ///   initialized, and aligned for `T` (when `!(self.uses_contiguous_side_metadata() && self.log_num_of_bits == 0)`).
+    /// * Neither another thread nor `visit_data` may concurrently write to or atomically modify the
+    ///   scanned side-metadata range (including shared boundary bytes) while this scan is running,
+    ///   and no live `&mut` reference may alias it.
+    pub unsafe fn scan_non_zero_values<T: MetadataValue>(
         &self,
         data_start_addr: Address,
         data_end_addr: Address,
@@ -1609,9 +1823,9 @@ impl SideMetadataSpec {
             // TODO: VO bits is one-bit-per-word.  But if we want to scan other metadata (such as
             // the forwarding bits which has two bits per word), we will need to refactor the
             // algorithm of `scan_non_zero_values_fast`.
-            // SAFETY: `scan_non_zero_values` (preserved with its public signature) requires
-            // `[data_start_addr, data_end_addr)` to have fully mapped, initialized side metadata
-            // that is not concurrently mutated (including by `visit_data`) during scanning.
+            // SAFETY: `self.uses_contiguous_side_metadata() && self.log_num_of_bits == 0` holds,
+            // and caller guarantees `[data_start_addr, data_end_addr)` has fully mapped,
+            // initialized, quiescent side metadata without live `&mut` aliases.
             unsafe {
                 self.scan_non_zero_values_fast(data_start_addr, data_end_addr, visit_data);
             }
@@ -1625,9 +1839,8 @@ impl SideMetadataSpec {
             or the metadata has more than one bit per region. \
                 The performance is slow, as MMTk does not optimize for this case."
             );
-            // SAFETY: `scan_non_zero_values` (preserved with its public signature) requires
-            // `[data_start_addr, data_end_addr)` to have fully mapped, initialized, `T`-aligned
-            // side metadata that is not concurrently mutated (including by `visit_data`) during scanning.
+            // SAFETY: Caller guarantees `[data_start_addr, data_end_addr)` has fully mapped,
+            // initialized, `T`-aligned, quiescent side metadata without live `&mut` aliases.
             unsafe {
                 self.scan_non_zero_values_simple::<T>(data_start_addr, data_end_addr, visit_data);
             }
@@ -1685,9 +1898,20 @@ impl SideMetadataSpec {
         let mut visitor = |range| {
             match range {
                 BitByteRange::Bytes { start, end } => {
-                    helpers::scan_non_zero_bits_in_metadata_bytes(start, end, &mut |addr, bit| {
-                        visit_data(helpers::contiguous_meta_address_to_address(self, addr, bit));
-                    });
+                    // SAFETY: Caller guarantees `[start, end)` lies within the mapped, initialized,
+                    // quiescent contiguous side-metadata range for `[data_start_addr, data_end_addr)`
+                    // without concurrent mutations (including inside `visit_data`) or `&mut` aliases.
+                    unsafe {
+                        helpers::scan_non_zero_bits_in_metadata_bytes(
+                            start,
+                            end,
+                            &mut |addr, bit| {
+                                visit_data(helpers::contiguous_meta_address_to_address(
+                                    self, addr, bit,
+                                ));
+                            },
+                        );
+                    }
                 }
                 BitByteRange::BitsInByte {
                     addr,
@@ -2871,6 +3095,68 @@ mod tests {
                 0b11
             );
             assert_eq!(spec.load_atomic::<u8>(data_addr, Ordering::Acquire), 0b10);
+        });
+    }
+
+    #[test]
+    fn test_mapped_slice_helpers() {
+        test_side_metadata(3, |spec, data_addr, _meta_addr| {
+            // `TEST_LOG_BYTES_IN_REGION == 12` (4 KiB/region), `log_bits == 3` (1 byte/region).
+            // `test_side_metadata` maps 1 region (`4 KiB` => `1` metadata byte); map a full 4-page
+            // (`16 KiB` => `4` metadata bytes) window for slice/chunk projections.
+            let four_pages = 4 << TEST_LOG_BYTES_IN_REGION;
+            let ctx = SideMetadataContext {
+                global: vec![*spec],
+                local: vec![],
+            };
+            ctx.try_map_metadata_space(data_addr, four_pages, "SliceHelperTest")
+                .unwrap();
+
+            {
+                // SAFETY: `spec` is mapped for `[data_addr, data_addr + four_pages)`, single-threaded,
+                // and exclusively borrowed within this inner block.
+                let bytes_mut = unsafe { spec.mapped_bytes_mut_unchecked(data_addr, four_pages) };
+                assert_eq!(bytes_mut.len(), 4);
+                bytes_mut.copy_from_slice(&[0x11, 0x22, 0x33, 0x44]);
+            }
+
+            {
+                // SAFETY: `bytes_mut` was dropped above; `[data_addr, data_addr + four_pages)` is
+                // mapped, initialized, and immutable for the duration of this block.
+                let bytes = unsafe { spec.mapped_bytes_unchecked(data_addr, four_pages) };
+                assert_eq!(bytes, &[0x11, 0x22, 0x33, 0x44]);
+            }
+
+            {
+                // SAFETY: Previous non-atomic slices were dropped; only `AtomicU8` operations touch
+                // the 4 metadata bytes inside this block.
+                let atomics = unsafe { spec.mapped_atomic_bytes_unchecked::<4>(data_addr) };
+                assert_eq!(atomics[0].load(Ordering::Relaxed), 0x11);
+                atomics[2].store(0x99, Ordering::Relaxed);
+
+                // SAFETY: Coexisting `&[[AtomicU8; 2]; 2]` shares only `AtomicU8` references.
+                let grid = unsafe { spec.mapped_atomic_byte_chunks_unchecked::<2, 2>(data_addr) };
+                assert_eq!(grid[1][0].load(Ordering::Relaxed), 0x99);
+                assert_eq!(grid[1][1].load(Ordering::Relaxed), 0x44);
+            }
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "byte boundary")]
+    fn test_mapped_bytes_unaligned_subbyte_panics() {
+        serial_test(|| {
+            core_test_initialize_side_metadata();
+            let spec = SideMetadataSpec {
+                name: "subbyte_slice_test",
+                is_global: true,
+                offset: 0,
+                log_num_of_bits: 0, // 1 bit per 8-byte word => 64 bytes per metadata byte
+                log_bytes_in_region: 3,
+            };
+            let unaligned_data = vm_layout::vm_layout().heap_start + 8usize;
+            // SAFETY: Expected to panic in `checked_mapped_byte_range` before any pointer dereference.
+            let _ = unsafe { spec.mapped_bytes_unchecked(unaligned_data, 64) };
         });
     }
 }

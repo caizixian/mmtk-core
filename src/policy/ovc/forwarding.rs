@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use crate::util::constants::BYTES_IN_WORD;
 use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::spec_defs::{OVC_MARK, OVC_OFFSET_VECTOR};
@@ -17,10 +19,7 @@ pub(crate) struct OVCRegion(Address);
 impl Region for OVCRegion {
     const LOG_BYTES: usize = 20; // 1 MiB
     fn from_aligned_address(address: Address) -> Self {
-        assert!(
-            address.is_aligned_to(Self::BYTES),
-            "{address} is not aligned"
-        );
+        Self::assert_aligned_non_zero(address);
         OVCRegion(address)
     }
     fn start(&self) -> Address {
@@ -105,7 +104,7 @@ pub(crate) struct Block(Address);
 impl Region for Block {
     const LOG_BYTES: usize = 9;
     fn from_aligned_address(address: Address) -> Self {
-        assert!(address.is_aligned_to(Self::BYTES));
+        Self::assert_aligned_non_zero(address);
         Block(address)
     }
     fn start(&self) -> Address {
@@ -149,7 +148,14 @@ impl<VM: VMBinding> ForwardingMetadata<VM> {
         MARK_SPEC.fetch_or_atomic::<u8>(last_word_of_object, 1, Ordering::Relaxed);
     }
 
-    pub fn calculate_offset_vector(&self, region: OVCRegion, cursor: Address) {
+    /// Populate `OFFSET_VECTOR_SPEC` across `[region.start(), cursor)` from quiescent `MARK_SPEC`.
+    ///
+    /// # Safety
+    /// * `region` must be an allocated `OVCSpace` region with `MARK_SPEC` and `OFFSET_VECTOR_SPEC`
+    ///   mapped and initialized across `[region.start(), region.end())`.
+    /// * `cursor` must be aligned to `Block::BYTES` with `region.start() <= cursor <= region.end()`.
+    /// * No thread may concurrently mutate `MARK_SPEC` in `[region.start(), cursor)` during this call.
+    pub(super) unsafe fn calculate_offset_vector(&self, region: OVCRegion, cursor: Address) {
         let mut state = Transducer::new(region.start());
         let first_block = Block::from_aligned_address(region.start());
         let last_block = Block::from_aligned_address(cursor);
@@ -159,24 +165,36 @@ impl<VM: VMBinding> ForwardingMetadata<VM> {
                 state.encode(region, block.start()),
                 Ordering::Relaxed,
             );
-            MARK_SPEC.scan_non_zero_values::<u8>(
-                block.start(),
-                block.end(),
-                &mut |addr: Address| {
-                    state.visit_mark_bit(addr);
-                },
-            );
+            // SAFETY: Caller guarantees `block` lies within an allocated `OVCSpace` region whose
+            // `MARK_SPEC` is mapped, initialized, and quiescent during `CalculateForwarding`, and
+            // `state.visit_mark_bit` only updates local `Transducer` state.
+            unsafe {
+                MARK_SPEC.scan_non_zero_values::<u8>(
+                    block.start(),
+                    block.end(),
+                    &mut |addr: Address| {
+                        state.visit_mark_bit(addr);
+                    },
+                );
+            }
         }
-        self.calculated.store(true, Ordering::Relaxed);
+        self.calculated.store(true, Ordering::Release);
     }
 
     pub fn release(&self) {
-        self.calculated.store(false, Ordering::Relaxed);
+        self.calculated.store(false, Ordering::Release);
     }
 
-    pub fn forward(&self, address: Address) -> Address {
-        debug_assert!(
-            self.calculated.load(Ordering::Relaxed),
+    /// Compute the forwarded destination address for an object at `address`.
+    ///
+    /// # Safety
+    /// * `self.has_calculated_forwarding_addresses()` must be `true`, and `address` must reside in
+    ///   an allocated `OVCSpace` region whose `MARK_SPEC` and `OFFSET_VECTOR_SPEC` are mapped and
+    ///   initialized across `Block::from_unaligned_address(address)`.
+    /// * No thread may concurrently mutate `MARK_SPEC` in `[block.start(), address)` during this call.
+    pub(super) unsafe fn forward(&self, address: Address) -> Address {
+        assert!(
+            self.calculated.load(Ordering::Acquire),
             "forward() should only be called when we have calculated an offset vector"
         );
         let region = OVCRegion::from_unaligned_address(address);
@@ -189,29 +207,43 @@ impl<VM: VMBinding> ForwardingMetadata<VM> {
         // The transducer in this implementation computes the final
         // address of an object; whereas Total-Live-Data in the paper computes
         // the distance of the object from the start of the block.
-        MARK_SPEC.scan_non_zero_values::<u8>(block.start(), address, &mut |addr: Address| {
-            state.visit_mark_bit(addr)
-        });
+        // SAFETY: Caller guarantees `address` lies in a mapped `OVCSpace` block after offset-vector
+        // calculation with quiescent `MARK_SPEC`, and `state.visit_mark_bit` does not mutate `MARK_SPEC`.
+        unsafe {
+            MARK_SPEC.scan_non_zero_values::<u8>(block.start(), address, &mut |addr: Address| {
+                state.visit_mark_bit(addr)
+            });
+        }
         state.to
     }
 
-    pub fn scan_marked_objects(
+    /// Scan start-of-object mark bits in `[start, end)` and invoke `f` on each marked object.
+    ///
+    /// # Safety
+    /// * `[start, end)` must lie within an allocated `OVCSpace` region with `MARK_SPEC` mapped and
+    ///   initialized.
+    /// * Neither another thread nor `f` may mutate `MARK_SPEC` in `[start, end)` during this scan.
+    pub(super) unsafe fn scan_marked_objects(
         &self,
         start: Address,
         end: Address,
         f: &mut impl FnMut(ObjectReference),
     ) {
         let mut in_object = false;
-        MARK_SPEC.scan_non_zero_values::<u8>(start, end, &mut |addr: Address| {
-            if !in_object {
-                let object = ObjectReference::from_raw_address(addr).unwrap();
-                f(object);
-            }
-            in_object = !in_object;
-        });
+        // SAFETY: Caller guarantees `[start, end)` has mapped, initialized `MARK_SPEC` metadata and
+        // neither another thread nor `f` mutates `MARK_SPEC` during the scan.
+        unsafe {
+            MARK_SPEC.scan_non_zero_values::<u8>(start, end, &mut |addr: Address| {
+                if !in_object {
+                    let object = ObjectReference::from_raw_address(addr).unwrap();
+                    f(object);
+                }
+                in_object = !in_object;
+            });
+        }
     }
 
     pub fn has_calculated_forwarding_addresses(&self) -> bool {
-        self.calculated.load(Ordering::Relaxed)
+        self.calculated.load(Ordering::Acquire)
     }
 }

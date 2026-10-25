@@ -87,9 +87,14 @@ pub fn bench(c: &mut Criterion) {
 
         b.iter(|| {
             holder.clear();
-            scan_non_zero_bits_in_metadata_bytes(start, end, &mut |addr, shift| {
-                holder.push((addr, shift));
-            });
+            // SAFETY: `[start, end)` is backed by `bitmap.words` (`Box<AlignedBitmap>`, non-null,
+            // mapped, and initialized), exclusively owned by this single-threaded benchmark, and
+            // the visitor closure only pushes to `holder` without mutating `bitmap.words`.
+            unsafe {
+                scan_non_zero_bits_in_metadata_bytes(start, end, &mut |addr, shift| {
+                    holder.push((addr, shift));
+                });
+            }
         });
 
         assert_eq!(holder.len(), NUM_OBJECTS);
