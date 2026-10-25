@@ -1,5 +1,4 @@
 use std::sync::Mutex;
-use std::{cell::UnsafeCell, marker::PhantomData};
 
 use crate::plan::concurrent::Pause;
 use crate::plan::global::Plan;
@@ -22,7 +21,9 @@ use crate::{
 use super::gc_work::mature_evac::EvacuateMatureObjects;
 use crate::util::constants::LOG_BYTES_IN_PAGE;
 use atomic::Ordering;
+use atomic_refcell::AtomicRefCell;
 use crossbeam::queue::SegQueue;
+use crossbeam::utils::CachePadded;
 use std::sync::atomic::AtomicUsize;
 
 #[repr(C)]
@@ -44,20 +45,11 @@ impl<VM: VMBinding> RemSetEntry<VM> {
 }
 
 pub struct MatureEvecRemSet<VM: VMBinding> {
-    gc_buffers: Vec<UnsafeCell<Vec<RemSetEntry<VM>>>>,
+    gc_buffers: Vec<CachePadded<AtomicRefCell<Vec<RemSetEntry<VM>>>>>,
     pub global_packets: Mutex<Vec<Box<dyn GCWork<VM>>>>,
-    local_packets: Vec<UnsafeCell<Vec<Box<dyn GCWork<VM>>>>>,
-    _p: PhantomData<fn() -> VM>,
+    local_packets: Vec<Mutex<Vec<Box<dyn GCWork<VM>>>>>,
     size: AtomicUsize,
 }
-
-// SAFETY: `global_packets` (`Mutex<Vec<Box<dyn GCWork<VM>>>>`) and `size` (`AtomicUsize`) are
-// intrinsically `Sync`. The per-worker `UnsafeCell` slots in `gc_buffers` and `local_packets` are
-// indexed exclusively by `worker.ordinal` via `unsafe fn record` (whose safety contract requires a
-// `GCWorker<VM>` belonging to the owning `MMTK<VM>` instance, with `&mut GCWorker<VM>` statically
-// preventing re-entrant access on that worker) while bulk draining via `flush_all(&mut self)`
-// requires `&mut MatureEvecRemSet<VM>` during single-worker STW `LXR::prepare`.
-unsafe impl<VM: VMBinding> Sync for MatureEvecRemSet<VM> {}
 
 impl<VM: VMBinding> MatureEvecRemSet<VM> {
     pub fn new(workers: usize) -> Self {
@@ -65,13 +57,11 @@ impl<VM: VMBinding> MatureEvecRemSet<VM> {
             gc_buffers: vec![],
             global_packets: Mutex::new(vec![]),
             local_packets: vec![],
-            _p: PhantomData,
             size: AtomicUsize::new(0),
         };
         rs.gc_buffers
-            .resize_with(workers, || UnsafeCell::new(vec![]));
-        rs.local_packets
-            .resize_with(workers, || UnsafeCell::new(vec![]));
+            .resize_with(workers, || CachePadded::new(AtomicRefCell::new(vec![])));
+        rs.local_packets.resize_with(workers, || Mutex::new(vec![]));
         rs
     }
 
@@ -86,7 +76,7 @@ impl<VM: VMBinding> MatureEvecRemSet<VM> {
             }
         }
         for cell in &mut self.local_packets {
-            let buf = cell.get_mut();
+            let buf = cell.get_mut().unwrap();
             if !buf.is_empty() {
                 let packets = std::mem::take(buf);
                 for p in packets {
@@ -102,52 +92,36 @@ impl<VM: VMBinding> MatureEvecRemSet<VM> {
     }
 
     /// Flush worker `id`'s local remembered-set buffer into `self.local_packets[id]`.
-    ///
-    /// # Safety
-    ///
-    /// - `id` must be in bounds (`id < self.gc_buffers.len()`, which equals `self.local_packets.len()`).
-    /// - The caller must have exclusive access to `self.gc_buffers[id]` and `self.local_packets[id]`
-    ///   for the duration of this call (no other live shared or mutable references to either cell's
-    ///   contents may exist concurrently on this or any other thread).
     #[cold]
-    unsafe fn flush(&self, id: usize) {
+    fn flush(&self, id: usize) {
         let remset = {
-            // SAFETY: Caller guarantees `id < self.gc_buffers.len()` and exclusive access to
-            // `self.gc_buffers[id]`. `buf` is dropped at the end of this block before accessing
-            // `self.local_packets[id]`.
-            let buf = unsafe { &mut *self.gc_buffers[id].get() };
+            let mut buf = self.gc_buffers[id].borrow_mut();
             if buf.is_empty() {
                 return;
             }
-            std::mem::take(buf)
+            std::mem::take(&mut *buf)
         };
         self.size.fetch_add(remset.len(), Ordering::SeqCst);
         let w = EvacuateMatureObjects::new(remset);
-        // SAFETY: Caller guarantees `id < self.local_packets.len()` and exclusive access to
-        // `self.local_packets[id]`.
-        let packet_buffer = unsafe { &mut *self.local_packets[id].get() };
+        let mut packet_buffer = self.local_packets[id].lock().unwrap();
         packet_buffer.push(Box::new(w));
     }
 
     /// Record slot `s` into `worker`'s thread-local mature-evacuation remembered-set buffer.
-    ///
-    /// # Safety
-    ///
-    /// `worker` must belong to the same `MMTK<VM>` instance that owns `lxr` and `self` (ensuring
-    /// `worker.ordinal < self.gc_buffers.len()` and that no other `GCWorker` in this instance shares
-    /// `worker.ordinal`), and no concurrent access to `self.gc_buffers[worker.ordinal]` or
-    /// `self.local_packets[worker.ordinal]` (such as [`Self::flush_all`]) may occur during this call.
-    pub(super) unsafe fn record(
+    pub(super) fn record(
         &self,
         worker: &mut crate::scheduler::GCWorker<VM>,
         s: VM::VMSlot,
         _o: ObjectReference,
         lxr: &LXR<VM>,
     ) {
-        debug_assert!(std::ptr::eq(
-            worker.mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap(),
-            lxr
-        ));
+        assert!(
+            std::ptr::eq(
+                worker.mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap(),
+                lxr
+            ),
+            "GCWorker belongs to a different LXR plan instance"
+        );
         debug_assert_eq!(
             crate::scheduler::current_worker_ordinal(),
             Some(worker.ordinal)
@@ -156,19 +130,12 @@ impl<VM: VMBinding> MatureEvecRemSet<VM> {
         let ix = lxr.immix_space.address_in_space(s.to_address());
         let entry = RemSetEntry::<VM>::encode(s, ix);
         let should_flush = {
-            // SAFETY: By caller precondition, `worker` belongs to the `MMTK<VM>` instance owning
-            // `self`, so `id < self.gc_buffers.len()`, and holding `&mut GCWorker<VM>` while no STW
-            // `flush_all(&mut self)` is active guarantees exclusive access to `self.gc_buffers[id]`.
-            // `buf` is dropped at the end of this block before `self.flush(id)` reborrows the cell.
-            let buf = unsafe { &mut *self.gc_buffers[id].get() };
+            let mut buf = self.gc_buffers[id].borrow_mut();
             buf.push(entry);
             buf.len() >= EvacuateMatureObjects::<VM>::CAPACITY
         };
         if should_flush {
-            // SAFETY: `id < self.gc_buffers.len()`, `buf` above has ended its borrow, and
-            // `&mut GCWorker<VM>` for this `MMTK<VM>` instance guarantees exclusive access to
-            // `self.gc_buffers[id]` and `self.local_packets[id]`.
-            unsafe { self.flush(id) };
+            self.flush(id);
         }
     }
 }

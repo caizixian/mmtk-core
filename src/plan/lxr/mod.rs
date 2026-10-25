@@ -95,8 +95,9 @@ impl Drop for LazySweepingJobsCounter {
         let lazy_sweeping_jobs = LAZY_SWEEPING_JOBS.read();
         if let Some(decs) = self.decs_counter.as_ref() {
             if decs.fetch_sub(1, Ordering::SeqCst) == 1 {
-                let f = lazy_sweeping_jobs.end_of_decs.as_ref().unwrap();
-                f(self.clone())
+                if let Some(f) = lazy_sweeping_jobs.end_of_decs.as_ref() {
+                    f(self.clone())
+                }
             }
         }
         if self.counter.fetch_sub(1, Ordering::SeqCst) == 1 {
@@ -120,9 +121,9 @@ impl LazySweepingJobs {
     fn new() -> Self {
         Self {
             prev_decs_counter: None,
-            curr_decs_counter: None,
+            curr_decs_counter: Some(Arc::new(AtomicUsize::new(0))),
             prev_counter: None,
-            curr_counter: None,
+            curr_counter: Some(Arc::new(AtomicUsize::new(0))),
             end_of_decs: None,
             end_of_lazy: None,
         }

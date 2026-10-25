@@ -78,50 +78,110 @@ pub fn create_mutator<VM: VMBinding>(
 pub fn create_plan<VM: VMBinding>(
     plan: PlanSelector,
     args: CreateGeneralPlanArgs<VM>,
-) -> Box<dyn Plan<VM = VM>> {
+) -> Box<std::cell::UnsafeCell<dyn Plan<VM = VM>>> {
+    use std::cell::UnsafeCell;
     match plan {
-        PlanSelector::NoGC => {
-            Box::new(crate::plan::nogc::NoGC::new(args)) as Box<dyn Plan<VM = VM>>
-        }
-        PlanSelector::SemiSpace => {
-            Box::new(crate::plan::semispace::SemiSpace::new(args)) as Box<dyn Plan<VM = VM>>
-        }
-        PlanSelector::GenCopy => Box::new(crate::plan::generational::copying::GenCopy::new(args))
-            as Box<dyn Plan<VM = VM>>,
-        PlanSelector::GenImmix => Box::new(crate::plan::generational::immix::GenImmix::new(args))
-            as Box<dyn Plan<VM = VM>>,
-        PlanSelector::MarkSweep => {
-            Box::new(crate::plan::marksweep::MarkSweep::new(args)) as Box<dyn Plan<VM = VM>>
-        }
-        PlanSelector::Immix => {
-            Box::new(crate::plan::immix::Immix::new(args)) as Box<dyn Plan<VM = VM>>
-        }
-        PlanSelector::PageProtect => {
-            Box::new(crate::plan::pageprotect::PageProtect::new(args)) as Box<dyn Plan<VM = VM>>
-        }
-        PlanSelector::Lisp2 => {
-            Box::new(crate::plan::markcompact::lisp2::Lisp2::new(args)) as Box<dyn Plan<VM = VM>>
-        }
-        PlanSelector::StickyImmix => {
-            Box::new(crate::plan::sticky::immix::StickyImmix::new(args)) as Box<dyn Plan<VM = VM>>
-        }
-        PlanSelector::LXR => crate::plan::lxr::LXR::new(args) as Box<dyn Plan<VM = VM>>,
-        PlanSelector::ConcurrentImmix => {
-            Box::new(crate::plan::concurrent::immix::ConcurrentImmix::new(args))
-                as Box<dyn Plan<VM = VM>>
-        }
-        PlanSelector::OVC => {
-            Box::new(crate::plan::markcompact::ovc::OVC::new(args)) as Box<dyn Plan<VM = VM>>
-        }
+        PlanSelector::NoGC => Box::new(UnsafeCell::new(crate::plan::nogc::NoGC::new(args)))
+            as Box<UnsafeCell<dyn Plan<VM = VM>>>,
+        PlanSelector::SemiSpace => Box::new(UnsafeCell::new(
+            crate::plan::semispace::SemiSpace::new(args),
+        )) as Box<UnsafeCell<dyn Plan<VM = VM>>>,
+        PlanSelector::GenCopy => Box::new(UnsafeCell::new(
+            crate::plan::generational::copying::GenCopy::new(args),
+        )) as Box<UnsafeCell<dyn Plan<VM = VM>>>,
+        PlanSelector::GenImmix => Box::new(UnsafeCell::new(
+            crate::plan::generational::immix::GenImmix::new(args),
+        )) as Box<UnsafeCell<dyn Plan<VM = VM>>>,
+        PlanSelector::MarkSweep => Box::new(UnsafeCell::new(
+            crate::plan::marksweep::MarkSweep::new(args),
+        )) as Box<UnsafeCell<dyn Plan<VM = VM>>>,
+        PlanSelector::Immix => Box::new(UnsafeCell::new(crate::plan::immix::Immix::new(args)))
+            as Box<UnsafeCell<dyn Plan<VM = VM>>>,
+        PlanSelector::PageProtect => Box::new(UnsafeCell::new(
+            crate::plan::pageprotect::PageProtect::new(args),
+        )) as Box<UnsafeCell<dyn Plan<VM = VM>>>,
+        PlanSelector::Lisp2 => Box::new(UnsafeCell::new(
+            crate::plan::markcompact::lisp2::Lisp2::new(args),
+        )) as Box<UnsafeCell<dyn Plan<VM = VM>>>,
+        PlanSelector::StickyImmix => Box::new(UnsafeCell::new(
+            crate::plan::sticky::immix::StickyImmix::new(args),
+        )) as Box<UnsafeCell<dyn Plan<VM = VM>>>,
+        PlanSelector::LXR => crate::plan::lxr::LXR::new(args) as Box<UnsafeCell<dyn Plan<VM = VM>>>,
+        PlanSelector::ConcurrentImmix => Box::new(UnsafeCell::new(
+            crate::plan::concurrent::immix::ConcurrentImmix::new(args),
+        )) as Box<UnsafeCell<dyn Plan<VM = VM>>>,
+        PlanSelector::OVC => Box::new(UnsafeCell::new(crate::plan::markcompact::ovc::OVC::new(
+            args,
+        ))) as Box<UnsafeCell<dyn Plan<VM = VM>>>,
     }
 }
 
-/// Complete post-construction initialization for plans that register `'static` self-referential
-/// hooks or callbacks once the boxed plan has reached its final location inside `MMTK`.
-pub(crate) fn post_init_plan<VM: VMBinding>(plan: &'static dyn Plan<VM = VM>) {
-    if let Some(lxr) = plan.downcast_ref::<crate::plan::lxr::LXR<VM>>() {
-        lxr.post_init();
+/// Perform plan-local pause-end mutations while `&mut dyn Plan<VM = VM>` is held, returning
+/// `true` if the pause also ended the GC cycle so the caller should invoke
+/// `mmtk.gc_trigger.policy.on_gc_end(mmtk)` *after* dropping `&mut dyn Plan<VM = VM>`.
+pub(crate) fn finish_plan_pause<VM: VMBinding>(
+    plan: &mut dyn Plan<VM = VM>,
+    mmtk: &'static MMTK<VM>,
+    tls: VMWorkerThread,
+    next_gc_full_heap: Option<bool>,
+) -> bool {
+    match *mmtk.options.plan {
+        PlanSelector::NoGC => unreachable!("GC triggered in nogc"),
+        PlanSelector::SemiSpace
+        | PlanSelector::PageProtect
+        | PlanSelector::Lisp2
+        | PlanSelector::OVC => {
+            plan.common_mut().on_pause_end(tls);
+            assert!(
+                plan.concurrent().is_none(),
+                "ConcurrentPlan must override on_pause_end"
+            );
+            true
+        }
+        PlanSelector::MarkSweep => plan
+            .downcast_mut::<crate::plan::marksweep::MarkSweep<VM>>()
+            .unwrap()
+            .finish_pause(tls),
+        PlanSelector::Immix => plan
+            .downcast_mut::<crate::plan::immix::Immix<VM>>()
+            .unwrap()
+            .finish_pause(tls),
+        PlanSelector::GenCopy => plan
+            .downcast_mut::<crate::plan::generational::copying::GenCopy<VM>>()
+            .unwrap()
+            .finish_pause(tls, next_gc_full_heap),
+        PlanSelector::GenImmix => plan
+            .downcast_mut::<crate::plan::generational::immix::GenImmix<VM>>()
+            .unwrap()
+            .finish_pause(tls, next_gc_full_heap),
+        PlanSelector::StickyImmix => plan
+            .downcast_mut::<crate::plan::sticky::immix::StickyImmix<VM>>()
+            .unwrap()
+            .finish_pause(tls, next_gc_full_heap),
+        PlanSelector::ConcurrentImmix => plan
+            .downcast_mut::<crate::plan::concurrent::immix::ConcurrentImmix<VM>>()
+            .unwrap()
+            .finish_pause(mmtk),
+        PlanSelector::LXR => plan
+            .downcast_mut::<crate::plan::lxr::LXR<VM>>()
+            .unwrap()
+            .finish_pause(tls),
     }
+}
+
+/// Run plan-specific hooks once `MMTK::initialize_collection` guarantees `MMTK<VM>` is `'static`.
+pub(crate) fn on_collection_initialized<VM: VMBinding>(plan: &'static dyn Plan<VM = VM>) {
+    if let Some(lxr) = plan.downcast_ref::<crate::plan::lxr::LXR<VM>>() {
+        lxr.register_lazy_sweeping_hooks();
+    }
+}
+
+/// Pre-compute whether the next GC should be full-heap for generational plans while `&dyn Plan`
+/// is borrowed immutably, before acquiring `&mut dyn Plan` in `GCWorkScheduler::on_gc_finished`.
+pub(crate) fn compute_next_gc_full_heap<VM: VMBinding>(plan: &dyn Plan<VM = VM>) -> Option<bool> {
+    plan.generational().map(|_| {
+        crate::plan::generational::global::CommonGenPlan::should_next_gc_be_full_heap(plan)
+    })
 }
 
 /// Create thread local GC worker.
@@ -407,10 +467,19 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     /// This method should only be called after 1. side metadata is initialized (as some SFT maps may use side metadata), 2. the plan is created in the heap and won't be moved,
     /// and 3. the side metadata sanity is initialized (otherwise we may try access side metadata and trigger sanity check before side metadata sanity is initialized)
     fn initialize_sft(&self) {
-        // SAFETY: `initialize_sft` is called exclusively inside `MMTK::new` after `SFT_MAP` has
-        // been initialized (`SFT_MAP.initialize_once`), after side metadata and sanity state are
-        // set up, and before `MMTK` returns or any mutator/GC worker threads are spawned, so no
-        // other thread or call frame holds a shared or mutable reference into `SFT_MAP`.
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static SFT_INITIALIZED: AtomicBool = AtomicBool::new(false);
+        assert!(
+            !SFT_INITIALIZED.swap(true, Ordering::AcqRel),
+            "Plan::initialize_sft may only be called once during MMTK::new"
+        );
+        crate::mmtk::SFT_MAP.initialize_once(&crate::policy::sft_map::create_sft_map);
+        // SAFETY: `SFT_INITIALIZED.swap(true, Ordering::AcqRel)` enforces at runtime that this
+        // block executes at most once across the entire process lifetime; `MMTK::new` calls
+        // `plan.initialize_sft()` single-threaded after side metadata setup and before returning
+        // `MMTK<VM>` or spawning any mutator/GC worker threads (any second or post-init call via
+        // `&dyn Plan` panics above before reaching `get_mut()`), and `SFT_MAP.initialize_once`
+        // guarantees `SFT_MAP` is initialized before obtaining an exclusive `&mut`.
         let sft_map: &mut dyn crate::policy::sft_map::SFTMap =
             unsafe { crate::mmtk::SFT_MAP.get_mut() }.as_mut();
         self.for_each_space(&mut |s| {

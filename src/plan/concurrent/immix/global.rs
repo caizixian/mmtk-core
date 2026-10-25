@@ -241,41 +241,9 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
     }
 
     fn on_pause_end(&mut self, mmtk: &'static MMTK<VM>, _tls: VMWorkerThread) {
-        self.last_gc_was_defrag
-            .store(self.immix_space.end_of_gc(), Ordering::Relaxed);
-
-        let pause = self.current_pause().unwrap();
-        if pause == Pause::InitialMark {
-            self.set_concurrent_marking_state(true);
-        }
-        if pause == Pause::FinalMark {
-            // All marking must be finished by the end of `FinalMark`.  Work left in the
-            // `Concurrent` bucket would be traced after the heap has been released.
-            let concurrent_bucket = &mmtk.scheduler.work_buckets[WorkBucketStage::Concurrent];
-            assert!(
-                concurrent_bucket.is_empty(),
-                "Concurrent bucket is not empty at the end of FinalMark ({} packets)",
-                concurrent_bucket.len()
-            );
-        }
-        self.previous_pause.store(Some(pause), Ordering::SeqCst);
-        self.current_pause.store(None, Ordering::SeqCst);
-        if pause != Pause::FinalMark {
-            self.should_do_full_gc.store(false, Ordering::SeqCst);
-        } else {
-            // FIXME: Currently it is unsafe to trigger full GC during concurrent marking.
-            // See `Self::schedule_collection`.
-            // We keep the value of `self.should_do_full_gc` so that if full GC is triggered,
-            // the next GC will be full GC.
-        }
-
-        // Every pause ends a GC cycle, except `InitialMark`, which is followed by concurrent
-        // marking and a `FinalMark` pause before the cycle ends.
-        if pause != Pause::InitialMark {
+        if self.finish_pause(mmtk) {
             mmtk.gc_trigger.policy.on_gc_end(mmtk);
         }
-
-        info!("{:?} end", pause);
     }
 
     fn current_gc_may_move_object(&self) -> bool {
@@ -511,6 +479,41 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
             .base()
             .options
             .concurrent_immix_disable_concurrent_marking
+    }
+
+    pub(in crate::plan) fn finish_pause(&mut self, mmtk: &'static MMTK<VM>) -> bool {
+        self.last_gc_was_defrag
+            .store(self.immix_space.end_of_gc(), Ordering::Relaxed);
+
+        let pause = self.current_pause().unwrap();
+        if pause == Pause::InitialMark {
+            self.set_concurrent_marking_state(true);
+        }
+        if pause == Pause::FinalMark {
+            // All marking must be finished by the end of `FinalMark`.  Work left in the
+            // `Concurrent` bucket would be traced after the heap has been released.
+            let concurrent_bucket = &mmtk.scheduler.work_buckets[WorkBucketStage::Concurrent];
+            assert!(
+                concurrent_bucket.is_empty(),
+                "Concurrent bucket is not empty at the end of FinalMark ({} packets)",
+                concurrent_bucket.len()
+            );
+        }
+        self.previous_pause.store(Some(pause), Ordering::SeqCst);
+        self.current_pause.store(None, Ordering::SeqCst);
+        if pause != Pause::FinalMark {
+            self.should_do_full_gc.store(false, Ordering::SeqCst);
+        } else {
+            // FIXME: Currently it is unsafe to trigger full GC during concurrent marking.
+            // See `Self::schedule_collection`.
+            // We keep the value of `self.should_do_full_gc` so that if full GC is triggered,
+            // the next GC will be full GC.
+        }
+
+        info!("{:?} end", pause);
+        // Every pause ends a GC cycle, except `InitialMark`, which is followed by concurrent
+        // marking and a `FinalMark` pause before the cycle ends.
+        pause != Pause::InitialMark
     }
 }
 

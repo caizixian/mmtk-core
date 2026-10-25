@@ -110,11 +110,15 @@ pub fn mmtk_shutdown<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
 /// Currently we do not allow removing regions from VM space.
 #[cfg(feature = "vm_space")]
 pub fn set_vm_space<VM: VMBinding>(mmtk: &mut MMTK<VM>, start: Address, size: usize) {
-    mmtk.plan
-        .get_mut()
-        .base_mut()
-        .vm_space
-        .set_vm_region(start, size);
+    // SAFETY: Holding `&mut MMTK<VM>` guarantees exclusive runtime access to this `MMTK` instance
+    // (before `MMTK` is shared as `&'static MMTK<VM>` with mutators or GC workers), and
+    // `set_vm_region` does not re-entrantly read `mmtk.plan` via `gc_trigger` or `SFT_MAP`.
+    // Deriving `&mut dyn Plan` via `UnsafeCell::get(&*mmtk.plan)` instead of `mmtk.plan.get_mut()`
+    // avoids traversing `&mut Box<...>`'s `Unique` pointer and invalidating the dormant `'static`
+    // references already stored in `mmtk.gc_trigger` and `SFT_MAP` during `MMTK::new`.
+    let plan: &mut dyn crate::Plan<VM = VM> =
+        unsafe { &mut *std::cell::UnsafeCell::get(&*mmtk.plan) };
+    plan.base_mut().vm_space.set_vm_region(start, size);
 }
 
 /// Request MMTk to create a mutator for the given thread. The ownership

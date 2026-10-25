@@ -71,17 +71,16 @@ impl<VM: VMBinding> GCWork<VM> for ScheduleCollection {
 /// be no other concurrent work packet that accesses plan (read or write). Otherwise, there may
 /// be a race condition.
 pub struct Prepare<C: GCWorkContext> {
-    pub plan: *const C::PlanType,
+    plan_addr: usize,
+    _p: PhantomData<fn() -> C>,
 }
-
-// SAFETY: `Prepare<C>` only carries a `plan` pointer token (and `do_work` obtains `&mut C::PlanType`
-// directly from `mmtk` rather than dereferencing `self.plan`), where `C::PlanType: Plan` (`Sync`),
-// so transferring `Prepare<C>` to a GC worker thread is sound.
-unsafe impl<C: GCWorkContext> Send for Prepare<C> {}
 
 impl<C: GCWorkContext> Prepare<C> {
     pub fn new(plan: *const C::PlanType) -> Self {
-        Self { plan }
+        Self {
+            plan_addr: plan as usize,
+            _p: PhantomData,
+        }
     }
 }
 
@@ -92,13 +91,13 @@ impl<C: GCWorkContext> GCWork<C::VM> for Prepare<C> {
         let needs_prepare_mutator = {
             // SAFETY: `Prepare` is scheduled as the sole initial packet in `WorkBucketStage::Prepare`
             // after all mutators have stopped and before `PrepareMutator`/`PrepareCollector` packets
-            // are added below, while all other GC workers are parked. No other thread holds or
-            // creates a shared or mutable reference to `mmtk.plan` during this block, and deriving
-            // `&mut` via `mmtk.get_plan_mut()` preserves `UnsafeCell` mutable provenance.
+            // are added below, while all other GC workers are parked. No concurrent or re-entrant
+            // read/write access to `mmtk.plan` occurs during this block, and `mmtk.get_plan_mut()`
+            // derives `&mut` from `MMTK::plan`'s `Box<UnsafeCell<dyn Plan>>`.
             let plan_mut: &mut C::PlanType = unsafe { mmtk.get_plan_mut() }
                 .downcast_mut::<C::PlanType>()
                 .unwrap();
-            debug_assert_eq!(self.plan, plan_mut as *const C::PlanType);
+            debug_assert_eq!(self.plan_addr, plan_mut as *const C::PlanType as usize);
             plan_mut.prepare(worker.tls);
             plan_mut.constraints().needs_prepare_mutator
         };
@@ -162,19 +161,18 @@ impl<VM: VMBinding> GCWork<VM> for PrepareCollector {
 /// be no other concurrent work packet that accesses plan (read or write). Otherwise, there may
 /// be a race condition.
 pub struct Release<C: GCWorkContext> {
-    pub plan: *const C::PlanType,
+    plan_addr: usize,
+    _p: PhantomData<fn() -> C>,
 }
 
 impl<C: GCWorkContext> Release<C> {
     pub fn new(plan: *const C::PlanType) -> Self {
-        Self { plan }
+        Self {
+            plan_addr: plan as usize,
+            _p: PhantomData,
+        }
     }
 }
-
-// SAFETY: `Release<C>` only carries a `plan` pointer token (and `do_work` obtains `&mut C::PlanType`
-// directly from `mmtk` rather than dereferencing `self.plan`), where `C::PlanType: Plan` (`Sync`),
-// so transferring `Release<C>` to a GC worker thread is sound.
-unsafe impl<C: GCWorkContext> Send for Release<C> {}
 
 impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
@@ -186,13 +184,13 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
             // SAFETY: `WorkBucketStage::Release` opens only after all prior STW buckets are drained
             // and all workers have parked, with `Release` as the sole initial packet in the bucket
             // before `ReleaseMutator`/`ReleaseCollector` packets are enqueued below. `on_gc_release`
-            // above has already returned, so no shared or mutable reference to `mmtk.plan` exists on
-            // any thread during this block, and `mmtk.get_plan_mut()` derives mutable provenance
-            // from `MMTK::plan`'s `UnsafeCell`.
+            // above has already returned, so no concurrent or re-entrant read/write access to
+            // `mmtk.plan` occurs during this block, and `mmtk.get_plan_mut()` derives `&mut` from
+            // `MMTK::plan`'s `Box<UnsafeCell<dyn Plan>>`.
             let plan_mut: &mut C::PlanType = unsafe { mmtk.get_plan_mut() }
                 .downcast_mut::<C::PlanType>()
                 .unwrap();
-            debug_assert_eq!(self.plan, plan_mut as *const C::PlanType);
+            debug_assert_eq!(self.plan_addr, plan_mut as *const C::PlanType as usize);
             plan_mut.release(worker.tls);
         }
 

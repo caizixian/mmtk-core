@@ -16,7 +16,6 @@ use crate::plan::lxr::gc_work::tracing::ProcessModBufSATB;
 use crate::plan::VectorQueue;
 use crate::scheduler::WorkBucketStage;
 use crate::util::metadata::log_bit::{LOGGED_VALUE, UNLOGGED_VALUE};
-use crate::util::metadata::side_metadata::address_to_meta_address;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::*;
 use crate::vm::slot::MemorySlice;
@@ -248,31 +247,6 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
         if dst.bytes() == 0 {
             return;
         }
-        // Quickly check if all fields are logged. If yes, skip the barrier.
-        let unlog_bits_start = address_to_meta_address(&Self::UNLOG_BITS, dst.start());
-        let unlog_bits_end =
-            address_to_meta_address(&Self::UNLOG_BITS, dst.start() + (dst.bytes() - 1));
-        let mut cursor = unlog_bits_start;
-        let mut all_logged = true;
-        while cursor <= unlog_bits_end {
-            // SAFETY: `dst` is a non-empty (`dst.bytes() > 0`), valid heap `MemorySlice`, so side
-            // metadata for `[dst.start(), dst.start() + dst.bytes())` (i.e. `[unlog_bits_start,
-            // unlog_bits_end]`) is mapped and initialized. `AtomicU8` has alignment 1, and all
-            // concurrent mutator accesses to `UNLOG_BITS` during mutator execution use `AtomicU8`
-            // (`SideMetadataSpec::load_atomic` / `compare_exchange_atomic`), while non-atomic GC
-            // updates occur only during STW pauses or on newly acquired clean blocks not yet
-            // reachable by mutators, avoiding both data races and mixed-size atomic accesses.
-            if unsafe { cursor.atomic_load::<std::sync::atomic::AtomicU8>(Ordering::Relaxed) } != 0
-            {
-                all_logged = false;
-                break;
-            }
-            cursor += 1usize;
-        }
-        if all_logged {
-            return;
-        }
-
         for s in dst.iter_slots() {
             let _succ = self.enqueue_node(None, s, None);
         }

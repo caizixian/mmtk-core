@@ -106,15 +106,6 @@ pub struct GCWorker<VM: VMBinding> {
     pub local_work_buffer: deque::Worker<Box<dyn GCWork<VM>>>,
 }
 
-// SAFETY: Every field of `GCWorkerShared<VM>` is `Sync` except `stat: AtomicRefCell<WorkerLocalStat<VM>>`
-// because `WorkerLocalStat` privately stores `Box<dyn WorkCounter>` where `WorkCounter: Send` (not `Sync`,
-// due to `pfm::PerfEvent` under `perf_counter`). Exclusive mutations (`start`/`stop`) require
-// `borrow_stat_mut` (`AtomicRefCell::try_borrow_mut`), while shared borrows via `borrow_stat`
-// (`AtomicRefCell::try_borrow`) only expose `&WorkerLocalStat<VM>`, whose methods read `AtomicBool`,
-// `HashMap` metadata, `WorkCounter::name` (`String` clone), and `WorkCounter::get_base` (`WorkCounterBase`
-// `f64` fields) without ever accessing `PerfEvent` concurrently.
-unsafe impl<VM: VMBinding> Sync for GCWorkerShared<VM> {}
-
 // Error message for borrowing `GCWorkerShared::stat`.
 const STAT_BORROWED_MSG: &str = "GCWorkerShared.stat is already borrowed.  This may happen if \
     the mutator calls harness_begin or harness_end while the GC is running.";
@@ -234,6 +225,10 @@ impl<VM: VMBinding> GCWorker<VM> {
     /// * `tls`: The VM-specific thread-local storage for this GC worker thread.
     /// * `mmtk`: A reference to an MMTk instance.
     pub fn run(mut self: Box<Self>, tls: VMWorkerThread, mmtk: &'static MMTK<VM>) {
+        assert!(
+            std::ptr::eq(self.mmtk, mmtk),
+            "GCWorker::run called with a different MMTK instance than the one that owns this worker"
+        );
         probe!(mmtk, gcworker_run);
         debug!(
             "Worker started. ordinal: {}, {}",

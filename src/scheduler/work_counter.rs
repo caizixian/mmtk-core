@@ -34,7 +34,7 @@ impl<T: 'static + WorkCounter + Clone> WorkCounterClone for T {
 /// the same work packet and the types are not statically known.
 /// The overhead should be negligible compared with the cost of executing
 /// a work packet.
-pub(super) trait WorkCounter: WorkCounterClone + std::fmt::Debug + Send {
+pub(super) trait WorkCounter: WorkCounterClone + std::fmt::Debug + Send + Sync {
     // TODO: consolidate with crate::util::statistics::counter::Counter;
     /// Start the counter
     fn start(&mut self);
@@ -140,12 +140,22 @@ mod perf_event {
     use std::fmt;
 
     /// Work counter for perf events
-    #[derive(Clone)]
     pub struct WorkPerfEvent {
         base: WorkCounterBase,
         running: bool,
         event_name: String,
-        pe: PerfEvent,
+        pe: std::sync::Mutex<PerfEvent>,
+    }
+
+    impl Clone for WorkPerfEvent {
+        fn clone(&self) -> Self {
+            Self {
+                base: self.base,
+                running: self.running,
+                event_name: self.event_name.clone(),
+                pe: std::sync::Mutex::new(*self.pe.lock().unwrap()),
+            }
+        }
     }
 
     impl WorkPerfEvent {
@@ -166,7 +176,7 @@ mod perf_event {
                 base: Default::default(),
                 running: false,
                 event_name: name.to_string(),
-                pe,
+                pe: std::sync::Mutex::new(pe),
             }
         }
     }
@@ -184,16 +194,18 @@ mod perf_event {
     impl WorkCounter for WorkPerfEvent {
         fn start(&mut self) {
             self.running = true;
-            self.pe.reset().expect("Failed to reset perf event");
-            self.pe.enable().expect("Failed to enable perf event");
+            let pe = self.pe.get_mut().unwrap();
+            pe.reset().expect("Failed to reset perf event");
+            pe.enable().expect("Failed to enable perf event");
         }
         fn stop(&mut self) {
             self.running = true;
-            let perf_event_value = self.pe.read().unwrap();
+            let pe = self.pe.get_mut().unwrap();
+            let perf_event_value = pe.read().unwrap();
             self.base.merge_val(perf_event_value.value as f64);
             // assert not multiplexing
             assert_eq!(perf_event_value.time_enabled, perf_event_value.time_running);
-            self.pe.disable().expect("Failed to disable perf event");
+            pe.disable().expect("Failed to disable perf event");
         }
         fn name(&self) -> String {
             self.event_name.to_owned()

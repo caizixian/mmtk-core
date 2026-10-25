@@ -114,7 +114,9 @@ impl<VM: VMBinding> Plan for GenCopy<VM> {
         );
         // SAFETY: `worker` belongs to this `GenCopy` plan and `GCWorker::run` has initialized
         // `worker.copy` via `GenCopy::create_copy_config`, which maps `CopySelector::CopySpace(0)`
-        // in `space_mapping` so `copy[0]` was written by `GCWorkerCopyContext::new`.
+        // in `space_mapping` so `copy[0]` was written by `GCWorkerCopyContext::new` (assuming
+        // `GCWorkerCopyContext::copy[0]`, currently `pub` in `src/util/copy/mod.rs`, has not been
+        // overwritten with `MaybeUninit::uninit()` via `worker.get_copy_context_mut()`).
         unsafe { worker.get_copy_context_mut().copy[0].assume_init_mut() }.rebind(self.tospace());
     }
 
@@ -130,9 +132,9 @@ impl<VM: VMBinding> Plan for GenCopy<VM> {
     }
 
     fn on_pause_end(&mut self, mmtk: &'static MMTK<VM>, tls: VMWorkerThread) {
-        let next_gc_full_heap = CommonGenPlan::should_next_gc_be_full_heap(self);
-        self.gen.on_pause_end(tls, next_gc_full_heap);
-        mmtk.gc_trigger.policy.on_gc_end(mmtk);
+        if self.finish_pause(tls, None) {
+            mmtk.gc_trigger.policy.on_gc_end(mmtk);
+        }
     }
 
     fn get_collection_reserved_pages(&self) -> usize {
@@ -275,5 +277,16 @@ impl<VM: VMBinding> GenCopy<VM> {
         } else {
             &mut self.copyspace1
         }
+    }
+
+    pub(in crate::plan) fn finish_pause(
+        &mut self,
+        tls: VMWorkerThread,
+        next_gc_full_heap: Option<bool>,
+    ) -> bool {
+        let next_gc_full_heap =
+            next_gc_full_heap.unwrap_or_else(|| CommonGenPlan::should_next_gc_be_full_heap(self));
+        self.gen.on_pause_end(tls, next_gc_full_heap);
+        true
     }
 }

@@ -46,8 +46,9 @@ impl<VM: VMBinding> GCWork<VM> for UpdateReferences<VM> {
             // `WorkBucketStage::SecondRoots` (which opens sequentially only after
             // `CalculateForwarding` drains and all other GC workers are parked, while mutators
             // remain stopped), before any `ScanMutatorRoots`/`ScanVMSpecificRoots` packets are
-            // added below. No other thread holds a reference to `mmtk.plan`, and `get_plan_mut`
-            // derives mutable provenance from `MMTK::plan`'s `UnsafeCell`.
+            // added below. No concurrent or re-entrant read/write access to `mmtk.plan` occurs
+            // during this block, and `mmtk.get_plan_mut()` derives `&mut` from `MMTK::plan`'s
+            // `Box<UnsafeCell<dyn Plan>>`.
             let plan_mut = unsafe { mmtk.get_plan_mut() }
                 .downcast_mut::<Lisp2<VM>>()
                 .unwrap();

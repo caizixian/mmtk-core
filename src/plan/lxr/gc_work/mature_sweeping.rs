@@ -10,7 +10,7 @@ use crate::util::heap::chunk_map::Chunk;
 use crate::util::linear_scan::Region;
 use crate::util::rc::{self, RefCountHelper};
 use crate::util::ObjectReference;
-use crate::vm::VMBinding;
+use crate::vm::{ObjectModel, VMBinding};
 use crate::MMTK;
 
 /// Chunk sweeping work packet.
@@ -34,16 +34,22 @@ impl<VM: VMBinding> SweepDeadCycles<VM> {
 
     fn process_dead_object(&mut self, o: ObjectReference) {
         if RefCountHelper::<VM>::SANITY {
-            // SAFETY: `SweepDeadCycles` runs only after `FinalMark` or `Full` GC on non-nursery,
-            // non-defrag-source blocks partitioned disjointly by chunk across `SweepDeadCycles`
-            // packets, and `o` is an unmarked mature object (`!immix_space.is_marked(o)`) with
-            // non-zero RC that is unreachable by mutators and skipped by concurrent `ProcessDecs`
-            // (`mature_sweeping_in_progress && !lxr.is_marked(o)`). `o` has not yet been zeroed in
-            // `RC_TABLE` or queued for block sweeping, and by `ObjectModel`'s `ObjectReference`
-            // contract `o.to_raw_address()` is non-null, word-aligned (`size_of::<usize>()`), and
-            // points within `o`'s mapped word-granular allocation.
-            unsafe {
-                o.to_raw_address().store(0xdeadusize);
+            let obj_end =
+                VM::VMObjectModel::ref_to_object_start(o) + VM::VMObjectModel::get_current_size(o);
+            if o.to_raw_address() + std::mem::size_of::<usize>() <= obj_end {
+                // SAFETY: `SweepDeadCycles` runs only after `FinalMark` or `Full` GC (when
+                // concurrent marking is inactive) on non-nursery, non-defrag-source blocks
+                // partitioned disjointly by chunk across `SweepDeadCycles` packets, and `o` is an
+                // unmarked mature object (`!immix_space.is_marked(o)`) with non-zero RC that is
+                // unreachable by mutators and skipped by concurrent `ProcessDecs`
+                // (`mature_sweeping_in_progress && !lxr.is_marked(o)`). `o` has not yet been
+                // zeroed in `RC_TABLE` or queued for block sweeping. By `ObjectModel`'s
+                // `ObjectReference` contract, `o.to_raw_address()` is non-null, word-aligned
+                // (`size_of::<usize>()`), and at or after `ref_to_object_start(o)`, and the guard
+                // above ensures all `size_of::<usize>()` bytes lie within `[obj_start, obj_end)`.
+                unsafe {
+                    o.to_raw_address().store(0xdeadusize);
+                }
             }
         }
 

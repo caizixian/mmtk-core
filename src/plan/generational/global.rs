@@ -261,8 +261,41 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
     /// [`get_available_pages`](crate::plan::Plan::get_available_pages)
     /// whose value depends on which spaces have been released.
     pub fn should_next_gc_be_full_heap(plan: &dyn Plan<VM = VM>) -> bool {
+        use crate::util::options::NurserySize;
+        debug_assert!(plan.generational().is_some());
         let available = plan.get_available_pages();
-        let min_nursery = plan.base().gc_trigger.get_min_nursery_pages();
+        // Compute `min_nursery` directly from `plan.options().nursery` and `gc_trigger.policy`
+        // rather than `gc_trigger.get_min_nursery_pages()` so this helper never dereferences
+        // `gc_trigger.plan()` (`&'static dyn Plan`) if called while `&mut Plan` is active.
+        let min_bytes = match *plan.options().nursery {
+            NurserySize::Bounded { min, max: _ } => min,
+            NurserySize::ProportionalBounded { min, max: _ } => {
+                let min_bytes = crate::util::conversions::pages_to_bytes(
+                    plan.base()
+                        .gc_trigger
+                        .policy
+                        .get_current_heap_size_in_pages(),
+                ) as f64
+                    * min;
+                let min_bytes = crate::util::conversions::raw_align_up(
+                    min_bytes as usize,
+                    crate::util::constants::BYTES_IN_PAGE,
+                );
+                if min_bytes < crate::util::options::DEFAULT_MIN_NURSERY {
+                    warn!(
+                        "Proportional nursery with min size {} ({}) is smaller than DEFAULT_MIN_NURSERY ({}). Use DEFAULT_MIN_NURSERY instead.",
+                        min,
+                        min_bytes,
+                        crate::util::options::DEFAULT_MIN_NURSERY
+                    );
+                    crate::util::options::DEFAULT_MIN_NURSERY
+                } else {
+                    min_bytes
+                }
+            }
+            NurserySize::Fixed(sz) => sz,
+        };
+        let min_nursery = crate::util::conversions::bytes_to_pages_up(min_bytes);
         let next_gc_full_heap = available < min_nursery;
         trace!(
             "next gc will be full heap? {}, available pages = {}, min nursery = {}",

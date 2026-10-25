@@ -75,7 +75,7 @@ pub struct LXR<VM: VMBinding> {
     pub prev_roots: RwLock<SegQueue<Vec<ObjectReference>>>,
     pub curr_roots: RwLock<SegQueue<Vec<ObjectReference>>>,
     pub rc: RefCountHelper<VM>,
-    block_allocation: BlockAllocation<VM>,
+    block_allocation: &'static BlockAllocation<VM>,
     pub(super) evac_set: MatureEvacuationSet,
     pub(super) mature_evac_remset: MatureEvecRemSet<VM>,
     pub(super) num_clean_blocks_released_lazy: AtomicUsize,
@@ -113,8 +113,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             return true;
         }
         // Survival limits
-        let total_young_alloc_pages =
-            self.block_allocation.total_young_allocation_in_bytes() >> LOG_BYTES_IN_MBYTE;
+        let total_young_alloc_pages = self
+            .block_allocation
+            .total_young_allocation_in_bytes(&self.immix_space)
+            >> LOG_BYTES_IN_MBYTE;
         // Use copy promotion ratio, or just total promotion ratio.
         let ratio = if LXR_CONSTRAINTS.moves_objects {
             super::SURVIVAL_RATIO_PREDICTOR.copy_promote_ratio()
@@ -169,6 +171,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             .store(false, Ordering::SeqCst);
         // Set current pause kind
         self.current_pause.store(Some(pause), Ordering::SeqCst);
+        self.update_block_allocation_cm_state();
         self.perform_cycle_collection
             .store(pause != Pause::RefCount, Ordering::SeqCst);
         // Schedule work
@@ -249,9 +252,12 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         self.common.los.is_end_of_satb_or_full_gc = false;
         self.common
             .release(tls, pause == Pause::Full || pause == Pause::FinalMark);
-        self.block_allocation
-            .sweep_nursery_blocks(self.immix_space.scheduler(), pause);
-        self.block_allocation.sweep_mutator_reused_blocks(pause);
+        let block_allocation = self.block_allocation;
+        let max_stw_sweep_blocks = *self.base().options.lxr_max_stw_sweep_nursery_blocks;
+        block_allocation.sweep_nursery_blocks(&self.immix_space, max_stw_sweep_blocks, pause);
+        block_allocation.sweep_mutator_reused_blocks(pause, |block| {
+            self.add_to_possibly_dead_mature_blocks(block, false);
+        });
         // Check if we want to do all decs and sweeping in the pause
         if super::disable_lasy_dec_for_current_gc() {
             self.immix_space
@@ -314,8 +320,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             mmtk.gc_trigger.policy.on_gc_start(mmtk);
         }
 
-        super::SURVIVAL_RATIO_PREDICTOR
-            .set_alloc_size(self.block_allocation.total_young_allocation_in_bytes());
+        super::SURVIVAL_RATIO_PREDICTOR.set_alloc_size(
+            self.block_allocation
+                .total_young_allocation_in_bytes(&self.immix_space),
+        );
 
         if pause == Pause::Full || pause == Pause::InitialMark {
             // Reset block mark and object mark table.
@@ -334,36 +342,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn on_pause_end(&mut self, mmtk: &'static MMTK<Self::VM>, tls: VMWorkerThread) {
-        super::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(false, Ordering::SeqCst);
-        // self.immix_space.flush_page_resource();
-        let pause = self.current_pause().unwrap();
-        if pause == Pause::InitialMark {
-            self.set_concurrent_marking_state(true);
-        }
-        self.previous_pause.store(Some(pause), Ordering::SeqCst);
-        self.current_pause.store(None, Ordering::SeqCst);
-        LAZY_SWEEPING_JOBS.write().swap();
-        if super::LAZY_DECREMENTS {
-            let perform_cycle_collection =
-                self.get_available_pages() < super::CYCLE_TRIGGER_THRESHOLD;
-            self.hint_cycle_gc
-                .store(perform_cycle_collection, Ordering::SeqCst);
-            self.hint_emergency_gc.store(false, Ordering::SeqCst);
-            self.perform_cycle_collection.store(false, Ordering::SeqCst);
-        }
-        self.avail_pages_at_end_of_last_gc
-            .store(self.get_available_pages(), Ordering::SeqCst);
-        HEAP_AFTER_GC.store(self.get_reserved_pages(), Ordering::SeqCst);
-
-        self.common_mut().on_pause_end(tls);
-
-        // Individual RC pauses that don't overlap with concurrent tracing consist of a GC cycle.
-        // Concurrent tracing, including RC pauses in between, counts as one GC cycle.
-        // A Full GC counts as a GC cycle.
-        if pause == Pause::RefCount && !self.concurrent_work_in_progress()
-            || pause == Pause::FinalMark
-            || pause == Pause::Full
-        {
+        if self.finish_pause(tls) {
             mmtk.gc_trigger.policy.on_gc_end(mmtk);
         }
     }
@@ -423,7 +402,7 @@ impl<VM: VMBinding> ConcurrentPlan for LXR<VM> {
 }
 
 impl<VM: VMBinding> LXR<VM> {
-    pub fn new(args: CreateGeneralPlanArgs<VM>) -> Box<Self> {
+    pub fn new(args: CreateGeneralPlanArgs<VM>) -> Box<std::cell::UnsafeCell<Self>> {
         assert!(
             VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC.is_in_header(),
             "LXR does not support placing forwarding bits on the side."
@@ -453,16 +432,27 @@ impl<VM: VMBinding> LXR<VM> {
             constraints: &LXR_CONSTRAINTS,
             global_side_metadata_specs,
         };
-        let immix_space = ImmixSpace::new(
+        let mut immix_space = ImmixSpace::new(
             plan_args.get_mature_space_args("immix", true, false, VMRequest::discontiguous()),
             ImmixSpaceArgs {
                 never_move_objects: false,
                 mixed_age: false,
             },
         );
-        let mut lxr = Box::new(LXR {
+        immix_space.rc_enabled = true;
+        let block_allocation: &'static BlockAllocation<VM> =
+            Box::leak(Box::new(BlockAllocation::new()));
+        immix_space.install_hooks(block_allocation);
+
+        let mut common = CommonPlan::new(plan_args);
+        common.los.rc_enabled = true;
+
+        // Note: `verify_side_metadata_sanity` is invoked by `MMTK::new` after side metadata
+        // initialization, and `register_lazy_sweeping_hooks` is invoked in
+        // `MMTK::initialize_collection` once `MMTK<VM>` is `'static`.
+        Box::new(std::cell::UnsafeCell::new(LXR {
             immix_space,
-            common: CommonPlan::new(plan_args),
+            common,
             perform_cycle_collection: AtomicBool::new(false),
             hint_cycle_gc: AtomicBool::new(false),
             hint_emergency_gc: AtomicBool::new(false),
@@ -475,20 +465,45 @@ impl<VM: VMBinding> LXR<VM> {
             prev_roots: Default::default(),
             curr_roots: Default::default(),
             rc: RefCountHelper::NEW,
-            block_allocation: BlockAllocation::new(),
+            block_allocation,
             evac_set: MatureEvacuationSet::default(),
             mature_evac_remset: MatureEvecRemSet::new(num_workers),
             possibly_dead_mature_blocks: Default::default(),
             num_clean_blocks_released_lazy: Default::default(),
-        });
+        }))
+    }
 
-        lxr.immix_space.rc_enabled = true;
-        lxr.common.los.rc_enabled = true;
+    pub(in crate::plan) fn finish_pause(&mut self, tls: VMWorkerThread) -> bool {
+        super::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(false, Ordering::SeqCst);
+        // self.immix_space.flush_page_resource();
+        let pause = self.current_pause().unwrap();
+        if pause == Pause::InitialMark {
+            self.set_concurrent_marking_state(true);
+        }
+        self.previous_pause.store(Some(pause), Ordering::SeqCst);
+        self.current_pause.store(None, Ordering::SeqCst);
+        self.update_block_allocation_cm_state();
+        LAZY_SWEEPING_JOBS.write().swap();
+        if super::LAZY_DECREMENTS {
+            let perform_cycle_collection =
+                self.get_available_pages() < super::CYCLE_TRIGGER_THRESHOLD;
+            self.hint_cycle_gc
+                .store(perform_cycle_collection, Ordering::SeqCst);
+            self.hint_emergency_gc.store(false, Ordering::SeqCst);
+            self.perform_cycle_collection.store(false, Ordering::SeqCst);
+        }
+        self.avail_pages_at_end_of_last_gc
+            .store(self.get_available_pages(), Ordering::SeqCst);
+        HEAP_AFTER_GC.store(self.get_reserved_pages(), Ordering::SeqCst);
 
-        // Note: `verify_side_metadata_sanity` and `post_init` are invoked later by `MMTK::new`,
-        // after side metadata initialization and after the boxed plan is placed in `MMTK`.
+        self.common_mut().on_pause_end(tls);
 
-        lxr
+        // Individual RC pauses that don't overlap with concurrent tracing consist of a GC cycle.
+        // Concurrent tracing, including RC pauses in between, counts as one GC cycle.
+        // A Full GC counts as a GC cycle.
+        pause == Pause::RefCount && !self.concurrent_work_in_progress()
+            || pause == Pause::FinalMark
+            || pause == Pause::Full
     }
 
     pub fn cm_enabled(&self) -> bool {
@@ -904,11 +919,8 @@ impl<VM: VMBinding> LXR<VM> {
         self.decide_next_gc_may_perform_cycle_collection(pause);
     }
 
-    pub(in crate::plan) fn post_init(&'static self) {
-        self.block_allocation.init(&self.immix_space, self);
-        self.immix_space.install_hooks(&self.block_allocation);
+    pub(crate) fn register_lazy_sweeping_hooks(&'static self) {
         let mut lazy_sweeping_jobs = LAZY_SWEEPING_JOBS.write();
-        lazy_sweeping_jobs.swap();
         lazy_sweeping_jobs.end_of_decs = Some(Box::new(move |c| {
             self.on_lazy_decs_finished(c);
         }));
@@ -917,11 +929,18 @@ impl<VM: VMBinding> LXR<VM> {
         }));
     }
 
+    fn update_block_allocation_cm_state(&self) {
+        self.block_allocation.set_cm_in_progress_or_final_mark(
+            self.concurrent_work_in_progress() || self.current_pause() == Some(Pause::FinalMark),
+        );
+    }
+
     fn set_concurrent_marking_state(&self, active: bool) {
         self.in_concurrent_marking.store(active, Ordering::SeqCst);
         self.common
             .los
             .bump_page_reuse_count
             .store(active, Ordering::SeqCst);
+        self.update_block_allocation_cm_state();
     }
 }

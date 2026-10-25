@@ -132,14 +132,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 return;
             };
             if super::super::MATURE_EVACUATION && CHECK_REMSET && self.plan.in_defrag(t) {
-                // SAFETY: `worker` is the active `GCWorker` executing `do_work` for the `MMTK<VM>`
-                // instance owning `self.plan`. `LXRConcurrentTraceObjects` runs only in
-                // `ConcurrentResumable` or `FinishConcurrentWork` (never concurrently with STW
-                // `LXR::prepare` / `flush_all`), so `&mut GCWorker<VM>` guarantees exclusive access
-                // to `worker.ordinal`'s local remembered-set buffers.
-                unsafe {
-                    self.plan.mature_evac_remset.record(worker, s, t, self.plan);
-                }
+                self.plan.mature_evac_remset.record(worker, s, t, self.plan);
             }
             self.next_objects.push(t);
             if self.next_objects.len() > Self::SATB_BUFFER_SIZE {
