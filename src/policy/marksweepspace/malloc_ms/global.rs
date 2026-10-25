@@ -364,8 +364,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
             return Address::ZERO;
         }
 
-        let (address, actual_size, is_offset_malloc) =
-            alloc_with_usable_size::<VM>(size, align, offset);
+        let (address, actual_size, is_offset_malloc) = alloc_with_usable_size(size, align, offset);
         if !address.is_zero() {
             assert!(
                 actual_size > 0,

@@ -1,11 +1,10 @@
 use crate::util::constants::BYTES_IN_ADDRESS;
 use crate::util::malloc::library::*;
 use crate::util::Address;
-use crate::vm::VMBinding;
 
 /// Allocate `size` bytes aligned to `align` at `offset`, returning
 /// `(address, usable_size, is_offset_malloc)`, or `(Address::ZERO, 0, _)` on failure.
-pub(crate) fn alloc_with_usable_size<VM: VMBinding>(
+pub(crate) fn alloc_with_usable_size(
     size: usize,
     align: usize,
     offset: usize,
@@ -70,28 +69,24 @@ pub(crate) fn alloc_with_usable_size<VM: VMBinding>(
             return (Address::ZERO, 0, true);
         }
         // SAFETY: `calloc(1, actual_size)` returns either null or a live zero-initialized
-        // allocation of `actual_size <= isize::MAX` bytes. When non-null, advancing `result` in
-        // multiples of `align` places `result` in `[base + BYTES_IN_ADDRESS, base +
-        // BYTES_IN_ADDRESS + align)`, so `header_offset + BYTES_IN_ADDRESS == result_offset <=
-        // actual_size`; writing `raw` via `write_unaligned` at `header_offset`, forming the payload
-        // pointer at `result_offset`, and querying `malloc_usable_size(raw)` are all in-bounds of
-        // `raw`'s live allocation while preserving pointer provenance.
+        // allocation of `actual_size <= isize::MAX` bytes. When non-null, `0 <= pad < align`
+        // places `result_offset = BYTES_IN_ADDRESS + pad` in `[BYTES_IN_ADDRESS,
+        // BYTES_IN_ADDRESS + align)` with `header_offset + BYTES_IN_ADDRESS == result_offset` and
+        // `result_offset + size <= actual_size`; writing `raw` via `write_unaligned` at
+        // `header_offset`, forming the payload pointer at `result_offset`, and querying
+        // `malloc_usable_size(raw)` are all in-bounds of `raw`'s live allocation while preserving
+        // pointer provenance.
         let (address, usable) = unsafe {
             let raw = calloc(1, actual_size);
             if raw.is_null() {
                 return (Address::ZERO, 0, true);
             }
             let base = Address::from_mut_ptr(raw);
-            let mut result = crate::util::alloc::allocator::align_allocation_no_fill::<VM>(
-                base,
-                align,
-                offset % align,
-            );
-            while result < base + BYTES_IN_ADDRESS {
-                result += align;
-            }
-            let header_offset = (result - BYTES_IN_ADDRESS) - base;
-            let result_offset = result - base;
+            let min_result = base.as_usize() + BYTES_IN_ADDRESS;
+            let misalign = min_result.wrapping_add(offset) & (align - 1);
+            let pad = (align - misalign) & (align - 1);
+            let header_offset = pad;
+            let result_offset = BYTES_IN_ADDRESS + pad;
             debug_assert!(result_offset + size <= actual_size);
             raw.cast::<u8>()
                 .add(header_offset)
@@ -119,9 +114,8 @@ pub(crate) fn alloc_with_usable_size<VM: VMBinding>(
 
 /// Allocate `size` bytes, aligned to `align` at `offset`.
 /// Returns `(address, is_offset_malloc)`, or `(Address::ZERO, _)` on allocation failure.
-pub(crate) fn alloc<VM: VMBinding>(size: usize, align: usize, offset: usize) -> (Address, bool) {
-    let (address, _usable_size, is_offset_malloc) =
-        alloc_with_usable_size::<VM>(size, align, offset);
+pub(crate) fn alloc(size: usize, align: usize, offset: usize) -> (Address, bool) {
+    let (address, _usable_size, is_offset_malloc) = alloc_with_usable_size(size, align, offset);
     (address, is_offset_malloc)
 }
 

@@ -14,19 +14,23 @@ fn test_malloc() {
                 (8, 16, 0, false),
                 (16, 8, 0, false),
                 (16, 32, 0, false),
+                (16, 4, 2, true),
+                (8, 8, 2, true),
                 (8, 16, 4, true),
+                (8, 16, 16, true),
                 (16, 8, 4, true),
                 (32, 64, 4, true),
+                (16, 128, 4, true),
             ];
             for (size, align, offset, expect_offset_malloc) in cases {
                 let (addr, usable, is_offset_malloc) =
-                    malloc_ms_util::alloc_with_usable_size::<MockVM>(size, align, offset);
+                    malloc_ms_util::alloc_with_usable_size(size, align, offset);
                 assert!(!addr.is_zero());
                 assert!((addr + offset).is_aligned_to(align));
                 assert_eq!(is_offset_malloc, expect_offset_malloc);
                 assert!(usable >= size);
 
-                let (addr2, is_offset2) = malloc_ms_util::alloc::<MockVM>(size, align, offset);
+                let (addr2, is_offset2) = malloc_ms_util::alloc(size, align, offset);
                 assert!(!addr2.is_zero());
                 assert!((addr2 + offset).is_aligned_to(align));
                 assert_eq!(is_offset2, expect_offset_malloc);

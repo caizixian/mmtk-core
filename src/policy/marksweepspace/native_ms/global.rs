@@ -446,6 +446,33 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
             .filter(|chunk| self.address_in_space(chunk.start()))
     }
 
+    fn prepare_chunk(&self, chunk: Chunk) {
+        debug_assert!(self.chunk_map.get(chunk).unwrap().is_allocated());
+        let mut n_occupied_blocks = 0;
+        chunk
+            .iter_region::<Block>()
+            .filter(|block| block.get_state() != BlockState::Unallocated)
+            .for_each(|block| {
+                block.set_state(BlockState::Unmarked);
+                n_occupied_blocks += 1;
+            });
+        if n_occupied_blocks == 0 {
+            self.chunk_map.set_allocated(chunk, false);
+        } else if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC {
+            side.bzero_metadata(chunk.start(), Chunk::BYTES);
+        }
+    }
+
+    /// Synchronously reset block and object mark state across all allocated chunks while all GC
+    /// workers are parked between two tracing passes in a single STW pause (e.g., `Lisp2`),
+    /// without scheduling async `Prepare` or `Release` packets.
+    #[cfg(feature = "marksweep_as_nonmoving")]
+    pub(crate) fn prepare_for_re_marking(&self) {
+        for chunk in self.iter_allocated_chunks() {
+            self.prepare_chunk(chunk);
+        }
+    }
+
     pub fn prepare(&self, _full_heap: bool) {
         #[cfg(debug_assertions)]
         self.abandoned_in_gc.lock().unwrap().assert_empty();
@@ -714,20 +741,7 @@ struct PrepareChunkMap {
 impl<VM: VMBinding> GCWork<VM> for PrepareChunkMap {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         with_ms_space(mmtk, self.space_descriptor, |space| {
-            debug_assert!(space.chunk_map.get(self.chunk).unwrap().is_allocated());
-            let mut n_occupied_blocks = 0;
-            self.chunk
-                .iter_region::<Block>()
-                .filter(|block| block.get_state() != BlockState::Unallocated)
-                .for_each(|block| {
-                    block.set_state(BlockState::Unmarked);
-                    n_occupied_blocks += 1;
-                });
-            if n_occupied_blocks == 0 {
-                space.chunk_map.set_allocated(self.chunk, false);
-            } else if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC {
-                side.bzero_metadata(self.chunk.start(), Chunk::BYTES);
-            }
+            space.prepare_chunk(self.chunk);
         });
     }
 }

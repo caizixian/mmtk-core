@@ -189,8 +189,9 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
         self.release_shared(tls);
     }
 
-    fn on_pause_end(&mut self, mmtk: &'static MMTK<VM>, _tls: VMWorkerThread) {
+    fn on_pause_end(&mut self, mmtk: &'static MMTK<VM>, tls: VMWorkerThread) {
         if self.finish_pause(mmtk) {
+            self.common.on_pause_end(tls);
             mmtk.gc_trigger.policy.on_gc_end(mmtk);
         }
     }
@@ -292,6 +293,8 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
     pub fn new(args: CreateGeneralPlanArgs<VM>) -> Self {
         if *args.options.concurrent_immix_disable_concurrent_marking {
             warn!("Option 'concurrent_immix_disable_concurrent_marking' is set to true. Concurrent marking is disabled for ConcurrentImmix. This will make ConcurrentImmix behave exactly like full heap Immix.");
+        } else if cfg!(feature = "marksweep_as_nonmoving") {
+            warn!("Feature 'marksweep_as_nonmoving' is enabled. Concurrent marking is disabled for ConcurrentImmix because MarkSweepSpace requires STW collection.");
         }
 
         let spec = crate::util::metadata::extract_side_metadata(&[
@@ -436,10 +439,13 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
     }
 
     fn concurrent_marking_is_disabled(&self) -> bool {
-        *self
-            .base()
-            .options
-            .concurrent_immix_disable_concurrent_marking
+        // `MarkSweepSpace` (`native_ms`) is an STW policy whose block/mark-bit invariants and lazy
+        // sweeping require mutators to be stopped for the entire mark-and-release cycle.
+        cfg!(feature = "marksweep_as_nonmoving")
+            || *self
+                .base()
+                .options
+                .concurrent_immix_disable_concurrent_marking
     }
 
     pub(in crate::plan) fn prepare_shared(&self, tls: VMWorkerThread) {

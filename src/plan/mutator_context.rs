@@ -198,17 +198,18 @@ impl<VM: VMBinding> MutatorBuilder<VM> {
 ///
 /// # `#[repr(C)]` Layout Notes
 /// `Mutator<VM>` has a deterministic fixed-size `#[repr(C)]` layout:
-/// - `allocators: Allocators<VM>` contains the fixed-size `[MaybeUninit<...>; MAX_*]` allocator
-///   arrays followed by a `u16` initialization bitmask (`+8` bytes including pointer-alignment
-///   padding at the end of `Allocators<VM>`).
+/// - `allocators: Allocators<VM>` contains six fixed-size allocator arrays (`648` bytes on 64-bit,
+///   `324` bytes on 32-bit) safely initialized inline using niche-optimized `Option<&'static ...>`
+///   space references (`None` for unconfigured slots) without `MaybeUninit` or trailing bitmask
+///   fields, preserving the exact inline sizes and field offsets of `Allocators<VM>` and
+///   `Mutator<VM>` (`barrier`, `mutator_tls`, `plan`, `config`).
 /// - VM bindings that mirror `Mutator<VM>` in C/C++ or JIT code should query allocator and field
 ///   offsets dynamically via [`Mutator::get_allocator_base_offset`],
 ///   [`crate::util::alloc::AllocatorInfo::new`], or `std::mem::offset_of!(Mutator<VM>, ...)`
-///   rather than hardcoding struct sizes (note that `barrier` and `mutator_tls` sit after
-///   `allocators` and include `Allocators<VM>`'s trailing `8`-byte initialization metadata).
+///   rather than hardcoding struct sizes.
 // We are trying to make this struct fixed-sized so that VM bindings can easily define a type to have the exact same layout as this struct.
 // Currently Mutator is fixed sized, and we should try keep this invariant:
-// - Allocators are fixed-length arrays of allocators plus a `#[repr(transparent)]` u16 bitmask.
+// - Allocators are fixed-length arrays of allocators initialized inline via niche-optimized `Option<&'static ...>`.
 // - MutatorConfig only has pointers/refs (including fat pointers), and is fixed sized.
 //
 // Soundness invariant: `allocators` and `config` are module-private and constructed exclusively in

@@ -976,6 +976,27 @@ impl<VM: VMBinding> CommonPlan<VM> {
         self.base.release(tls, full_heap)
     }
 
+    /// Re-prepare common and base spaces between Pass 1 (marking) and Pass 2 (forwarding) of a
+    /// two-pass mark-compact STW pause (`Lisp2` `SecondRoots`), while all workers are parked inside
+    /// `WorkerMonitor` without running mutator release packets.
+    pub(in crate::plan) fn reprepare_for_forwarding_pass(&self, tls: VMWorkerThread) {
+        self.immortal.release();
+        self.los.release(true);
+        #[cfg(not(feature = "marksweep_as_nonmoving"))]
+        self.release_nonmoving_space(true);
+        self.base.release(tls, true);
+
+        self.immortal.prepare();
+        self.los.prepare(true);
+        #[cfg(feature = "marksweep_as_nonmoving")]
+        if *self.base.options.plan != PlanSelector::LXR {
+            self.nonmoving.prepare_for_re_marking();
+        }
+        #[cfg(not(feature = "marksweep_as_nonmoving"))]
+        self.prepare_nonmoving_space(true);
+        self.base.prepare(tls, true);
+    }
+
     pub(crate) fn schedule_unlog_bits_op(&self, unlog_bits_op: UnlogBitsOperation) {
         if VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.is_on_side() {
             match unlog_bits_op {
@@ -995,12 +1016,18 @@ impl<VM: VMBinding> CommonPlan<VM> {
     pub fn clear_side_log_bits(&self) {
         self.immortal.clear_side_log_bits();
         self.los.clear_side_log_bits();
+        if *self.base.options.plan != PlanSelector::LXR {
+            self.nonmoving.clear_side_log_bits();
+        }
         self.base.clear_side_log_bits();
     }
 
     pub fn set_side_log_bits(&self) {
         self.immortal.set_side_log_bits();
         self.los.set_side_log_bits();
+        if *self.base.options.plan != PlanSelector::LXR {
+            self.nonmoving.set_side_log_bits();
+        }
         self.base.set_side_log_bits();
     }
 

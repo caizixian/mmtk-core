@@ -33,8 +33,8 @@ impl<VM: VMBinding> CalculateForwardingAddress<VM> {
 /// Create another round of root scanning work packets to update object references.
 ///
 /// [`UpdateReferences::schedule`] registers a pre-open hook on [`WorkBucketStage::SecondRoots`]
-/// and enqueues the marker packet so `common.{release, prepare}` runs inside `WorkerMonitor` while
-/// all workers are parked right before `WorkBucketStage::SecondRoots` opens.
+/// and enqueues the marker packet so `common.reprepare_for_forwarding_pass` runs inside
+/// `WorkerMonitor` while all workers are parked right before `WorkBucketStage::SecondRoots` opens.
 pub struct UpdateReferences<VM: VMBinding> {
     p: PhantomData<fn() -> VM>,
 }
@@ -62,8 +62,7 @@ impl<VM: VMBinding> UpdateReferences<VM> {
                         "Lisp2 UpdateReferences requires GcStatus::InPause"
                     );
                     let plan = mmtk.get_plan().downcast_ref::<Lisp2<VM>>().unwrap();
-                    plan.common.release(tls, true);
-                    plan.common.prepare(tls, true);
+                    plan.common.reprepare_for_forwarding_pass(tls);
                 }
                 #[cfg(feature = "extreme_assertions")]
                 mmtk.slot_logger.reset();
