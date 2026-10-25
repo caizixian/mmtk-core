@@ -1,11 +1,13 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 
 use crate::{
     policy::{marksweepspace::native_ms::*, sft::GCWorkerMutRef},
-    scheduler::{GCWorkScheduler, GCWorker, WorkBucketStage},
+    scheduler::{GCWork, GCWorkScheduler, GCWorker, WorkBucketStage},
     util::{
         copy::CopySemantics,
         epilogue,
@@ -16,6 +18,7 @@ use crate::{
         ObjectReference,
     },
     vm::{ActivePlan, VMBinding},
+    MMTK,
 };
 
 #[cfg(feature = "vo_bit")]
@@ -31,7 +34,6 @@ use crate::util::linear_scan::Region;
 use crate::util::VMThread;
 use crate::vm::ObjectModel;
 use crate::vm::Scanning;
-use std::sync::Mutex;
 
 /// The result for `MarkSweepSpace.acquire_block()`. `MarkSweepSpace` will attempt
 /// to allocate from abandoned blocks first. If none found, it will get a new block
@@ -39,11 +41,11 @@ use std::sync::Mutex;
 pub enum BlockAcquireResult {
     Exhausted,
     /// A new block we just acquired from the page resource
-    Fresh(Block),
-    /// An available block. The block can be directly used if there is any free cell in it.
-    AbandonedAvailable(Block),
-    /// An unswept block. The block needs to be swept first before it can be used.
-    AbandonedUnswept(Block),
+    Fresh(FreshBlock),
+    /// An available swept block. The block can be directly used if there is any free cell in it.
+    AbandonedAvailable(SweptBlock),
+    /// An unswept marked block. The block must be linearly swept first before it can be used.
+    AbandonedUnswept(UnsweptBlock),
 }
 
 /// A mark sweep space.
@@ -88,17 +90,22 @@ pub struct MarkSweepSpace<VM: VMBinding> {
     pending_release_packets: AtomicUsize,
 }
 
-// SAFETY: Every field of `MarkSweepSpace<VM>` other than `pr: BlockPageResource<VM, Block>` is
-// auto-`Sync`. `BlockPageResource` fails auto-`Sync` only because `BlockQueue::data` uses
-// `UnsafeCell<Box<[MaybeUninit<Block>]>>`; `BlockPageResource` synchronizes all concurrent
-// accesses via `RwLock` (`head_global_freed_blocks`, `global_freed_blocks`), `AtomicUsize`
-// `pop` cursors, `Mutex` (`sync`), and disjoint `worker.ordinal` indexing on
-// `worker_local_freed_blocks` (flushed before mutators resume).
-unsafe impl<VM: VMBinding> Sync for MarkSweepSpace<VM> {}
+// Compile-time verification that `MarkSweepSpace<VM>` is automatically `Send + Sync` without any
+// manual `unsafe impl Sync`.
+const fn _assert_marksweepspace_send_sync<VM: VMBinding>() {
+    const fn check<T: Send + Sync>() {}
+    check::<MarkSweepSpace<VM>>();
+}
+
+#[cfg(feature = "mock_test")]
+static_assertions::assert_impl_all!(
+    MarkSweepSpace<crate::util::test_util::mock_vm::MockVM>: Send,
+    Sync
+);
 
 pub struct AbandonedBlockLists {
     available: BlockLists,
-    unswept: BlockLists,
+    unswept: UnsweptBlockLists,
     consumed: BlockLists,
 }
 
@@ -106,93 +113,92 @@ impl AbandonedBlockLists {
     fn new() -> Self {
         Self {
             available: new_empty_block_lists(),
-            unswept: new_empty_block_lists(),
+            unswept: new_empty_unswept_block_lists(),
             consumed: new_empty_block_lists(),
         }
     }
 
     /// Move all blocks from a mutator's local block lists into `self`.
-    ///
-    /// # Safety
-    /// Every block in `available`, `available_stress`, `consumed`, and `unswept` must belong to
-    /// the `MarkSweepSpace` that owns `self`.
-    pub(crate) unsafe fn abandon_from(
+    pub(crate) fn abandon_from(
         &mut self,
         available: &mut BlockLists,
         available_stress: &mut BlockLists,
         consumed: &mut BlockLists,
-        unswept: &mut BlockLists,
+        unswept: &mut UnsweptBlockLists,
     ) {
         for i in 0..MI_BIN_FULL {
-            if !available[i].is_empty() {
-                self.available[i].append(&mut available[i]);
+            let bin = BinIndex::new(i).unwrap();
+            if !available[bin].is_empty() {
+                self.available.append_bin_from(bin, available);
             }
-            if !available_stress[i].is_empty() {
-                self.available[i].append(&mut available_stress[i]);
+            if !available_stress[bin].is_empty() {
+                self.available.append_bin_from(bin, available_stress);
             }
-            if !consumed[i].is_empty() {
-                self.consumed[i].append(&mut consumed[i]);
+            if !consumed[bin].is_empty() {
+                self.consumed.append_bin_from(bin, consumed);
             }
-            if !unswept[i].is_empty() {
-                self.unswept[i].append(&mut unswept[i]);
+            if !unswept[bin].is_empty() {
+                self.unswept.append_bin_from(bin, unswept);
             }
         }
     }
 
-    /// Release unmarked blocks in all bins back to `space`, and move remaining blocks into
-    /// `unswept` for lazy sweeping.
-    ///
-    /// # Safety
-    /// Every block in `self` must belong to `space`, and no mutator or other GC worker may
-    /// concurrently access blocks in `self` or their side metadata.
-    unsafe fn sweep_later<VM: VMBinding>(&mut self, space: &MarkSweepSpace<VM>) {
+    /// Release unmarked blocks in all bins back to `space`, and (under lazy sweeping) move
+    /// surviving `BlockState::Marked` blocks into `self.unswept`.
+    fn sweep_later<VM: VMBinding>(&mut self, space: &MarkSweepSpace<VM>) {
         for i in 0..MI_BIN_FULL {
-            // Release free blocks
-            // SAFETY: Caller guarantees all blocks in `self` belong to `space` with no concurrent access.
-            unsafe {
-                self.available[i].release_blocks(space);
-                self.consumed[i].release_blocks(space);
-            }
-            if cfg!(not(feature = "eager_sweeping")) {
-                // SAFETY: Same as above.
-                unsafe { self.unswept[i].release_blocks(space) };
-            } else {
+            let bin = BinIndex::new(i).unwrap();
+            if cfg!(feature = "eager_sweeping") {
                 // If we do eager sweeping, we should have no unswept blocks.
-                debug_assert!(self.unswept[i].is_empty());
-            }
-
-            // For eager sweeping, that's it.  We just release unmarked blocks, and leave marked
-            // blocks to be swept later in the `SweepChunk` work packet.
-
-            // For lazy sweeping, we move blocks from available and consumed to unswept.  When an
-            // allocator tries to use them, they will sweep the block.
-            if cfg!(not(feature = "eager_sweeping")) {
-                self.unswept[i].append(&mut self.available[i]);
-                self.unswept[i].append(&mut self.consumed[i]);
+                debug_assert!(self.unswept[bin].is_empty());
+                // For eager sweeping, release unmarked blocks and leave marked blocks in
+                // `available` and `consumed` to be swept in-place by `SweepChunk` work packets.
+                self.available.release_blocks(bin, space);
+                self.consumed.release_blocks(bin, space);
+            } else {
+                // First release unmarked blocks already in `unswept` from prior GCs, leaving only
+                // `BlockState::Marked` blocks in `self.unswept[bin]`.
+                self.unswept.release_blocks(bin, space);
+                // For lazy sweeping, release unmarked blocks from `available` and `consumed` and
+                // move surviving `BlockState::Marked` blocks onto `self.unswept[bin]`.
+                self.available.release_blocks_and_move_marked_to_unswept(
+                    bin,
+                    space,
+                    &mut self.unswept,
+                );
+                self.consumed.release_blocks_and_move_marked_to_unswept(
+                    bin,
+                    space,
+                    &mut self.unswept,
+                );
             }
         }
     }
 
     fn recycle_blocks(&mut self) {
         for i in 0..MI_BIN_FULL {
-            self.consumed[i].transfer_available_blocks(&mut self.available[i]);
+            let bin = BinIndex::new(i).unwrap();
+            self.consumed
+                .transfer_available_bin_to(bin, &mut self.available);
         }
     }
 
     fn merge(&mut self, other: &mut Self) {
         for i in 0..MI_BIN_FULL {
-            self.available[i].append(&mut other.available[i]);
-            self.unswept[i].append(&mut other.unswept[i]);
-            self.consumed[i].append(&mut other.consumed[i]);
+            let bin = BinIndex::new(i).unwrap();
+            self.available.append_bin_from(bin, &mut other.available);
+            self.unswept.append_bin_from(bin, &mut other.unswept);
+            self.consumed.append_bin_from(bin, &mut other.consumed);
         }
     }
 
     #[cfg(debug_assertions)]
     fn assert_empty(&self) {
         for i in 0..MI_BIN_FULL {
-            assert!(self.available[i].is_empty());
-            assert!(self.unswept[i].is_empty());
-            assert!(self.consumed[i].is_empty());
+            let bin = BinIndex::new(i).unwrap();
+            assert!(self.available[bin].is_empty());
+            assert!(self.unswept[bin].is_empty());
+            assert!(self.consumed[bin].is_empty());
         }
     }
 }
@@ -355,7 +361,6 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
                 MetadataSpec::OnSide(Block::LOCAL_FREE_LIST_TABLE),
                 #[cfg(feature = "malloc_native_mimalloc")]
                 MetadataSpec::OnSide(Block::THREAD_FREE_LIST_TABLE),
-                MetadataSpec::OnSide(Block::BLOCK_LIST_TABLE),
                 MetadataSpec::OnSide(Block::TLS_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
@@ -459,6 +464,12 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
     }
 
     pub fn record_new_block(&self, block: Block) {
+        assert!(
+            self.address_in_space(block.start()),
+            "MarkSweepSpace::record_new_block: block {:?} does not belong to space {}",
+            block,
+            self.common.name
+        );
         block.init();
         self.chunk_map.set_allocated(block.chunk(), true);
     }
@@ -503,28 +514,30 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
         );
     }
 
-    /// Release a block back to the page resource after clearing its metadata.
-    ///
-    /// # Safety
-    /// `block` must belong to `self`, must have been removed from any `BlockList`, and must not be
-    /// concurrently accessed by any mutator or other GC worker.
-    pub(super) unsafe fn release_block(&self, block: Block) {
-        // SAFETY: Caller guarantees `block` belongs to `self`, is unlinked from all `BlockList`s,
-        // and has no concurrent access.
-        unsafe { self.block_clear_metadata(block) };
-
-        block.deinit();
-        self.pr.release_block(block);
+    /// Release a detached linear block (`SweptBlock` or `UnsweptBlock`) back to the page resource
+    /// after verifying space membership and clearing its side metadata.
+    pub(super) fn release_block<B: IntrusiveBlock>(&self, block: B) {
+        let raw = block.block();
+        assert!(
+            self.address_in_space(raw.start()),
+            "MarkSweepSpace::release_block: block {:?} does not belong to space {}",
+            raw,
+            self.common.name
+        );
+        self.block_clear_metadata(raw);
+        raw.deinit();
+        self.pr.release_block(raw);
     }
 
-    /// Zero all local metadata for `block`.
-    ///
-    /// # Safety
-    /// `block` must belong to `self`, must not be linked in any `BlockList`, and must not have its
-    /// metadata concurrently accessed by other threads.
-    unsafe fn block_clear_metadata(&self, block: Block) {
+    /// Zero all local metadata for a block in `self` before returning it to `self.pr`.
+    fn block_clear_metadata(&self, block: Block) {
         for metadata_spec in Block::METADATA_SPECS {
             metadata_spec.set_zero_atomic(block.start(), Ordering::SeqCst);
+        }
+        #[cfg(feature = "malloc_native_mimalloc")]
+        {
+            Block::LOCAL_FREE_LIST_TABLE.set_zero_atomic(block.start(), Ordering::SeqCst);
+            Block::THREAD_FREE_LIST_TABLE.set_zero_atomic(block.start(), Ordering::SeqCst);
         }
         #[cfg(feature = "vo_bit")]
         crate::util::metadata::vo_bit::bzero_vo_bit(block.start(), Block::BYTES);
@@ -539,22 +552,16 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
     ) -> BlockAcquireResult {
         {
             let mut abandoned = self.abandoned.lock().unwrap();
-            let bin = mi_bin::<VM>(size, align);
+            let bin = mi_bin_bounded::<VM>(size, align);
 
-            {
-                let abandoned_available = &mut abandoned.available;
-                if !abandoned_available[bin].is_empty() {
-                    let block = abandoned_available[bin].pop().unwrap();
-                    return BlockAcquireResult::AbandonedAvailable(block);
-                }
+            if let Some(block) = abandoned.available.pop(bin) {
+                assert!(self.address_in_space(block.start()));
+                return BlockAcquireResult::AbandonedAvailable(block);
             }
 
-            {
-                let abandoned_unswept = &mut abandoned.unswept;
-                if !abandoned_unswept[bin].is_empty() {
-                    let block = abandoned_unswept[bin].pop().unwrap();
-                    return BlockAcquireResult::AbandonedUnswept(block);
-                }
+            if let Some(block) = abandoned.unswept.pop(bin) {
+                assert!(self.address_in_space(block.start()));
+                return BlockAcquireResult::AbandonedUnswept(block);
             }
         }
 
@@ -562,7 +569,14 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
         if acquired.is_zero() {
             BlockAcquireResult::Exhausted
         } else {
-            BlockAcquireResult::Fresh(Block::from_unaligned_address(acquired))
+            let block = Block::from_aligned_address(acquired);
+            self.record_new_block(block);
+            // SAFETY: `self.acquire` returned a freshly acquired, 64 KiB-aligned block in `self`
+            // with mapped heap pages `[block.start(), block.end())` and mapped side metadata
+            // (`PREV_BLOCK_TABLE == None && NEXT_BLOCK_TABLE == None`), `record_new_block`
+            // initialized `MARK_TABLE = BlockState::Unmarked` and `ChunkMap`, and no `BlockList`
+            // or other thread holds `block`.
+            BlockAcquireResult::Fresh(unsafe { FreshBlock::from_block_unchecked(block) })
         }
     }
 
@@ -633,9 +647,6 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
     }
 }
 
-use crate::scheduler::GCWork;
-use crate::MMTK;
-
 struct PrepareChunkMap<VM: VMBinding> {
     space: &'static MarkSweepSpace<VM>,
     chunk: Chunk,
@@ -675,10 +686,7 @@ impl<VM: VMBinding> GCWork<VM> for ReleaseMarkSweepSpace<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         {
             let mut abandoned = self.space.abandoned.lock().unwrap();
-            // SAFETY: All blocks in `self.space.abandoned` belong to `self.space`, and this work
-            // packet holds the `abandoned` mutex during the STW `Release` stage before `SweepChunk`
-            // packets are spawned (`pending_release_packets` barrier).
-            unsafe { abandoned.sweep_later(self.space) };
+            abandoned.sweep_later(self.space);
         }
 
         self.space.release_packet_done();

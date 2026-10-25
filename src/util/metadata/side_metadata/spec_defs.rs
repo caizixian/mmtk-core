@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use crate::util::constants::*;
 use crate::util::heap::layout::vm_layout::*;
 use crate::util::linear_scan::Region;
@@ -93,8 +95,6 @@ define_side_metadata_specs!(
     MS_BLOCK_NEXT   = (global: false, log_num_of_bits: LOG_BITS_IN_ADDRESS, log_bytes_in_region: crate::policy::marksweepspace::native_ms::Block::LOG_BYTES),
     // Previous block in list for native mimalloc
     MS_BLOCK_PREV   = (global: false, log_num_of_bits: LOG_BITS_IN_ADDRESS, log_bytes_in_region: crate::policy::marksweepspace::native_ms::Block::LOG_BYTES),
-    // Pointer to owning list for blocks for native mimalloc
-    MS_BLOCK_LIST   = (global: false, log_num_of_bits: LOG_BITS_IN_ADDRESS, log_bytes_in_region: crate::policy::marksweepspace::native_ms::Block::LOG_BYTES),
     // Size of cells in block for native mimalloc FIXME: do we actually need usize?
     MS_BLOCK_SIZE         = (global: false, log_num_of_bits: LOG_BITS_IN_ADDRESS, log_bytes_in_region: crate::policy::marksweepspace::native_ms::Block::LOG_BYTES),
     // TLS of owning mutator of block for native mimalloc

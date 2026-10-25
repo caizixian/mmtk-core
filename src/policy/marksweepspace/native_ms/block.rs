@@ -1,4 +1,5 @@
 // adapted from Immix
+#![deny(unsafe_op_in_unsafe_fn)]
 
 use atomic::Ordering;
 
@@ -6,27 +7,30 @@ use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::heap::chunk_map::*;
 use crate::util::linear_scan::Region;
 use crate::util::linear_scan::UnstraddlableRegion;
+use crate::util::metadata::side_metadata::{MetadataCodec, TypedSideSpec, U8Bits, UsizeBits};
 use crate::util::object_enum::BlockMayHaveObjects;
 use crate::vm::ObjectModel;
 use crate::{
     util::{
-        metadata::side_metadata::SideMetadataSpec, Address, ObjectReference, OpaquePointer,
-        VMThread,
+        metadata::side_metadata::SideMetadataSpec, Address, AlignedAddress, ObjectReference,
+        OpaquePointer, VMThread,
     },
     vm::VMBinding,
 };
 
-use std::num::NonZeroUsize;
-
-/// A 64KB region for MiMalloc.
-/// This is also known as MiMalloc page. We try to avoid getting confused with the OS 4K page. So we call it block.
-/// This type always holds a non-zero address to refer to a block. The underlying `NonZeroUsize` type ensures the
-/// size of `Option<Block>` is the same as `Block` itself.
-// TODO: If we actually use the first block, we would need to turn the type into `Block(Address)`, and use `None` and
-// `Block(Address::ZERO)` to differentiate those.
-#[derive(Clone, Copy, PartialOrd, PartialEq)]
+/// A 64 KiB region for MiMalloc.
+///
+/// This is also known as a MiMalloc page. We call it `Block` to avoid confusion with OS 4 KiB pages.
+/// Backed by [`AlignedAddress<16>`] (`#[repr(transparent)]` over `NonNull<u8>`), guaranteeing:
+/// 1. Non-zero 64 KiB alignment (`size_of::<Option<Block>>() == size_of::<usize>()` via NPO), and
+/// 2. Zero-`unsafe`, provenance-preserving `Block::start(&self) -> Address` recovery.
+#[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct Block(NonZeroUsize);
+pub struct Block(AlignedAddress<16>);
+
+static_assertions::assert_eq_size!(Block, usize);
+static_assertions::assert_eq_size!(Option<Block>, usize);
+static_assertions::assert_eq_align!(Option<Block>, usize);
 
 impl std::fmt::Debug for Block {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -38,21 +42,16 @@ impl Region for Block {
     const LOG_BYTES: usize = 16;
 
     fn from_aligned_address(address: Address) -> Self {
-        assert!(address.is_aligned_to(Self::BYTES));
-        Self(
-            NonZeroUsize::new(address.as_usize())
-                .expect("native_ms::Block address must be non-zero"),
-        )
+        Self(AlignedAddress::<16>::from_aligned_address(address))
     }
 
+    #[inline(always)]
     fn start(&self) -> Address {
-        // SAFETY: `Address::from_usize` wraps the raw integer address without Rust-level UB;
-        // `self.0` holds the non-zero aligned block start address stored at construction.
-        unsafe { Address::from_usize(self.0.get()) }
+        self.0.to_address()
     }
 }
 
-/// An objects cannot straddle multiple native  blocks.
+/// Objects cannot straddle multiple native MarkSweep blocks.
 impl UnstraddlableRegion for Block {}
 
 impl BlockMayHaveObjects for Block {
@@ -65,13 +64,12 @@ impl Block {
     /// Log pages in block
     pub const LOG_PAGES: usize = Self::LOG_BYTES - LOG_BYTES_IN_PAGE as usize;
 
-    pub const METADATA_SPECS: [SideMetadataSpec; 7] = [
+    pub const METADATA_SPECS: [SideMetadataSpec; 6] = [
         Self::MARK_TABLE,
         Self::NEXT_BLOCK_TABLE,
         Self::PREV_BLOCK_TABLE,
         Self::FREE_LIST_TABLE,
         Self::SIZE_TABLE,
-        Self::BLOCK_LIST_TABLE,
         Self::TLS_TABLE,
     ];
 
@@ -100,11 +98,20 @@ impl Block {
     pub const SIZE_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::MS_BLOCK_SIZE;
 
-    pub const BLOCK_LIST_TABLE: SideMetadataSpec =
-        crate::util::metadata::side_metadata::spec_defs::MS_BLOCK_LIST;
-
     pub const TLS_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::MS_BLOCK_TLS;
+
+    // Compile-time region & bit-width validated typed specs.
+    const TYPED_MARK_TABLE: TypedSideSpec<Block, U8Bits, BlockState> =
+        TypedSideSpec::new(Self::MARK_TABLE);
+    const TYPED_NEXT_BLOCK_TABLE: TypedSideSpec<Block, UsizeBits> =
+        TypedSideSpec::new(Self::NEXT_BLOCK_TABLE);
+    const TYPED_PREV_BLOCK_TABLE: TypedSideSpec<Block, UsizeBits> =
+        TypedSideSpec::new(Self::PREV_BLOCK_TABLE);
+    const TYPED_FREE_LIST_TABLE: TypedSideSpec<Block, UsizeBits> =
+        TypedSideSpec::new(Self::FREE_LIST_TABLE);
+    const TYPED_SIZE_TABLE: TypedSideSpec<Block, UsizeBits> = TypedSideSpec::new(Self::SIZE_TABLE);
+    const TYPED_TLS_TABLE: TypedSideSpec<Block, UsizeBits> = TypedSideSpec::new(Self::TLS_TABLE);
 
     /// Load the head cell address of this block's free list.
     ///
@@ -113,9 +120,9 @@ impl Block {
     /// side metadata, and no other thread may concurrently write to `self`'s `FREE_LIST_TABLE`
     /// entry.
     pub unsafe fn load_free_list(&self) -> Address {
-        // SAFETY: Caller guarantees `FREE_LIST_TABLE` is mapped for `self.start()` with no
-        // concurrent writes; `Address::from_usize` wraps the raw free-list address value.
-        unsafe { Address::from_usize(Block::FREE_LIST_TABLE.load::<usize>(self.start())) }
+        // SAFETY: Caller guarantees `FREE_LIST_TABLE` is mapped for `self` with no concurrent
+        // writes; `Address::from_usize` wraps the raw free-list cell address value.
+        unsafe { Address::from_usize(Self::TYPED_FREE_LIST_TABLE.load(*self)) }
     }
 
     /// Store the head cell address of this block's free list.
@@ -125,9 +132,9 @@ impl Block {
     /// side metadata, and the caller must have exclusive access to `self`'s `FREE_LIST_TABLE`
     /// entry.
     pub unsafe fn store_free_list(&self, free_list: Address) {
-        // SAFETY: Caller guarantees `FREE_LIST_TABLE` is mapped for `self.start()` and
-        // exclusively accessed by this thread.
-        unsafe { Block::FREE_LIST_TABLE.store::<usize>(self.start(), free_list.as_usize()) }
+        // SAFETY: Caller guarantees `FREE_LIST_TABLE` is mapped for `self` and exclusively
+        // accessed by this thread.
+        unsafe { Self::TYPED_FREE_LIST_TABLE.store(*self, free_list.as_usize()) }
     }
 
     /// Load the head cell address of this block's thread-local free list.
@@ -137,6 +144,7 @@ impl Block {
     /// `LOCAL_FREE_LIST_TABLE` side metadata, and no other thread may concurrently write to
     /// `self`'s `LOCAL_FREE_LIST_TABLE` entry.
     #[cfg(feature = "malloc_native_mimalloc")]
+    #[allow(dead_code)]
     pub unsafe fn load_local_free_list(&self) -> Address {
         // SAFETY: Caller guarantees `LOCAL_FREE_LIST_TABLE` is mapped for `self.start()` with no
         // concurrent writes; `Address::from_usize` wraps the raw free-list address value.
@@ -163,6 +171,7 @@ impl Block {
     /// `THREAD_FREE_LIST_TABLE` side metadata, and any concurrent accesses to `self`'s
     /// `THREAD_FREE_LIST_TABLE` entry must also be atomic.
     #[cfg(feature = "malloc_native_mimalloc")]
+    #[allow(dead_code)]
     pub unsafe fn load_thread_free_list(&self) -> Address {
         let raw =
             Block::THREAD_FREE_LIST_TABLE.load_atomic::<usize>(self.start(), Ordering::SeqCst);
@@ -186,7 +195,8 @@ impl Block {
     }
 
     #[cfg(feature = "malloc_native_mimalloc")]
-    pub fn cas_thread_free_list(&self, old_thread_free: Address, new_thread_free: Address) -> bool {
+    #[allow(dead_code)]
+    fn cas_thread_free_list(&self, old_thread_free: Address, new_thread_free: Address) -> bool {
         Block::THREAD_FREE_LIST_TABLE
             .compare_exchange_atomic::<usize>(
                 self.start(),
@@ -202,26 +212,38 @@ impl Block {
     ///
     /// # Safety
     /// `self` must belong to an allocated `MarkSweepSpace` chunk with mapped `PREV_BLOCK_TABLE`
-    /// side metadata, and no other thread may concurrently write to `self`'s `PREV_BLOCK_TABLE`
-    /// entry.
+    /// side metadata, no other thread may concurrently write to `self`'s `PREV_BLOCK_TABLE`
+    /// entry, and any non-zero entry must be a valid 64 KiB-aligned `Block` start address.
     pub unsafe fn load_prev_block(&self) -> Option<Block> {
-        // SAFETY: Caller guarantees `PREV_BLOCK_TABLE` is mapped for `self.start()` with no
-        // concurrent writes.
-        let prev = unsafe { Block::PREV_BLOCK_TABLE.load::<usize>(self.start()) };
-        NonZeroUsize::new(prev).map(Block)
+        // SAFETY: Caller guarantees `PREV_BLOCK_TABLE` is mapped for `self` with no concurrent
+        // writes, and any non-zero value is a valid 64 KiB-aligned `Block` start address.
+        let prev_addr = unsafe {
+            let prev = Self::TYPED_PREV_BLOCK_TABLE.load(*self);
+            if prev == 0 {
+                return None;
+            }
+            Address::from_usize(prev)
+        };
+        Some(Self::from_aligned_address(prev_addr))
     }
 
     /// Load the next `Block` link from `NEXT_BLOCK_TABLE`.
     ///
     /// # Safety
     /// `self` must belong to an allocated `MarkSweepSpace` chunk with mapped `NEXT_BLOCK_TABLE`
-    /// side metadata, and no other thread may concurrently write to `self`'s `NEXT_BLOCK_TABLE`
-    /// entry.
+    /// side metadata, no other thread may concurrently write to `self`'s `NEXT_BLOCK_TABLE`
+    /// entry, and any non-zero entry must be a valid 64 KiB-aligned `Block` start address.
     pub unsafe fn load_next_block(&self) -> Option<Block> {
-        // SAFETY: Caller guarantees `NEXT_BLOCK_TABLE` is mapped for `self.start()` with no
-        // concurrent writes.
-        let next = unsafe { Block::NEXT_BLOCK_TABLE.load::<usize>(self.start()) };
-        NonZeroUsize::new(next).map(Block)
+        // SAFETY: Caller guarantees `NEXT_BLOCK_TABLE` is mapped for `self` with no concurrent
+        // writes, and any non-zero value is a valid 64 KiB-aligned `Block` start address.
+        let next_addr = unsafe {
+            let next = Self::TYPED_NEXT_BLOCK_TABLE.load(*self);
+            if next == 0 {
+                return None;
+            }
+            Address::from_usize(next)
+        };
+        Some(Self::from_aligned_address(next_addr))
     }
 
     /// Store `next` into `self`'s `NEXT_BLOCK_TABLE` link.
@@ -231,10 +253,10 @@ impl Block {
     /// side metadata, and the caller must have exclusive access to `self`'s `NEXT_BLOCK_TABLE`
     /// entry.
     pub unsafe fn store_next_block(&self, next: Block) {
-        // SAFETY: Caller guarantees `NEXT_BLOCK_TABLE` is mapped for `self.start()` and
-        // exclusively accessed by this thread.
+        // SAFETY: Caller guarantees `NEXT_BLOCK_TABLE` is mapped for `self` and exclusively
+        // accessed by this thread.
         unsafe {
-            Block::NEXT_BLOCK_TABLE.store::<usize>(self.start(), next.start().as_usize());
+            Self::TYPED_NEXT_BLOCK_TABLE.store(*self, next.start().as_usize());
         }
     }
 
@@ -245,10 +267,10 @@ impl Block {
     /// side metadata, and the caller must have exclusive access to `self`'s `NEXT_BLOCK_TABLE`
     /// entry.
     pub unsafe fn clear_next_block(&self) {
-        // SAFETY: Caller guarantees `NEXT_BLOCK_TABLE` is mapped for `self.start()` and
-        // exclusively accessed by this thread.
+        // SAFETY: Caller guarantees `NEXT_BLOCK_TABLE` is mapped for `self` and exclusively
+        // accessed by this thread.
         unsafe {
-            Block::NEXT_BLOCK_TABLE.store::<usize>(self.start(), 0);
+            Self::TYPED_NEXT_BLOCK_TABLE.store(*self, 0);
         }
     }
 
@@ -259,10 +281,10 @@ impl Block {
     /// side metadata, and the caller must have exclusive access to `self`'s `PREV_BLOCK_TABLE`
     /// entry.
     pub unsafe fn store_prev_block(&self, prev: Block) {
-        // SAFETY: Caller guarantees `PREV_BLOCK_TABLE` is mapped for `self.start()` and
-        // exclusively accessed by this thread.
+        // SAFETY: Caller guarantees `PREV_BLOCK_TABLE` is mapped for `self` and exclusively
+        // accessed by this thread.
         unsafe {
-            Block::PREV_BLOCK_TABLE.store::<usize>(self.start(), prev.start().as_usize());
+            Self::TYPED_PREV_BLOCK_TABLE.store(*self, prev.start().as_usize());
         }
     }
 
@@ -273,15 +295,15 @@ impl Block {
     /// side metadata, and the caller must have exclusive access to `self`'s `PREV_BLOCK_TABLE`
     /// entry.
     pub unsafe fn clear_prev_block(&self) {
-        // SAFETY: Caller guarantees `PREV_BLOCK_TABLE` is mapped for `self.start()` and
-        // exclusively accessed by this thread.
+        // SAFETY: Caller guarantees `PREV_BLOCK_TABLE` is mapped for `self` and exclusively
+        // accessed by this thread.
         unsafe {
-            Block::PREV_BLOCK_TABLE.store::<usize>(self.start(), 0);
+            Self::TYPED_PREV_BLOCK_TABLE.store(*self, 0);
         }
     }
 
     pub fn load_block_cell_size(&self) -> usize {
-        Block::SIZE_TABLE.load_atomic::<usize>(self.start(), Ordering::SeqCst)
+        Self::TYPED_SIZE_TABLE.load_atomic(*self, Ordering::SeqCst)
     }
 
     /// Store the cell size (in bytes) for this block.
@@ -291,9 +313,9 @@ impl Block {
     /// metadata, and the caller must have exclusive access to `self`'s `SIZE_TABLE` entry.
     pub unsafe fn store_block_cell_size(&self, size: usize) {
         debug_assert_ne!(size, 0);
-        // SAFETY: Caller guarantees `SIZE_TABLE` is mapped for `self.start()` and exclusively
-        // accessed by this thread.
-        unsafe { Block::SIZE_TABLE.store::<usize>(self.start(), size) }
+        // SAFETY: Caller guarantees `SIZE_TABLE` is mapped for `self` and exclusively accessed by
+        // this thread.
+        unsafe { Self::TYPED_SIZE_TABLE.store(*self, size) }
     }
 
     /// Store the owning mutator `VMThread` into `TLS_TABLE`.
@@ -303,9 +325,9 @@ impl Block {
     /// metadata, and the caller must have exclusive access to `self`'s `TLS_TABLE` entry.
     pub unsafe fn store_tls(&self, tls: VMThread) {
         let tls_usize: usize = tls.0.to_address().as_usize();
-        // SAFETY: Caller guarantees `TLS_TABLE` is mapped for `self.start()` and exclusively
-        // accessed by this thread.
-        unsafe { Block::TLS_TABLE.store(self.start(), tls_usize) }
+        // SAFETY: Caller guarantees `TLS_TABLE` is mapped for `self` and exclusively accessed by
+        // this thread.
+        unsafe { Self::TYPED_TLS_TABLE.store(*self, tls_usize) }
     }
 
     /// Load the owning mutator `VMThread` from `TLS_TABLE`.
@@ -314,7 +336,7 @@ impl Block {
     /// `self` must belong to an allocated `MarkSweepSpace` chunk with mapped `TLS_TABLE` side
     /// metadata, and any concurrent accesses to `self`'s `TLS_TABLE` entry must be atomic.
     pub unsafe fn load_tls(&self) -> VMThread {
-        let tls = Block::TLS_TABLE.load_atomic::<usize>(self.start(), Ordering::SeqCst);
+        let tls = Self::TYPED_TLS_TABLE.load_atomic(*self, Ordering::SeqCst);
         // SAFETY: `Address::from_usize` wraps the raw `VMThread` opaque pointer value previously
         // stored via `store_tls`.
         VMThread(OpaquePointer::from_address(unsafe {
@@ -336,14 +358,12 @@ impl Block {
 
     /// Get block mark state.
     pub fn get_state(&self) -> BlockState {
-        let byte = Self::MARK_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst);
-        byte.into()
+        Self::TYPED_MARK_TABLE.load_atomic(*self, Ordering::SeqCst)
     }
 
     /// Set block mark state.
     pub fn set_state(&self, state: BlockState) {
-        let state = u8::from(state);
-        Self::MARK_TABLE.store_atomic::<u8>(self.start(), state, Ordering::SeqCst);
+        Self::TYPED_MARK_TABLE.store_atomic(*self, state, Ordering::SeqCst);
     }
 
     /// Sweep the block. This is done either lazily in the allocation phase, or eagerly at the end of a GC.
@@ -535,42 +555,92 @@ impl Block {
 }
 
 /// The block allocation state.
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[repr(u8)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, bytemuck::NoUninit, bytemuck::CheckedBitPattern)]
 pub enum BlockState {
     /// the block is not allocated.
-    Unallocated,
-    /// the block is allocated but not marked.
-    Unmarked,
-    /// the block is allocated and marked.
-    Marked,
+    Unallocated = 0,
+    /// the block is allocated but not marked (`u8::MAX`).
+    Unmarked = 0xFF,
+    /// the block is allocated and marked (`u8::MAX - 1`).
+    Marked = 0xFE,
 }
 
-impl BlockState {
-    /// Private constant
-    const MARK_UNALLOCATED: u8 = 0;
-    /// Private constant
-    const MARK_UNMARKED: u8 = u8::MAX;
-    /// Private constant
-    const MARK_MARKED: u8 = u8::MAX - 1;
+const _: () = {
+    assert!(BlockState::Unmarked as u8 == u8::MAX);
+    assert!(BlockState::Marked as u8 == u8::MAX - 1);
+};
+
+impl MetadataCodec<u8> for BlockState {
+    #[inline(always)]
+    fn encode(self) -> u8 {
+        bytemuck::cast(self)
+    }
+
+    #[inline(always)]
+    fn decode(raw: u8) -> Self {
+        bytemuck::checked::try_cast(raw)
+            .unwrap_or_else(|_| panic!("Invalid native_ms::BlockState discriminant: {raw:#x}"))
+    }
 }
 
 impl From<u8> for BlockState {
+    #[inline(always)]
     fn from(state: u8) -> Self {
-        match state {
-            Self::MARK_UNALLOCATED => BlockState::Unallocated,
-            Self::MARK_UNMARKED => BlockState::Unmarked,
-            Self::MARK_MARKED => BlockState::Marked,
-            _ => unreachable!(),
-        }
+        <Self as MetadataCodec<u8>>::decode(state)
     }
 }
 
 impl From<BlockState> for u8 {
+    #[inline(always)]
     fn from(state: BlockState) -> Self {
-        match state {
-            BlockState::Unallocated => BlockState::MARK_UNALLOCATED,
-            BlockState::Unmarked => BlockState::MARK_UNMARKED,
-            BlockState::Marked => BlockState::MARK_MARKED,
+        <BlockState as MetadataCodec<u8>>::encode(state)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_block_aligned_address_round_trip_and_npo() {
+        #[repr(align(65536))]
+        struct MockBlockBuf([u64; Block::BYTES / 8]);
+
+        let mut buf = Box::new(MockBlockBuf([0u64; Block::BYTES / 8]));
+        let base = Address::from_mut_ptr(buf.0.as_mut_ptr());
+        let block = Block::from_aligned_address(base);
+        assert_eq!(block.start(), base);
+        assert_eq!(block.end(), base + Block::BYTES);
+        assert_eq!(Some(block).map(|b| b.start()), Some(base));
+
+        // Verify provenance is preserved across `Address -> Block -> Address`.
+        let recovered = block.start();
+        // SAFETY: `recovered` points to `buf.0[0]`, aligned to `u64`, writable, and unaliased.
+        unsafe {
+            recovered.store::<u64>(0xcafe_babe_dead_beef);
         }
+        assert_eq!(buf.0[0], 0xcafe_babe_dead_beef);
+    }
+
+    #[test]
+    fn test_block_state_bytemuck_codec() {
+        for state in [
+            BlockState::Unallocated,
+            BlockState::Unmarked,
+            BlockState::Marked,
+        ] {
+            let raw = u8::from(state);
+            assert_eq!(BlockState::from(raw), state);
+            assert_eq!(<BlockState as MetadataCodec<u8>>::decode(raw), state);
+        }
+        assert_eq!(u8::from(BlockState::Unallocated), 0);
+        assert!(bytemuck::checked::try_cast::<u8, BlockState>(1).is_err());
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid native_ms::BlockState discriminant")]
+    fn test_block_state_invalid_discriminant_panics() {
+        let _ = BlockState::from(1u8);
     }
 }
