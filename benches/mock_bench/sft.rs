@@ -8,7 +8,7 @@ use mmtk::util::test_util::mock_vm::*;
 use mmtk::AllocationSemantics;
 
 pub fn bench(c: &mut Criterion) {
-    let fixture = MutatorFixture::create();
+    let mut fixture = MutatorFixture::create();
     let addr = memory_manager::alloc(fixture.mutator(), 8, 8, 0, AllocationSemantics::Default);
     let obj = <MockVM>::object_start_to_ref(addr);
 

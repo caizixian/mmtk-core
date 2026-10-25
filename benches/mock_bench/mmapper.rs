@@ -8,7 +8,7 @@ use mmtk::{
 };
 
 pub fn bench(c: &mut Criterion) {
-    let fixture = MutatorFixture::create_with_heapsize(1 << 30);
+    let mut fixture = MutatorFixture::create_with_heapsize(1 << 30);
 
     let regular = memory_manager::alloc(
         fixture.mutator(),
