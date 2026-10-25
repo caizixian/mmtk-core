@@ -64,10 +64,12 @@ impl<'stw> MallocExclusiveChunk<'stw> {
     /// Mint an exclusive STW chunk token for `chunk`.
     ///
     /// # Safety
-    /// * `chunk` must be a non-zero allocated chunk in `MallocSpace::chunk_map` with a valid
-    ///   `SFT_MAP` entry, and all specs in `MallocSpace::metadata` (`VO_BIT_SIDE_METADATA_SPEC`,
-    ///   `ACTIVE_PAGE_METADATA_SPEC`, `OFFSET_MALLOC_METADATA_SPEC`, and `on_side_mark_spec` if
-    ///   `Some`) must be mapped and initialized across `[chunk.start(), chunk.end())` for `'stw`.
+    /// * `chunk` must be a non-zero allocated chunk owned by `MallocSpace` (`owns_chunk(chunk)`,
+    ///   i.e. allocated in `MallocSpace::chunk_map` with `SFT_MAP` pointing to that `MallocSpace`,
+    ///   ruling out any 4-bit `ChunkState` `space_index` collision), and all specs in
+    ///   `MallocSpace::metadata` (`VO_BIT_SIDE_METADATA_SPEC`, `ACTIVE_PAGE_METADATA_SPEC`,
+    ///   `OFFSET_MALLOC_METADATA_SPEC`, and `on_side_mark_spec` if `Some`) must be mapped and
+    ///   initialized across `[chunk.start(), chunk.end())` for `'stw`.
     /// * For the entire `'stw` lifetime, the holder must have unique ownership of `chunk`'s
     ///   chunk-local side metadata (`VO_BIT_SIDE_METADATA_SPEC`, `ACTIVE_PAGE_METADATA_SPEC`, and
     ///   `on_side_mark_spec`): mutators are stopped at STW `Release` and no other `MallocExclusiveChunk`
@@ -702,12 +704,24 @@ impl<VM: VMBinding> MallocSpace<VM> {
         true
     }
 
-    /// Check if metadata is mapped for a given address. We check with the chunk map: if the side metadata
-    /// for the chunk map is mapped, and if it is allocated in the chunk map.
+    /// Safely verify that `chunk` is non-zero, allocated in `self.chunk_map` (`Acquire` load
+    /// synchronizing-with `map_metadata_and_update_bound`), and registered to `self` in `SFT_MAP`
+    /// (disambiguating any 4-bit `ChunkState` `space_index` collision with contiguous or other
+    /// discontiguous spaces).
+    #[inline]
+    fn owns_chunk(&self, chunk: Chunk) -> bool {
+        self.chunk_map.is_allocated_checked(chunk)
+            && crate::mmtk::SFT_MAP.has_sft_entry(chunk.start())
+            && std::ptr::eq(
+                (crate::mmtk::SFT_MAP.get_checked(chunk.start()) as *const dyn SFT).cast::<()>(),
+                (self as *const Self).cast::<()>(),
+            )
+    }
+
+    /// Check if metadata is mapped and owned by `self` for `address` via `self.chunk_map` and `SFT_MAP`.
     fn is_meta_space_mapped_for_address(&self, address: Address) -> bool {
         let chunk_start = address.align_down(BYTES_IN_CHUNK);
-        self.chunk_map
-            .is_allocated_checked(Chunk::from_aligned_address(chunk_start))
+        self.owns_chunk(Chunk::from_aligned_address(chunk_start))
     }
 
     /// Free an allocation starting at `addr` that was previously returned by [`Self::alloc`].
@@ -858,24 +872,24 @@ impl<VM: VMBinding> MallocSpace<VM> {
         let on_side_mark_spec = shared_self.on_side_mark_spec();
         let mut prev_chunk: Option<Chunk> = None;
         let mut work_packets: Vec<Box<dyn GCWork<VM>>> = Vec::new();
-        for chunk in shared_self.chunk_map.all_chunks() {
+        for chunk in shared_self
+            .chunk_map
+            .all_chunks()
+            .filter(|&chunk| shared_self.owns_chunk(chunk))
+        {
             assert!(
                 prev_chunk.is_none_or(|prev| prev < chunk),
                 "ChunkMap::all_chunks must yield strictly monotonic chunks for disjoint MallocExclusiveChunk ownership"
             );
             prev_chunk = Some(chunk);
-            assert!(
-                shared_self.chunk_map.is_allocated_checked(chunk)
-                    && crate::mmtk::SFT_MAP.has_sft_entry(chunk.start()),
-                "Allocated MallocSpace chunk {:?} must have mapped metadata and an SFT entry",
-                chunk
-            );
             // SAFETY: `MallocSpace::release` runs during STW `Release` while all mutators are
-            // parked; strictly monotonic `prev_chunk < chunk` proves each allocated `chunk` is
-            // minted into at most one linear `MSSweepChunk` packet, `is_allocated_checked` +
-            // `map_metadata_and_update_bound` guarantee `VO_BIT`, `ACTIVE_PAGE_METADATA_SPEC`,
-            // `OFFSET_MALLOC_METADATA_SPEC`, and `on_side_mark_spec` are mapped across `chunk` for
-            // `'static`, and every set `VO_BIT` in `chunk` denotes a live `MallocSpace` object.
+            // parked; strictly monotonic `prev_chunk < chunk` proves each `chunk` is minted into at
+            // most one linear `MSSweepChunk` packet, `shared_self.owns_chunk(chunk)` (paired with
+            // `map_metadata_and_update_bound`'s `SFT_MAP.update` before `Release` `set_allocated`)
+            // proves `chunk` belongs to `shared_self` (ruling out 4-bit `space_index` collisions)
+            // with `VO_BIT`, `ACTIVE_PAGE_METADATA_SPEC`, `OFFSET_MALLOC_METADATA_SPEC`, and
+            // `on_side_mark_spec` mapped across `chunk` for `'static`, and every set `VO_BIT` in
+            // `chunk` denotes a live `MallocSpace` object.
             let exclusive =
                 unsafe { MallocExclusiveChunk::new_unchecked(chunk, on_side_mark_spec) };
             work_packets.push(Box::new(MSSweepChunk {
@@ -905,7 +919,8 @@ impl<VM: VMBinding> MallocSpace<VM> {
     ///
     /// # Safety
     /// - `chunk_start` must be non-zero, aligned to `BYTES_IN_CHUNK`, and correspond to an
-    ///   allocated chunk in `self.chunk_map` with mapped side metadata and a valid `SFT_MAP` entry.
+    ///   allocated chunk owned by `self` (`self.owns_chunk(...)`, i.e. allocated in `self.chunk_map`
+    ///   with mapped side metadata and `SFT_MAP` pointing to `self`).
     /// - Called during the STW `Release` stage by the unique worker assigned to `chunk_start`
     ///   (no mutators are allocating and no other thread accesses `chunk_start`'s chunk-local side
     ///   metadata), and every set `VO_BIT` in `chunk_start` must denote a live `MallocSpace` object.
@@ -917,13 +932,14 @@ impl<VM: VMBinding> MallocSpace<VM> {
         );
         let chunk = Chunk::from_aligned_address(chunk_start);
         assert!(
-            self.chunk_map.is_allocated_checked(chunk)
-                && crate::mmtk::SFT_MAP.has_sft_entry(chunk_start),
-            "sweep_chunk requires an allocated MallocSpace chunk with an SFT entry: {:?}",
+            self.owns_chunk(chunk),
+            "sweep_chunk requires an allocated chunk owned by MallocSpace: {:?}",
             chunk
         );
-        // SAFETY: Caller upholds exclusive STW sweep ownership, mapped side metadata, and live
-        // VO-marked object invariants for `chunk`.
+        // SAFETY: `self.owns_chunk(chunk)` verified `chunk` is allocated in `self.chunk_map` with
+        // mapped `MallocSpace` side metadata and an `SFT_MAP` entry pointing to `self` (ruling out
+        // 4-bit `space_index` collisions), and caller upholds exclusive STW sweep ownership and
+        // live VO-marked object invariants for `chunk`.
         let exclusive =
             unsafe { MallocExclusiveChunk::new_unchecked(chunk, self.on_side_mark_spec()) };
         self.sweep_exclusive_chunk(exclusive);

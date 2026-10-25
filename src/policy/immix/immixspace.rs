@@ -296,7 +296,7 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
         warn!("ImmixSpace::clear_side_log_bits is single-treaded.  Consider clearing side metadata in per-chunk work packets.");
 
         let log_bit = VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec();
-        for chunk in self.chunk_map.all_chunks() {
+        for chunk in self.iter_allocated_chunks() {
             log_bit.bzero_metadata(chunk.start(), Chunk::BYTES);
         }
     }
@@ -306,7 +306,7 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
         warn!("ImmixSpace::set_side_log_bits is single-treaded.  Consider setting side metadata in per-chunk work packets.");
 
         let log_bit = VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec();
-        for chunk in self.chunk_map.all_chunks() {
+        for chunk in self.iter_allocated_chunks() {
             log_bit.bset_metadata(chunk.start(), Chunk::BYTES);
         }
     }
@@ -650,7 +650,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 .defrag
                 .defrag_spill_threshold
                 .load(Ordering::Acquire);
-            let work_packets = space.chunk_map.generate_tasks(|chunk| {
+            let work_packets = space.generate_chunk_tasks(|chunk| {
                 Box::new(PrepareBlockState {
                     space,
                     chunk,
@@ -694,7 +694,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             };
 
             if let Some(scope) = maybe_scope {
-                let work_packets = shared_self.chunk_map.generate_tasks(|chunk| {
+                let work_packets = shared_self.generate_chunk_tasks(|chunk| {
                     Box::new(ClearVOBitsAfterPrepare {
                         space,
                         chunk,
@@ -742,6 +742,23 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         did_defrag
     }
 
+    /// Iterate all allocated chunks in `self.chunk_map` that genuinely belong to `self`
+    /// (`self.address_in_space(chunk.start())`), filtering out any foreign chunks whose 4-bit
+    /// `ChunkState` `space_index` collides with `self.common.descriptor.get_index()`.
+    fn iter_allocated_chunks(&self) -> impl Iterator<Item = Chunk> + '_ {
+        self.chunk_map
+            .all_chunks()
+            .filter(|chunk| self.address_in_space(chunk.start()))
+    }
+
+    /// Generate per-chunk work packets only for allocated chunks owned by `self`.
+    fn generate_chunk_tasks(
+        &self,
+        func: impl Fn(Chunk) -> Box<dyn GCWork<VM>>,
+    ) -> Vec<Box<dyn GCWork<VM>>> {
+        self.iter_allocated_chunks().map(func).collect()
+    }
+
     /// Generate chunk sweep tasks
     fn generate_sweep_tasks(&self, unlog_bits_op: UnlogBitsOperation) -> Vec<Box<dyn GCWork<VM>>> {
         self.defrag.mark_histograms.lock().clear();
@@ -752,7 +769,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             space,
             counter: AtomicUsize::new(0),
         });
-        let tasks = self.chunk_map.generate_tasks(|chunk| {
+        let tasks = self.generate_chunk_tasks(|chunk| {
             Box::new(SweepChunk {
                 space,
                 chunk,
@@ -764,40 +781,45 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         tasks
     }
 
-    /// Validate that `block` belongs to an allocated chunk in `self.chunk_map` and mint a
+    /// Validate that `block` belongs to an allocated chunk owned by `self` and mint a
     /// space-sealed [`MappedBlock`].
     #[inline]
     pub(super) fn mapped_block(&self, block: Block) -> Option<MappedBlock<'_>> {
         if !block.is_zero()
             && block.start().is_aligned_to(Block::BYTES)
+            && self.address_in_space(block.start())
             && self.chunk_map.is_allocated_checked(block.chunk())
         {
-            // SAFETY: `!block.is_zero()`, `block.start()` is aligned to `Block::BYTES`, and
-            // `is_allocated_checked` verified `block.chunk()` is allocated in `self.chunk_map`,
-            // which is only set after `self.acquire` has mapped all specs in `self.common.metadata`
-            // (including global `RC_TABLE` when `self.rc_enabled`, asserted in `ImmixSpace::new`).
+            // SAFETY: `!block.is_zero()`, `block.start()` is aligned to `Block::BYTES`,
+            // `self.address_in_space(block.start())` proves `block.chunk()` belongs to `self`
+            // (eliminating any 4-bit `ChunkState` `space_index` collision with foreign spaces), and
+            // `is_allocated_checked` (`Acquire` load pairing with `set_allocated`'s `Release` store)
+            // verified `block.chunk()` is allocated in `self.chunk_map` after `self.acquire` mapped
+            // `self.common.metadata` (including global `RC_TABLE` when `self.rc_enabled`, asserted
+            // in `ImmixSpace::new`).
             Some(unsafe { MappedBlock::new_unchecked(block, self.rc_enabled) })
         } else {
             None
         }
     }
 
-    /// Iterate all blocks of an allocated `chunk` in `self.chunk_map` as space-sealed
+    /// Iterate all blocks of an allocated `chunk` owned by `self` as space-sealed
     /// [`MappedBlock`]s.
     pub(super) fn iter_chunk_blocks(
         &self,
         chunk: Chunk,
     ) -> impl Iterator<Item = MappedBlock<'_>> + '_ {
         assert!(
-            self.chunk_map.is_allocated_checked(chunk),
-            "iter_chunk_blocks requires an allocated chunk in ImmixSpace: {:?}",
+            self.address_in_space(chunk.start()) && self.chunk_map.is_allocated_checked(chunk),
+            "iter_chunk_blocks requires an allocated chunk owned by ImmixSpace: {:?}",
             chunk
         );
         let rc_enabled = self.rc_enabled;
         chunk.iter_region::<Block>().map(move |block| {
-            // SAFETY: `chunk` was verified non-zero and allocated in `self.chunk_map` above (so
-            // every `Block` in `chunk.iter_region::<Block>()` is non-zero, aligned to
-            // `Block::BYTES`, and has all `ImmixSpace` side metadata mapped for `'self`).
+            // SAFETY: `chunk` was verified non-zero, in `self` (`self.address_in_space(chunk.start())`,
+            // ruling out any 4-bit `ChunkState` `space_index` collision), and allocated in
+            // `self.chunk_map` above, so every `Block` in `chunk.iter_region::<Block>()` is
+            // non-zero, aligned to `Block::BYTES`, and in `self` for `'self`.
             unsafe { MappedBlock::new_unchecked(block, rc_enabled) }
         })
     }
@@ -1604,7 +1626,10 @@ struct SweepChunk<VM: VMBinding> {
 
 impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        assert!(self.space.chunk_map.get(self.chunk).unwrap().is_allocated());
+        assert!(
+            self.space.address_in_space(self.chunk.start())
+                && self.space.chunk_map.is_allocated_checked(self.chunk)
+        );
 
         let mut histogram = self.space.defrag.new_histogram();
         let line_mark_state = if super::BLOCK_ONLY {

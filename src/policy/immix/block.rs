@@ -164,20 +164,30 @@ impl Block {
     /// Checked projection of `RC_TABLE` for plan-level callers (`calc_dead_lines`, `clear_rc_table`)
     /// that do not pass `&ImmixSpace<VM>`.
     fn rc_array_checked(&self) -> RCArray<'_> {
+        const _: () = assert!(LINES_IN_BLOCK * BYTES_PER_LINE <= BYTES_IN_PAGE);
         assert!(
             !self.is_zero()
                 && self.start().is_aligned_to(Self::BYTES)
                 && self.start().as_usize() <= usize::MAX - Self::BYTES
+                && address_to_meta_address(&crate::util::rc::RC_TABLE, self.start())
+                    >= crate::util::rc::RC_TABLE.get_starting_address()
+                && address_to_meta_address(&crate::util::rc::RC_TABLE, self.end() - 1usize)
+                    >= crate::util::rc::RC_TABLE.get_starting_address()
+                && address_to_meta_address(&crate::util::rc::RC_TABLE, self.end() - 1usize)
+                    < crate::util::rc::RC_TABLE.upper_bound_address_for_contiguous()
                 && crate::util::rc::RC_TABLE.is_mapped(self.start())
                 && crate::util::rc::RC_TABLE.is_mapped(self.end() - 1usize),
-            "Block {:?} is not a non-zero aligned Immix block with mapped RC_TABLE",
+            "Block {:?} is not a non-zero aligned Immix block with in-bounds mapped RC_TABLE",
             self
         );
         // SAFETY:
         // 1. The assertion above unconditionally verifies `!self.is_zero()`, `self.start()` is
         //    aligned to `Self::BYTES` (`<= 32 KiB << BYTES_IN_CHUNK`) without overflow, and global
-        //    contiguous `RC_TABLE` is mapped across `[self.start(), self.end())` (within a single
-        //    `MMAPPER` page, which is zero-initialized and never unmapped for the process lifetime).
+        //    contiguous `RC_TABLE` for `[self.start(), self.end())` falls strictly within
+        //    `[RC_TABLE.get_starting_address(), RC_TABLE.upper_bound_address_for_contiguous())` and
+        //    spans at most two adjacent `MMAPPER` pages (`LINES_IN_BLOCK * BYTES_PER_LINE <=
+        //    BYTES_IN_PAGE`), both verified mapped via `self.start()` and `self.end() - 1usize`
+        //    (zero-initialized and never unmapped for the process lifetime).
         // 2. Every safe `RC_TABLE` operation in the crate (`RefCountHelper`, `SideMetadataSpec`
         //    atomic ops, `RCArray`) accesses `RC_TABLE` exclusively via `AtomicU8`; the only
         //    non-atomic `RC_TABLE` accessors (`set_relaxed`, `set_line_relaxed`,
@@ -514,17 +524,18 @@ pub(crate) struct MappedBlock<'space> {
 }
 
 impl<'space> MappedBlock<'space> {
-    /// Construct a `MappedBlock<'space>` after the owning `ImmixSpace` has verified chunk
-    /// allocation and mapped side metadata.
+    /// Construct a `MappedBlock<'space>` after the owning `ImmixSpace` has verified space
+    /// membership (`address_in_space`), chunk allocation, and mapped side metadata.
     ///
     /// # Safety
     /// * `!block.is_zero()` and `block.start().is_aligned_to(Block::BYTES)`.
-    /// * `block.chunk()` must be an allocated chunk of an `ImmixSpace` that lives for `'space`
-    ///   with `space.rc_enabled == rc_enabled` (observed via `ChunkMap::is_allocated_checked`'s
-    ///   `Acquire` load pairing with `ChunkMap::set_allocated`'s `Release` store), so all
-    ///   side-metadata tables in `ImmixSpace::side_metadata_specs(rc_enabled)` (plus global
-    ///   `RC_TABLE` when `rc_enabled`, verified in `ImmixSpace::new`) are mapped and initialized
-    ///   for `[block.start(), block.end())` for `'space`.
+    /// * `block` must belong to an allocated chunk genuinely owned by an `ImmixSpace` that lives
+    ///   for `'space` (`space.address_in_space(block.start())` and `space.rc_enabled == rc_enabled`,
+    ///   disambiguating any 4-bit `ChunkState` `space_index` collision and observed via
+    ///   `ChunkMap::is_allocated_checked`'s `Acquire` load pairing with `ChunkMap::set_allocated`'s
+    ///   `Release` store), so all side-metadata tables in `ImmixSpace::side_metadata_specs(rc_enabled)`
+    ///   (plus global `RC_TABLE` when `rc_enabled`, verified in `ImmixSpace::new`) are in-bounds
+    ///   and mapped for allocated blocks in `block.chunk()` for `'space`.
     #[inline(always)]
     pub(super) unsafe fn new_unchecked(block: Block, rc_enabled: bool) -> Self {
         debug_assert!(!block.is_zero() && block.start().is_aligned_to(Block::BYTES));
@@ -546,15 +557,24 @@ impl<'space> MappedBlock<'space> {
     /// Panics if `!self.rc_enabled`.
     #[inline(always)]
     pub(crate) fn rc_table(&self) -> &[[AtomicU8; BYTES_PER_LINE]; LINES_IN_BLOCK] {
+        const _: () = assert!(LINES_IN_BLOCK * BYTES_PER_LINE <= BYTES_IN_PAGE);
         assert!(
             self.rc_enabled,
             "MappedBlock::rc_table requires an RC-enabled ImmixSpace"
         );
+        assert!(
+            crate::util::rc::RC_TABLE.is_mapped(self.block.start())
+                && crate::util::rc::RC_TABLE.is_mapped(self.block.end() - 1usize),
+            "MappedBlock::rc_table requires mapped RC_TABLE for {:?}",
+            self.block
+        );
         // SAFETY:
-        // 1. `MappedBlock<'space>` together with `self.rc_enabled` guarantees `!self.block.is_zero()`,
-        //    `self.block.start()` is aligned to `Block::BYTES` (mapping to `LINES_IN_BLOCK * BYTES_PER_LINE`
-        //    bytes within a single `BYTES_IN_CHUNK` chunk), and global `RC_TABLE` is mapped and
-        //    initialized for `'space` (checked in `ImmixSpace::new`), which outlives `&self`.
+        // 1. `MappedBlock<'space>` together with `self.rc_enabled` and the `is_mapped` assertion
+        //    above guarantees `!self.block.is_zero()`, `self.block.start()` is aligned to
+        //    `Block::BYTES` and in `ImmixSpace` (`address_in_space`, hence strictly within
+        //    `RC_TABLE`'s contiguous bounds), and `RC_TABLE` for `[self.block.start(), self.block.end())`
+        //    (spanning at most two adjacent `MMAPPER` pages since `LINES_IN_BLOCK * BYTES_PER_LINE
+        //    <= BYTES_IN_PAGE`) is mapped and initialized for `'space` (outliving `&self`).
         // 2. Every safe `RC_TABLE` operation in the crate uses `AtomicU8`; the only non-atomic
         //    `RC_TABLE` helpers (`RefCountHelper::{set_relaxed, set_line_relaxed,
         //    object_or_line_is_dead, rc_table_range}`) are `unsafe fn`s whose own `# Safety`
@@ -582,16 +602,25 @@ impl<'space> MappedBlock<'space> {
     /// allocator ownership of `self.block` (e.g. a reusable block popped from `reusable_blocks`).
     #[inline(always)]
     pub(super) unsafe fn line_mark_table(&self) -> &[AtomicU8; LINES_IN_BLOCK] {
+        const _: () = assert!(LINES_IN_BLOCK <= BYTES_IN_PAGE);
         assert!(
             !self.rc_enabled && !super::BLOCK_ONLY,
             "MappedBlock::line_mark_table requires a non-RC line-granularity ImmixSpace"
         );
-        // SAFETY: `MappedBlock<'space>` together with `!self.rc_enabled && !BLOCK_ONLY` guarantees
-        // `!self.block.is_zero()`, `self.block.start()` is aligned to `Block::BYTES` (mapping to
-        // `LINES_IN_BLOCK` bytes in `Line::MARK_TABLE` within a single chunk), and `Line::MARK_TABLE`
-        // is mapped and initialized for `'space` (outliving `&self`). Caller guarantees no
-        // concurrent non-atomic `bzero_metadata`, mixed-width atomic access, or `&[u8]`/`&mut [u8]`
-        // alias on `self.block`'s `Line::MARK_TABLE` bytes for the lifetime of `&self`.
+        assert!(
+            Line::MARK_TABLE.is_mapped(self.block.start())
+                && Line::MARK_TABLE.is_mapped(self.block.end() - 1usize),
+            "MappedBlock::line_mark_table requires mapped Line::MARK_TABLE for {:?}",
+            self.block
+        );
+        // SAFETY: `MappedBlock<'space>` together with `!self.rc_enabled && !BLOCK_ONLY` and the
+        // `is_mapped` assertion above guarantees `!self.block.is_zero()`, `self.block.start()` is
+        // aligned to `Block::BYTES` and in `ImmixSpace` (`address_in_space`, hence strictly within
+        // `Line::MARK_TABLE` bounds), and `Line::MARK_TABLE` for `[self.block.start(), self.block.end())`
+        // (`LINES_IN_BLOCK <= BYTES_IN_PAGE`, at most two adjacent `MMAPPER` pages) is mapped and
+        // initialized for `'space` (outliving `&self`). Caller guarantees no concurrent non-atomic
+        // `bzero_metadata`, mixed-width atomic access, or `&[u8]`/`&mut [u8]` alias on
+        // `self.block`'s `Line::MARK_TABLE` bytes for the lifetime of `&self`.
         unsafe {
             Line::MARK_TABLE.mapped_atomic_bytes_unchecked::<LINES_IN_BLOCK>(self.block.start())
         }

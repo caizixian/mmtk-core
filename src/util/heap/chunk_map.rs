@@ -198,9 +198,13 @@ impl ChunkMap {
         if chunk == Chunk::ZERO {
             return false;
         }
+        let min_meta_address = Self::ALLOC_TABLE.get_starting_address();
         let max_meta_address = Self::ALLOC_TABLE.upper_bound_address_for_contiguous();
         let meta_address = address_to_meta_address(&Self::ALLOC_TABLE, chunk.start());
-        meta_address < max_meta_address && meta_address.is_mapped() && self.is_allocated(chunk)
+        meta_address >= min_meta_address
+            && meta_address < max_meta_address
+            && meta_address.is_mapped()
+            && self.is_allocated(chunk)
     }
 
     /// Get chunk state. Return None if the chunk does not belong to the space.
@@ -218,7 +222,7 @@ impl ChunkMap {
     pub fn all_chunks(&self) -> impl Iterator<Item = Chunk> + '_ {
         let chunk_range = self.chunk_range.lock();
         RegionIterator::<Chunk>::new(chunk_range.start, chunk_range.end)
-            .filter(|c| self.get(*c).is_some())
+            .filter(|c| self.is_allocated_checked(*c))
     }
 
     /// Helper function to create per-chunk processing work packets for each allocated chunks.
