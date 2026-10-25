@@ -9,7 +9,6 @@ use crate::scheduler::gc_work::*;
 use crate::scheduler::GCWork;
 use crate::scheduler::GCWorker;
 use crate::scheduler::WorkBucketStage;
-use crate::scheduler::{SoloStageWork, SoloWorkerToken};
 use crate::vm::ActivePlan;
 use crate::vm::Scanning;
 use crate::vm::VMBinding;
@@ -35,10 +34,9 @@ impl<VM: VMBinding> CalculateForwardingAddress<VM> {
 
 /// Create another round of root scanning work packets to update object references.
 ///
-/// Constructing `UpdateReferences::<VM>::new(plan)` registers [`UpdateReferencesSolo`] as solo
-/// stage work for [`WorkBucketStage::SecondRoots`] so `common.{release, prepare}` runs on a single
-/// worker while all other workers stay gated in `WorkerMonitor` (even if `common.prepare` pushes
-/// packets to already-open `WorkBucketStage::Prepare`).
+/// Constructing `UpdateReferences::<VM>::new(plan)` registers a pre-open hook on
+/// [`WorkBucketStage::SecondRoots`] so `common.{release, prepare}` runs inside `WorkerMonitor`
+/// while all workers are parked right before `WorkBucketStage::SecondRoots` opens.
 pub struct UpdateReferences<VM: VMBinding> {
     p: PhantomData<fn() -> VM>,
 }
@@ -49,76 +47,61 @@ impl<VM: VMBinding> GCWork<VM> for UpdateReferences<VM> {
 
 impl<VM: VMBinding> UpdateReferences<VM> {
     pub fn new(plan: &Lisp2<VM>) -> Self {
-        plan.base().scheduler.set_solo_stage_work(
-            WorkBucketStage::SecondRoots,
-            UpdateReferencesSolo::<VM> { p: PhantomData },
+        plan.base().scheduler.work_buckets[WorkBucketStage::SecondRoots].set_pre_open_hook(
+            |mmtk, tls, parked| {
+                // The following needs to be done right before the second round of root scanning
+                VM::VMScanning::prepare_for_roots_re_scanning();
+                mmtk.state.prepare_for_stack_scanning();
+                // Prepare common and base spaces for the 2nd round of transitive closure
+                {
+                    assert!(
+                        parked.monitor_eq(&mmtk.scheduler.worker_monitor),
+                        "WorkersParked belongs to a different MMTK instance"
+                    );
+                    assert_eq!(
+                        mmtk.get_gc_status(),
+                        crate::global_state::GcStatus::InPause,
+                        "Lisp2 UpdateReferences requires GcStatus::InPause"
+                    );
+                    let _plan_lease = mmtk.enter_plan_mut_lease();
+                    // SAFETY:
+                    // 1. `parked` witnesses `mmtk.scheduler.worker_monitor` with
+                    //    `WorkerMonitor::sync` held and all `0..worker_count` GC workers parked,
+                    //    and `mmtk.get_gc_status() == GcStatus::InPause` guarantees all mutators
+                    //    are stopped at GC safepoints.
+                    // 2. `prepare_for_roots_re_scanning` ran above before acquiring `plan_mut`,
+                    //    `_plan_lease` enforces non-reentrancy on this thread,
+                    //    `common.{release, prepare}` performs only internal space updates without
+                    //    calling `mmtk.get_plan()`, and `plan_mut` is dropped at the end of this
+                    //    block.
+                    let plan_mut = unsafe { mmtk.get_plan_mut() }
+                        .downcast_mut::<Lisp2<VM>>()
+                        .unwrap();
+                    plan_mut.common.release(tls, true);
+                    plan_mut.common.prepare(tls, true);
+                }
+                #[cfg(feature = "extreme_assertions")]
+                mmtk.slot_logger.reset();
+
+                // We do two passes of transitive closures. We clear the live bytes from the first pass.
+                mmtk.scheduler
+                    .worker_group
+                    .get_and_clear_worker_live_bytes();
+
+                let packets = VM::VMActivePlan::mutators()
+                    .map(|mutator| {
+                        Box::new(ScanMutatorRoots::<Lisp2ForwardingGCWorkContext<VM>>::new(
+                            mutator,
+                        )) as _
+                    })
+                    .collect::<Vec<_>>();
+                mmtk.scheduler.work_buckets[WorkBucketStage::SecondRoots].bulk_add(packets);
+
+                mmtk.scheduler.work_buckets[WorkBucketStage::SecondRoots]
+                    .add(ScanVMSpecificRoots::<Lisp2ForwardingGCWorkContext<VM>>::new());
+            },
         );
         Self { p: PhantomData }
-    }
-}
-
-struct UpdateReferencesSolo<VM: VMBinding> {
-    p: PhantomData<fn() -> VM>,
-}
-
-impl<VM: VMBinding> SoloStageWork<VM> for UpdateReferencesSolo<VM> {
-    fn do_solo_work(
-        &mut self,
-        worker: &mut GCWorker<VM>,
-        mmtk: &'static MMTK<VM>,
-        solo: SoloWorkerToken<'_>,
-    ) {
-        assert_eq!(solo.instance_id(), mmtk.id);
-        // The following needs to be done right before the second round of root scanning
-        VM::VMScanning::prepare_for_roots_re_scanning();
-        mmtk.state.prepare_for_stack_scanning();
-        // Prepare common and base spaces for the 2nd round of transitive closure
-        {
-            let _plan_lease = mmtk.enter_plan_mut_lease();
-            // SAFETY:
-            // 1. `solo: SoloWorkerToken<'_>` (`solo.instance_id() == mmtk.id`) is minted solely by
-            //    `WorkerMonitor::enter_solo_packet` after `all_parked` locked all other
-            //    `worker_count - 1` `WorkerPerm`s of `mmtk.id` inside `WorkerMonitor::park_and_wait`
-            //    (gated across spurious Condvar wakeups, with `notify_work_available` calls from
-            //    `common.prepare` pushing into already-open `WorkBucketStage::Prepare` deferred
-            //    until `SoloExecutionGuard` drops after `do_solo_work` returns), and
-            //    `WorkBucketStage::SecondRoots` remains closed.
-            // 2. `WorkBucketStage::SecondRoots` is sequentially opened only after
-            //    `CalculateForwarding` drains while mutators remain paused at GC safepoints.
-            // 3. `prepare_for_roots_re_scanning` ran above before acquiring `plan_mut`,
-            //    `_plan_lease` enforces non-reentrancy on this thread, `common.{release, prepare}`
-            //    performs only internal space updates without calling `mmtk.get_plan()`, and
-            //    `plan_mut` is dropped immediately at the end of this block.
-            let plan_mut = unsafe { mmtk.get_plan_mut() }
-                .downcast_mut::<Lisp2<VM>>()
-                .unwrap();
-            plan_mut.common.release(worker.tls, true);
-            plan_mut.common.prepare(worker.tls, true);
-            let _ = &solo;
-        }
-        #[cfg(feature = "extreme_assertions")]
-        mmtk.slot_logger.reset();
-
-        // We do two passes of transitive closures. We clear the live bytes from the first pass.
-        mmtk.scheduler
-            .worker_group
-            .get_and_clear_worker_live_bytes();
-
-        let tickets = VM::VMActivePlan::mutators()
-            .map(MutatorTicket::from_mut)
-            .collect::<Vec<_>>();
-        let packets = tickets
-            .into_iter()
-            .map(|ticket| {
-                Box::new(ScanMutatorRoots::<Lisp2ForwardingGCWorkContext<VM>>::new(
-                    ticket,
-                )) as _
-            })
-            .collect::<Vec<_>>();
-        mmtk.scheduler.work_buckets[WorkBucketStage::SecondRoots].bulk_add(packets);
-
-        mmtk.scheduler.work_buckets[WorkBucketStage::SecondRoots]
-            .add(ScanVMSpecificRoots::<Lisp2ForwardingGCWorkContext<VM>>::new());
     }
 }
 

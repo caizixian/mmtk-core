@@ -39,6 +39,7 @@ atomic_refcell = "0.1.7"
 atomic-traits = "0.4.0"
 bytemuck = { version = "1.14.0", features = [
     "derive",
+    "extern_crate_alloc",
     "zeroable_maybe_uninit",
 ] }
 cfg-if = "1.0"

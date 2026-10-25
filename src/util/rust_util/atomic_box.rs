@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::OnceLock;
@@ -97,26 +99,30 @@ impl<T> OnceOptionBox<T> {
             at_least_release(order_store),
             at_least_acquire(order_load),
         );
-        match cas_result {
+        let ptr = match cas_result {
             Ok(old_inner) => {
                 debug_assert_eq!(old_inner, std::ptr::null_mut());
-                // SAFETY: `new_inner` came from `Box::into_raw` above and was just published into
-                // `self.inner`, which only ever hands out shared `&T` references until `Drop` has
-                // exclusive `&mut self`.
-                unsafe { &*new_inner }
+                new_inner
             }
             Err(old_inner) => {
-                // SAFETY: `compare_exchange` failed, so `new_inner` was never shared and remains
-                // uniquely owned by this thread as the raw pointer from `Box::into_raw` above.
-                drop(unsafe { Box::from_raw(new_inner) });
                 debug_assert!(!old_inner.is_null());
-                // SAFETY: Because `compare_exchange` expected `null_mut()` and failed with at
-                // least `Acquire` ordering, `old_inner` is the non-null `Box::into_raw` pointer
-                // published by the winning thread with at least `Release` ordering; it remains
-                // valid, initialized, and immutable (aside from interior mutability on `T: Sync`)
-                // for the lifetime of `&self`.
-                unsafe { &*old_inner }
+                old_inner
             }
+        };
+        // SAFETY:
+        // - If `compare_exchange` failed (`ptr != new_inner`), `new_inner` was never shared and
+        //   remains uniquely owned by this thread from `Box::into_raw` above, so `Box::from_raw`
+        //   safely reclaims and drops it.
+        // - `ptr` is either `new_inner` (just published by this thread) or `old_inner` (non-null
+        //   `Box::into_raw` pointer published by the winning thread with at least `Release`
+        //   ordering and observed here with at least `Acquire` ordering). `self.inner` never
+        //   changes or frees that allocation until `Drop::drop(&mut self)`, and only shared `&T`
+        //   references are ever handed out, so `&*ptr` is valid for `&self`'s lifetime.
+        unsafe {
+            if ptr != new_inner {
+                drop(Box::from_raw(new_inner));
+            }
+            &*ptr
         }
     }
 }

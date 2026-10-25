@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use crate::plan::concurrent::global::ConcurrentPlan;
 use crate::plan::concurrent::immix::gc_work::ConcurrentImmixGCWorkContext;
 use crate::plan::concurrent::immix::gc_work::ConcurrentImmixSTWGCWorkContext;
@@ -271,6 +273,20 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
     }
 
     fn on_pause_start(&self, mmtk: &'static MMTK<VM>) {
+        self.on_pause_start_with_mutators(mmtk, None);
+    }
+
+    fn concurrent(&self) -> Option<&dyn ConcurrentPlan<VM = VM>> {
+        Some(self)
+    }
+}
+
+impl<VM: VMBinding> ConcurrentImmix<VM> {
+    pub(in crate::plan) fn on_pause_start_with_mutators(
+        &self,
+        mmtk: &'static MMTK<VM>,
+        stopped_mutators: Option<&mut [&'static mut crate::plan::Mutator<VM>]>,
+    ) {
         use crate::vm::ActivePlan;
         let pause = self.current_pause().unwrap();
         match pause {
@@ -287,8 +303,14 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
             Pause::FinalMark => {
                 debug_assert!(self.concurrent_marking_in_progress());
                 // Flush barrier buffers
-                for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
-                    mutator.barrier.flush();
+                if let Some(mutators) = stopped_mutators {
+                    for mutator in mutators.iter_mut() {
+                        mutator.barrier.flush();
+                    }
+                } else {
+                    for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
+                        mutator.barrier.flush();
+                    }
                 }
                 self.set_concurrent_marking_state(false);
             }
@@ -320,12 +342,6 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
         info!("{:?} start", pause);
     }
 
-    fn concurrent(&self) -> Option<&dyn ConcurrentPlan<VM = VM>> {
-        Some(self)
-    }
-}
-
-impl<VM: VMBinding> ConcurrentImmix<VM> {
     pub fn new(args: CreateGeneralPlanArgs<VM>) -> Self {
         if *args.options.concurrent_immix_disable_concurrent_marking {
             warn!("Option 'concurrent_immix_disable_concurrent_marking' is set to true. Concurrent marking is disabled for ConcurrentImmix. This will make ConcurrentImmix behave exactly like full heap Immix.");

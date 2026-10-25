@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use crate::util::address::Address;
 use crate::util::constants::BYTES_IN_PAGE;
 use crate::util::os::*;
@@ -20,25 +22,38 @@ pub fn mmap(
     strategy: MmapStrategy,
     annotation: &MmapAnnotation<'_>,
 ) -> MmapResult<Address> {
-    let ptr = start.to_mut_ptr();
+    let expected = start.to_mut_ptr();
     let prot = strategy.prot.get_native_flags();
     let flags = strategy.get_posix_mmap_flags(true);
-    wrap_libc_call(
-        // SAFETY: Public `OSMemory::dzmmap` implementation. `MAP_PRIVATE | MAP_ANONYMOUS` with
-        // `fd == -1` and `offset == 0` maps anonymous pages (zero-filled by the kernel on Linux,
-        // or explicitly zeroed by `MacOS::dzmmap` when `strategy.reserve` is true). On Linux and
-        // Android (`linux_common.rs`), `!strategy.replace` passes `MAP_FIXED_NOREPLACE`, which
-        // atomically fails with `EEXIST` rather than overwriting any existing mapping, whereas
-        // `strategy.replace` passes `MAP_FIXED`. On macOS (`macos.rs`), `get_posix_mmap_flags(true)`
-        // unconditionally passes `MAP_FIXED` regardless of `strategy.replace`. Whenever `MAP_FIXED`
-        // is in effect (`strategy.replace == true` or macOS), soundness relies on MMTk callers
-        // restricting `[start, start + size)` to unmapped or MMTk-quarantined/test virtual address
-        // ranges so live Rust stack/heap/code/library mappings are never overwritten (flagged for
-        // Stage-2 `OSMemory` tightening).
-        &|| unsafe { libc::mmap(start.to_mut_ptr(), size, prot, flags, -1, 0) },
-        ptr,
-    )
-    .map_err(|e| MmapError::new(start, size, annotation, e))?;
+    // SAFETY: Public `OSMemory::dzmmap` implementation. `MAP_PRIVATE | MAP_ANONYMOUS` with
+    // `fd == -1` and `offset == 0` maps anonymous pages (zero-filled by the kernel on Linux, or
+    // explicitly zeroed by `MacOS::dzmmap` when `strategy.reserve` is true). When
+    // `!strategy.replace`, `MAP_FIXED` is never passed (`MAP_FIXED_NOREPLACE` is used on
+    // Linux/Android, and non-destructive hint placement is used on macOS with fallback mappings
+    // immediately unmapped below), so existing mappings are never overwritten. When
+    // `strategy.replace` is true (`MAP_FIXED`), callers restrict `[start, start + size)` to
+    // unmapped or MMTk-quarantined/test virtual address ranges.
+    let actual = unsafe { libc::mmap(expected, size, prot, flags, -1, 0) };
+    if actual == libc::MAP_FAILED {
+        return Err(MmapError::new(
+            start,
+            size,
+            annotation,
+            std::io::Error::last_os_error(),
+        ));
+    }
+    if actual != expected {
+        // On platforms without `MAP_FIXED_NOREPLACE` (e.g. macOS when `!strategy.replace`), the
+        // kernel treats `expected` as a placement hint and maps elsewhere if `[start, start + size)`
+        // is already occupied. Unmap that fallback region and report `AlreadyExists`.
+        let _ = munmap(Address::from_mut_ptr(actual), size);
+        return Err(MmapError::new(
+            start,
+            size,
+            annotation,
+            std::io::Error::from(std::io::ErrorKind::AlreadyExists),
+        ));
+    }
     Ok(start)
 }
 
@@ -154,8 +169,7 @@ pub type ProcessIDType = libc::pid_t;
 pub type ThreadIDType = libc::pthread_t;
 
 pub fn get_process_id() -> Result<ProcessIDType> {
-    // SAFETY: `libc::getpid` is async-signal-safe and thread-safe with no preconditions.
-    Ok(unsafe { libc::getpid() })
+    Ok(std::process::id() as ProcessIDType)
 }
 
 pub fn get_thread_id() -> Result<ThreadIDType> {

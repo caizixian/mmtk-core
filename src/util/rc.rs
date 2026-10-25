@@ -1,10 +1,12 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU32, AtomicUsize};
+use std::sync::atomic::AtomicUsize;
 
 use crate::util::linear_scan::Region;
-use crate::util::{metadata::side_metadata::address_to_meta_address, Address};
+use crate::util::Address;
 use crate::{
-    policy::immix::{block::Block, line::Line},
+    policy::immix::line::Line,
     util::{metadata::side_metadata::SideMetadataSpec, ObjectReference},
     vm::*,
 };
@@ -34,22 +36,6 @@ pub const RC_STRADDLE_LINES: SideMetadataSpec =
 pub const RC_TABLE: SideMetadataSpec = crate::util::metadata::side_metadata::spec_defs::RC_TABLE;
 
 static INC_BUFFER_SIZE: AtomicUsize = AtomicUsize::new(0);
-
-static TOTAL_INCS_PACKETS: AtomicU32 = AtomicU32::new(0);
-
-static TOTAL_INCS: AtomicU32 = AtomicU32::new(0);
-static ROOT_INCS: AtomicU32 = AtomicU32::new(0);
-static MATURE_INCS: AtomicU32 = AtomicU32::new(0);
-static NURSERY_INCS: AtomicU32 = AtomicU32::new(0);
-static FAST_NURSERY_INCS: AtomicU32 = AtomicU32::new(0);
-static LOS_INCS: AtomicU32 = AtomicU32::new(0);
-
-static PROMOTED_OBJECTS: AtomicU32 = AtomicU32::new(0);
-static PROMOTED_SCALARS: [AtomicU32; 3] = [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
-static PROMOTED_PRIM_ARRAYS: [AtomicU32; 3] =
-    [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
-static PROMOTED_OBJECT_ARRAYS: [AtomicU32; 3] =
-    [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
 
 /// A zero-sized helper type providing methods to read and update per-object reference count
 /// metadata for LXR's reference counting plan.
@@ -94,24 +80,6 @@ impl<VM: VMBinding> RefCountHelper<VM> {
         RC_TABLE.fetch_update_atomic(o.to_raw_address(), Ordering::Relaxed, Ordering::Relaxed, f)
     }
 
-    /// Returns `true` if object `o`'s reference count has saturated at `MAX_REF_COUNT` (sticky).
-    pub fn is_stuck(&self, o: ObjectReference) -> bool {
-        self.count(o) == MAX_REF_COUNT
-    }
-
-    /// Forces object `o`'s reference count to `MAX_REF_COUNT`, permanently marking it as sticky
-    /// so it is never reclaimed by reference counting.
-    pub fn stick(&self, o: ObjectReference) -> Result<u8, u8> {
-        self.fetch_update(o, |x| {
-            debug_assert!(x <= MAX_REF_COUNT);
-            if x == MAX_REF_COUNT {
-                None
-            } else {
-                Some(MAX_REF_COUNT)
-            }
-        })
-    }
-
     /// Increments object `o`'s reference count by one, leaving it unchanged (saturating) once
     /// it has reached `MAX_REF_COUNT`.
     pub fn inc(&self, o: ObjectReference) -> Result<u8, u8> {
@@ -131,59 +99,9 @@ impl<VM: VMBinding> RefCountHelper<VM> {
         })
     }
 
-    /// Decrements object `o`'s reference count by one, unless it is already zero or has
-    /// saturated at `MAX_REF_COUNT` (sticky), in which case it is left unchanged.
-    pub fn dec(&self, o: ObjectReference) -> Result<u8, u8> {
-        #[cfg(feature = "vo_bit")]
-        debug_assert!(
-            crate::util::metadata::vo_bit::is_vo_bit_set(o),
-            "{o}: VO bit not set",
-        );
-
-        self.fetch_update(o, |x| {
-            debug_assert!(x <= MAX_REF_COUNT);
-            if x == 0 || x == MAX_REF_COUNT
-            /* sticky */
-            {
-                None
-            } else {
-                Some(x - 1)
-            }
-        })
-    }
-
     /// Atomically sets object `o`'s reference count to `count`.
     pub fn set(&self, o: ObjectReference, count: u8) {
         RC_TABLE.store_atomic(o.to_raw_address(), count, Ordering::Relaxed)
-    }
-
-    /// Sets object `o`'s reference count to `count` using a non-atomic store.
-    ///
-    /// # Safety
-    ///
-    /// - `o` must lie within a region whose `RC_TABLE` side metadata is mapped.
-    /// - Because `RC_TABLE` packs multiple 2-bit entries into each metadata byte (`MIN_OBJECT_SIZE`
-    ///   = 4 bytes, 4 entries per byte), no other thread may concurrently read or write (atomically
-    ///   or non-atomically) any `RC_TABLE` entry sharing the metadata byte containing `o`.
-    pub unsafe fn set_relaxed(&self, o: ObjectReference, count: u8) {
-        // SAFETY: Upheld by the caller: `RC_TABLE` metadata for `o` is mapped and no concurrent
-        // atomic or non-atomic access occurs to the metadata byte containing `o`.
-        unsafe { RC_TABLE.store(o.to_raw_address(), count) }
-    }
-
-    /// Sets the reference count entry at `line.start()` to `count` using a non-atomic store.
-    ///
-    /// # Safety
-    ///
-    /// - `line` must lie within a region whose `RC_TABLE` side metadata is mapped.
-    /// - Because `RC_TABLE` packs multiple 2-bit entries into each metadata byte, no other thread
-    ///   may concurrently read or write (atomically or non-atomically) any `RC_TABLE` entry sharing
-    ///   the metadata byte containing `line.start()`.
-    pub unsafe fn set_line_relaxed(&self, line: Line, count: u8) {
-        // SAFETY: Upheld by the caller: `RC_TABLE` metadata for `line.start()` is mapped and no
-        // concurrent atomic or non-atomic access occurs to the metadata byte containing
-        // `line.start()`.
-        unsafe { RC_TABLE.store(line.start(), count) }
     }
 
     /// Returns object `o`'s current reference count.
@@ -196,57 +114,6 @@ impl<VM: VMBinding> RefCountHelper<VM> {
     /// or the start of a straddle line.
     pub fn count_by_address(&self, addr: Address) -> u8 {
         RC_TABLE.load_atomic(addr, Ordering::Relaxed)
-    }
-
-    /// Returns `true` if the RC table entry at `o`'s address is zero. Used for both individual
-    /// objects and line-granularity entries (e.g. straddle line markers), which share the same table.
-    ///
-    /// # Safety
-    /// * `o` must reside in a space whose `RC_TABLE` side metadata is mapped, readable, and
-    ///   initialized.
-    /// * Because this performs a non-atomic [`SideMetadataSpec::load_byte`], no other thread may
-    ///   concurrently write to or atomically modify `RC_TABLE` at `o.to_raw_address()` for the
-    ///   duration of this call, and no live `&mut` reference may alias that metadata byte.
-    pub unsafe fn object_or_line_is_dead(&self, o: ObjectReference) -> bool {
-        // SAFETY: Caller guarantees `RC_TABLE` for `o` is mapped, initialized, and free of
-        // concurrent writes, atomic modifications, or live `&mut` aliases.
-        unsafe { RC_TABLE.load_byte(o.to_raw_address()) == 0 }
-    }
-
-    /// Returns a slice view over the raw RC table memory covering block `b`, reinterpreted as an
-    /// array of `UInt`, allowing the block's reference counts to be scanned in bulk.
-    ///
-    /// # Safety
-    ///
-    /// - `b` must be a valid allocated Immix block whose `RC_TABLE` side metadata range is
-    ///   contiguously mapped, initialized, and aligned to `std::mem::align_of::<UInt>()`, with
-    ///   total metadata byte length divisible by `std::mem::size_of::<UInt>()` (`size_of::<UInt>() > 0`).
-    /// - For the entire lifetime of the returned slice, the `RC_TABLE` side metadata covering `b`
-    ///   must remain mapped and no thread may concurrently mutate (atomically or non-atomically)
-    ///   any byte in that metadata range.
-    pub unsafe fn rc_table_range<UInt: bytemuck::AnyBitPattern>(&self, b: Block) -> &[UInt] {
-        assert!(std::mem::size_of::<UInt>() > 0);
-        debug_assert!({
-            let log_bits_in_uint: usize =
-                (std::mem::size_of::<UInt>() << 3).trailing_zeros() as usize;
-            Block::LOG_BYTES - super::rc::LOG_MIN_OBJECT_SIZE + super::rc::LOG_REF_COUNT_BITS
-                >= log_bits_in_uint
-        });
-        let start_addr = address_to_meta_address(&super::rc::RC_TABLE, b.start());
-        let limit_addr = address_to_meta_address(&super::rc::RC_TABLE, b.end());
-        let byte_len = limit_addr - start_addr;
-        debug_assert!(start_addr.is_aligned_to(std::mem::align_of::<UInt>()));
-        debug_assert_eq!(byte_len % std::mem::size_of::<UInt>(), 0);
-        let len = byte_len / std::mem::size_of::<UInt>();
-        // SAFETY:
-        // - `start_addr` is non-zero and aligned to `align_of::<UInt>()` as required by the caller
-        //   (verified via `debug_assert!` above).
-        // - By caller precondition, the contiguous `RC_TABLE` metadata range `[start_addr, limit_addr)`
-        //   (`len * size_of::<UInt>()` bytes, `<= isize::MAX`) is mapped, initialized, and stays
-        //   mapped without any concurrent atomic or non-atomic writes for the returned slice's
-        //   lifetime.
-        // - `UInt: bytemuck::AnyBitPattern` guarantees every initialized byte pattern is a valid `UInt`.
-        unsafe { std::slice::from_raw_parts(start_addr.to_ptr::<UInt>(), len) }
     }
 
     /// Returns `true` if object `o`'s reference count is zero.
@@ -311,7 +178,6 @@ impl<VM: VMBinding> RefCountHelper<VM> {
     /// Clears the straddle-line and reference-count markers set by `mark_straddle_object` for
     /// every line (other than the first) spanned by object `o`.
     pub fn unmark_straddle_object(&self, o: ObjectReference) {
-        // debug_assert!(crate::args::RC_NURSERY_EVACUATION);
         let size = VM::VMObjectModel::get_current_size(o);
         if size > Line::BYTES {
             let start = o.to_object_start::<VM>();
@@ -332,27 +198,8 @@ impl<VM: VMBinding> RefCountHelper<VM> {
         }
     }
 
-    /// Debug assertion that every `MIN_OBJECT_SIZE` granule within object `o` has a reference
-    /// count of zero, used to verify that a reclaimed object has been fully cleared.
-    pub fn assert_zero_ref_count(&self, o: ObjectReference) {
-        let size = VM::VMObjectModel::get_current_size(o);
-        for i in (0..size).step_by(MIN_OBJECT_SIZE) {
-            let a = o.to_raw_address() + i;
-            assert_eq!(0, self.count_by_address(a));
-        }
-    }
-
-    /// Called when object `o` is promoted to mature space; marks it as a straddle object if it
-    /// spans more than one line, deriving its size from the VM binding.
-    pub fn promote(&self, o: ObjectReference) {
-        let size = o.get_size::<VM>();
-        if size > Line::BYTES {
-            self.mark_straddle_object_with_size(o, size);
-        }
-    }
-
-    /// Same as `promote`, but with the object's size supplied by the caller instead of being
-    /// queried from the VM binding.
+    /// Marks object `o` as a straddle object when promoted to mature space if its supplied `size`
+    /// spans more than one line.
     pub fn promote_with_size(&self, o: ObjectReference, size: usize) {
         if size > Line::BYTES {
             self.mark_straddle_object_with_size(o, size);

@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use crate::util::address::Address;
 use crate::util::os::imp::unix_like::linux_like::linux_common;
 use crate::util::os::imp::unix_like::unix_common;
@@ -25,7 +27,7 @@ impl OSMemory for Android {
         align: usize,
         strategy: MmapStrategy,
         annotation: &MmapAnnotation<'_>,
-    ) -> Result<Address> {
+    ) -> MmapResult<Address> {
         linux_common::dzmmap_anywhere(size, align, strategy, annotation)
     }
 
