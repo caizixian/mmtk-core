@@ -7,7 +7,6 @@ use crate::util::heap::layout::vm_layout::*;
 use crate::util::heap::space_descriptor::{AtomicSpaceDescriptor, SpaceDescriptor};
 use crate::util::int_array_freelist::IntArrayFreeList;
 use crate::util::Address;
-use bytemuck::allocation::zeroed_slice_box;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -33,8 +32,12 @@ impl Map32 {
             shared_discontig_fl_count: AtomicUsize::new(0),
             total_available_discontiguous_chunks: AtomicUsize::new(0),
             finalized: AtomicBool::new(false),
-            // This can be big on 64-bit machines; allocate zeroed pages directly via `alloc_zeroed`.
-            descriptor_map: zeroed_slice_box::<AtomicSpaceDescriptor>(max_chunks),
+            descriptor_map: std::iter::repeat_with(|| {
+                AtomicSpaceDescriptor::new(SpaceDescriptor::UNINITIALIZED)
+            })
+            .take(max_chunks)
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
         }
     }
 }
