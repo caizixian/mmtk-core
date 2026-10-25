@@ -59,9 +59,6 @@ impl IntArrayFreeList {
         assert!(-iafl.head <= iafl.heads);
         iafl
     }
-    pub(crate) fn get_ordinal(&self) -> i32 {
-        -self.head - 1
-    }
 }
 
 #[cfg(test)]

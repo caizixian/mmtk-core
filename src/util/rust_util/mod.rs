@@ -1,7 +1,6 @@
 //! This module works around limitations of the Rust programming language, and provides missing
 //! functionalities that we may expect the Rust programming language and its standard libraries
 //! to provide.
-pub mod atomic_box;
 pub(crate) mod fin;
 pub mod rev_group;
 

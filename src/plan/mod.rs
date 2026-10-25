@@ -74,3 +74,6 @@ pub use nogc::NOGC_CONSTRAINTS;
 pub use pageprotect::PP_CONSTRAINTS;
 pub use semispace::SS_CONSTRAINTS;
 pub use sticky::immix::STICKY_IMMIX_CONSTRAINTS;
+
+#[cfg(all(test, feature = "mock_test", feature = "marksweep_as_nonmoving"))]
+mod mock_test_nonmoving_gc;

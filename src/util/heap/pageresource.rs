@@ -32,23 +32,6 @@ pub trait PageResource<VM: VMBinding>: 'static {
         self.common().accounting.clear_reserved(reserved_pages);
     }
 
-    fn update_zeroing_approach(&self, _nontemporal: bool, concurrent: bool) {
-        debug_assert!(!concurrent || self.common().contiguous);
-        unimplemented!()
-    }
-
-    fn skip_concurrent_zeroing(&self) {
-        unimplemented!()
-    }
-
-    fn trigger_concurrent_zeroing(&self) {
-        unimplemented!()
-    }
-
-    fn concurrent_zeroing(&self) {
-        panic!("This PageResource does not implement concurrent zeroing")
-    }
-
     fn alloc_pages(
         &self,
         space_descriptor: SpaceDescriptor,

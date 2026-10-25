@@ -1,10 +1,10 @@
 use super::global::Lisp2;
 use crate::plan::tracing::{PlanTrace, UnsupportedTrace};
-use crate::plan::Plan;
 use crate::policy::lisp2space::Lisp2Space;
 use crate::policy::lisp2space::{TRACE_KIND_FORWARD, TRACE_KIND_MARK};
 use crate::scheduler::gc_work::*;
 use crate::scheduler::GCWork;
+use crate::scheduler::GCWorkScheduler;
 use crate::scheduler::GCWorker;
 use crate::scheduler::WorkBucketStage;
 use crate::vm::ActivePlan;
@@ -32,9 +32,9 @@ impl<VM: VMBinding> CalculateForwardingAddress<VM> {
 
 /// Create another round of root scanning work packets to update object references.
 ///
-/// Constructing `UpdateReferences::<VM>::new(plan)` registers a pre-open hook on
-/// [`WorkBucketStage::SecondRoots`] so `common.{release, prepare}` runs inside `WorkerMonitor`
-/// while all workers are parked right before `WorkBucketStage::SecondRoots` opens.
+/// [`UpdateReferences::schedule`] registers a pre-open hook on [`WorkBucketStage::SecondRoots`]
+/// and enqueues the marker packet so `common.reprepare_for_forwarding_pass` runs inside
+/// `WorkerMonitor` while all workers are parked right before `WorkBucketStage::SecondRoots` opens.
 pub struct UpdateReferences<VM: VMBinding> {
     p: PhantomData<fn() -> VM>,
 }
@@ -44,8 +44,8 @@ impl<VM: VMBinding> GCWork<VM> for UpdateReferences<VM> {
 }
 
 impl<VM: VMBinding> UpdateReferences<VM> {
-    pub fn new(plan: &Lisp2<VM>) -> Self {
-        plan.base().scheduler.work_buckets[WorkBucketStage::SecondRoots].set_pre_open_hook(
+    pub(super) fn schedule(scheduler: &GCWorkScheduler<VM>) {
+        scheduler.work_buckets[WorkBucketStage::SecondRoots].set_pre_open_hook(
             |mmtk, tls, parked| {
                 // The following needs to be done right before the second round of root scanning
                 VM::VMScanning::prepare_for_roots_re_scanning();
@@ -62,8 +62,7 @@ impl<VM: VMBinding> UpdateReferences<VM> {
                         "Lisp2 UpdateReferences requires GcStatus::InPause"
                     );
                     let plan = mmtk.get_plan().downcast_ref::<Lisp2<VM>>().unwrap();
-                    plan.common.release(tls, true);
-                    plan.common.prepare(tls, true);
+                    plan.common.reprepare_for_forwarding_pass(tls);
                 }
                 #[cfg(feature = "extreme_assertions")]
                 mmtk.slot_logger.reset();
@@ -86,7 +85,7 @@ impl<VM: VMBinding> UpdateReferences<VM> {
                     .add(ScanVMSpecificRoots::<Lisp2ForwardingGCWorkContext<VM>>::new());
             },
         );
-        Self { p: PhantomData }
+        scheduler.work_buckets[WorkBucketStage::SecondRoots].add(Self { p: PhantomData });
     }
 }
 

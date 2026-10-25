@@ -89,20 +89,12 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn process_concurrent_packets_in_pause(&self) {
-        let mut packets = vec![];
-        // Buggy
         let bucket = &self.work_buckets[WorkBucketStage::Concurrent];
         loop {
-            if bucket.is_empty() {
+            let packets = bucket.drain_all_packets();
+            if packets.is_empty() {
                 break;
             }
-            match bucket.get_queue().steal() {
-                Steal::Success(w) => packets.push(w),
-                Steal::Empty => break,
-                Steal::Retry => {}
-            }
-        }
-        if !packets.is_empty() {
             self.work_buckets[WorkBucketStage::STWRCDecsAndSweep].bulk_add(packets);
         }
     }
@@ -192,10 +184,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         self.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<C>::new());
 
         // Prepare global/collectors/mutators
-        self.work_buckets[WorkBucketStage::Prepare].add(Prepare::<C>::new(plan));
+        Prepare::<C>::schedule(self);
 
         // Release global/collectors/mutators
-        self.work_buckets[WorkBucketStage::Release].add(Release::<C>::new(plan));
+        Release::<C>::schedule(self);
 
         // Analysis GC work
         #[cfg(feature = "analysis")]
@@ -507,16 +499,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 }
             }
         }
-    }
-
-    /// Called by workers to get a schedulable work packet.
-    /// Park the worker if there're no available packets.
-    #[allow(dead_code)]
-    pub(crate) fn poll(&self, worker: &mut GCWorker<VM>) -> PollResult<VM> {
-        if let Some(work) = self.poll_schedulable_work(worker) {
-            return Ok(work);
-        }
-        self.poll_slow(worker)
     }
 
     pub(super) fn poll_slow(&self, worker: &mut GCWorker<VM>) -> PollResult<VM> {
@@ -860,5 +842,37 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let a = enable_bucket(WorkBucketStage::Concurrent, true);
         let b = enable_bucket(WorkBucketStage::ConcurrentResumable, false);
         a || b
+    }
+}
+
+#[cfg(all(test, feature = "mock_test"))]
+mod tests {
+    use super::*;
+    use crate::util::test_util::mock_vm::MockVM;
+
+    struct DummyWork;
+
+    impl GCWork<MockVM> for DummyWork {
+        fn do_work(&mut self, _worker: &mut GCWorker<MockVM>, _mmtk: &'static MMTK<MockVM>) {}
+    }
+
+    #[test]
+    fn process_concurrent_packets_in_pause_drains_active_and_deferred_queues() {
+        let scheduler = GCWorkScheduler::<MockVM>::new(1, AffinityKind::OsDefault);
+        let concurrent = &scheduler.work_buckets[WorkBucketStage::Concurrent];
+        concurrent.set_enabled(true);
+
+        // Enqueue into both the active queue and the deferred (inactive) queue, then flip so both
+        // internal `Injector` queues hold pending packets.
+        concurrent.add(DummyWork);
+        concurrent.add_deferred(Box::new(DummyWork));
+        concurrent.flip();
+        concurrent.add_deferred(Box::new(DummyWork));
+
+        scheduler.process_concurrent_packets_in_pause();
+
+        assert!(concurrent.drain_all_packets().is_empty());
+        let moved = scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].drain_all_packets();
+        assert_eq!(moved.len(), 3);
     }
 }

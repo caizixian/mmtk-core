@@ -89,18 +89,16 @@ impl<VM: VMBinding> Plan for Lisp2<VM> {
             .add(StopMutators::<Lisp2GCWorkContext<VM>>::new());
 
         // Prepare global/collectors/mutators
-        scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(Prepare::<Lisp2GCWorkContext<VM>>::new(self));
+        Prepare::<Lisp2GCWorkContext<VM>>::schedule(scheduler);
 
         scheduler.work_buckets[WorkBucketStage::CalculateForwarding]
             .add(CalculateForwardingAddress::<VM>::new(&self.lisp2_space));
         // do another trace to update references
-        scheduler.work_buckets[WorkBucketStage::SecondRoots].add(UpdateReferences::<VM>::new(self));
+        UpdateReferences::<VM>::schedule(scheduler);
         scheduler.work_buckets[WorkBucketStage::Compact].add(Compact::<VM>::new(&self.lisp2_space));
 
         // Release global/collectors/mutators
-        scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<Lisp2GCWorkContext<VM>>::new(self));
+        Release::<Lisp2GCWorkContext<VM>>::schedule(scheduler);
 
         // Reference processing
         if !*self.base().options.no_reference_types {

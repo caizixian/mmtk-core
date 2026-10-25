@@ -35,31 +35,7 @@ use crate::{
 #[cfg(feature = "vo_bit")]
 use crate::util::Address;
 
-struct ChunkSweepLease<'a> {
-    sweeping_chunks: &'a Mutex<HashSet<Chunk>>,
-    chunk: Chunk,
-}
-
-impl<'a> ChunkSweepLease<'a> {
-    fn acquire(sweeping_chunks: &'a Mutex<HashSet<Chunk>>, chunk: Chunk) -> Self {
-        let inserted = sweeping_chunks.lock().unwrap().insert(chunk);
-        assert!(
-            inserted,
-            "Concurrent sweep attempted on MarkSweepSpace chunk {:?}",
-            chunk
-        );
-        Self {
-            sweeping_chunks,
-            chunk,
-        }
-    }
-}
-
-impl Drop for ChunkSweepLease<'_> {
-    fn drop(&mut self) {
-        self.sweeping_chunks.lock().unwrap().remove(&self.chunk);
-    }
-}
+use super::super::ChunkSweepLease;
 
 /// The result for `MarkSweepSpace.acquire_block()`. `MarkSweepSpace` will attempt
 /// to allocate from abandoned blocks first. If none found, it will get a new block
@@ -470,6 +446,33 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
             .filter(|chunk| self.address_in_space(chunk.start()))
     }
 
+    fn prepare_chunk(&self, chunk: Chunk) {
+        debug_assert!(self.chunk_map.get(chunk).unwrap().is_allocated());
+        let mut n_occupied_blocks = 0;
+        chunk
+            .iter_region::<Block>()
+            .filter(|block| block.get_state() != BlockState::Unallocated)
+            .for_each(|block| {
+                block.set_state(BlockState::Unmarked);
+                n_occupied_blocks += 1;
+            });
+        if n_occupied_blocks == 0 {
+            self.chunk_map.set_allocated(chunk, false);
+        } else if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC {
+            side.bzero_metadata(chunk.start(), Chunk::BYTES);
+        }
+    }
+
+    /// Synchronously reset block and object mark state across all allocated chunks while all GC
+    /// workers are parked between two tracing passes in a single STW pause (e.g., `Lisp2`),
+    /// without scheduling async `Prepare` or `Release` packets.
+    #[cfg(feature = "marksweep_as_nonmoving")]
+    pub(crate) fn prepare_for_re_marking(&self) {
+        for chunk in self.iter_allocated_chunks() {
+            self.prepare_chunk(chunk);
+        }
+    }
+
     pub fn prepare(&self, _full_heap: bool) {
         #[cfg(debug_assertions)]
         self.abandoned_in_gc.lock().unwrap().assert_empty();
@@ -665,7 +668,7 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
             0,
             "MarkSweepSpace::sweep_allocated_chunk requires all release packets to finish first"
         );
-        let _lease = ChunkSweepLease::acquire(&self.sweeping_chunks, chunk);
+        let _lease = ChunkSweepLease::acquire(&self.sweeping_chunks, chunk, "MarkSweepSpace");
         assert!(
             self.chunk_map.is_allocated_checked(chunk) && self.chunk_map.get(chunk).is_some(),
             "MarkSweepSpace::sweep_allocated_chunk: chunk {:?} is not allocated in space {}",
@@ -738,20 +741,7 @@ struct PrepareChunkMap {
 impl<VM: VMBinding> GCWork<VM> for PrepareChunkMap {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         with_ms_space(mmtk, self.space_descriptor, |space| {
-            debug_assert!(space.chunk_map.get(self.chunk).unwrap().is_allocated());
-            let mut n_occupied_blocks = 0;
-            self.chunk
-                .iter_region::<Block>()
-                .filter(|block| block.get_state() != BlockState::Unallocated)
-                .for_each(|block| {
-                    block.set_state(BlockState::Unmarked);
-                    n_occupied_blocks += 1;
-                });
-            if n_occupied_blocks == 0 {
-                space.chunk_map.set_allocated(self.chunk, false);
-            } else if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC {
-                side.bzero_metadata(self.chunk.start(), Chunk::BYTES);
-            }
+            space.prepare_chunk(self.chunk);
         });
     }
 }

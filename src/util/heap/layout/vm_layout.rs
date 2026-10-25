@@ -88,12 +88,6 @@ impl VMLayout {
     pub(crate) fn space_shift_64(&self) -> usize {
         self.log_space_extent
     }
-    /// Bitwise mask to isolate a space index in a virtual address.
-    /// We can't express this constant in a 32-bit environment, hence the
-    /// conditional definition.
-    pub(crate) fn space_mask_64(&self) -> usize {
-        ((1 << LOG_MAX_SPACES) - 1) << self.space_shift_64()
-    }
     /// Size of each space in the 64-bit memory layout
     /// We can't express this constant in a 32-bit environment, hence the
     /// conditional definition.

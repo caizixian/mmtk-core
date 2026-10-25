@@ -9,10 +9,47 @@
 
 // TODO: we should extract the code about mark sweep, and make both implementation use the same mark sweep code.
 
-// We will only use one of the two mark sweep implementations, depending on the enabled feature.
-#![allow(dead_code)]
+use std::collections::HashSet;
+use std::sync::Mutex;
+
+use crate::util::heap::chunk_map::Chunk;
+
+/// RAII lease ensuring at most one GC worker sweeps a given `chunk` in a mark-sweep space.
+pub(super) struct ChunkSweepLease<'a> {
+    sweeping_chunks: &'a Mutex<HashSet<Chunk>>,
+    chunk: Chunk,
+}
+
+impl<'a> ChunkSweepLease<'a> {
+    pub(super) fn acquire(
+        sweeping_chunks: &'a Mutex<HashSet<Chunk>>,
+        chunk: Chunk,
+        space_name: &'static str,
+    ) -> Self {
+        let inserted = sweeping_chunks.lock().unwrap().insert(chunk);
+        assert!(
+            inserted,
+            "Concurrent sweep attempted on {space_name} chunk {chunk:?}"
+        );
+        Self {
+            sweeping_chunks,
+            chunk,
+        }
+    }
+}
+
+impl Drop for ChunkSweepLease<'_> {
+    fn drop(&mut self) {
+        self.sweeping_chunks.lock().unwrap().remove(&self.chunk);
+    }
+}
 
 /// Malloc mark sweep. This uses `MallocSpace` and `MallocAllocator`.
+#[cfg_attr(not(feature = "malloc_mark_sweep"), allow(dead_code))]
 pub(crate) mod malloc_ms;
 /// Native mark sweep. This uses `MarkSweepSpace` and `FreeListAllocator`.
+#[cfg_attr(
+    all(feature = "malloc_mark_sweep", not(feature = "marksweep_as_nonmoving")),
+    allow(dead_code)
+)]
 pub(crate) mod native_ms;

@@ -79,40 +79,84 @@ pub fn create_plan<VM: VMBinding>(
     args: CreateGeneralPlanArgs<VM>,
 ) -> Box<std::cell::UnsafeCell<dyn Plan<VM = VM>>> {
     use std::cell::UnsafeCell;
-    match plan {
-        PlanSelector::NoGC => Box::new(UnsafeCell::new(crate::plan::nogc::NoGC::new(args)))
-            as Box<UnsafeCell<dyn Plan<VM = VM>>>,
-        PlanSelector::SemiSpace => Box::new(UnsafeCell::new(
-            crate::plan::semispace::SemiSpace::new(args),
-        )) as Box<UnsafeCell<dyn Plan<VM = VM>>>,
-        PlanSelector::GenCopy => Box::new(UnsafeCell::new(
-            crate::plan::generational::copying::GenCopy::new(args),
-        )) as Box<UnsafeCell<dyn Plan<VM = VM>>>,
-        PlanSelector::GenImmix => Box::new(UnsafeCell::new(
-            crate::plan::generational::immix::GenImmix::new(args),
-        )) as Box<UnsafeCell<dyn Plan<VM = VM>>>,
-        PlanSelector::MarkSweep => Box::new(UnsafeCell::new(
-            crate::plan::marksweep::MarkSweep::new(args),
-        )) as Box<UnsafeCell<dyn Plan<VM = VM>>>,
-        PlanSelector::Immix => Box::new(UnsafeCell::new(crate::plan::immix::Immix::new(args)))
-            as Box<UnsafeCell<dyn Plan<VM = VM>>>,
-        PlanSelector::PageProtect => Box::new(UnsafeCell::new(
-            crate::plan::pageprotect::PageProtect::new(args),
-        )) as Box<UnsafeCell<dyn Plan<VM = VM>>>,
-        PlanSelector::Lisp2 => Box::new(UnsafeCell::new(
-            crate::plan::markcompact::lisp2::Lisp2::new(args),
-        )) as Box<UnsafeCell<dyn Plan<VM = VM>>>,
-        PlanSelector::StickyImmix => Box::new(UnsafeCell::new(
-            crate::plan::sticky::immix::StickyImmix::new(args),
-        )) as Box<UnsafeCell<dyn Plan<VM = VM>>>,
-        PlanSelector::LXR => crate::plan::lxr::LXR::new(args) as Box<UnsafeCell<dyn Plan<VM = VM>>>,
-        PlanSelector::ConcurrentImmix => Box::new(UnsafeCell::new(
-            crate::plan::concurrent::immix::ConcurrentImmix::new(args),
-        )) as Box<UnsafeCell<dyn Plan<VM = VM>>>,
-        PlanSelector::OVC => Box::new(UnsafeCell::new(crate::plan::markcompact::ovc::OVC::new(
-            args,
-        ))) as Box<UnsafeCell<dyn Plan<VM = VM>>>,
+    fn box_plan<VM: VMBinding, P: Plan<VM = VM>>(plan: P) -> Box<UnsafeCell<dyn Plan<VM = VM>>> {
+        Box::new(UnsafeCell::new(plan))
     }
+    match plan {
+        PlanSelector::NoGC => box_plan(crate::plan::nogc::NoGC::new(args)),
+        PlanSelector::SemiSpace => box_plan(crate::plan::semispace::SemiSpace::new(args)),
+        PlanSelector::GenCopy => box_plan(crate::plan::generational::copying::GenCopy::new(args)),
+        PlanSelector::GenImmix => box_plan(crate::plan::generational::immix::GenImmix::new(args)),
+        PlanSelector::MarkSweep => box_plan(crate::plan::marksweep::MarkSweep::new(args)),
+        PlanSelector::Immix => box_plan(crate::plan::immix::Immix::new(args)),
+        PlanSelector::PageProtect => box_plan(crate::plan::pageprotect::PageProtect::new(args)),
+        PlanSelector::Lisp2 => box_plan(crate::plan::markcompact::lisp2::Lisp2::new(args)),
+        PlanSelector::StickyImmix => box_plan(crate::plan::sticky::immix::StickyImmix::new(args)),
+        PlanSelector::LXR => crate::plan::lxr::LXR::new(args),
+        PlanSelector::ConcurrentImmix => {
+            box_plan(crate::plan::concurrent::immix::ConcurrentImmix::new(args))
+        }
+        PlanSelector::OVC => box_plan(crate::plan::markcompact::ovc::OVC::new(args)),
+    }
+}
+
+macro_rules! downcast_plan {
+    ($plan:expr, $ty:ty) => {
+        $plan.downcast_ref::<$ty>().unwrap()
+    };
+}
+
+macro_rules! with_concrete_plan {
+    ($mmtk:expr, |$p:ident| $body:expr) => {{
+        let plan = $mmtk.get_plan();
+        match *$mmtk.options.plan {
+            PlanSelector::NoGC => unreachable!("GC triggered in nogc"),
+            PlanSelector::SemiSpace => {
+                let $p = downcast_plan!(plan, crate::plan::semispace::SemiSpace<VM>);
+                $body
+            }
+            PlanSelector::GenCopy => {
+                let $p = downcast_plan!(plan, crate::plan::generational::copying::GenCopy<VM>);
+                $body
+            }
+            PlanSelector::GenImmix => {
+                let $p = downcast_plan!(plan, crate::plan::generational::immix::GenImmix<VM>);
+                $body
+            }
+            PlanSelector::MarkSweep => {
+                let $p = downcast_plan!(plan, crate::plan::marksweep::MarkSweep<VM>);
+                $body
+            }
+            PlanSelector::Immix => {
+                let $p = downcast_plan!(plan, crate::plan::immix::Immix<VM>);
+                $body
+            }
+            PlanSelector::PageProtect => {
+                let $p = downcast_plan!(plan, crate::plan::pageprotect::PageProtect<VM>);
+                $body
+            }
+            PlanSelector::Lisp2 => {
+                let $p = downcast_plan!(plan, crate::plan::markcompact::lisp2::Lisp2<VM>);
+                $body
+            }
+            PlanSelector::StickyImmix => {
+                let $p = downcast_plan!(plan, crate::plan::sticky::immix::StickyImmix<VM>);
+                $body
+            }
+            PlanSelector::LXR => {
+                let $p = downcast_plan!(plan, crate::plan::lxr::LXR<VM>);
+                $body
+            }
+            PlanSelector::ConcurrentImmix => {
+                let $p = downcast_plan!(plan, crate::plan::concurrent::immix::ConcurrentImmix<VM>);
+                $body
+            }
+            PlanSelector::OVC => {
+                let $p = downcast_plan!(plan, crate::plan::markcompact::ovc::OVC<VM>);
+                $body
+            }
+        }
+    }};
 }
 
 /// Run `Plan::on_pause_start` while reusing any already-borrowed `&'static mut Mutator`s from
@@ -157,54 +201,7 @@ pub(crate) fn prepare_global<VM: VMBinding>(
     parked: &mut WorkersParked<'_>,
 ) {
     assert_stw_parked(mmtk, parked);
-    let plan = mmtk.get_plan();
-    match *mmtk.options.plan {
-        PlanSelector::NoGC => unreachable!("GC triggered in nogc"),
-        PlanSelector::SemiSpace => plan
-            .downcast_ref::<crate::plan::semispace::SemiSpace<VM>>()
-            .unwrap()
-            .prepare_shared(tls),
-        PlanSelector::GenCopy => plan
-            .downcast_ref::<crate::plan::generational::copying::GenCopy<VM>>()
-            .unwrap()
-            .prepare_shared(tls),
-        PlanSelector::GenImmix => plan
-            .downcast_ref::<crate::plan::generational::immix::GenImmix<VM>>()
-            .unwrap()
-            .prepare_shared(tls),
-        PlanSelector::MarkSweep => plan
-            .downcast_ref::<crate::plan::marksweep::MarkSweep<VM>>()
-            .unwrap()
-            .prepare_shared(tls),
-        PlanSelector::Immix => plan
-            .downcast_ref::<crate::plan::immix::Immix<VM>>()
-            .unwrap()
-            .prepare_inner(tls, UnlogBitsOperation::NoOp),
-        PlanSelector::PageProtect => plan
-            .downcast_ref::<crate::plan::pageprotect::PageProtect<VM>>()
-            .unwrap()
-            .prepare_shared(tls),
-        PlanSelector::Lisp2 => plan
-            .downcast_ref::<crate::plan::markcompact::lisp2::Lisp2<VM>>()
-            .unwrap()
-            .prepare_shared(tls),
-        PlanSelector::StickyImmix => plan
-            .downcast_ref::<crate::plan::sticky::immix::StickyImmix<VM>>()
-            .unwrap()
-            .prepare_shared(tls),
-        PlanSelector::LXR => plan
-            .downcast_ref::<crate::plan::lxr::LXR<VM>>()
-            .unwrap()
-            .prepare_shared(tls),
-        PlanSelector::ConcurrentImmix => plan
-            .downcast_ref::<crate::plan::concurrent::immix::ConcurrentImmix<VM>>()
-            .unwrap()
-            .prepare_shared(tls),
-        PlanSelector::OVC => plan
-            .downcast_ref::<crate::plan::markcompact::ovc::OVC<VM>>()
-            .unwrap()
-            .prepare_shared(tls),
-    }
+    with_concrete_plan!(mmtk, |p| p.prepare_shared(tls));
 }
 
 /// Execute plan release during `WorkBucketStage::Release`'s pre-open hook while all mutators are
@@ -215,54 +212,7 @@ pub(crate) fn release_global<VM: VMBinding>(
     parked: &mut WorkersParked<'_>,
 ) {
     assert_stw_parked(mmtk, parked);
-    let plan = mmtk.get_plan();
-    match *mmtk.options.plan {
-        PlanSelector::NoGC => unreachable!("GC triggered in nogc"),
-        PlanSelector::SemiSpace => plan
-            .downcast_ref::<crate::plan::semispace::SemiSpace<VM>>()
-            .unwrap()
-            .release_shared(tls),
-        PlanSelector::GenCopy => plan
-            .downcast_ref::<crate::plan::generational::copying::GenCopy<VM>>()
-            .unwrap()
-            .release_shared(tls),
-        PlanSelector::GenImmix => plan
-            .downcast_ref::<crate::plan::generational::immix::GenImmix<VM>>()
-            .unwrap()
-            .release_shared(tls),
-        PlanSelector::MarkSweep => plan
-            .downcast_ref::<crate::plan::marksweep::MarkSweep<VM>>()
-            .unwrap()
-            .release_shared(tls),
-        PlanSelector::Immix => plan
-            .downcast_ref::<crate::plan::immix::Immix<VM>>()
-            .unwrap()
-            .release_inner(tls, UnlogBitsOperation::NoOp),
-        PlanSelector::PageProtect => plan
-            .downcast_ref::<crate::plan::pageprotect::PageProtect<VM>>()
-            .unwrap()
-            .release_shared(tls),
-        PlanSelector::Lisp2 => plan
-            .downcast_ref::<crate::plan::markcompact::lisp2::Lisp2<VM>>()
-            .unwrap()
-            .release_shared(tls),
-        PlanSelector::StickyImmix => plan
-            .downcast_ref::<crate::plan::sticky::immix::StickyImmix<VM>>()
-            .unwrap()
-            .release_shared(tls),
-        PlanSelector::LXR => plan
-            .downcast_ref::<crate::plan::lxr::LXR<VM>>()
-            .unwrap()
-            .release_shared(tls),
-        PlanSelector::ConcurrentImmix => plan
-            .downcast_ref::<crate::plan::concurrent::immix::ConcurrentImmix<VM>>()
-            .unwrap()
-            .release_shared(tls),
-        PlanSelector::OVC => plan
-            .downcast_ref::<crate::plan::markcompact::ovc::OVC<VM>>()
-            .unwrap()
-            .release_shared(tls),
-    }
+    with_concrete_plan!(mmtk, |p| p.release_shared(tls));
 }
 
 /// Execute end-of-pause `Plan` bookkeeping at the end of `GCWorkScheduler::on_gc_finished` while
@@ -301,34 +251,29 @@ fn finish_plan_pause<VM: VMBinding>(
             );
             true
         }
-        PlanSelector::MarkSweep => plan
-            .downcast_ref::<crate::plan::marksweep::MarkSweep<VM>>()
-            .unwrap()
-            .finish_pause(tls),
-        PlanSelector::Immix => plan
-            .downcast_ref::<crate::plan::immix::Immix<VM>>()
-            .unwrap()
-            .finish_pause(tls),
-        PlanSelector::GenCopy => plan
-            .downcast_ref::<crate::plan::generational::copying::GenCopy<VM>>()
-            .unwrap()
-            .finish_pause(tls, next_gc_full_heap),
-        PlanSelector::GenImmix => plan
-            .downcast_ref::<crate::plan::generational::immix::GenImmix<VM>>()
-            .unwrap()
-            .finish_pause(tls, next_gc_full_heap),
-        PlanSelector::StickyImmix => plan
-            .downcast_ref::<crate::plan::sticky::immix::StickyImmix<VM>>()
-            .unwrap()
-            .finish_pause(tls, next_gc_full_heap),
-        PlanSelector::ConcurrentImmix => plan
-            .downcast_ref::<crate::plan::concurrent::immix::ConcurrentImmix<VM>>()
-            .unwrap()
-            .finish_pause(mmtk),
-        PlanSelector::LXR => plan
-            .downcast_ref::<crate::plan::lxr::LXR<VM>>()
-            .unwrap()
-            .finish_pause(tls),
+        PlanSelector::MarkSweep => {
+            downcast_plan!(plan, crate::plan::marksweep::MarkSweep<VM>).finish_pause(tls)
+        }
+        PlanSelector::Immix => {
+            downcast_plan!(plan, crate::plan::immix::Immix<VM>).finish_pause(tls)
+        }
+        PlanSelector::GenCopy => {
+            downcast_plan!(plan, crate::plan::generational::copying::GenCopy<VM>)
+                .finish_pause(tls, next_gc_full_heap)
+        }
+        PlanSelector::GenImmix => {
+            downcast_plan!(plan, crate::plan::generational::immix::GenImmix<VM>)
+                .finish_pause(tls, next_gc_full_heap)
+        }
+        PlanSelector::StickyImmix => {
+            downcast_plan!(plan, crate::plan::sticky::immix::StickyImmix<VM>)
+                .finish_pause(tls, next_gc_full_heap)
+        }
+        PlanSelector::ConcurrentImmix => {
+            downcast_plan!(plan, crate::plan::concurrent::immix::ConcurrentImmix<VM>)
+                .finish_pause(mmtk)
+        }
+        PlanSelector::LXR => downcast_plan!(plan, crate::plan::lxr::LXR<VM>).finish_pause(tls),
     }
 }
 
@@ -1031,6 +976,27 @@ impl<VM: VMBinding> CommonPlan<VM> {
         self.base.release(tls, full_heap)
     }
 
+    /// Re-prepare common and base spaces between Pass 1 (marking) and Pass 2 (forwarding) of a
+    /// two-pass mark-compact STW pause (`Lisp2` `SecondRoots`), while all workers are parked inside
+    /// `WorkerMonitor` without running mutator release packets.
+    pub(in crate::plan) fn reprepare_for_forwarding_pass(&self, tls: VMWorkerThread) {
+        self.immortal.release();
+        self.los.release(true);
+        #[cfg(not(feature = "marksweep_as_nonmoving"))]
+        self.release_nonmoving_space(true);
+        self.base.release(tls, true);
+
+        self.immortal.prepare();
+        self.los.prepare(true);
+        #[cfg(feature = "marksweep_as_nonmoving")]
+        if *self.base.options.plan != PlanSelector::LXR {
+            self.nonmoving.prepare_for_re_marking();
+        }
+        #[cfg(not(feature = "marksweep_as_nonmoving"))]
+        self.prepare_nonmoving_space(true);
+        self.base.prepare(tls, true);
+    }
+
     pub(crate) fn schedule_unlog_bits_op(&self, unlog_bits_op: UnlogBitsOperation) {
         if VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.is_on_side() {
             match unlog_bits_op {
@@ -1050,12 +1016,18 @@ impl<VM: VMBinding> CommonPlan<VM> {
     pub fn clear_side_log_bits(&self) {
         self.immortal.clear_side_log_bits();
         self.los.clear_side_log_bits();
+        if *self.base.options.plan != PlanSelector::LXR {
+            self.nonmoving.clear_side_log_bits();
+        }
         self.base.clear_side_log_bits();
     }
 
     pub fn set_side_log_bits(&self) {
         self.immortal.set_side_log_bits();
         self.los.set_side_log_bits();
+        if *self.base.options.plan != PlanSelector::LXR {
+            self.nonmoving.set_side_log_bits();
+        }
         self.base.set_side_log_bits();
     }
 
@@ -1130,7 +1102,7 @@ impl<VM: VMBinding> CommonPlan<VM> {
             if #[cfg(feature = "immortal_as_nonmoving")] {
                 self.nonmoving.release();
             } else if #[cfg(feature = "marksweep_as_nonmoving")] {
-                self.nonmoving.prepare(_full_heap);
+                self.nonmoving.release();
             } else {
                 self.nonmoving.release(_full_heap, UnlogBitsOperation::NoOp);
             }

@@ -1,9 +1,5 @@
 //! Finite bounded index `Fin<N>` (`0 <= val < N`) for zero-`unsafe` bounds-check-free array
-//! indexing (`BP 3.1`).
-//!
-//! Consumed by Wave 2B tracks (`s2-ms` free-list size classes, `s2-immix-malloc`, and `s2-runtime`
-//! `SFTMap` / `WorkBucketStage` tables).
-#![allow(dead_code)]
+//! indexing.
 
 use core::ops::{Index, IndexMut};
 

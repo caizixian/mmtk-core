@@ -24,7 +24,7 @@ type BarrierType<VM> = SATBBarrier<BarrierSemanticsType<VM>>;
 
 pub fn concurrent_immix_mutator_release<VM: VMBinding>(
     mutator: &mut Mutator<VM>,
-    _tls: VMWorkerThread,
+    tls: VMWorkerThread,
 ) {
     // Release is not scheduled for initial mark pause
     let current_pause = mutator.plan.concurrent().unwrap().current_pause().unwrap();
@@ -33,6 +33,7 @@ pub fn concurrent_immix_mutator_release<VM: VMBinding>(
     let immix_allocator = mutator
         .allocator_downcast_mut_for_semantic::<ImmixAllocator<VM>>(AllocationSemantics::Default);
     immix_allocator.reset();
+    crate::plan::mutator_context::common_release_func(mutator, tls);
 
     // Deactivate SATB
     if current_pause == Pause::Full || current_pause == Pause::FinalMark {
@@ -47,7 +48,7 @@ pub fn concurrent_immix_mutator_release<VM: VMBinding>(
 
 pub fn concurent_immix_mutator_prepare<VM: VMBinding>(
     mutator: &mut Mutator<VM>,
-    _tls: VMWorkerThread,
+    tls: VMWorkerThread,
 ) {
     // Prepare is not scheduled for final mark pause
     let current_pause = mutator.plan.concurrent().unwrap().current_pause().unwrap();
@@ -56,6 +57,7 @@ pub fn concurent_immix_mutator_prepare<VM: VMBinding>(
     let immix_allocator = mutator
         .allocator_downcast_mut_for_semantic::<ImmixAllocator<VM>>(AllocationSemantics::Default);
     immix_allocator.reset();
+    crate::plan::mutator_context::common_prepare_func(mutator, tls);
 
     // Activate SATB
     if current_pause == Pause::InitialMark {

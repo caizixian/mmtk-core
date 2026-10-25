@@ -29,13 +29,7 @@ struct MonotonePageResourceSync {
 }
 
 pub enum MonotonePageResourceConditional {
-    Contiguous {
-        start: Address,
-        /// Current frontier of zeroing, in a separate zeroing thread.
-        zeroing_cursor: Address,
-        /// Current limit of zeroing. If zeroingCursor < zeroingSentinel, zeroing is still happening.
-        zeroing_sentinel: Address,
-    },
+    Contiguous { start: Address },
     Discontiguous,
 }
 
@@ -158,11 +152,7 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
                 cursor: start,
                 current_chunk: chunk_align_down(start),
                 sentinel,
-                conditional: MonotonePageResourceConditional::Contiguous {
-                    start,
-                    zeroing_cursor: sentinel,
-                    zeroing_sentinel: start,
-                },
+                conditional: MonotonePageResourceConditional::Contiguous { start },
             }),
             _p: PhantomData,
         }
@@ -268,27 +258,33 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
         }
     }
 
-    /// Iterate over all contiguous memory regions in this space.
-    /// For contiguous space, this iterator yields a single region covering the allocated range.
+    /// Iterate over all non-empty contiguous memory regions allocated in this space.
+    /// For contiguous space, this iterator yields at most one region covering the allocated range.
     pub fn iterate_allocated_regions(&self) -> impl Iterator<Item = (Address, usize)> + '_ {
         let sync = self.sync.lock().unwrap();
         let cursor = sync.cursor;
+        let current_chunk = sync.current_chunk;
         let regions: Vec<(Address, usize)> = match sync.conditional {
             MonotonePageResourceConditional::Contiguous { start, .. } => {
-                let end = cursor.align_up(BYTES_IN_CHUNK);
-                vec![(start, end - start)]
+                if cursor <= start {
+                    Vec::new()
+                } else {
+                    let end = cursor.align_up(BYTES_IN_CHUNK);
+                    vec![(start, end - start)]
+                }
             }
             MonotonePageResourceConditional::Discontiguous => self
                 .common
                 .discontiguous_region_ranges()
                 .into_iter()
-                .map(|(start, region_size)| {
-                    let size = if start < cursor && cursor < start + region_size {
+                .filter_map(|(start, region_size)| {
+                    let size = if start == current_chunk {
+                        debug_assert!(cursor >= start && cursor <= start + region_size);
                         cursor - start
                     } else {
                         region_size
                     };
-                    (start, size)
+                    (size > 0).then_some((start, size))
                 })
                 .collect(),
         };

@@ -3,47 +3,35 @@
 //! constants and data structures (such as [`Slab`]) are larger than `i32::MAX`.  For this reason,
 //! this module is only available on 64-bit machines.
 use super::MapState;
+use crate::util::conversions;
 use crate::util::heap::layout::mmapper::csm::{ChunkRange, MapStateStorage};
 use crate::util::heap::layout::vm_layout::*;
 use crate::util::os::MmapResult;
-use crate::util::rust_util::atomic_box::OnceOptionBox;
 use crate::util::rust_util::rev_group::RevisitableGroupByForIterator;
 use crate::util::Address;
 use atomic::{Atomic, Ordering};
-use bytemuck::allocation::zeroed_vec;
 use std::fmt;
+use std::sync::OnceLock;
 
 /// Logarithm of the address space size that [`TwoLevelStateStorage`] is able to handle.
 /// This is enough for ARM64, x86_64 and some other architectures.
 /// Feel free to increase it if we plan to support larger address spaces.
 const LOG_MAPPABLE_BYTES: usize = 48;
-/// Address space size a user-space program is allowed to use.
-const MAPPABLE_BYTES: usize = 1 << LOG_MAPPABLE_BYTES;
-/// The limit of mappable address
-// SAFETY: `MAPPABLE_BYTES` (`1 << 48` on 64-bit targets) fits in `usize` and is used purely as an
-// exclusive upper-bound virtual address constant for `ChunkRange::is_within_limit` assertions;
-// `Address::from_usize` wraps the raw integer without dereferencing memory.
-const MAPPABLE_ADDRESS_LIMIT: Address = unsafe { Address::from_usize(MAPPABLE_BYTES) };
+/// Total number of chunks covered by [`LOG_MAPPABLE_BYTES`].
+const MAPPABLE_CHUNKS: usize = 1 << (LOG_MAPPABLE_BYTES - LOG_BYTES_IN_CHUNK);
 
 /// Log number of bytes per slab. For a two-level array, it is advisable to choose the arithmetic
-/// mean of [`LOG_MAPPABLE_BYTES`] and [`LOG_BYTES_IN_CHUNK`] in order to make [`MMAP_SLAB_BYTES`]
-/// the geometric mean of [`MAPPABLE_BYTES`] and [`BYTES_IN_CHUNK`].  This will balance the array
-/// size of [`TwoLevelStateStorage::slabs`] and [`Slab`].
+/// mean of [`LOG_MAPPABLE_BYTES`] and [`LOG_BYTES_IN_CHUNK`] in order to balance the array size
+/// of [`TwoLevelStateStorage::slabs`] and [`Slab`].
 ///
 /// TODO: Use `usize::midpoint` after bumping MSRV to 1.85
 const LOG_MMAP_SLAB_BYTES: usize =
     LOG_BYTES_IN_CHUNK + (LOG_MAPPABLE_BYTES - LOG_BYTES_IN_CHUNK) / 2;
-/// Number of bytes per slab.
-const MMAP_SLAB_BYTES: usize = 1 << LOG_MMAP_SLAB_BYTES;
 
 /// Log number of chunks per slab.
 const LOG_MMAP_CHUNKS_PER_SLAB: usize = LOG_MMAP_SLAB_BYTES - LOG_BYTES_IN_CHUNK;
 /// Number of chunks per slab.
 const MMAP_CHUNKS_PER_SLAB: usize = 1 << LOG_MMAP_CHUNKS_PER_SLAB;
-
-/// Mask for getting in-slab bits from an address.
-/// Invert this to get out-of-slab bits.
-const MMAP_SLAB_MASK: usize = (1 << LOG_MMAP_SLAB_BYTES) - 1;
 
 /// Logarithm of maximum number of slabs.
 const LOG_MAX_SLABS: usize = LOG_MAPPABLE_BYTES - LOG_MMAP_SLAB_BYTES;
@@ -57,12 +45,12 @@ type Slab = [Atomic<MapState>; MMAP_CHUNKS_PER_SLAB];
 ///
 /// It is essentially a lazily initialized array of [`Atomic<MapState>`].  Because it is designed to
 /// govern a large address range, and the array is sparse, we use a two-level design.  The higher
-/// level holds a vector of slabs, and each slab holds an array of [`Atomic<MapState>`].  Each slab
-/// governs an aligned region of [`MMAP_CHUNKS_PER_SLAB`] chunks.  Slabs are lazily created when the
-/// user intends to write into one of its `MapState`.
+/// level holds a boxed slice of [`OnceLock<Box<Slab>>`], and each slab holds an array of
+/// [`Atomic<MapState>`].  Each slab governs an aligned region of [`MMAP_CHUNKS_PER_SLAB`] chunks.
+/// Slabs are lazily created when the user intends to write into one of its `MapState`.
 pub struct TwoLevelStateStorage {
-    /// Slabs
-    slabs: Vec<OnceOptionBox<Slab>>,
+    /// Lazily initialized slabs.
+    slabs: Box<[OnceLock<Box<Slab>>]>,
 }
 
 assert_impl_all!(Slab: Send, Sync);
@@ -80,10 +68,11 @@ impl MapStateStorage for TwoLevelStateStorage {
     }
 
     fn get_state(&self, chunk: Address) -> MapState {
-        let Some(slab) = self.slab_table(chunk) else {
+        let chunk_idx = chunk.chunk_index();
+        let Some(slab) = self.slab_table(chunk_idx) else {
             return MapState::Unmapped;
         };
-        slab[Self::in_slab_index(chunk)].load(Ordering::Relaxed)
+        slab[Self::in_slab_index(chunk_idx)].load(Ordering::Relaxed)
     }
 
     fn bulk_set_state(&self, range: ChunkRange, state: MapState) {
@@ -92,9 +81,9 @@ impl MapStateStorage for TwoLevelStateStorage {
         }
 
         if range.is_single_chunk() {
-            let addr = range.start;
-            let slab = self.get_or_allocate_slab_table(addr);
-            slab[Self::in_slab_index(addr)].store(state, Ordering::Relaxed);
+            let chunk_idx = range.start_chunk;
+            let slab = self.get_or_allocate_slab_table(chunk_idx);
+            slab[Self::in_slab_index(chunk_idx)].store(state, Ordering::Relaxed);
             return;
         }
 
@@ -114,9 +103,9 @@ impl MapStateStorage for TwoLevelStateStorage {
         }
 
         if range.is_single_chunk() {
-            let addr = range.start;
-            let slab = self.get_or_allocate_slab_table(addr);
-            let slot = &slab[Self::in_slab_index(addr)];
+            let chunk_idx = range.start_chunk;
+            let slab = self.get_or_allocate_slab_table(chunk_idx);
+            let slot = &slab[Self::in_slab_index(chunk_idx)];
 
             let old_state = slot.load(Ordering::Relaxed);
             if let Some(new_state) = update_fn(range, old_state)? {
@@ -132,9 +121,7 @@ impl MapStateStorage for TwoLevelStateStorage {
             slice_indices.push(slice);
         });
 
-        let start = range.start;
-        // Chunk index from `start`.
-        let mut start_index: usize = 0usize;
+        let mut group_start = range.start_chunk;
 
         for group in slice_indices
             .iter()
@@ -143,10 +130,8 @@ impl MapStateStorage for TwoLevelStateStorage {
             .revisitable_group_by(|s| s.load(Ordering::Relaxed))
         {
             let state = group.key;
-            let end_index = start_index + group.len;
-            let group_start = start + (start_index << LOG_BYTES_IN_CHUNK);
-            let group_bytes = group.len << LOG_BYTES_IN_CHUNK;
-            let group_range = ChunkRange::new_aligned(group_start, group_bytes);
+            let group_len = group.len;
+            let group_range = ChunkRange::new(group_start, group_len);
 
             if let Some(new_state) = update_fn(group_range, state)? {
                 for slot in group {
@@ -154,7 +139,7 @@ impl MapStateStorage for TwoLevelStateStorage {
                 }
             }
 
-            start_index = end_index;
+            group_start += group_len;
         }
 
         Ok(())
@@ -163,8 +148,11 @@ impl MapStateStorage for TwoLevelStateStorage {
 
 impl TwoLevelStateStorage {
     pub fn new() -> Self {
+        let slabs: Vec<OnceLock<Box<Slab>>> = std::iter::repeat_with(OnceLock::new)
+            .take(MAX_SLABS)
+            .collect();
         Self {
-            slabs: zeroed_vec(MAX_SLABS),
+            slabs: slabs.into_boxed_slice(),
         }
     }
 
@@ -172,61 +160,53 @@ impl TwoLevelStateStorage {
         std::array::from_fn(|_| Atomic::new(MapState::Unmapped))
     }
 
-    fn slab_table(&self, addr: Address) -> Option<&Slab> {
-        let index: usize = Self::slab_index(addr);
-        let slot = self.slabs.get(index)?;
-        // `Acquire` pairs with the `Release` store in `get_or_allocate_slab_table` so all
-        // `MapState::Unmapped` initialization writes to the newly allocated `Slab` happen-before
-        // any reader loads from it on weakly-ordered architectures.
-        slot.get(Ordering::Acquire)
+    fn slab_table(&self, chunk_idx: usize) -> Option<&Slab> {
+        self.slabs
+            .get(Self::slab_index(chunk_idx))?
+            .get()
+            .map(Box::as_ref)
     }
 
-    fn get_or_allocate_slab_table(&self, addr: Address) -> &Slab {
-        let index: usize = Self::slab_index(addr);
+    fn get_or_allocate_slab_table(&self, chunk_idx: usize) -> &Slab {
+        let index = Self::slab_index(chunk_idx);
         let Some(slot) = self.slabs.get(index) else {
-            panic!("Cannot allocate slab for address: {addr}");
+            panic!(
+                "Cannot allocate slab for chunk {chunk_idx} (address {})",
+                conversions::chunk_index_to_address(chunk_idx)
+            );
         };
-        // `Box::new(Self::new_slab())` inside `OnceOptionBox::get_or_init` writes
-        // `MapState::Unmapped` into heap memory allocated via `alloc()` before publishing the
-        // pointer, so `Release` store and `Acquire` load are required to synchronize those
-        // initializing writes with concurrent readers.
-        slot.get_or_init(Ordering::Acquire, Ordering::Release, Self::new_slab)
+        slot.get_or_init(|| Box::new(Self::new_slab()))
     }
 
-    fn slab_index(addr: Address) -> usize {
-        addr >> LOG_MMAP_SLAB_BYTES
+    fn slab_index(chunk_idx: usize) -> usize {
+        chunk_idx >> LOG_MMAP_CHUNKS_PER_SLAB
     }
 
-    fn in_slab_index(addr: Address) -> usize {
-        (addr & MMAP_SLAB_MASK) >> LOG_BYTES_IN_CHUNK
+    fn in_slab_index(chunk_idx: usize) -> usize {
+        chunk_idx & (MMAP_CHUNKS_PER_SLAB - 1)
     }
 
-    /// Visit all slabs that overlap with the `range` from low to high address.  For each slab, call
-    /// `f` with the slice of the slab that overlap with the chunks within the `range`.
+    /// Visit all slabs that overlap with the `range` from low to high chunk index.  For each slab,
+    /// call `f` with the slice of the slab that overlaps with the chunks within the `range`.
     fn foreach_slab_slice_for_write<'s, F>(&'s self, range: ChunkRange, mut f: F)
     where
         F: FnMut(&'s [Atomic<MapState>]),
     {
         debug_assert!(
-            range.is_within_limit(MAPPABLE_ADDRESS_LIMIT),
+            range.is_within_limit(MAPPABLE_CHUNKS),
             "range {range} out of bound"
         );
 
-        let limit = range.limit();
-        let mut low = range.start;
+        let limit = range.end_chunk();
+        let mut low = range.start_chunk;
         while low < limit {
-            let high = (low + MMAP_SLAB_BYTES)
-                .align_down(MMAP_SLAB_BYTES)
-                .min(limit);
+            let next_slab_boundary =
+                ((low >> LOG_MMAP_CHUNKS_PER_SLAB) + 1) << LOG_MMAP_CHUNKS_PER_SLAB;
+            let high = next_slab_boundary.min(limit);
 
             let slab = self.get_or_allocate_slab_table(low);
             let low_index = Self::in_slab_index(low);
-            let high_index = Self::in_slab_index(high);
-            let ub_index = if high_index == 0 {
-                MMAP_CHUNKS_PER_SLAB
-            } else {
-                high_index
-            };
+            let ub_index = low_index + (high - low);
             f(&slab[low_index..ub_index]);
 
             low = high;

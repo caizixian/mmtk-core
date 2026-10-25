@@ -31,13 +31,19 @@ pub(crate) fn unreachable_prepare_func<VM: VMBinding>(
 /// An mutator prepare implementation for plans that use [`crate::plan::global::CommonPlan`].
 #[allow(unused_variables)]
 pub(crate) fn common_prepare_func<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
-    // Prepare the free list allocator used for non moving
+    // Non-moving spaces in `CommonPlan` are only prepared/released on full-heap collections.
     #[cfg(feature = "marksweep_as_nonmoving")]
-    mutator
-        .allocator_downcast_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(
-            AllocationSemantics::NonMoving,
-        )
-        .prepare();
+    if !mutator
+        .plan
+        .generational()
+        .is_some_and(|g| g.is_current_gc_nursery())
+    {
+        mutator
+            .allocator_downcast_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(
+                AllocationSemantics::NonMoving,
+            )
+            .prepare();
+    }
 }
 
 /// A place-holder implementation for `MutatorConfig::release_func` that should not be called.
@@ -54,21 +60,33 @@ pub(crate) fn unreachable_release_func<VM: VMBinding>(
 pub(crate) fn common_release_func<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
     cfg_if::cfg_if! {
         if #[cfg(feature = "marksweep_as_nonmoving")] {
-            // Release the free list allocator used for non moving
-            mutator
-                .allocator_downcast_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(
-                    AllocationSemantics::NonMoving,
-                )
-                .release();
+            // Release the free list allocator used for non moving on full-heap collections.
+            if !mutator
+                .plan
+                .generational()
+                .is_some_and(|g| g.is_current_gc_nursery())
+            {
+                mutator
+                    .allocator_downcast_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(
+                        AllocationSemantics::NonMoving,
+                    )
+                    .release();
+            }
         } else if #[cfg(feature = "immortal_as_nonmoving")] {
-            // Do nothig for the bump pointer allocator
+            // Do nothing for the bump pointer allocator
         } else {
             // Reset the Immix allocator
-            mutator
-                .allocator_downcast_mut_for_semantic::<crate::util::alloc::ImmixAllocator<VM>>(
-                    AllocationSemantics::NonMoving,
-                )
-                .reset();
+            if !mutator
+                .plan
+                .generational()
+                .is_some_and(|g| g.is_current_gc_nursery())
+            {
+                mutator
+                    .allocator_downcast_mut_for_semantic::<crate::util::alloc::ImmixAllocator<VM>>(
+                        AllocationSemantics::NonMoving,
+                    )
+                    .reset();
+            }
         }
     }
 }
@@ -180,17 +198,18 @@ impl<VM: VMBinding> MutatorBuilder<VM> {
 ///
 /// # `#[repr(C)]` Layout Notes
 /// `Mutator<VM>` has a deterministic fixed-size `#[repr(C)]` layout:
-/// - `allocators: Allocators<VM>` contains the fixed-size `[MaybeUninit<...>; MAX_*]` allocator
-///   arrays followed by a `u16` initialization bitmask (`+8` bytes including pointer-alignment
-///   padding at the end of `Allocators<VM>`).
+/// - `allocators: Allocators<VM>` contains six fixed-size allocator arrays (`648` bytes on 64-bit,
+///   `324` bytes on 32-bit) safely initialized inline using niche-optimized `Option<&'static ...>`
+///   space references (`None` for unconfigured slots) without `MaybeUninit` or trailing bitmask
+///   fields, preserving the exact inline sizes and field offsets of `Allocators<VM>` and
+///   `Mutator<VM>` (`barrier`, `mutator_tls`, `plan`, `config`).
 /// - VM bindings that mirror `Mutator<VM>` in C/C++ or JIT code should query allocator and field
 ///   offsets dynamically via [`Mutator::get_allocator_base_offset`],
 ///   [`crate::util::alloc::AllocatorInfo::new`], or `std::mem::offset_of!(Mutator<VM>, ...)`
-///   rather than hardcoding struct sizes (note that `barrier` and `mutator_tls` sit after
-///   `allocators` and include `Allocators<VM>`'s trailing `8`-byte initialization metadata).
+///   rather than hardcoding struct sizes.
 // We are trying to make this struct fixed-sized so that VM bindings can easily define a type to have the exact same layout as this struct.
 // Currently Mutator is fixed sized, and we should try keep this invariant:
-// - Allocators are fixed-length arrays of allocators plus a `#[repr(transparent)]` u16 bitmask.
+// - Allocators are fixed-length arrays of allocators initialized inline via niche-optimized `Option<&'static ...>`.
 // - MutatorConfig only has pointers/refs (including fat pointers), and is fixed sized.
 //
 // Soundness invariant: `allocators` and `config` are module-private and constructed exclusively in
