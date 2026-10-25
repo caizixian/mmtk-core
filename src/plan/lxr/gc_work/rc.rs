@@ -49,8 +49,6 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     survival_ratio_predictor_local: SurvivalRatioPredictorLocal,
 }
 
-unsafe impl<VM: VMBinding, const KIND: EdgeKind> Send for ProcessIncs<VM, KIND> {}
-
 impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     const CAPACITY: usize = 1024;
     const UNLOG_BITS: SideMetadataSpec = *VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
@@ -209,6 +207,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
 
     fn record_mature_evac_remset2(
         &mut self,
+        worker: &mut GCWorker<VM>,
         slot_in_defrag: bool,
         s: VM::VMSlot,
         o: ObjectReference,
@@ -217,15 +216,28 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             return;
         }
         if !slot_in_defrag && self.lxr.in_defrag(o) {
-            self.lxr.mature_evac_remset.record(s, o, self.lxr);
+            // SAFETY: `worker` is the active `GCWorker` executing `do_work` for the `MMTK<VM>`
+            // instance owning `self.lxr`. `ProcessIncs` runs in `RCProcessIncs` /
+            // `RCProcessIncsNonMoving` / `Unconstrained` (strictly before or after `Prepare` in
+            // `InitialMark`/`FinalMark`/`Full` pauses, and `self.in_cm || self.pause == FinalMark`
+            // is guarded above), so `LXR::prepare` (`flush_all`) is not running concurrently and
+            // `&mut GCWorker<VM>` guarantees exclusive access to `worker.ordinal`'s local buffers.
+            unsafe {
+                self.lxr.mature_evac_remset.record(worker, s, o, self.lxr);
+            }
         }
     }
 
-    fn record_mature_evac_remset(&mut self, s: VM::VMSlot, o: ObjectReference) {
+    fn record_mature_evac_remset(
+        &mut self,
+        worker: &mut GCWorker<VM>,
+        s: VM::VMSlot,
+        o: ObjectReference,
+    ) {
         if !(MATURE_EVACUATION && (self.in_cm || self.pause == Pause::FinalMark)) {
             return;
         }
-        self.record_mature_evac_remset2(self.lxr.address_in_defrag(s.to_address()), s, o);
+        self.record_mature_evac_remset2(worker, self.lxr.address_in_defrag(s.to_address()), s, o);
     }
 
     fn scan_nursery_object(
@@ -241,16 +253,20 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC.heap_bytes_per_unlog_byte();
         if los {
             let start =
-                side_metadata::address_to_meta_address(&Self::UNLOG_BITS, o.to_raw_address())
-                    .to_mut_ptr::<u8>();
+                side_metadata::address_to_meta_address(&Self::UNLOG_BITS, o.to_raw_address());
             let limit = side_metadata::address_to_meta_address(
                 &Self::UNLOG_BITS,
                 (o.to_raw_address() + size).align_up(heap_bytes_per_unlog_byte),
-            )
-            .to_mut_ptr::<u8>();
+            );
+            let bytes = limit - start;
+            // SAFETY: `o` is a newly promoted LargeObjectSpace object (`self.inc(o)` atomically
+            // transitioned its RC from `0 -> 1`, which only this worker wins) occupying dedicated
+            // page-aligned LOS pages (`LOG_BYTES_IN_PAGE >= 12`, so `[start, limit)` is disjoint
+            // from any other object's `UNLOG_BITS` bytes). Side metadata for `o`'s mapped LOS
+            // pages is mapped and valid for writes of `bytes` `u8`s (alignment 1), and mutators
+            // are stopped during `ProcessIncs`.
             unsafe {
-                let bytes = limit.offset_from(start) as usize;
-                std::ptr::write_bytes(start, 0xffu8, bytes);
+                std::ptr::write_bytes(start.to_mut_ptr::<u8>(), 0xffu8, bytes);
             }
             o.to_raw_address().unlog_field_relaxed::<VM>();
         } else if in_place_promotion {
@@ -262,7 +278,25 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             let mut cursor = start.align_down(step);
             let mut meta = side_metadata::address_to_meta_address(&Self::UNLOG_BITS, cursor);
             while cursor < aligned_end {
-                unsafe { meta.store(0xffffffffu32) }
+                debug_assert!(
+                    meta.is_aligned_to(std::mem::align_of::<std::sync::atomic::AtomicU32>())
+                );
+                // SAFETY: `o` resides in a mapped Immix block whose `UNLOG_BITS` side metadata is
+                // mapped for the entire block (which is `Block::BYTES`-aligned, a multiple of
+                // `step`). `cursor` is aligned to `step = heap_bytes_per_unlog_byte << 2` (one
+                // 256-byte Immix `Line` on 64-bit, half a line on 32-bit) and the side metadata
+                // base address is page-aligned, so `meta` is valid and 4-byte aligned for
+                // `AtomicU32`. Mutators are stopped during `ProcessIncs`, Immix nursery objects
+                // never share a line with pre-existing mature objects (`EDGE_KIND_MATURE`), and
+                // using `AtomicU32` with `Ordering::Relaxed` avoids write-write data races if
+                // another GC worker promotes a neighboring nursery object in the same `step`
+                // window concurrently.
+                unsafe {
+                    meta.atomic_store::<std::sync::atomic::AtomicU32>(
+                        0xffffffffu32,
+                        Ordering::Relaxed,
+                    );
+                }
                 meta += 4usize;
                 cursor += step;
             }
@@ -297,7 +331,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 if rc != crate::util::rc::MAX_REF_COUNT {
                     let _ = self.rc.inc(target);
                 }
-                self.record_mature_evac_remset2(obj_in_defrag, slot, target);
+                self.record_mature_evac_remset2(worker, obj_in_defrag, slot, target);
             }
         });
     }
@@ -330,10 +364,14 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         if Block::containing(o).get_state() != BlockState::Nursery {
             return true;
         }
-        if cfg!(debug_assertions) {
-            let cls = unsafe { (o.to_raw_address() + 8usize).load::<u32>() };
-            assert!(cls != 0, "ERROR {:?} rc={}", o, self.rc.count(o));
-        }
+        debug_assert!(o.to_raw_address().is_mapped());
+        #[cfg(feature = "vo_bit")]
+        debug_assert!(
+            crate::util::metadata::vo_bit::is_vo_bit_set(o),
+            "ERROR {:?} rc={}: VO bit not set",
+            o,
+            self.rc.count(o)
+        );
         false
     }
 
@@ -451,7 +489,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         let new = self.process_inc_and_evacuate(worker, o, depth);
         // Put this into remset if this is a mature slot, or a weak root
         if K != EDGE_KIND_ROOT || add_root_to_remset {
-            self.record_mature_evac_remset(s, new);
+            self.record_mature_evac_remset(worker, s, new);
         }
         if new != o {
             s.store(new)
@@ -459,10 +497,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         Some(new)
     }
 
-    fn process_incs<const K: EdgeKind>(
+    fn process_owned_incs<const K: EdgeKind>(
         &mut self,
         worker: &mut GCWorker<VM>,
-        mut incs: AddressBuffer<'_, VM::VMSlot>,
+        incs: Vec<VM::VMSlot>,
         depth: u32,
         add_root_to_remset: bool,
     ) -> Option<Vec<ObjectReference>> {
@@ -474,31 +512,58 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             if std::mem::size_of::<VM::VMSlot>() == std::mem::size_of::<ObjectReference>()
                 && std::mem::align_of::<VM::VMSlot>() == std::mem::align_of::<ObjectReference>()
             {
-                let roots = incs.as_mut_ptr() as *mut ObjectReference;
+                // Wrap in `ManuallyDrop` before calling `as_mut_ptr()` so moving/forgetting `incs`
+                // after writing through `base_ptr` never retags `Vec`'s internal `Unique` pointer
+                // and invalidates `base_ptr` under Stacked Borrows (`-Zmiri-retag-fields`).
+                let mut incs = std::mem::ManuallyDrop::new(incs);
+                let len = incs.len();
+                let cap = incs.capacity();
+                let base_ptr = incs.as_mut_ptr();
                 let mut num_roots = 0usize;
-                for s in incs.iter() {
-                    if let Some(new) = self.process_slot::<K>(worker, *s, depth, add_root_to_remset)
+                for i in 0..len {
+                    // SAFETY: `i < len`, so `base_ptr.add(i)` is in bounds of `incs`'s initialized
+                    // allocation (`0..len`) and aligned for `VM::VMSlot`. Because `num_roots <= i`,
+                    // prior writes to `0..num_roots` never overlap index `i`, and no shared slice
+                    // borrow of `incs` exists to invalidate `base_ptr` under Stacked/Tree Borrows.
+                    let s = unsafe { base_ptr.add(i).read() };
+                    if let Some(new) = self.process_slot::<K>(worker, s, depth, add_root_to_remset)
                     {
+                        // SAFETY: `num_roots <= i < len <= cap`, `ObjectReference` has the exact
+                        // same size and alignment as `VM::VMSlot` (checked above), and slot `i` has
+                        // already been copied out into `s`, so writing `ObjectReference` at
+                        // `num_roots` is in bounds, properly aligned, and non-overlapping with any
+                        // unread `VM::VMSlot` in `(i + 1)..len`.
                         unsafe {
-                            roots.add(num_roots).write(new);
+                            base_ptr.cast::<ObjectReference>().add(num_roots).write(new);
                         }
                         num_roots += 1;
                     }
                 }
                 return if num_roots != 0 {
-                    let cap = incs.capacity();
-                    std::mem::forget(incs); // roots references incs now. we dont need incs.
-                    let roots =
-                        unsafe { Vec::<ObjectReference>::from_raw_parts(roots, num_roots, cap) };
+                    // SAFETY: `base_ptr` was allocated by the global `Vec` allocator with capacity
+                    // `cap >= num_roots > 0` for `VM::VMSlot`, which has identical non-zero size
+                    // and alignment to `ObjectReference`; elements `0..num_roots` were initialized
+                    // as valid `ObjectReference`s above; and `incs` is wrapped in `ManuallyDrop` so
+                    // ownership of the allocation is uniquely transferred without retagging.
+                    let roots = unsafe {
+                        Vec::<ObjectReference>::from_raw_parts(
+                            base_ptr.cast::<ObjectReference>(),
+                            num_roots,
+                            cap,
+                        )
+                    };
                     Some(roots)
                 } else {
+                    // No elements were overwritten (`num_roots == 0`), so `incs` still holds `len`
+                    // valid `VM::VMSlot` values and can be dropped normally to free its buffer.
+                    let _ = std::mem::ManuallyDrop::into_inner(incs);
                     None
                 };
             }
 
             // General case: we need to allocate a new vector and push into it.
             let mut roots = Vec::with_capacity(incs.len());
-            for s in incs.iter() {
+            for s in &incs {
                 if let Some(new) = self.process_slot::<K>(worker, *s, depth, add_root_to_remset) {
                     roots.push(new);
                 }
@@ -509,10 +574,20 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 Some(roots)
             }
         } else {
-            for s in incs.iter() {
-                self.process_slot::<K>(worker, *s, depth, false);
-            }
+            self.process_slice_incs::<K>(worker, &incs, depth);
             None
+        }
+    }
+
+    fn process_slice_incs<const K: EdgeKind>(
+        &mut self,
+        worker: &mut GCWorker<VM>,
+        incs: &[VM::VMSlot],
+        depth: u32,
+    ) {
+        debug_assert_ne!(K, EDGE_KIND_ROOT);
+        for s in incs {
+            self.process_slot::<K>(worker, *s, depth, false);
         }
     }
 }
@@ -521,30 +596,6 @@ pub type EdgeKind = u8;
 pub const EDGE_KIND_ROOT: u8 = 0;
 pub const EDGE_KIND_NURSERY: u8 = 1;
 pub const EDGE_KIND_MATURE: u8 = 2;
-
-enum AddressBuffer<'a, S: Slot> {
-    Owned(Vec<S>),
-    Ref(&'a mut Vec<S>),
-}
-
-impl<S: Slot> Deref for AddressBuffer<'_, S> {
-    type Target = Vec<S>;
-    fn deref(&self) -> &Self::Target {
-        match self {
-            Self::Owned(x) => x,
-            Self::Ref(x) => x,
-        }
-    }
-}
-
-impl<S: Slot> DerefMut for AddressBuffer<'_, S> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        match self {
-            Self::Owned(x) => x,
-            Self::Ref(x) => x,
-        }
-    }
-}
 
 impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
@@ -572,7 +623,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         };
         let roots = {
             let incs = std::mem::take(&mut self.incs);
-            self.process_incs::<KIND>(worker, AddressBuffer::Owned(incs), self.depth, false)
+            self.process_owned_incs::<KIND>(worker, incs, self.depth, false)
         };
         if let Some(roots) = roots {
             if self.lxr.cm_enabled()
@@ -638,12 +689,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                 incs = a.to_vec();
             }
             if !incs.is_empty() {
-                self.process_incs::<EDGE_KIND_NURSERY>(
-                    worker,
-                    AddressBuffer::Ref(&mut incs),
-                    depth,
-                    false,
-                );
+                self.process_slice_incs::<EDGE_KIND_NURSERY>(worker, &incs, depth);
             }
         }
         self.survival_ratio_predictor_local.sync();
@@ -728,9 +774,14 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         o: ObjectReference,
         lxr: &LXR<VM>,
     ) -> bool {
-        if self.mark_dead_objects {
-            lxr.mark(o);
-        }
+        let can_poison_object = if self.mark_dead_objects {
+            // If concurrent marking already claimed `o`'s mark bit (`lxr.mark(o) == false`), a
+            // concurrent `LXRConcurrentTraceObjects` worker may still be reading `o`'s header to
+            // scan its fields; only poison `o` when CM is inactive or we won the mark bit first.
+            lxr.mark(o)
+        } else {
+            true
+        };
         // Recursively decrease field ref counts
         let tls = worker.tls.0;
         o.iterate_fields::<VM, _>(tls, |slot| {
@@ -767,7 +818,16 @@ impl<VM: VMBinding> ProcessDecs<VM> {
 
             self.rc.unmark_straddle_object(o);
         }
-        if RefCountHelper::<VM>::SANITY {
+        if RefCountHelper::<VM>::SANITY && can_poison_object {
+            // SAFETY: `o` is a live-allocated object whose last reference count is dropping from
+            // `1 -> 0` (all epoch increments ran before decrements, so no mutator or other
+            // `ProcessDecs` worker holds a reference to `o`, and `!dead` in `process_decs` ensures
+            // this runs at most once even if an adjacent `RC_TABLE` entry retries `fetch_update`).
+            // `can_poison_object` guarantees no concurrent `LXRConcurrentTraceObjects` worker won
+            // `o`'s mark bit to scan `o`, and `o` has not yet been released to block/LOS sweeping.
+            // By `ObjectModel`'s `ObjectReference` contract, `o.to_raw_address()` is non-null,
+            // word-aligned (`ObjectReference::ALIGNMENT == size_of::<usize>()`), and points inside
+            // `o`'s mapped word-granular allocation.
             unsafe { o.to_raw_address().store(0xdeadusize) };
         }
         if in_ix_space {
@@ -867,13 +927,12 @@ impl<VM: VMBinding> CollectSlotRoots<VM> {
 
 impl<VM: VMBinding> GCWork<VM> for CollectSlotRoots<VM> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        self.set_worker(worker);
         if !self.slots.is_empty() {
             let lxr = self.mmtk().get_plan().downcast_ref::<LXR<VM>>().unwrap();
             let roots = std::mem::take(&mut self.slots);
             let mut w = ProcessIncs::<_, EDGE_KIND_ROOT>::new(roots, lxr);
             w.root_kind = self.root_kind;
-            GCWork::do_work(&mut w, self.worker(), self.mmtk());
+            GCWork::do_work(&mut w, worker, self.mmtk());
         }
     }
 }

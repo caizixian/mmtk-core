@@ -3,17 +3,18 @@ use crate::policy::immix::block::{Block, BlockState};
 use crate::scheduler::{GCWork, GCWorker};
 use crate::util::heap::chunk_map::Chunk;
 use crate::util::linear_scan::Region;
-use crate::{vm::*, Plan, MMTK};
+use crate::{vm::*, MMTK};
 use std::ops::Range;
 
 pub struct FastRCPrepare;
 
 impl<VM: VMBinding> GCWork<VM> for FastRCPrepare {
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let lxr = unsafe { mmtk.get_plan_mut() }
-            .downcast_mut::<LXR<VM>>()
-            .unwrap();
-        lxr.prepare(worker.tls)
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        // `FastRCPrepare` runs in `WorkBucketStage::RCProcessIncs` concurrently with `ProcessIncs`
+        // packets holding `&LXR<VM>`, so it must use shared `&LXR<VM>` access rather than
+        // `mmtk.get_plan_mut()`.
+        let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
+        lxr.prepare_fast_rc();
     }
 }
 

@@ -4,7 +4,7 @@ use super::{MATURE_EVACUATION, NURSERY_EVACUATION};
 use crate::plan::tracing::UnsupportedTrace;
 use crate::plan::VectorObjectQueue;
 use crate::scheduler::gc_work::RootKind;
-use crate::scheduler::{GCWorker, WorkBucketStage};
+use crate::scheduler::WorkBucketStage;
 #[cfg(feature = "non_moving_root")]
 use crate::util::ObjectReference;
 use crate::vm::{RootsWorkFactory, VMBinding};
@@ -31,15 +31,10 @@ pub struct ProcessEdgesBase<VM: VMBinding> {
     pub slots: Vec<VM::VMSlot>,
     pub nodes: VectorObjectQueue,
     mmtk: &'static MMTK<VM>,
-    // Use raw pointer for fast pointer dereferencing, instead of using `Option<&'static mut GCWorker<VM>>`.
-    // Because a copying gc will dereference this pointer at least once for every object copy.
-    worker: *mut GCWorker<VM>,
     pub roots: bool,
     pub root_kind: Option<RootKind>,
     pub bucket: WorkBucketStage,
 }
-
-unsafe impl<VM: VMBinding> Send for ProcessEdgesBase<VM> {}
 
 impl<VM: VMBinding> ProcessEdgesBase<VM> {
     pub fn new(
@@ -59,19 +54,10 @@ impl<VM: VMBinding> ProcessEdgesBase<VM> {
             slots,
             nodes: VectorObjectQueue::new(),
             mmtk,
-            worker: std::ptr::null_mut(),
             roots,
             root_kind: if roots { Some(RootKind::Strong) } else { None },
             bucket,
         }
-    }
-
-    pub fn set_worker(&mut self, worker: &mut GCWorker<VM>) {
-        self.worker = worker;
-    }
-
-    pub fn worker(&self) -> &'static mut GCWorker<VM> {
-        unsafe { &mut *self.worker }
     }
 
     pub fn mmtk(&self) -> &'static MMTK<VM> {

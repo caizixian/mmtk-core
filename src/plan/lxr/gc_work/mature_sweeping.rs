@@ -34,6 +34,14 @@ impl<VM: VMBinding> SweepDeadCycles<VM> {
 
     fn process_dead_object(&mut self, o: ObjectReference) {
         if RefCountHelper::<VM>::SANITY {
+            // SAFETY: `SweepDeadCycles` runs only after `FinalMark` or `Full` GC on non-nursery,
+            // non-defrag-source blocks partitioned disjointly by chunk across `SweepDeadCycles`
+            // packets, and `o` is an unmarked mature object (`!immix_space.is_marked(o)`) with
+            // non-zero RC that is unreachable by mutators and skipped by concurrent `ProcessDecs`
+            // (`mature_sweeping_in_progress && !lxr.is_marked(o)`). `o` has not yet been zeroed in
+            // `RC_TABLE` or queued for block sweeping, and by `ObjectModel`'s `ObjectReference`
+            // contract `o.to_raw_address()` is non-null, word-aligned (`size_of::<usize>()`), and
+            // points within `o`'s mapped word-granular allocation.
             unsafe {
                 o.to_raw_address().store(0xdeadusize);
             }
@@ -59,8 +67,8 @@ impl<VM: VMBinding> SweepDeadCycles<VM> {
             cursor += rc::MIN_OBJECT_SIZE;
             let c = self.rc.count_by_address(cur_cursor);
             if c != 0 {
-                // Safety: cur_cursor is either a valid object reference, or a straddle line
-                let o = unsafe { ObjectReference::from_raw_address_unchecked(cur_cursor) };
+                let o = ObjectReference::from_raw_address(cur_cursor)
+                    .expect("Immix block cursor in SweepDeadCycles cannot be null");
                 if !immix_space.is_marked(o) {
                     if Line::is_aligned(o.to_raw_address()) {
                         if c == 1 && self.rc.object_is_in_straddle_line_no_rc_check(o) {

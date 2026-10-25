@@ -10,9 +10,8 @@ use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::linear_scan::Region;
 use crate::vm::VMBinding;
 use atomic::{Atomic, Ordering};
-use std::cell::UnsafeCell;
 use std::sync::atomic::AtomicUsize;
-use std::sync::RwLock;
+use std::sync::{OnceLock, RwLock};
 
 struct BlockCache {
     cursor: AtomicUsize,
@@ -58,38 +57,41 @@ impl BlockCache {
 }
 
 pub struct BlockAllocation<VM: VMBinding> {
-    space: UnsafeCell<*const ImmixSpace<VM>>,
-    lxr: UnsafeCell<*const LXR<VM>>,
+    space: OnceLock<&'static ImmixSpace<VM>>,
+    lxr: OnceLock<&'static LXR<VM>>,
     nursery_blocks: BlockCache,
     reused_blocks: BlockCache,
 }
 
-unsafe impl<VM: VMBinding> Sync for BlockAllocation<VM> {}
-unsafe impl<VM: VMBinding> Send for BlockAllocation<VM> {}
-
 impl<VM: VMBinding> BlockAllocation<VM> {
     pub fn new() -> Self {
         Self {
-            space: UnsafeCell::new(std::ptr::null()),
-            lxr: UnsafeCell::new(std::ptr::null()),
+            space: OnceLock::new(),
+            lxr: OnceLock::new(),
             nursery_blocks: BlockCache::new(),
             reused_blocks: BlockCache::new(),
         }
     }
 
-    pub fn init(&self, space: &ImmixSpace<VM>, lxr: &'static LXR<VM>) {
-        unsafe {
-            *self.space.get() = space as *const ImmixSpace<VM>;
-            *self.lxr.get() = lxr as *const LXR<VM>;
-        }
+    pub fn init(&self, space: &'static ImmixSpace<VM>, lxr: &'static LXR<VM>) {
+        self.space
+            .set(space)
+            .unwrap_or_else(|_| panic!("BlockAllocation::init called more than once"));
+        self.lxr
+            .set(lxr)
+            .unwrap_or_else(|_| panic!("BlockAllocation::init called more than once"));
     }
 
     fn space(&self) -> &'static ImmixSpace<VM> {
-        unsafe { &**self.space.get() }
+        self.space
+            .get()
+            .expect("BlockAllocation::space accessed before BlockAllocation::init")
     }
 
     fn lxr(&self) -> &'static LXR<VM> {
-        unsafe { &**self.lxr.get() }
+        self.lxr
+            .get()
+            .expect("BlockAllocation::lxr accessed before BlockAllocation::init")
     }
 
     pub fn clean_nursery_mb(&self) -> usize {

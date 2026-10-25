@@ -33,12 +33,11 @@ pub(crate) fn unreachable_prepare_func<VM: VMBinding>(
 pub(crate) fn common_prepare_func<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
     // Prepare the free list allocator used for non moving
     #[cfg(feature = "marksweep_as_nonmoving")]
-    unsafe {
-        mutator.allocator_impl_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(
+    mutator
+        .allocator_downcast_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(
             AllocationSemantics::NonMoving,
         )
-    }
-    .prepare();
+        .prepare();
 }
 
 /// A place-holder implementation for `MutatorConfig::release_func` that should not be called.
@@ -56,16 +55,20 @@ pub(crate) fn common_release_func<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls
     cfg_if::cfg_if! {
         if #[cfg(feature = "marksweep_as_nonmoving")] {
             // Release the free list allocator used for non moving
-            unsafe { mutator.allocator_impl_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(
-                AllocationSemantics::NonMoving,
-            )}.release();
+            mutator
+                .allocator_downcast_mut_for_semantic::<crate::util::alloc::FreeListAllocator<VM>>(
+                    AllocationSemantics::NonMoving,
+                )
+                .release();
         } else if #[cfg(feature = "immortal_as_nonmoving")] {
             // Do nothig for the bump pointer allocator
         } else {
             // Reset the Immix allocator
-            unsafe { mutator.allocator_impl_mut_for_semantic::<crate::util::alloc::ImmixAllocator<VM>>(
-                AllocationSemantics::NonMoving,
-            )}.reset();
+            mutator
+                .allocator_downcast_mut_for_semantic::<crate::util::alloc::ImmixAllocator<VM>>(
+                    AllocationSemantics::NonMoving,
+                )
+                .reset();
         }
     }
 }
@@ -145,6 +148,18 @@ impl<VM: VMBinding> MutatorBuilder<VM> {
     }
 
     pub fn build(self) -> Mutator<VM> {
+        for (_, &selector) in self.config.allocator_mapping.iter() {
+            if selector != AllocatorSelector::None {
+                assert!(
+                    self.config
+                        .space_mapping
+                        .iter()
+                        .any(|&(mapped_selector, _)| mapped_selector == selector),
+                    "MutatorConfig maps an AllocationSemantics to {:?}, which is missing from space_mapping",
+                    selector,
+                );
+            }
+        }
         Mutator {
             allocators: Allocators::<VM>::new(
                 self.mutator_tls,
@@ -166,15 +181,20 @@ impl<VM: VMBinding> MutatorBuilder<VM> {
 // Currently Mutator is fixed sized, and we should try keep this invariant:
 // - Allocators are fixed-length arrays of allocators.
 // - MutatorConfig only has pointers/refs (including fat pointers), and is fixed sized.
+//
+// Soundness invariant: `allocators` and `config` are module-private and constructed exclusively in
+// `MutatorBuilder::build`, which verifies that every non-`None` `AllocatorSelector` in
+// `config.allocator_mapping` is present in `config.space_mapping` and therefore initialized in
+// `allocators` by `Allocators::new`. Neither field is ever replaced after construction.
 #[repr(C)]
 pub struct Mutator<VM: VMBinding> {
-    pub(crate) allocators: Allocators<VM>,
+    allocators: Allocators<VM>,
     /// Holds some thread-local states for the barrier.
     pub barrier: Box<dyn Barrier<VM>>,
     /// The mutator thread that is bound with this Mutator struct.
     pub mutator_tls: VMMutatorThread,
     pub(crate) plan: &'static dyn Plan<VM = VM>,
-    pub(crate) config: MutatorConfig<VM>,
+    config: MutatorConfig<VM>,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -193,10 +213,7 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         offset: usize,
         allocator: AllocationSemantics,
     ) -> Address {
-        let allocator = unsafe {
-            self.allocators
-                .get_allocator_mut(self.config.allocator_mapping[allocator])
-        };
+        let allocator = self.allocator_mut_for_semantic(allocator);
         // The value should be default/unset at the beginning of an allocation request.
         debug_assert!(allocator.get_context().get_alloc_options().is_default());
         allocator.alloc(size, align, offset)
@@ -210,10 +227,7 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         allocator: AllocationSemantics,
         options: AllocationOptions,
     ) -> Address {
-        let allocator = unsafe {
-            self.allocators
-                .get_allocator_mut(self.config.allocator_mapping[allocator])
-        };
+        let allocator = self.allocator_mut_for_semantic(allocator);
         // The value should be default/unset at the beginning of an allocation request.
         debug_assert!(allocator.get_context().get_alloc_options().is_default());
         allocator.alloc_with_options(size, align, offset, options)
@@ -226,10 +240,7 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         offset: usize,
         allocator: AllocationSemantics,
     ) -> Address {
-        let allocator = unsafe {
-            self.allocators
-                .get_allocator_mut(self.config.allocator_mapping[allocator])
-        };
+        let allocator = self.allocator_mut_for_semantic(allocator);
         // The value should be default/unset at the beginning of an allocation request.
         debug_assert!(allocator.get_context().get_alloc_options().is_default());
         allocator.alloc_slow(size, align, offset)
@@ -243,10 +254,7 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         allocator: AllocationSemantics,
         options: AllocationOptions,
     ) -> Address {
-        let allocator = unsafe {
-            self.allocators
-                .get_allocator_mut(self.config.allocator_mapping[allocator])
-        };
+        let allocator = self.allocator_mut_for_semantic(allocator);
         // The value should be default/unset at the beginning of an allocation request.
         debug_assert!(allocator.get_context().get_alloc_options().is_default());
         allocator.alloc_slow_with_options(size, align, offset, options)
@@ -254,12 +262,9 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
 
     // Note that this method is slow, and we expect VM bindings that care about performance to implement allocation fastpath sequence in their bindings.
     fn post_alloc(&mut self, refer: ObjectReference, bytes: usize, allocator: AllocationSemantics) {
-        unsafe {
-            self.allocators
-                .get_allocator_mut(self.config.allocator_mapping[allocator])
-        }
-        .get_space()
-        .initialize_object_metadata(refer, bytes)
+        self.allocator_mut_for_semantic(allocator)
+            .get_space()
+            .initialize_object_metadata(refer, bytes)
     }
 
     fn get_tls(&self) -> VMMutatorThread {
@@ -272,6 +277,39 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
 }
 
 impl<VM: VMBinding> Mutator<VM> {
+    pub(crate) fn config(&self) -> &MutatorConfig<VM> {
+        &self.config
+    }
+
+    /// Resolve the initialized allocator mapped to `semantic` using `Mutator`'s construction
+    /// invariant. Panics if `semantic` maps to `AllocatorSelector::None`.
+    #[inline(always)]
+    pub(crate) fn allocator_mut_for_semantic(
+        &mut self,
+        semantic: AllocationSemantics,
+    ) -> &mut dyn Allocator<VM> {
+        let selector = self.config.allocator_mapping[semantic];
+        // SAFETY: By `Mutator`'s private-field invariant established in `MutatorBuilder::build`,
+        // every non-`None` selector in `self.config.allocator_mapping` was verified to be in
+        // `self.config.space_mapping` and initialized in `self.allocators` by `Allocators::new`,
+        // and `AllocatorSelector::None` panics safely in `Allocators::get_allocator_mut` before
+        // reading any `MaybeUninit` slot.
+        unsafe { self.allocators.get_allocator_mut(selector) }
+    }
+
+    /// Resolve and downcast the initialized allocator mapped to `semantic`.
+    /// Panics if `semantic` maps to `AllocatorSelector::None` or to an allocator of a different
+    /// concrete type than `T`.
+    #[inline]
+    pub(crate) fn allocator_downcast_mut_for_semantic<T: Allocator<VM>>(
+        &mut self,
+        semantic: AllocationSemantics,
+    ) -> &mut T {
+        self.allocator_mut_for_semantic(semantic)
+            .downcast_mut::<T>()
+            .unwrap()
+    }
+
     /// Get all the valid allocator selector (no duplicate)
     fn get_all_allocator_selectors(&self) -> Vec<AllocatorSelector> {
         use itertools::Itertools;
@@ -288,6 +326,10 @@ impl<VM: VMBinding> Mutator<VM> {
     /// Inform each allocator about destroying. Call allocator-specific on destroy methods.
     pub fn on_destroy(&mut self) {
         for selector in self.get_all_allocator_selectors() {
+            // SAFETY: Every `selector` returned by `get_all_allocator_selectors` comes from
+            // `self.config.allocator_mapping` and is not `AllocatorSelector::None`; by `Mutator`'s
+            // construction invariant in `MutatorBuilder::build`, that slot in `self.allocators`
+            // was initialized by `Allocators::new`.
             unsafe { self.allocators.get_allocator_mut(selector) }.on_mutator_destroy();
         }
     }
@@ -295,62 +337,84 @@ impl<VM: VMBinding> Mutator<VM> {
     /// Get the allocator for the selector.
     ///
     /// # Safety
-    /// The selector needs to be valid, and points to an allocator that has been initialized.
+    /// The caller must ensure `selector` is in bounds and designates an allocator slot in `self`
+    /// that was initialized when `self` was created (i.e. present in `MutatorConfig::space_mapping`,
+    /// or `AllocatorSelector::None` which panics).
     /// [`crate::memory_manager::get_allocator_mapping`] can be used to get a selector.
     pub unsafe fn allocator(&self, selector: AllocatorSelector) -> &dyn Allocator<VM> {
-        self.allocators.get_allocator(selector)
+        // SAFETY: Guaranteed by caller contract above.
+        unsafe { self.allocators.get_allocator(selector) }
     }
 
     /// Get the mutable allocator for the selector.
     ///
     /// # Safety
-    /// The selector needs to be valid, and points to an allocator that has been initialized.
+    /// The caller must ensure `selector` is in bounds and designates an allocator slot in `self`
+    /// that was initialized when `self` was created (i.e. present in `MutatorConfig::space_mapping`,
+    /// or `AllocatorSelector::None` which panics).
     /// [`crate::memory_manager::get_allocator_mapping`] can be used to get a selector.
     pub unsafe fn allocator_mut(&mut self, selector: AllocatorSelector) -> &mut dyn Allocator<VM> {
-        self.allocators.get_allocator_mut(selector)
+        // SAFETY: Guaranteed by caller contract above.
+        unsafe { self.allocators.get_allocator_mut(selector) }
     }
 
     /// Get the allocator of a concrete type for the selector.
     ///
     /// # Safety
-    /// The selector needs to be valid, and points to an allocator that has been initialized.
+    /// The caller must ensure `selector` is in bounds and designates an allocator slot in `self`
+    /// that was initialized when `self` was created (panics if `selector` is `None` or if `T` does
+    /// not match the concrete allocator type at `selector`).
     /// [`crate::memory_manager::get_allocator_mapping`] can be used to get a selector.
     pub unsafe fn allocator_impl<T: Allocator<VM>>(&self, selector: AllocatorSelector) -> &T {
-        self.allocators.get_typed_allocator(selector)
+        // SAFETY: Guaranteed by caller contract above.
+        unsafe { self.allocators.get_typed_allocator(selector) }
     }
 
     /// Get the mutable allocator of a concrete type for the selector.
     ///
     /// # Safety
-    /// The selector needs to be valid, and points to an allocator that has been initialized.
+    /// The caller must ensure `selector` is in bounds and designates an allocator slot in `self`
+    /// that was initialized when `self` was created (panics if `selector` is `None` or if `T` does
+    /// not match the concrete allocator type at `selector`).
     /// [`crate::memory_manager::get_allocator_mapping`] can be used to get a selector.
     pub unsafe fn allocator_impl_mut<T: Allocator<VM>>(
         &mut self,
         selector: AllocatorSelector,
     ) -> &mut T {
-        self.allocators.get_typed_allocator_mut(selector)
+        // SAFETY: Guaranteed by caller contract above.
+        unsafe { self.allocators.get_typed_allocator_mut(selector) }
     }
 
     /// Get the allocator of a concrete type for the semantic.
     ///
     /// # Safety
-    /// The semantic needs to match the allocator type.
+    /// All `Mutator` instances validate at construction that every non-`None` selector in
+    /// `allocator_mapping` is initialized; this method remains `unsafe` for public API
+    /// compatibility and panics if `semantic` maps to `AllocatorSelector::None` or to a concrete
+    /// allocator type other than `T`.
     pub unsafe fn allocator_impl_for_semantic<T: Allocator<VM>>(
         &self,
         semantic: AllocationSemantics,
     ) -> &T {
-        self.allocator_impl::<T>(self.config.allocator_mapping[semantic])
+        // SAFETY: By `Mutator`'s construction invariant in `MutatorBuilder::build`, every
+        // non-`None` selector in `self.config.allocator_mapping` is initialized in `self.allocators`.
+        unsafe { self.allocator_impl::<T>(self.config.allocator_mapping[semantic]) }
     }
 
     /// Get the mutable allocator of a concrete type for the semantic.
     ///
     /// # Safety
-    /// The semantic needs to match the allocator type.
+    /// All `Mutator` instances validate at construction that every non-`None` selector in
+    /// `allocator_mapping` is initialized; this method remains `unsafe` for public API
+    /// compatibility and panics if `semantic` maps to `AllocatorSelector::None` or to a concrete
+    /// allocator type other than `T`.
     pub unsafe fn allocator_impl_mut_for_semantic<T: Allocator<VM>>(
         &mut self,
         semantic: AllocationSemantics,
     ) -> &mut T {
-        self.allocator_impl_mut::<T>(self.config.allocator_mapping[semantic])
+        // SAFETY: By `Mutator`'s construction invariant in `MutatorBuilder::build`, every
+        // non-`None` selector in `self.config.allocator_mapping` is initialized in `self.allocators`.
+        unsafe { self.allocator_impl_mut::<T>(self.config.allocator_mapping[semantic]) }
     }
 
     /// Return the base offset from a mutator pointer to the allocator specified by the selector.

@@ -1,6 +1,7 @@
 use crate::plan::concurrent::global::ConcurrentPlan;
 use crate::plan::concurrent::immix::gc_work::ConcurrentImmixGCWorkContext;
 use crate::plan::concurrent::immix::gc_work::ConcurrentImmixSTWGCWorkContext;
+use crate::plan::concurrent::AtomicPause;
 use crate::plan::concurrent::Pause;
 use crate::plan::global::BasePlan;
 use crate::plan::global::CommonPlan;
@@ -31,7 +32,6 @@ use crate::MMTK;
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use std::sync::atomic::AtomicBool;
 
-use atomic::Atomic;
 use atomic::Ordering;
 use enum_map::EnumMap;
 
@@ -48,8 +48,8 @@ pub struct ConcurrentImmix<VM: VMBinding> {
     #[parent]
     pub common: CommonPlan<VM>,
     last_gc_was_defrag: AtomicBool,
-    current_pause: Atomic<Option<Pause>>,
-    previous_pause: Atomic<Option<Pause>>,
+    current_pause: AtomicPause,
+    previous_pause: AtomicPause,
     should_do_full_gc: AtomicBool,
     concurrent_marking_active: AtomicBool,
     unfinished_concurrent_marking: AtomicBool,
@@ -395,8 +395,8 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
             ),
             common: CommonPlan::new(plan_args),
             last_gc_was_defrag: AtomicBool::new(false),
-            current_pause: Atomic::new(None),
-            previous_pause: Atomic::new(None),
+            current_pause: AtomicPause::new(None),
+            previous_pause: AtomicPause::new(None),
             should_do_full_gc: AtomicBool::new(false),
             concurrent_marking_active: AtomicBool::new(false),
             unfinished_concurrent_marking: AtomicBool::new(false),

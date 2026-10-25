@@ -116,6 +116,14 @@ pub fn create_plan<VM: VMBinding>(
     }
 }
 
+/// Complete post-construction initialization for plans that register `'static` self-referential
+/// hooks or callbacks once the boxed plan has reached its final location inside `MMTK`.
+pub(crate) fn post_init_plan<VM: VMBinding>(plan: &'static dyn Plan<VM = VM>) {
+    if let Some(lxr) = plan.downcast_ref::<crate::plan::lxr::LXR<VM>>() {
+        lxr.post_init();
+    }
+}
+
 /// Create thread local GC worker.
 pub fn create_gc_worker_context<VM: VMBinding>(
     tls: VMWorkerThread,
@@ -399,6 +407,10 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     /// This method should only be called after 1. side metadata is initialized (as some SFT maps may use side metadata), 2. the plan is created in the heap and won't be moved,
     /// and 3. the side metadata sanity is initialized (otherwise we may try access side metadata and trigger sanity check before side metadata sanity is initialized)
     fn initialize_sft(&self) {
+        // SAFETY: `initialize_sft` is called exclusively inside `MMTK::new` after `SFT_MAP` has
+        // been initialized (`SFT_MAP.initialize_once`), after side metadata and sanity state are
+        // set up, and before `MMTK` returns or any mutator/GC worker threads are spawned, so no
+        // other thread or call frame holds a shared or mutable reference into `SFT_MAP`.
         let sft_map: &mut dyn crate::policy::sft_map::SFTMap =
             unsafe { crate::mmtk::SFT_MAP.get_mut() }.as_mut();
         self.for_each_space(&mut |s| {
@@ -812,18 +824,15 @@ impl<VM: VMBinding> CommonPlan<VM> {
 
     pub(crate) fn schedule_unlog_bits_op(&mut self, unlog_bits_op: UnlogBitsOperation) {
         if VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.is_on_side() {
-            // # Safety: CommonPlan reference is always valid within this collection cycle.
-            let common_plan = unsafe { &*(self as *const CommonPlan<VM>) };
-
             match unlog_bits_op {
                 UnlogBitsOperation::NoOp => {}
                 UnlogBitsOperation::BulkSet => {
                     self.base.scheduler.work_buckets[WorkBucketStage::Prepare]
-                        .add(SetCommonPlanUnlogBits { common_plan });
+                        .add(SetCommonPlanUnlogBits);
                 }
                 UnlogBitsOperation::BulkClear => {
                     self.base.scheduler.work_buckets[WorkBucketStage::Release]
-                        .add(ClearCommonPlanUnlogBits { common_plan });
+                        .add(ClearCommonPlanUnlogBits);
                 }
             }
         }

@@ -31,10 +31,8 @@ impl<VM: VMBinding, F: Fn(&'static OVCSpace<VM>) + Send + 'static> GenerateWork<
 /// Create another round of root scanning work packets
 /// to update object references.
 pub struct UpdateReferences<VM: VMBinding> {
-    p: PhantomData<VM>,
+    p: PhantomData<fn() -> VM>,
 }
-
-unsafe impl<VM: VMBinding> Send for UpdateReferences<VM> {}
 
 impl<VM: VMBinding> GCWork<VM> for UpdateReferences<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {

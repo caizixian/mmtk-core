@@ -7,7 +7,7 @@ use super::mature_evac::MatureEvacuationSet;
 use super::mutator::ALLOCATOR_MAPPING;
 use super::{LazySweepingJobsCounter, LAZY_SWEEPING_JOBS};
 use crate::plan::concurrent::global::ConcurrentPlan;
-use crate::plan::concurrent::Pause;
+use crate::plan::concurrent::{AtomicPause, Pause};
 use crate::plan::global::CommonPlan;
 use crate::plan::global::{BasePlan, CreateGeneralPlanArgs, CreateSpecificPlanArgs};
 use crate::plan::lxr::gc_work::mature_sweeping::{RCSweepMatureAfterSATBLOS, SweepDeadCycles};
@@ -40,7 +40,7 @@ use crate::vm::{Collection, ObjectModel, VMBinding};
 use crate::BarrierSelector;
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use crate::{scheduler::*, MMTK};
-use atomic::{Atomic, Ordering};
+use atomic::Ordering;
 use crossbeam::queue::SegQueue;
 use enum_map::EnumMap;
 use spin::Lazy;
@@ -64,8 +64,8 @@ pub struct LXR<VM: VMBinding> {
     /// Always true for non-rc immix.
     /// For RC immix, this is used for enable backup tracing.
     perform_cycle_collection: AtomicBool,
-    current_pause: Atomic<Option<Pause>>,
-    previous_pause: Atomic<Option<Pause>>,
+    current_pause: AtomicPause,
+    previous_pause: AtomicPause,
     hint_cycle_gc: AtomicBool,
     hint_emergency_gc: AtomicBool,
     avail_pages_at_end_of_last_gc: AtomicUsize,
@@ -195,6 +195,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
 
     fn prepare(&mut self, _tls: VMWorkerThread) {
         let pause = self.current_pause().unwrap();
+        if pause == Pause::RefCount {
+            self.prepare_fast_rc();
+            return;
+        }
         if pause == Pause::FinalMark || pause == Pause::Full {
             self.common.los.is_end_of_satb_or_full_gc = true;
             // release nursery memory before mature evacuation, to reduce the chance of to-space overflow.
@@ -462,8 +466,8 @@ impl<VM: VMBinding> LXR<VM> {
             perform_cycle_collection: AtomicBool::new(false),
             hint_cycle_gc: AtomicBool::new(false),
             hint_emergency_gc: AtomicBool::new(false),
-            current_pause: Atomic::new(None),
-            previous_pause: Atomic::new(None),
+            current_pause: AtomicPause::new(None),
+            previous_pause: AtomicPause::new(None),
             avail_pages_at_end_of_last_gc: AtomicUsize::new(0),
             zeroing_packets_scheduled: AtomicBool::new(false),
             decide_cycle_collection: (Mutex::new(true), Condvar::new()),
@@ -478,11 +482,11 @@ impl<VM: VMBinding> LXR<VM> {
             num_clean_blocks_released_lazy: Default::default(),
         });
 
-        lxr.gc_init();
+        lxr.immix_space.rc_enabled = true;
+        lxr.common.los.rc_enabled = true;
 
-        // Note: `verify_side_metadata_sanity` is invoked later by `MMTK::new`, after the dynamic
-        // side metadata base address has been initialized. It must not be called here during plan
-        // construction, as the side metadata layout is not yet registered at this point.
+        // Note: `verify_side_metadata_sanity` and `post_init` are invoked later by `MMTK::new`,
+        // after side metadata initialization and after the boxed plan is placed in `MMTK`.
 
         lxr
     }
@@ -570,7 +574,21 @@ impl<VM: VMBinding> LXR<VM> {
         self.immix_space.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add(packets);
     }
 
-    pub(super) fn process_mature_evacuation_remset(&self) {
+    pub(super) fn prepare_fast_rc(&self) {
+        let pause = self.current_pause().unwrap();
+        debug_assert_eq!(pause, Pause::RefCount);
+        debug_assert!(self.common.los.rc_enabled);
+        self.common
+            .los
+            .num_pages_released_lazy
+            .store(0, Ordering::Relaxed);
+        self.num_clean_blocks_released_lazy
+            .store(0, Ordering::SeqCst);
+        self.block_allocation
+            .reset_block_mark_for_mutator_reused_blocks(pause);
+    }
+
+    pub(super) fn process_mature_evacuation_remset(&mut self) {
         self.mature_evac_remset.flush_all();
         let packets = self.mature_evac_remset.take_global_packets();
         self.immix_space.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature]
@@ -886,24 +904,16 @@ impl<VM: VMBinding> LXR<VM> {
         self.decide_next_gc_may_perform_cycle_collection(pause);
     }
 
-    fn gc_init(&mut self) {
-        self.immix_space.rc_enabled = true;
-        self.common.los.rc_enabled = true;
-        unsafe {
-            let me: &'static Self = &*(self as *const Self);
-            me.block_allocation.init(&me.immix_space, me);
-            me.immix_space.install_hooks(&me.block_allocation);
-        }
+    pub(in crate::plan) fn post_init(&'static self) {
+        self.block_allocation.init(&self.immix_space, self);
+        self.immix_space.install_hooks(&self.block_allocation);
         let mut lazy_sweeping_jobs = LAZY_SWEEPING_JOBS.write();
         lazy_sweeping_jobs.swap();
-        let lxr_ptr = self as *const Self as usize;
         lazy_sweeping_jobs.end_of_decs = Some(Box::new(move |c| {
-            let lxr = unsafe { &*(lxr_ptr as *const Self) };
-            lxr.on_lazy_decs_finished(c);
+            self.on_lazy_decs_finished(c);
         }));
         lazy_sweeping_jobs.end_of_lazy = Some(Box::new(move || {
-            let lxr = unsafe { &*(lxr_ptr as *const Self) };
-            lxr.on_lazy_sweeping_finished();
+            self.on_lazy_sweeping_finished();
         }));
     }
 

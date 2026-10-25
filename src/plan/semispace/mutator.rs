@@ -16,21 +16,15 @@ use crate::MMTK;
 use enum_map::EnumMap;
 
 pub fn ss_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWorkerThread) {
+    let tospace = mutator
+        .plan
+        .downcast_ref::<SemiSpace<VM>>()
+        .unwrap()
+        .tospace();
     // rebind the allocation bump pointer to the appropriate semispace
-    let bump_allocator = unsafe {
-        mutator
-            .allocators
-            .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
-    }
-    .downcast_mut::<BumpAllocator<VM>>()
-    .unwrap();
-    bump_allocator.rebind(
-        mutator
-            .plan
-            .downcast_ref::<SemiSpace<VM>>()
-            .unwrap()
-            .tospace(),
-    );
+    let bump_allocator = mutator
+        .allocator_downcast_mut_for_semantic::<BumpAllocator<VM>>(AllocationSemantics::Default);
+    bump_allocator.rebind(tospace);
 
     common_release_func(mutator, tls);
 }

@@ -189,10 +189,8 @@ pub struct WorkerLocalStat<C> {
     work_counts: HashMap<TypeId, usize>,
     work_counters: HashMap<TypeId, Vec<Box<dyn WorkCounter>>>,
     enabled: AtomicBool,
-    _phantom: PhantomData<C>,
+    _phantom: PhantomData<fn() -> C>,
 }
-
-unsafe impl<C> Send for WorkerLocalStat<C> {}
 
 impl<C> Default for WorkerLocalStat<C> {
     fn default() -> Self {

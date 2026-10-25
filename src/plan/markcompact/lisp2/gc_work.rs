@@ -32,11 +32,8 @@ impl<VM: VMBinding> CalculateForwardingAddress<VM> {
 /// create another round of root scanning work packets
 /// to update object references
 pub struct UpdateReferences<VM: VMBinding> {
-    plan: *const Lisp2<VM>,
-    p: PhantomData<VM>,
+    p: PhantomData<fn() -> VM>,
 }
-
-unsafe impl<VM: VMBinding> Send for UpdateReferences<VM> {}
 
 impl<VM: VMBinding> GCWork<VM> for UpdateReferences<VM> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
@@ -44,9 +41,19 @@ impl<VM: VMBinding> GCWork<VM> for UpdateReferences<VM> {
         VM::VMScanning::prepare_for_roots_re_scanning();
         mmtk.state.prepare_for_stack_scanning();
         // Prepare common and base spaces for the 2nd round of transitive closure
-        let plan_mut = unsafe { &mut *(self.plan as *mut Lisp2<VM>) };
-        plan_mut.common.release(worker.tls, true);
-        plan_mut.common.prepare(worker.tls, true);
+        {
+            // SAFETY: `UpdateReferences` is scheduled as the sole initial packet in
+            // `WorkBucketStage::SecondRoots` (which opens sequentially only after
+            // `CalculateForwarding` drains and all other GC workers are parked, while mutators
+            // remain stopped), before any `ScanMutatorRoots`/`ScanVMSpecificRoots` packets are
+            // added below. No other thread holds a reference to `mmtk.plan`, and `get_plan_mut`
+            // derives mutable provenance from `MMTK::plan`'s `UnsafeCell`.
+            let plan_mut = unsafe { mmtk.get_plan_mut() }
+                .downcast_mut::<Lisp2<VM>>()
+                .unwrap();
+            plan_mut.common.release(worker.tls, true);
+            plan_mut.common.prepare(worker.tls, true);
+        }
         #[cfg(feature = "extreme_assertions")]
         mmtk.slot_logger.reset();
 
@@ -67,11 +74,8 @@ impl<VM: VMBinding> GCWork<VM> for UpdateReferences<VM> {
 }
 
 impl<VM: VMBinding> UpdateReferences<VM> {
-    pub fn new(plan: &Lisp2<VM>) -> Self {
-        Self {
-            plan,
-            p: PhantomData,
-        }
+    pub fn new(_plan: &Lisp2<VM>) -> Self {
+        Self { p: PhantomData }
     }
 }
 

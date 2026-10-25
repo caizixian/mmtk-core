@@ -134,7 +134,18 @@ pub struct MMTK<VM: VMBinding> {
     pub(crate) analysis_manager: Arc<AnalysisManager<VM>>,
 }
 
+// SAFETY: Every field of `MMTK<VM>` is `Sync` except `plan: UnsafeCell<Box<dyn Plan<VM = VM>>>`.
+// `Plan: Sync`, so concurrent shared accesses via `MMTK::get_plan` are thread-safe. Mutable access
+// via `MMTK::get_plan_mut` is `unsafe` and restricted by its safety contract to single-worker
+// single-worker stop-the-world points (such as `Prepare`, `Release`, `UpdateReferences`, and
+// `on_gc_finished`) when all mutators are paused and all other GC workers are parked, ensuring no
+// concurrent shared or mutable references to `plan` exist.
 unsafe impl<VM: VMBinding> Sync for MMTK<VM> {}
+// SAFETY: Every field of `MMTK<VM>` is `Send` except `plan: UnsafeCell<Box<dyn Plan<VM = VM>>>`
+// (because the `Plan` trait bounds `Sync` rather than `Send`). Every concrete `Plan` constructed by
+// `crate::plan::create_plan` owns only thread-independent heap/space structures, `Arc`s, locks, and
+// atomics (no thread-local handles), so transferring ownership of `MMTK<VM>` across threads before
+// pinning it at `'static` is sound.
 unsafe impl<VM: VMBinding> Send for MMTK<VM> {}
 
 impl<VM: VMBinding> MMTK<VM> {
@@ -188,17 +199,6 @@ impl<VM: VMBinding> MMTK<VM> {
         // Initialize side metadata runtime state and reserve its address range after creating spaces.
         crate::util::metadata::side_metadata::initialize_side_metadata::<VM>(&options);
 
-        // We haven't finished creating MMTk. No one is using the GC trigger. We cast the arc into a mutable reference.
-        {
-            // TODO: use Arc::get_mut_unchecked() when it is availble.
-            let gc_trigger: &mut GCTrigger<VM> =
-                unsafe { &mut *(Arc::as_ptr(&gc_trigger) as *mut _) };
-            // We know the plan address will not change. Cast it to a static reference.
-            let static_plan: &'static dyn Plan<VM = VM> = unsafe { &*(&*plan as *const _) };
-            // Set the plan so we can trigger GC and check GC condition without using plan
-            gc_trigger.set_plan(static_plan);
-        }
-
         // TODO: This probably does not work if we have multiple MMTk instances.
         // This needs to be called after we create Plan. It needs to use HeapMeta, which is gradually built when we create spaces.
         VM_MAP.finalize_static_space_map(
@@ -222,10 +222,35 @@ impl<VM: VMBinding> MMTK<VM> {
         // Then intiialize SFT because it may use side metadata
         plan.initialize_sft();
 
+        let plan = UnsafeCell::new(plan);
+
+        // Wire `gc_trigger` to the heap-allocated plan now that all `&mut` initialization on
+        // `plan` is complete and `plan` is wrapped in `UnsafeCell`.
+        {
+            // TODO: use Arc::get_mut_unchecked() when it is availble.
+            // SAFETY: `MMTK::new` runs single-threaded before returning `MMTK` or spawning any
+            // mutator/worker threads. Although `Arc<GCTrigger<VM>>` handles have been cloned into
+            // `plan` and its spaces (`Arc` stores a raw `NonNull` internally, not `&T`), no shared
+            // or mutable reference to `*gc_trigger` exists on the call stack during this block,
+            // and `Arc::as_ptr` yields a valid, aligned pointer to the initialized `GCTrigger<VM>`.
+            let gc_trigger: &mut GCTrigger<VM> =
+                unsafe { &mut *(Arc::as_ptr(&gc_trigger) as *mut _) };
+            // SAFETY: `plan` is a `Box<dyn Plan<VM = VM>>` inside `UnsafeCell`. Moving `plan` into
+            // the returned `MMTK` struct only moves the `UnsafeCell<Box<...>>` wrapper, while the
+            // pointee `dyn Plan<VM = VM>` remains at a fixed heap allocation that is never replaced
+            // or dropped once `MMTK` is shared as `&'static MMTK<VM>`. Deriving `static_plan` from
+            // `plan.get()` after all `&mut` setup above preserves the `UnsafeCell`'s interior-mutable
+            // provenance for subsequent STW `get_plan_mut()` calls.
+            let static_plan: &'static dyn Plan<VM = VM> = unsafe { &**plan.get() };
+            // Set the plan so we can trigger GC and check GC condition without using plan
+            gc_trigger.set_plan(static_plan);
+            crate::plan::post_init_plan(static_plan);
+        }
+
         MMTK {
             options,
             state,
-            plan: UnsafeCell::new(plan),
+            plan,
             reference_processors: ReferenceProcessors::new(),
             finalizable_processor: Mutex::new(FinalizableProcessor::<
                 <VM::VMReferenceGlue as ReferenceGlue<VM>>::FinalizableType,
@@ -487,6 +512,10 @@ impl<VM: VMBinding> MMTK<VM> {
 
     /// Get a reference to the plan.
     pub fn get_plan(&self) -> &dyn Plan<VM = VM> {
+        // SAFETY: `self.plan` is initialized in `MMTK::new` and never replaced. By the safety
+        // contract of `get_plan_mut`, `&mut dyn Plan` is only created during single-worker
+        // stop-the-world phases when no `get_plan` call or returned `&dyn Plan` reference is live
+        // concurrently on any thread.
         unsafe { &**(self.plan.get()) }
     }
 
@@ -494,10 +523,16 @@ impl<VM: VMBinding> MMTK<VM> {
     ///
     /// # Safety
     ///
-    /// This is unsafe because the caller must ensure that the plan is not used by other threads.
+    /// The caller must guarantee exclusive access to the plan for the entire lifetime of the
+    /// returned `&mut dyn Plan<VM = VM>`: no other shared (`&dyn Plan`, including via
+    /// [`MMTK::get_plan`] or `GCTrigger`) or mutable (`&mut dyn Plan`) reference to this instance's
+    /// plan may exist or be created concurrently on this or any other thread while the returned
+    /// reference is live.
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn get_plan_mut(&self) -> &mut dyn Plan<VM = VM> {
-        &mut **(self.plan.get())
+        // SAFETY: `self.plan` contains an initialized `Box<dyn Plan<VM = VM>>`, and the caller
+        // upholds exclusive access with no live aliasing shared or mutable references.
+        unsafe { &mut **(self.plan.get()) }
     }
 
     /// Get the run time options.

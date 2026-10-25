@@ -104,6 +104,17 @@ impl<VM: VMBinding> Plan for GenCopy<VM> {
     }
 
     fn prepare_worker(&self, worker: &mut GCWorker<Self::VM>) {
+        assert!(
+            worker.is_copy_context_initialized()
+                && std::ptr::eq(
+                    worker.mmtk.get_plan() as *const dyn Plan<VM = Self::VM> as *const (),
+                    self as *const Self as *const (),
+                ),
+            "GCWorker copy context was not initialized for this GenCopy plan",
+        );
+        // SAFETY: `worker` belongs to this `GenCopy` plan and `GCWorker::run` has initialized
+        // `worker.copy` via `GenCopy::create_copy_config`, which maps `CopySelector::CopySpace(0)`
+        // in `space_mapping` so `copy[0]` was written by `GCWorkerCopyContext::new`.
         unsafe { worker.get_copy_context_mut().copy[0].assume_init_mut() }.rebind(self.tospace());
     }
 

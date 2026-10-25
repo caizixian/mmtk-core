@@ -95,7 +95,7 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
     }
 
     fn get_slot_logging_state(&self, slot: VM::VMSlot) -> u8 {
-        unsafe { Self::UNLOG_BITS.load(slot.to_address()) }
+        Self::UNLOG_BITS.load_atomic::<u8>(slot.to_address(), Ordering::Relaxed)
     }
 
     fn attempt_to_log_field(&self, slot: VM::VMSlot) -> bool {
@@ -245,20 +245,29 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
     }
 
     fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, dst: VM::VMMemorySlice) {
+        if dst.bytes() == 0 {
+            return;
+        }
         // Quickly check if all fields are logged. If yes, skip the barrier.
         let unlog_bits_start = address_to_meta_address(&Self::UNLOG_BITS, dst.start());
-        let unlog_bits_start_aligned = unlog_bits_start.align_down(16);
         let unlog_bits_end =
-            address_to_meta_address(&Self::UNLOG_BITS, dst.start() + dst.bytes() - 1);
-        let unlog_bits_end_aligned = unlog_bits_end.align_down(16);
-        let mut cursor = unlog_bits_start_aligned;
+            address_to_meta_address(&Self::UNLOG_BITS, dst.start() + (dst.bytes() - 1));
+        let mut cursor = unlog_bits_start;
         let mut all_logged = true;
-        while cursor <= unlog_bits_end_aligned {
-            if unsafe { cursor.load::<u128>() } != 0 {
+        while cursor <= unlog_bits_end {
+            // SAFETY: `dst` is a non-empty (`dst.bytes() > 0`), valid heap `MemorySlice`, so side
+            // metadata for `[dst.start(), dst.start() + dst.bytes())` (i.e. `[unlog_bits_start,
+            // unlog_bits_end]`) is mapped and initialized. `AtomicU8` has alignment 1, and all
+            // concurrent mutator accesses to `UNLOG_BITS` during mutator execution use `AtomicU8`
+            // (`SideMetadataSpec::load_atomic` / `compare_exchange_atomic`), while non-atomic GC
+            // updates occur only during STW pauses or on newly acquired clean blocks not yet
+            // reachable by mutators, avoiding both data races and mixed-size atomic accesses.
+            if unsafe { cursor.atomic_load::<std::sync::atomic::AtomicU8>(Ordering::Relaxed) } != 0
+            {
                 all_logged = false;
                 break;
             }
-            cursor += 16usize;
+            cursor += 1usize;
         }
         if all_logged {
             return;
