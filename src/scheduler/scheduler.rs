@@ -34,11 +34,6 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     affinity: AffinityKind,
 }
 
-// FIXME: GCWorkScheduler should be naturally Sync, but we cannot remove this `impl` yet.
-// Some subtle interaction between ObjectRememberingBarrier, Mutator and some GCWork instances
-// makes the compiler think WorkBucket is not Sync.
-unsafe impl<VM: VMBinding> Sync for GCWorkScheduler<VM> {}
-
 impl<VM: VMBinding> GCWorkScheduler<VM> {
     pub fn new(num_workers: usize, affinity: AffinityKind) -> Arc<Self> {
         assert!(num_workers > 0);
@@ -657,9 +652,21 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
         // All other workers are parked, so it is safe to access the Plan instance mutably.
         probe!(mmtk, plan_end_of_gc_begin);
-        let plan_mut: &mut dyn Plan<VM = VM> = unsafe { mmtk.get_plan_mut() };
-        // This also tells the GC trigger whether the GC cycle has ended (see `Plan::on_pause_end`).
-        plan_mut.on_pause_end(mmtk, worker.tls);
+        let next_gc_full_heap = crate::plan::compute_next_gc_full_heap(mmtk.get_plan());
+        let gc_ended = {
+            // SAFETY: `on_gc_finished` runs on the coordinator/last-parked GC worker after all STW
+            // buckets have drained and been closed, while all other GC workers remain parked and
+            // before mutators are resumed below (`resume_mutators`). `next_gc_full_heap` was
+            // computed above before acquiring `plan_mut`, and `finish_plan_pause` performs only
+            // plan-local updates without invoking `gc_trigger.policy.on_gc_end` (which is called
+            // after `plan_mut` is dropped below), so no concurrent or re-entrant read/write access
+            // to `mmtk.plan` occurs while `plan_mut` is live.
+            let plan_mut: &mut dyn Plan<VM = VM> = unsafe { mmtk.get_plan_mut() };
+            crate::plan::finish_plan_pause(plan_mut, mmtk, worker.tls, next_gc_full_heap)
+        };
+        if gc_ended {
+            mmtk.gc_trigger.policy.on_gc_end(mmtk);
+        }
         probe!(mmtk, plan_end_of_gc_end);
 
         // Compute the elapsed time of the pause so far. `pause_start_time` is taken (and the

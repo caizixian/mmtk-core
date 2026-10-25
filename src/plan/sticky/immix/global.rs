@@ -160,18 +160,9 @@ impl<VM: VMBinding> Plan for StickyImmix<VM> {
         mmtk: &'static MMTK<VM>,
         tls: crate::util::opaque_pointer::VMWorkerThread,
     ) {
-        let next_gc_full_heap =
-            crate::plan::generational::global::CommonGenPlan::should_next_gc_be_full_heap(self);
-        self.next_gc_full_heap
-            .store(next_gc_full_heap, Ordering::Relaxed);
-
-        let was_defrag = self.immix.immix_space.end_of_gc();
-        self.immix
-            .set_last_gc_was_defrag(was_defrag, Ordering::Relaxed);
-
-        self.immix.common.on_pause_end(tls);
-
-        mmtk.gc_trigger.policy.on_gc_end(mmtk);
+        if self.finish_pause(tls, None) {
+            mmtk.gc_trigger.policy.on_gc_end(mmtk);
+        }
     }
 
     fn collection_required(&self, space_full: bool, space: Option<SpaceStats<Self::VM>>) -> bool {
@@ -401,5 +392,24 @@ impl<VM: VMBinding> StickyImmix<VM> {
 
     pub fn get_immix_space(&self) -> &ImmixSpace<VM> {
         &self.immix.immix_space
+    }
+
+    pub(in crate::plan) fn finish_pause(
+        &mut self,
+        tls: crate::util::opaque_pointer::VMWorkerThread,
+        next_gc_full_heap: Option<bool>,
+    ) -> bool {
+        let next_gc_full_heap = next_gc_full_heap.unwrap_or_else(|| {
+            crate::plan::generational::global::CommonGenPlan::should_next_gc_be_full_heap(self)
+        });
+        self.next_gc_full_heap
+            .store(next_gc_full_heap, Ordering::Relaxed);
+
+        let was_defrag = self.immix.immix_space.end_of_gc();
+        self.immix
+            .set_last_gc_was_defrag(was_defrag, Ordering::Relaxed);
+
+        self.immix.common.on_pause_end(tls);
+        true
     }
 }

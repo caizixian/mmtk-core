@@ -49,13 +49,8 @@ pub fn create_lisp2_mutator<VM: VMBinding>(
 
 pub fn lisp2_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWorkerThread) {
     // reset the thread-local allocation bump pointer
-    let lisp2_allocator = unsafe {
-        mutator
-            .allocators
-            .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
-    }
-    .downcast_mut::<Lisp2Allocator<VM>>()
-    .unwrap();
+    let lisp2_allocator = mutator
+        .allocator_downcast_mut_for_semantic::<Lisp2Allocator<VM>>(AllocationSemantics::Default);
     lisp2_allocator.reset();
 
     common_release_func(mutator, tls);

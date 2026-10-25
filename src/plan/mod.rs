@@ -19,9 +19,12 @@ pub use barriers::BarrierSelector;
 mod gc_work;
 
 mod global;
+pub(crate) use global::compute_next_gc_full_heap;
 pub(crate) use global::create_gc_worker_context;
 pub(crate) use global::create_mutator;
 pub(crate) use global::create_plan;
+pub(crate) use global::finish_plan_pause;
+pub(crate) use global::on_collection_initialized;
 pub use global::AllocationSemantics;
 pub(crate) use global::CreateGeneralPlanArgs;
 pub(crate) use global::HasSpaces;

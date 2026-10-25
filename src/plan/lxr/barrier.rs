@@ -16,7 +16,6 @@ use crate::plan::lxr::gc_work::tracing::ProcessModBufSATB;
 use crate::plan::VectorQueue;
 use crate::scheduler::WorkBucketStage;
 use crate::util::metadata::log_bit::{LOGGED_VALUE, UNLOGGED_VALUE};
-use crate::util::metadata::side_metadata::address_to_meta_address;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::*;
 use crate::vm::slot::MemorySlice;
@@ -95,7 +94,7 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
     }
 
     fn get_slot_logging_state(&self, slot: VM::VMSlot) -> u8 {
-        unsafe { Self::UNLOG_BITS.load(slot.to_address()) }
+        Self::UNLOG_BITS.load_atomic::<u8>(slot.to_address(), Ordering::Relaxed)
     }
 
     fn attempt_to_log_field(&self, slot: VM::VMSlot) -> bool {
@@ -245,25 +244,9 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
     }
 
     fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, dst: VM::VMMemorySlice) {
-        // Quickly check if all fields are logged. If yes, skip the barrier.
-        let unlog_bits_start = address_to_meta_address(&Self::UNLOG_BITS, dst.start());
-        let unlog_bits_start_aligned = unlog_bits_start.align_down(16);
-        let unlog_bits_end =
-            address_to_meta_address(&Self::UNLOG_BITS, dst.start() + dst.bytes() - 1);
-        let unlog_bits_end_aligned = unlog_bits_end.align_down(16);
-        let mut cursor = unlog_bits_start_aligned;
-        let mut all_logged = true;
-        while cursor <= unlog_bits_end_aligned {
-            if unsafe { cursor.load::<u128>() } != 0 {
-                all_logged = false;
-                break;
-            }
-            cursor += 16usize;
-        }
-        if all_logged {
+        if dst.bytes() == 0 {
             return;
         }
-
         for s in dst.iter_slots() {
             let _succ = self.enqueue_node(None, s, None);
         }

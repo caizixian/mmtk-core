@@ -68,9 +68,9 @@ impl<VM: VMBinding> Plan for MarkSweep<VM> {
     }
 
     fn on_pause_end(&mut self, mmtk: &'static MMTK<VM>, tls: VMWorkerThread) {
-        self.ms.end_of_gc();
-        self.common.on_pause_end(tls);
-        mmtk.gc_trigger.policy.on_gc_end(mmtk);
+        if self.finish_pause(tls) {
+            mmtk.gc_trigger.policy.on_gc_end(mmtk);
+        }
     }
 
     fn collection_required(&self, space_full: bool, _space: Option<SpaceStats<Self::VM>>) -> bool {
@@ -126,5 +126,11 @@ impl<VM: VMBinding> MarkSweep<VM> {
 
     pub fn ms_space(&self) -> &MarkSweepSpace<VM> {
         &self.ms
+    }
+
+    pub(in crate::plan) fn finish_pause(&mut self, tls: VMWorkerThread) -> bool {
+        self.ms.end_of_gc();
+        self.common.on_pause_end(tls);
+        true
     }
 }

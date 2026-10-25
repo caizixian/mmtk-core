@@ -158,13 +158,9 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
     }
 
     fn on_pause_end(&mut self, mmtk: &'static MMTK<VM>, tls: VMWorkerThread) {
-        let next_gc_full_heap = CommonGenPlan::should_next_gc_be_full_heap(self);
-        self.gen.on_pause_end(tls, next_gc_full_heap);
-
-        let did_defrag = self.immix_space.end_of_gc();
-        self.last_gc_was_defrag.store(did_defrag, Ordering::Relaxed);
-
-        mmtk.gc_trigger.policy.on_gc_end(mmtk);
+        if self.finish_pause(tls, None) {
+            mmtk.gc_trigger.policy.on_gc_end(mmtk);
+        }
     }
 
     fn current_gc_may_move_object(&self) -> bool {
@@ -283,5 +279,19 @@ impl<VM: VMBinding> GenImmix<VM> {
 
     fn requires_full_heap_collection(&self) -> bool {
         self.gen.requires_full_heap_collection(self)
+    }
+
+    pub(in crate::plan) fn finish_pause(
+        &mut self,
+        tls: VMWorkerThread,
+        next_gc_full_heap: Option<bool>,
+    ) -> bool {
+        let next_gc_full_heap =
+            next_gc_full_heap.unwrap_or_else(|| CommonGenPlan::should_next_gc_be_full_heap(self));
+        self.gen.on_pause_end(tls, next_gc_full_heap);
+
+        let did_defrag = self.immix_space.end_of_gc();
+        self.last_gc_was_defrag.store(did_defrag, Ordering::Relaxed);
+        true
     }
 }

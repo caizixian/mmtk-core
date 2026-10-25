@@ -21,7 +21,7 @@ pub struct ConcurrentTraceObjects<
     initial_objects: Vec<ObjectReference>,
     /// `true` if the `initial_objects` are already marked.
     already_marked: bool,
-    phantom_data: PhantomData<(VM, P)>,
+    phantom_data: PhantomData<fn() -> (VM, P)>,
 }
 
 impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
@@ -37,11 +37,6 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
             phantom_data: PhantomData,
         }
     }
-}
-
-unsafe impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
-    Send for ConcurrentTraceObjects<VM, P, KIND>
-{
 }
 
 impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
@@ -115,12 +110,7 @@ pub struct ProcessModBufSATB<
     const KIND: TraceKind,
 > {
     nodes: Option<Vec<ObjectReference>>,
-    _p: std::marker::PhantomData<(VM, P)>,
-}
-
-unsafe impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
-    Send for ProcessModBufSATB<VM, P, KIND>
-{
+    _p: std::marker::PhantomData<fn() -> (VM, P)>,
 }
 
 impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
@@ -163,7 +153,7 @@ pub(crate) struct ConcurrentMarkingRootsWorkFactory<
     const KIND: TraceKind,
 > {
     pub(crate) mmtk: &'static MMTK<VM>,
-    phantom_data: PhantomData<P>,
+    phantom_data: PhantomData<fn() -> P>,
 }
 
 impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind> Clone
@@ -175,11 +165,6 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
             phantom_data: PhantomData,
         }
     }
-}
-
-unsafe impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>
-    Send for ConcurrentMarkingRootsWorkFactory<VM, P, KIND>
-{
 }
 
 impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND: TraceKind>

@@ -86,6 +86,19 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
     }
 
     fn prepare_worker(&self, worker: &mut GCWorker<VM>) {
+        assert!(
+            worker.is_copy_context_initialized()
+                && std::ptr::eq(
+                    worker.mmtk.get_plan() as *const dyn Plan<VM = VM> as *const (),
+                    self as *const Self as *const (),
+                ),
+            "GCWorker copy context was not initialized for this SemiSpace plan",
+        );
+        // SAFETY: `worker` belongs to this `SemiSpace` plan and `GCWorker::run` has initialized
+        // `worker.copy` via `SemiSpace::create_copy_config`, which maps `CopySelector::CopySpace(0)`
+        // in `space_mapping` so `copy[0]` was written by `GCWorkerCopyContext::new` (assuming
+        // `GCWorkerCopyContext::copy[0]`, currently `pub` in `src/util/copy/mod.rs`, has not been
+        // overwritten with `MaybeUninit::uninit()` via `worker.get_copy_context_mut()`).
         unsafe { worker.get_copy_context_mut().copy[0].assume_init_mut() }.rebind(self.tospace());
     }
 

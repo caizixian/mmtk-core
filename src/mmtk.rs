@@ -116,7 +116,7 @@ impl Default for MMTKBuilder {
 pub struct MMTK<VM: VMBinding> {
     pub(crate) options: Arc<Options>,
     pub(crate) state: Arc<GlobalState>,
-    pub(crate) plan: UnsafeCell<Box<dyn Plan<VM = VM>>>,
+    pub(crate) plan: std::ptr::NonNull<UnsafeCell<dyn Plan<VM = VM>>>,
     pub(crate) reference_processors: ReferenceProcessors,
     pub(crate) finalizable_processor:
         Mutex<FinalizableProcessor<<VM::VMReferenceGlue as ReferenceGlue<VM>>::FinalizableType>>,
@@ -134,7 +134,19 @@ pub struct MMTK<VM: VMBinding> {
     pub(crate) analysis_manager: Arc<AnalysisManager<VM>>,
 }
 
+// SAFETY: Every field of `MMTK<VM>` is `Sync` except `plan: NonNull<UnsafeCell<dyn Plan<VM = VM>>>`
+// (`NonNull` and `UnsafeCell` are `!Sync`). `plan` points to a leaked `'static` heap allocation,
+// and `Plan: Sync`, so concurrent shared accesses via `MMTK::get_plan` are thread-safe. Mutable
+// access via `MMTK::get_plan_mut` is `unsafe` and restricted by its safety contract to
+// single-worker stop-the-world scopes (such as `Prepare`, `Release`, `UpdateReferences`, and
+// `on_gc_finished`) when all mutators are paused, all other GC workers are parked, and no
+// concurrent or re-entrant read or write access to `plan` occurs while the `&mut` borrow is live.
 unsafe impl<VM: VMBinding> Sync for MMTK<VM> {}
+// SAFETY: Every field of `MMTK<VM>` is `Send` except `plan: NonNull<UnsafeCell<dyn Plan<VM = VM>>>`
+// (`NonNull` is `!Send` and the `Plan` trait bounds `Sync` rather than `Send`). Every concrete
+// `Plan` constructed by `crate::plan::create_plan` owns only thread-independent heap/space
+// structures, `Arc`s, locks, and atomics (no thread-local handles), so transferring ownership of
+// `MMTK<VM>` across threads before pinning it at `'static` is sound.
 unsafe impl<VM: VMBinding> Send for MMTK<VM> {}
 
 impl<VM: VMBinding> MMTK<VM> {
@@ -188,44 +200,68 @@ impl<VM: VMBinding> MMTK<VM> {
         // Initialize side metadata runtime state and reserve its address range after creating spaces.
         crate::util::metadata::side_metadata::initialize_side_metadata::<VM>(&options);
 
-        // We haven't finished creating MMTk. No one is using the GC trigger. We cast the arc into a mutable reference.
+        // TODO: This probably does not work if we have multiple MMTk instances.
+        // This needs to be called after we create Plan. It needs to use HeapMeta, which is gradually built when we create spaces.
         {
+            let plan_init = plan.get_mut();
+            VM_MAP.finalize_static_space_map(
+                heap.get_discontig_start(),
+                heap.get_discontig_end(),
+                &mut |start_address| {
+                    plan_init.for_each_space_mut(&mut |space| {
+                        // If the `VMMap` has a discontiguous memory range, we notify all discontiguous
+                        // space that the starting address has been determined.
+                        if let Some(pr) = space.maybe_get_page_resource_mut() {
+                            pr.update_discontiguous_start(start_address);
+                        }
+                    })
+                },
+            );
+
+            // The order here is important:
+            plan_init.initialize_side_metadata();
+            // Initialize side metadat sanity first
+            plan_init.verify_side_metadata_sanity();
+        }
+
+        // Leak `plan` via `Box::into_raw` now that all boot `&mut` initialization via
+        // `plan.get_mut()` has completed and been dropped, so the singleton `Plan` allocation has a
+        // true `'static` lifetime (never freed if `MMTK<VM>` is dropped while process-global
+        // `SFT_MAP` entries still point into its spaces) and every long-lived `'static` reference
+        // derives from `UnsafeCell::get(plan.as_ref())` (`SharedReadWrite` provenance) rather than
+        // from a temporary `&mut dyn Plan`.
+        let plan = std::ptr::NonNull::new(Box::into_raw(plan)).unwrap();
+        {
+            // SAFETY: `plan` was just created via `Box::into_raw` from an initialized
+            // `Box<UnsafeCell<dyn Plan<VM = VM>>>` after `plan.get_mut()` ended, and `MMTK` never
+            // frees or forms `&mut UnsafeCell<...>` to this allocation, so `plan` remains valid,
+            // properly aligned, and live at a fixed address for `'static` (even if `MMTK<VM>` is
+            // later dropped while `SFT_MAP` retains `'static` space pointers). `plan.as_ref()`
+            // forms a shared `&UnsafeCell<dyn Plan<VM = VM>>` preserving interior-mutable
+            // `SharedReadWrite` provenance over the `Plan` payload, and no `&mut dyn Plan` borrow
+            // is active here or concurrently with subsequent reads through `SFT_MAP` or
+            // `gc_trigger`.
+            let static_plan: &'static dyn Plan<VM = VM> =
+                unsafe { &*UnsafeCell::get(plan.as_ref()) };
+            // Then initialize SFT because it may use side metadata.
+            static_plan.initialize_sft();
+
             // TODO: use Arc::get_mut_unchecked() when it is availble.
+            // SAFETY: `MMTK::new` runs single-threaded before returning `MMTK` or spawning any
+            // mutator/worker threads. Although `Arc<GCTrigger<VM>>` handles have been cloned into
+            // `plan` and its spaces (`Arc` stores a raw `NonNull` internally, not `&T`), no shared
+            // or mutable reference to `*gc_trigger` exists on the call stack during this block,
+            // and `Arc::as_ptr` yields a valid, aligned pointer to the initialized `GCTrigger<VM>`.
             let gc_trigger: &mut GCTrigger<VM> =
                 unsafe { &mut *(Arc::as_ptr(&gc_trigger) as *mut _) };
-            // We know the plan address will not change. Cast it to a static reference.
-            let static_plan: &'static dyn Plan<VM = VM> = unsafe { &*(&*plan as *const _) };
             // Set the plan so we can trigger GC and check GC condition without using plan
             gc_trigger.set_plan(static_plan);
         }
 
-        // TODO: This probably does not work if we have multiple MMTk instances.
-        // This needs to be called after we create Plan. It needs to use HeapMeta, which is gradually built when we create spaces.
-        VM_MAP.finalize_static_space_map(
-            heap.get_discontig_start(),
-            heap.get_discontig_end(),
-            &mut |start_address| {
-                plan.for_each_space_mut(&mut |space| {
-                    // If the `VMMap` has a discontiguous memory range, we notify all discontiguous
-                    // space that the starting address has been determined.
-                    if let Some(pr) = space.maybe_get_page_resource_mut() {
-                        pr.update_discontiguous_start(start_address);
-                    }
-                })
-            },
-        );
-
-        // The order here is important:
-        plan.initialize_side_metadata();
-        // Initialize side metadat sanity first
-        plan.verify_side_metadata_sanity();
-        // Then intiialize SFT because it may use side metadata
-        plan.initialize_sft();
-
         MMTK {
             options,
             state,
-            plan: UnsafeCell::new(plan),
+            plan,
             reference_processors: ReferenceProcessors::new(),
             finalizable_processor: Mutex::new(FinalizableProcessor::<
                 <VM::VMReferenceGlue as ReferenceGlue<VM>>::FinalizableType,
@@ -262,6 +298,7 @@ impl<VM: VMBinding> MMTK<VM> {
             !self.state.is_initialized(),
             "MMTk collection has been initialized (was initialize_collection() already called before?)"
         );
+        crate::plan::on_collection_initialized(self.get_plan());
         self.scheduler.spawn_gc_threads(self, tls);
         self.state.gc_status.set_initialized();
         probe!(mmtk, collection_initialized);
@@ -487,17 +524,34 @@ impl<VM: VMBinding> MMTK<VM> {
 
     /// Get a reference to the plan.
     pub fn get_plan(&self) -> &dyn Plan<VM = VM> {
-        unsafe { &**(self.plan.get()) }
+        // SAFETY: `self.plan` is a valid, aligned `NonNull<UnsafeCell<dyn Plan<VM = VM>>>` leaked
+        // via `Box::into_raw` in `MMTK::new` and never freed or borrowed as `&mut UnsafeCell<...>`.
+        // By the safety contract of `get_plan_mut` (and single-threaded `&mut MMTK` exclusivity on
+        // `set_vm_space` during boot), `&mut dyn Plan` is only held when no concurrent or
+        // re-entrant `get_plan` access occurs on this or any other thread.
+        unsafe { &*UnsafeCell::get(self.plan.as_ref()) }
     }
 
     /// Get the plan as mutable reference.
     ///
     /// # Safety
     ///
-    /// This is unsafe because the caller must ensure that the plan is not used by other threads.
+    /// Although long-lived dormant `'static` shared references into the `Plan` and its spaces are
+    /// stored in `SFT_MAP`, `GCTrigger`, `Mutator`, `Allocators`, and `GCWorkerCopyContext`
+    /// (permitted because `MMTK::plan` points to a leaked `'static`
+    /// `UnsafeCell<dyn Plan<VM = VM>>`), the caller must guarantee exclusive runtime access
+    /// to the `Plan` and its spaces for the entire lifetime of the returned `&mut dyn Plan<VM = VM>`:
+    /// no concurrent or re-entrant read or write access to this `MMTK` instance's `Plan` or spaces
+    /// (whether via [`MMTK::get_plan`], [`MMTK::get_plan_mut`], `GCTrigger`, `SFT_MAP`, `Mutator`,
+    /// or `Allocators`) may occur on this or any other thread while the returned `&mut` reference
+    /// is live.
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn get_plan_mut(&self) -> &mut dyn Plan<VM = VM> {
-        &mut **(self.plan.get())
+        // SAFETY: `self.plan` is a valid, aligned `NonNull<UnsafeCell<dyn Plan<VM = VM>>>` leaked
+        // in `MMTK::new` and never freed or borrowed as `&mut UnsafeCell<...>`, and the caller
+        // guarantees no concurrent or re-entrant read/write access to the `Plan` or its spaces
+        // occurs while the returned `&mut` reference is live.
+        unsafe { &mut *UnsafeCell::get(self.plan.as_ref()) }
     }
 
     /// Get the run time options.

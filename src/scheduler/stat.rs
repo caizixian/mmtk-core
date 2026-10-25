@@ -17,17 +17,9 @@ pub struct SchedulerStat {
     /// Count the number of work packets executed for different types
     work_counts: HashMap<TypeId, usize>,
     /// Collect work counters from work threads.
-    /// Two dimensional vectors are used, e.g.
-    /// `[[foo_0, ..., foo_n], ..., [bar_0, ..., bar_n]]`.
-    /// The first dimension is for different types of work counters,
-    /// (`foo` and `bar` in the above example).
-    /// The second dimension if for work counters of the same type but from
-    /// different threads (`foo_0` and `bar_0` are from the same thread).
-    /// The order of insertion is determined by when [`SchedulerStat::merge`] is
-    /// called for each [`WorkerLocalStat`].
-    /// We assume different threads have the same set of work counters
-    /// (in the same order).
-    work_counters: HashMap<TypeId, Vec<Vec<Box<dyn WorkCounter>>>>,
+    /// Each entry stores `(counter_name, [base_0, ..., base_n])` across worker threads
+    /// in the same counter order recorded by [`WorkerLocalStat`].
+    work_counters: HashMap<TypeId, Vec<(String, Vec<WorkCounterBase>)>>,
 }
 
 impl SchedulerStat {
@@ -67,17 +59,14 @@ impl SchedulerStat {
             // Name of the work packet type
             let n = self.work_id_name_map[t];
             // Iterate through different types of work counters
-            for v in vs.iter() {
+            for (name, v) in vs.iter() {
                 // Aggregate work counters of the same type but from different
                 // worker threads
                 let fold = v
                     .iter()
-                    .fold(Default::default(), |acc: WorkCounterBase, x| {
-                        acc.merge(x.get_base())
-                    });
+                    .fold(Default::default(), |acc: WorkCounterBase, x| acc.merge(x));
                 // Update the overall execution time
                 duration_overall.merge_inplace(&fold);
-                let name = v.first().unwrap().name();
                 let pkt_total = format!("work.{}.{}.total", self.work_name(n), name);
                 let pkt_min = format!("work.{}.{}.min", self.work_name(n), name);
                 let pkt_max = format!("work.{}.{}.max", self.work_name(n), name);
@@ -134,21 +123,12 @@ impl SchedulerStat {
         }
         // Merge work counter for different work packet types
         for (id, counters) in &stat.work_counters {
-            // Initialize the two dimensional vector
-            // [
-            //    [], // foo counter
-            //    [], // bar counter
-            // ]
             let vs = self
                 .work_counters
                 .entry(*id)
-                .or_insert_with(|| vec![vec![]; counters.len()]);
-            // [
-            //    [counters[0] of type foo],
-            //    [counters[1] of type bar]
-            // ]
-            for (v, c) in vs.iter_mut().zip(counters.iter()) {
-                v.push(c.clone());
+                .or_insert_with(|| counters.iter().map(|c| (c.name(), vec![])).collect());
+            for ((_, v), c) in vs.iter_mut().zip(counters.iter()) {
+                v.push(*c.get_base());
             }
         }
     }
@@ -189,10 +169,8 @@ pub struct WorkerLocalStat<C> {
     work_counts: HashMap<TypeId, usize>,
     work_counters: HashMap<TypeId, Vec<Box<dyn WorkCounter>>>,
     enabled: AtomicBool,
-    _phantom: PhantomData<C>,
+    _phantom: PhantomData<fn() -> C>,
 }
-
-unsafe impl<C> Send for WorkerLocalStat<C> {}
 
 impl<C> Default for WorkerLocalStat<C> {
     fn default() -> Self {

@@ -96,6 +96,8 @@ pub struct GCWorker<VM: VMBinding> {
     scheduler: Arc<GCWorkScheduler<VM>>,
     /// The copy context, used to implement copying GC.
     copy: GCWorkerCopyContext<VM>,
+    /// True once `GCWorker::run` has initialized `self.copy` via `create_gc_worker_context`.
+    copy_initialized: bool,
     /// The reference to the MMTk instance.
     pub mmtk: &'static MMTK<VM>,
     /// Reference to the shared part of the GC worker.  It is used for synchronization.
@@ -103,9 +105,6 @@ pub struct GCWorker<VM: VMBinding> {
     /// Local work packet queue.
     pub local_work_buffer: deque::Worker<Box<dyn GCWork<VM>>>,
 }
-
-unsafe impl<VM: VMBinding> Sync for GCWorkerShared<VM> {}
-unsafe impl<VM: VMBinding> Send for GCWorkerShared<VM> {}
 
 // Error message for borrowing `GCWorkerShared::stat`.
 const STAT_BORROWED_MSG: &str = "GCWorkerShared.stat is already borrowed.  This may happen if \
@@ -147,6 +146,7 @@ impl<VM: VMBinding> GCWorker<VM> {
             ordinal,
             // We will set this later
             copy: GCWorkerCopyContext::new_non_copy(),
+            copy_initialized: false,
             scheduler,
             mmtk,
             shared,
@@ -191,6 +191,10 @@ impl<VM: VMBinding> GCWorker<VM> {
         &mut self.copy
     }
 
+    pub(crate) fn is_copy_context_initialized(&self) -> bool {
+        self.copy_initialized
+    }
+
     /// Poll a ready-to-execute work packet in the following order:
     ///
     /// 1. Any packet that should be processed only by this worker.
@@ -221,6 +225,10 @@ impl<VM: VMBinding> GCWorker<VM> {
     /// * `tls`: The VM-specific thread-local storage for this GC worker thread.
     /// * `mmtk`: A reference to an MMTk instance.
     pub fn run(mut self: Box<Self>, tls: VMWorkerThread, mmtk: &'static MMTK<VM>) {
+        assert!(
+            std::ptr::eq(self.mmtk, mmtk),
+            "GCWorker::run called with a different MMTK instance than the one that owns this worker"
+        );
         probe!(mmtk, gcworker_run);
         debug!(
             "Worker started. ordinal: {}, {}",
@@ -231,6 +239,7 @@ impl<VM: VMBinding> GCWorker<VM> {
         self.scheduler.resolve_affinity(self.ordinal);
         self.tls = tls;
         self.copy = crate::plan::create_gc_worker_context(tls, mmtk);
+        self.copy_initialized = true;
         loop {
             // Instead of having work_start and work_end tracepoints, we have
             // one tracepoint before polling for more work and one tracepoint
@@ -253,7 +262,7 @@ impl<VM: VMBinding> GCWorker<VM> {
             // Workaround a problem where bpftrace script cannot see the work packet names,
             // by force loading from the packet name.
             // See the "Known issues" section in `tools/tracing/timeline/README.md`
-            std::hint::black_box(unsafe { *(typename.as_ptr()) });
+            std::hint::black_box(typename.as_bytes().first().copied());
 
             probe!(mmtk, work, typename.as_ptr(), typename.len());
             debug_assert!(
@@ -307,9 +316,13 @@ pub(crate) struct WorkerGroup<VM: VMBinding> {
     state: Mutex<Option<WorkerCreationState<VM>>>,
 }
 
-/// We have to persuade Rust that `WorkerGroup` is safe to share because the compiler thinks one
-/// worker can refer to another worker via the path "worker -> scheduler -> worker_group ->
-/// `Surrendered::workers` -> worker" which is cyclic reference and unsafe.
+/// We have to persuade Rust that `WorkerGroup` is safe to share because the compiler hits an
+/// auto-trait cycle via "worker -> scheduler -> worker_group -> `Surrendered::workers` -> worker".
+// SAFETY: `workers_shared` is `Vec<Arc<GCWorkerShared<VM>>>` where `GCWorkerShared<VM>: Send + Sync`.
+// `state` is a `Mutex<Option<WorkerCreationState<VM>>>`, and every variant of `WorkerCreationState<VM>`
+// (`Vec<deque::Worker<Box<dyn GCWork<VM>>>>` and `Vec<Box<GCWorker<VM>>>`) owns exclusively `Send`
+// data (`GCWork<VM>: Send`, `GCWorkerCopyContext<VM>: Send`, `VMWorkerThread: Send`) synchronized by
+// the `Mutex`, so sharing `&WorkerGroup<VM>` across threads cannot cause unsynchronized access.
 unsafe impl<VM: VMBinding> Sync for WorkerGroup<VM> {}
 
 impl<VM: VMBinding> WorkerGroup<VM> {

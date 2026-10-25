@@ -110,10 +110,21 @@ pub fn mmtk_shutdown<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
 /// Currently we do not allow removing regions from VM space.
 #[cfg(feature = "vm_space")]
 pub fn set_vm_space<VM: VMBinding>(mmtk: &mut MMTK<VM>, start: Address, size: usize) {
-    unsafe { mmtk.get_plan_mut() }
-        .base_mut()
-        .vm_space
-        .set_vm_region(start, size);
+    // SAFETY: `mmtk.plan` is a valid, aligned `NonNull<UnsafeCell<dyn Plan<VM = VM>>>` leaked in
+    // `MMTK::new` and never freed or borrowed as `&mut UnsafeCell<...>`. `set_vm_space` is called
+    // single-threaded during VM boot via `&mut MMTK<VM>` (before `MMTK` is shared as
+    // `&'static MMTK<VM>` with mutators or GC workers) on distinct VM regions outside
+    // `available_range()`; `set_vm_region` does not touch `mmtk.gc_trigger`, and although
+    // `set_sft` -> `SFT_MAP.update` reads `SFT_MAP` entries under `debug_assertions`, on distinct
+    // boot regions those entries hold `EMPTY_SPACE_SFT` rather than any dormant `'static` space
+    // reference into `mmtk.plan` (Stage 2 switches `VMSpace::set_vm_region` to `&self`, eliminating
+    // `&mut Plan` / `&mut VMSpace` here altogether). Deriving `&mut dyn Plan` via
+    // `UnsafeCell::get(mmtk.plan.as_ref())` preserves interior-mutable `SharedReadWrite`
+    // provenance on the `Plan` allocation so dormant `'static` references stored in `gc_trigger`
+    // and `SFT_MAP` remain valid once `plan` drops.
+    let plan: &mut dyn crate::Plan<VM = VM> =
+        unsafe { &mut *std::cell::UnsafeCell::get(mmtk.plan.as_ref()) };
+    plan.base_mut().vm_space.set_vm_region(start, size);
 }
 
 /// Request MMTk to create a mutator for the given thread. The ownership
@@ -136,7 +147,7 @@ pub fn bind_mutator<VM: VMBinding>(
 
     const LOG_ALLOCATOR_MAPPING: bool = false;
     if LOG_ALLOCATOR_MAPPING {
-        info!("{:?}", mutator.config);
+        info!("{:?}", mutator.config());
     }
     mutator
 }

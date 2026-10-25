@@ -23,7 +23,7 @@ use crate::{
     plan::global::Plan,
     policy::{immix::block::Block, space::Space},
     scheduler::{GCWork, GCWorker, WorkBucketStage},
-    util::{metadata::side_metadata, object_forwarding, ObjectReference},
+    util::{object_forwarding, ObjectReference},
     vm::*,
     MMTK,
 };
@@ -48,8 +48,6 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     rc: RefCountHelper<VM>,
     survival_ratio_predictor_local: SurvivalRatioPredictorLocal,
 }
-
-unsafe impl<VM: VMBinding, const KIND: EdgeKind> Send for ProcessIncs<VM, KIND> {}
 
 impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     const CAPACITY: usize = 1024;
@@ -209,6 +207,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
 
     fn record_mature_evac_remset2(
         &mut self,
+        worker: &mut GCWorker<VM>,
         slot_in_defrag: bool,
         s: VM::VMSlot,
         o: ObjectReference,
@@ -217,15 +216,20 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             return;
         }
         if !slot_in_defrag && self.lxr.in_defrag(o) {
-            self.lxr.mature_evac_remset.record(s, o, self.lxr);
+            self.lxr.mature_evac_remset.record(worker, s, o, self.lxr);
         }
     }
 
-    fn record_mature_evac_remset(&mut self, s: VM::VMSlot, o: ObjectReference) {
+    fn record_mature_evac_remset(
+        &mut self,
+        worker: &mut GCWorker<VM>,
+        s: VM::VMSlot,
+        o: ObjectReference,
+    ) {
         if !(MATURE_EVACUATION && (self.in_cm || self.pause == Pause::FinalMark)) {
             return;
         }
-        self.record_mature_evac_remset2(self.lxr.address_in_defrag(s.to_address()), s, o);
+        self.record_mature_evac_remset2(worker, self.lxr.address_in_defrag(s.to_address()), s, o);
     }
 
     fn scan_nursery_object(
@@ -237,36 +241,58 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         _depth: u32,
         size: usize,
     ) {
-        let heap_bytes_per_unlog_byte =
-            VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC.heap_bytes_per_unlog_byte();
         if los {
-            let start =
-                side_metadata::address_to_meta_address(&Self::UNLOG_BITS, o.to_raw_address())
-                    .to_mut_ptr::<u8>();
-            let limit = side_metadata::address_to_meta_address(
-                &Self::UNLOG_BITS,
-                (o.to_raw_address() + size).align_up(heap_bytes_per_unlog_byte),
-            )
-            .to_mut_ptr::<u8>();
-            unsafe {
-                let bytes = limit.offset_from(start) as usize;
-                std::ptr::write_bytes(start, 0xffu8, bytes);
-            }
-            o.to_raw_address().unlog_field_relaxed::<VM>();
+            let obj_start = VM::VMObjectModel::ref_to_object_start(o);
+            Self::UNLOG_BITS.bset_metadata(obj_start, size);
         } else if in_place_promotion {
-            // Set every unlog bit covering the object. We align to the nearest u32 boundary,
-            // so we may overset unlog bits for adjacent objects.
-            let step = heap_bytes_per_unlog_byte << 2;
             let start = VM::VMObjectModel::ref_to_object_start(o);
-            let aligned_end = (start + size).align_up(step);
-            let mut cursor = start.align_down(step);
-            let mut meta = side_metadata::address_to_meta_address(&Self::UNLOG_BITS, cursor);
-            while cursor < aligned_end {
-                unsafe { meta.store(0xffffffffu32) }
-                meta += 4usize;
-                cursor += step;
+            #[cfg(feature = "extreme_assertions")]
+            {
+                let step = 1usize << Self::UNLOG_BITS.log_bytes_in_region;
+                let end = (start + size).align_up(step);
+                let mut cursor = start.align_down(step);
+                while cursor < end {
+                    Self::UNLOG_BITS.store_atomic::<u8>(
+                        cursor,
+                        crate::util::metadata::log_bit::UNLOGGED_VALUE,
+                        Ordering::Relaxed,
+                    );
+                    cursor += step;
+                }
             }
-        };
+            #[cfg(not(feature = "extreme_assertions"))]
+            {
+                // Set every unlog bit covering `[start, start + size)` via 1-byte relaxed atomics
+                // (`AtomicU8`). We align to the nearest `UNLOG_BITS` metadata byte, which may
+                // benignly overset unlog bits for adjacent slots in the same 64-byte window.
+                let heap_bytes_per_unlog_byte =
+                    VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC.heap_bytes_per_unlog_byte();
+                let aligned_start = start.align_down(heap_bytes_per_unlog_byte);
+                let aligned_end = (start + size).align_up(heap_bytes_per_unlog_byte);
+                let mut meta = crate::util::metadata::side_metadata::address_to_meta_address(
+                    &Self::UNLOG_BITS,
+                    aligned_start,
+                );
+                let meta_end = crate::util::metadata::side_metadata::address_to_meta_address(
+                    &Self::UNLOG_BITS,
+                    aligned_end,
+                );
+                while meta < meta_end {
+                    // SAFETY: `o` resides in a single mapped Immix block (`Block::BYTES >= 32 KiB`,
+                    // a multiple of `heap_bytes_per_unlog_byte`), so every side-metadata byte in
+                    // `[meta, meta_end)` is mapped and 1-byte aligned for `AtomicU8`. Mutators are
+                    // stopped during `ProcessIncs`, and all concurrent `ProcessIncs` updates to
+                    // Immix `UNLOG_BITS` (`in_place_promotion` and `unlog_and_load_rc_object`) use
+                    // `AtomicU8` stores of `0xff`, avoiding both data races and mixed-size atomic
+                    // accesses even when nursery objects occupy recycled lines adjacent to mature
+                    // objects.
+                    unsafe {
+                        meta.atomic_store::<std::sync::atomic::AtomicU8>(0xffu8, Ordering::Relaxed);
+                    }
+                    meta += 1usize;
+                }
+            }
+        }
         // Promotion above arms the per-field unlog bits. Do the same for object log bits.
         #[cfg(feature = "lxr_object_log")]
         VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(o, Ordering::SeqCst);
@@ -297,7 +323,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 if rc != crate::util::rc::MAX_REF_COUNT {
                     let _ = self.rc.inc(target);
                 }
-                self.record_mature_evac_remset2(obj_in_defrag, slot, target);
+                self.record_mature_evac_remset2(worker, obj_in_defrag, slot, target);
             }
         });
     }
@@ -330,10 +356,14 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         if Block::containing(o).get_state() != BlockState::Nursery {
             return true;
         }
-        if cfg!(debug_assertions) {
-            let cls = unsafe { (o.to_raw_address() + 8usize).load::<u32>() };
-            assert!(cls != 0, "ERROR {:?} rc={}", o, self.rc.count(o));
-        }
+        debug_assert!(o.to_raw_address().is_mapped());
+        #[cfg(feature = "vo_bit")]
+        debug_assert!(
+            crate::util::metadata::vo_bit::is_vo_bit_set(o),
+            "ERROR {:?} rc={}: VO bit not set",
+            o,
+            self.rc.count(o)
+        );
         false
     }
 
@@ -429,7 +459,16 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         let o = s.load();
         // unlog slot
         if K == EDGE_KIND_MATURE {
-            s.to_address().unlog_field_relaxed::<VM>();
+            // SAFETY: `Self::UNLOG_BITS` is a 1-bit (`log_num_of_bits == 0 < 3`) per-field side
+            // metadata spec, `s` is a valid heap slot whose side metadata is mapped, and
+            // over-setting adjacent bits in the same 64-byte (`heap_bytes_per_unlog_byte`) window
+            // to `1` (`UNLOGGED_VALUE`) is benign (it only forces at most one slow-path barrier on
+            // the next write to an adjacent slot) while callers never rely on adjacent bits being
+            // set. `set_raw_byte_atomic` uses `AtomicU8` (`Ordering::Relaxed`), avoiding data races
+            // and mixed-size atomic accesses against concurrent `ProcessIncs` workers.
+            unsafe {
+                Self::UNLOG_BITS.set_raw_byte_atomic(s.to_address(), Ordering::Relaxed);
+            }
         }
         o
     }
@@ -451,7 +490,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         let new = self.process_inc_and_evacuate(worker, o, depth);
         // Put this into remset if this is a mature slot, or a weak root
         if K != EDGE_KIND_ROOT || add_root_to_remset {
-            self.record_mature_evac_remset(s, new);
+            self.record_mature_evac_remset(worker, s, new);
         }
         if new != o {
             s.store(new)
@@ -459,60 +498,41 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         Some(new)
     }
 
-    fn process_incs<const K: EdgeKind>(
+    fn process_owned_incs<const K: EdgeKind>(
         &mut self,
         worker: &mut GCWorker<VM>,
-        mut incs: AddressBuffer<'_, VM::VMSlot>,
+        incs: Vec<VM::VMSlot>,
         depth: u32,
         add_root_to_remset: bool,
     ) -> Option<Vec<ObjectReference>> {
         if K == EDGE_KIND_ROOT {
-            // An optimization with Rust zero allocation. However, it only works if
-            // VMSlot has exactly the same size and alignment as ObjectReference, which
-            // is not guaranteed.
-            // TODO: Check performance of this optimization. If it is not significant, we can remove it to simplify the code.
-            if std::mem::size_of::<VM::VMSlot>() == std::mem::size_of::<ObjectReference>()
-                && std::mem::align_of::<VM::VMSlot>() == std::mem::align_of::<ObjectReference>()
-            {
-                let roots = incs.as_mut_ptr() as *mut ObjectReference;
-                let mut num_roots = 0usize;
-                for s in incs.iter() {
-                    if let Some(new) = self.process_slot::<K>(worker, *s, depth, add_root_to_remset)
-                    {
-                        unsafe {
-                            roots.add(num_roots).write(new);
-                        }
-                        num_roots += 1;
-                    }
-                }
-                return if num_roots != 0 {
-                    let cap = incs.capacity();
-                    std::mem::forget(incs); // roots references incs now. we dont need incs.
-                    let roots =
-                        unsafe { Vec::<ObjectReference>::from_raw_parts(roots, num_roots, cap) };
-                    Some(roots)
-                } else {
-                    None
-                };
-            }
-
-            // General case: we need to allocate a new vector and push into it.
-            let mut roots = Vec::with_capacity(incs.len());
-            for s in incs.iter() {
-                if let Some(new) = self.process_slot::<K>(worker, *s, depth, add_root_to_remset) {
-                    roots.push(new);
-                }
-            }
+            // `alloc::vec::in_place_collect` reuses `incs`'s heap buffer in place with zero
+            // allocations whenever `VM::VMSlot` and `ObjectReference` have identical size and
+            // alignment, and falls back to allocating a fresh `Vec` otherwise.
+            let roots: Vec<ObjectReference> = incs
+                .into_iter()
+                .filter_map(|s| self.process_slot::<K>(worker, s, depth, add_root_to_remset))
+                .collect();
             if roots.is_empty() {
                 None
             } else {
                 Some(roots)
             }
         } else {
-            for s in incs.iter() {
-                self.process_slot::<K>(worker, *s, depth, false);
-            }
+            self.process_slice_incs::<K>(worker, &incs, depth);
             None
+        }
+    }
+
+    fn process_slice_incs<const K: EdgeKind>(
+        &mut self,
+        worker: &mut GCWorker<VM>,
+        incs: &[VM::VMSlot],
+        depth: u32,
+    ) {
+        debug_assert_ne!(K, EDGE_KIND_ROOT);
+        for s in incs {
+            self.process_slot::<K>(worker, *s, depth, false);
         }
     }
 }
@@ -521,30 +541,6 @@ pub type EdgeKind = u8;
 pub const EDGE_KIND_ROOT: u8 = 0;
 pub const EDGE_KIND_NURSERY: u8 = 1;
 pub const EDGE_KIND_MATURE: u8 = 2;
-
-enum AddressBuffer<'a, S: Slot> {
-    Owned(Vec<S>),
-    Ref(&'a mut Vec<S>),
-}
-
-impl<S: Slot> Deref for AddressBuffer<'_, S> {
-    type Target = Vec<S>;
-    fn deref(&self) -> &Self::Target {
-        match self {
-            Self::Owned(x) => x,
-            Self::Ref(x) => x,
-        }
-    }
-}
-
-impl<S: Slot> DerefMut for AddressBuffer<'_, S> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        match self {
-            Self::Owned(x) => x,
-            Self::Ref(x) => x,
-        }
-    }
-}
 
 impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
@@ -572,7 +568,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         };
         let roots = {
             let incs = std::mem::take(&mut self.incs);
-            self.process_incs::<KIND>(worker, AddressBuffer::Owned(incs), self.depth, false)
+            self.process_owned_incs::<KIND>(worker, incs, self.depth, false)
         };
         if let Some(roots) = roots {
             if self.lxr.cm_enabled()
@@ -638,12 +634,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                 incs = a.to_vec();
             }
             if !incs.is_empty() {
-                self.process_incs::<EDGE_KIND_NURSERY>(
-                    worker,
-                    AddressBuffer::Ref(&mut incs),
-                    depth,
-                    false,
-                );
+                self.process_slice_incs::<EDGE_KIND_NURSERY>(worker, &incs, depth);
             }
         }
         self.survival_ratio_predictor_local.sync();
@@ -728,9 +719,23 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         o: ObjectReference,
         lxr: &LXR<VM>,
     ) -> bool {
-        if self.mark_dead_objects {
-            lxr.mark(o);
-        }
+        let can_poison_object = if self.mark_dead_objects {
+            // If concurrent marking already claimed `o`'s mark bit (`lxr.mark(o) == false`), a
+            // concurrent `LXRConcurrentTraceObjects` worker may still be reading `o`'s header to
+            // scan its fields; only poison `o` when we win the mark bit first.
+            lxr.mark(o)
+        } else {
+            // Immediately after `InitialMark` (`LAZY_DECREMENTS == true`), `self.mark_dead_objects`
+            // is `false` while `lxr.concurrent_work_in_progress()` is `true` and
+            // `LXRConcurrentTraceObjects` may concurrently scan objects; only poison when
+            // concurrent marking is inactive.
+            !lxr.concurrent_work_in_progress()
+        };
+        let obj_end_for_poison = if RefCountHelper::<VM>::SANITY && can_poison_object {
+            Some(VM::VMObjectModel::ref_to_object_start(o) + VM::VMObjectModel::get_current_size(o))
+        } else {
+            None
+        };
         // Recursively decrease field ref counts
         let tls = worker.tls.0;
         o.iterate_fields::<VM, _>(tls, |slot| {
@@ -767,8 +772,22 @@ impl<VM: VMBinding> ProcessDecs<VM> {
 
             self.rc.unmark_straddle_object(o);
         }
-        if RefCountHelper::<VM>::SANITY {
-            unsafe { o.to_raw_address().store(0xdeadusize) };
+        if let Some(obj_end) = obj_end_for_poison {
+            if o.to_raw_address() + std::mem::size_of::<usize>() <= obj_end {
+                // SAFETY: `o` is a live-allocated object whose last reference count is dropping
+                // from `1 -> 0` (all epoch increments ran before decrements, so no mutator or
+                // other `ProcessDecs` worker holds a reference to `o`, and `!dead` in
+                // `process_decs` ensures this runs at most once even if an adjacent `RC_TABLE`
+                // entry retries `fetch_update`). `can_poison_object` guarantees either concurrent
+                // marking is inactive (`!lxr.concurrent_work_in_progress()`) or this worker
+                // atomically claimed `o`'s mark bit first (`lxr.mark(o)`), so no concurrent
+                // `LXRConcurrentTraceObjects` worker reads `o`, and `o` has not yet been released
+                // to block or LOS sweeping. By `ObjectModel`'s `ObjectReference` contract,
+                // `o.to_raw_address()` is non-null, word-aligned (`size_of::<usize>()`), and at or
+                // after `ref_to_object_start(o)`, and the guard above ensures all
+                // `size_of::<usize>()` bytes lie within `[obj_start, obj_end)`.
+                unsafe { o.to_raw_address().store(0xdeadusize) };
+            }
         }
         if in_ix_space {
             let block = Block::containing(o);
@@ -867,13 +886,12 @@ impl<VM: VMBinding> CollectSlotRoots<VM> {
 
 impl<VM: VMBinding> GCWork<VM> for CollectSlotRoots<VM> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        self.set_worker(worker);
         if !self.slots.is_empty() {
             let lxr = self.mmtk().get_plan().downcast_ref::<LXR<VM>>().unwrap();
             let roots = std::mem::take(&mut self.slots);
             let mut w = ProcessIncs::<_, EDGE_KIND_ROOT>::new(roots, lxr);
             w.root_kind = self.root_kind;
-            GCWork::do_work(&mut w, self.worker(), self.mmtk());
+            GCWork::do_work(&mut w, worker, self.mmtk());
         }
     }
 }

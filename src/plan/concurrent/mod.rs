@@ -30,6 +30,43 @@ pub enum Pause {
     RefCount,
 }
 
-unsafe impl bytemuck::ZeroableInOption for Pause {}
+/// Lock-free atomic storage for `Option<Pause>`, encoding `None` as `0` and `Some(pause)` as
+/// `pause as u8` (`1..=4`) without relying on unsound `Pod` bit-pattern impls on `Option<Pause>`.
+#[derive(Default)]
+pub(in crate::plan) struct AtomicPause(std::sync::atomic::AtomicU8);
 
-unsafe impl bytemuck::PodInOption for Pause {}
+impl AtomicPause {
+    pub(in crate::plan) const fn new(pause: Option<Pause>) -> Self {
+        Self(std::sync::atomic::AtomicU8::new(Self::encode(pause)))
+    }
+
+    #[inline(always)]
+    const fn encode(pause: Option<Pause>) -> u8 {
+        match pause {
+            None => 0,
+            Some(p) => p as u8,
+        }
+    }
+
+    #[inline(always)]
+    fn decode(raw: u8) -> Option<Pause> {
+        match raw {
+            0 => None,
+            1 => Some(Pause::Full),
+            2 => Some(Pause::InitialMark),
+            3 => Some(Pause::FinalMark),
+            4 => Some(Pause::RefCount),
+            _ => unreachable!("Invalid AtomicPause discriminant: {}", raw),
+        }
+    }
+
+    #[inline(always)]
+    pub(in crate::plan) fn load(&self, order: std::sync::atomic::Ordering) -> Option<Pause> {
+        Self::decode(self.0.load(order))
+    }
+
+    #[inline(always)]
+    pub(in crate::plan) fn store(&self, pause: Option<Pause>, order: std::sync::atomic::Ordering) {
+        self.0.store(Self::encode(pause), order);
+    }
+}

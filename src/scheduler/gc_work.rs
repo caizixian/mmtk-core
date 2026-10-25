@@ -71,14 +71,16 @@ impl<VM: VMBinding> GCWork<VM> for ScheduleCollection {
 /// be no other concurrent work packet that accesses plan (read or write). Otherwise, there may
 /// be a race condition.
 pub struct Prepare<C: GCWorkContext> {
-    pub plan: *const C::PlanType,
+    plan_addr: usize,
+    _p: PhantomData<fn() -> C>,
 }
-
-unsafe impl<C: GCWorkContext> Send for Prepare<C> {}
 
 impl<C: GCWorkContext> Prepare<C> {
     pub fn new(plan: *const C::PlanType) -> Self {
-        Self { plan }
+        Self {
+            plan_addr: plan as usize,
+            _p: PhantomData,
+        }
     }
 }
 
@@ -86,10 +88,21 @@ impl<C: GCWorkContext> GCWork<C::VM> for Prepare<C> {
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
         trace!("Prepare Global");
         // We assume this is the only running work packet that accesses plan at the point of execution
-        let plan_mut: &mut C::PlanType = unsafe { &mut *(self.plan as *const _ as *mut _) };
-        plan_mut.prepare(worker.tls);
+        let needs_prepare_mutator = {
+            // SAFETY: `Prepare` is scheduled as the sole initial packet in `WorkBucketStage::Prepare`
+            // after all mutators have stopped and before `PrepareMutator`/`PrepareCollector` packets
+            // are added below, while all other GC workers are parked. No concurrent or re-entrant
+            // read/write access to `mmtk.plan` occurs during this block, and `mmtk.get_plan_mut()`
+            // derives `&mut` from `MMTK::plan`'s `NonNull<UnsafeCell<dyn Plan>>`.
+            let plan_mut: &mut C::PlanType = unsafe { mmtk.get_plan_mut() }
+                .downcast_mut::<C::PlanType>()
+                .unwrap();
+            debug_assert_eq!(self.plan_addr, plan_mut as *const C::PlanType as usize);
+            plan_mut.prepare(worker.tls);
+            plan_mut.constraints().needs_prepare_mutator
+        };
 
-        if plan_mut.constraints().needs_prepare_mutator {
+        if needs_prepare_mutator {
             let prepare_mutator_packets = <C::VM as VMBinding>::VMActivePlan::mutators()
                 .map(|mutator| Box::new(PrepareMutator::<C::VM>::new(mutator)) as _)
                 .collect::<Vec<_>>();
@@ -148,16 +161,18 @@ impl<VM: VMBinding> GCWork<VM> for PrepareCollector {
 /// be no other concurrent work packet that accesses plan (read or write). Otherwise, there may
 /// be a race condition.
 pub struct Release<C: GCWorkContext> {
-    pub plan: *const C::PlanType,
+    plan_addr: usize,
+    _p: PhantomData<fn() -> C>,
 }
 
 impl<C: GCWorkContext> Release<C> {
     pub fn new(plan: *const C::PlanType) -> Self {
-        Self { plan }
+        Self {
+            plan_addr: plan as usize,
+            _p: PhantomData,
+        }
     }
 }
-
-unsafe impl<C: GCWorkContext> Send for Release<C> {}
 
 impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
@@ -165,9 +180,19 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
 
         mmtk.gc_trigger.policy.on_gc_release(mmtk);
         // We assume this is the only running work packet that accesses plan at the point of execution
-
-        let plan_mut: &mut C::PlanType = unsafe { &mut *(self.plan as *const _ as *mut _) };
-        plan_mut.release(worker.tls);
+        {
+            // SAFETY: `WorkBucketStage::Release` opens only after all prior STW buckets are drained
+            // and all workers have parked, with `Release` as the sole initial packet in the bucket
+            // before `ReleaseMutator`/`ReleaseCollector` packets are enqueued below. `on_gc_release`
+            // above has already returned, so no concurrent or re-entrant read/write access to
+            // `mmtk.plan` occurs during this block, and `mmtk.get_plan_mut()` derives `&mut` from
+            // `MMTK::plan`'s `NonNull<UnsafeCell<dyn Plan>>`.
+            let plan_mut: &mut C::PlanType = unsafe { mmtk.get_plan_mut() }
+                .downcast_mut::<C::PlanType>()
+                .unwrap();
+            debug_assert_eq!(self.plan_addr, plan_mut as *const C::PlanType as usize);
+            plan_mut.release(worker.tls);
+        }
 
         let release_mutator_packets = <C::VM as VMBinding>::VMActivePlan::mutators()
             .map(|mutator| Box::new(ReleaseMutator::<C::VM>::new(mutator)) as _)
@@ -307,6 +332,12 @@ impl<C: GCWorkContext> GCWork<C::VM> for ScanMutatorRoots<C> {
         let factory = C::make_roots_work_factory(mmtk);
         <C::VM as VMBinding>::VMScanning::scan_roots_in_mutator_thread(
             worker.tls,
+            // SAFETY: `self.0` is an exclusive `&'static mut Mutator<C::VM>` yielded once per
+            // stopped mutator by `VMCollection::stop_all_mutators`. Reborrowing via `*mut _`
+            // satisfies `Scanning::scan_roots_in_mutator_thread`'s `'static` signature without
+            // moving `self.0` out of `&mut self`; `self.0` is not accessed while
+            // `scan_roots_in_mutator_thread` executes, and VM bindings do not retain the mutator
+            // reference past the call before `self.0.flush()` runs below.
             unsafe { &mut *(self.0 as *mut _) },
             factory,
         );
