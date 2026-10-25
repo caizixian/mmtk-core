@@ -1,4 +1,4 @@
-use std::sync::{Mutex, MutexGuard};
+use std::sync::Mutex;
 
 use super::layout::vm_layout::PAGES_IN_CHUNK;
 use super::layout::VMMap;
@@ -30,7 +30,24 @@ pub struct FreeListPageResource<VM: VMBinding> {
     pub(crate) protect_memory_on_release: Option<MmapProtection>,
 }
 
+assert_impl_all!(CommonPageResource: Send, Sync);
+assert_impl_all!(Option<MmapProtection>: Send, Sync);
+assert_impl_all!(crate::util::int_array_freelist::IntArrayFreeList: Send, Sync);
+assert_impl_all!(RawMemoryFreeList: Send, Sync);
+
+// SAFETY: Every field of `FreeListPageResource<VM>` is `Send`: `CommonPageResource` and
+// `Option<MmapProtection>` are `Send + Sync` (verified by `assert_impl_all!` above), `VM: VMBinding`
+// requires `VM: Send + Sync`, and `FreeListPageResourceSync` only lacks auto-`Send` because the
+// private trait `crate::util::freelist::FreeList` bounds `Sync + Downcast` without `+ Send`.
+// Because `crate::util::freelist` is private to `crate::util`, the only concrete types that can
+// inhabit `Box<dyn FreeList>` are `IntArrayFreeList` and `RawMemoryFreeList`, both of which
+// implement `Send + Sync` (verified by `assert_impl_all!` above).
 unsafe impl<VM: VMBinding> Send for FreeListPageResource<VM> {}
+
+// SAFETY: All non-mutex fields (`CommonPageResource`, `PhantomData<VM>`, `Option<MmapProtection>`)
+// are `Sync`, and `FreeListPageResourceSync` is protected by `std::sync::Mutex`. As established on
+// the `Send` impl above, `FreeListPageResourceSync` is soundly `Send`, which suffices for
+// `Mutex<FreeListPageResourceSync>: Sync`.
 unsafe impl<VM: VMBinding> Sync for FreeListPageResource<VM> {}
 
 struct FreeListPageResourceSync {
@@ -54,6 +71,16 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
             // We bypass the mutex lock by calling `get_mut`.
             let sync = self.sync.get_mut().unwrap();
             sync.start = start.align_up(BYTES_IN_REGION);
+            let CreateFreeListResult {
+                free_list,
+                space_displacement,
+            } = self.common.vm_map.create_freelist(sync.start);
+            debug_assert!(
+                free_list.downcast_ref::<RawMemoryFreeList>().is_none(),
+                "We can't allocate RawMemoryFreeList for discontiguous spaces."
+            );
+            debug_assert_eq!(space_displacement, 0);
+            sync.free_list = free_list;
         }
     }
 
@@ -88,9 +115,8 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
         let mut new_chunk = false;
         let mut page_offset = sync.free_list.alloc(required_pages as _);
         if page_offset == freelist::FAILURE && self.common.growable {
-            page_offset = unsafe {
-                self.allocate_contiguous_chunks(space_descriptor, required_pages, &mut sync)
-            };
+            page_offset =
+                self.allocate_contiguous_chunks(space_descriptor, required_pages, &mut sync);
             new_chunk = true;
         }
 
@@ -173,28 +199,13 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
     }
 
     pub fn new_discontiguous(vm_map: &'static dyn VMMap) -> Self {
-        // This is a place-holder value that is used by neither `vm_map.create_freelist` nor the
-        // space.  The location of discontiguous spaces is not determined before all contiguous
-        // spaces are places, at which time the starting address of discontiguous spaces will be
-        // updated to the correct value.
+        // `start` and `free_list` are placeholders until `VMMap::finalize_static_space_map`
+        // determines the discontiguous region bounds, initializes `Map32`'s `OnceLock` parent page
+        // map, and invokes `update_discontiguous_start` on every discontiguous page resource.
         let start = vm_layout().available_start();
-
-        let CreateFreeListResult {
-            free_list,
-            space_displacement,
-        } = vm_map.create_freelist(start);
-
-        // In theory, nothing prevents us from using `RawMemoryFreeList` for discontiguous spaces.
-        // But in the current implementation, only `Map32` supports discontiguous spaces, and
-        // `Map32` only uses `IntArrayFreeList`.
-        debug_assert!(
-            free_list.downcast_ref::<RawMemoryFreeList>().is_none(),
-            "We can't allocate RawMemoryFreeList for discontiguous spaces."
-        );
-
-        // Discontiguous free list page resources are only used by `Map32` which uses
-        // `IntArrayFreeList` exclusively.  It does not have space displacement.
-        debug_assert_eq!(space_displacement, 0);
+        let free_list = Box::new(crate::util::int_array_freelist::IntArrayFreeList::new(
+            0, 1, 1,
+        ));
         debug!("new_discontiguous. start: {start})");
 
         FreeListPageResource {
@@ -251,10 +262,9 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         space_descriptor: SpaceDescriptor,
     ) -> Result<PRAllocResult, PRAllocFail> {
         assert!(self.common.growable);
-        // FIXME: We need a safe implementation
         let mut sync = self.sync.lock().unwrap();
         let page_offset =
-            unsafe { self.allocate_contiguous_chunks(space_descriptor, PAGES_IN_CHUNK, &mut sync) };
+            self.allocate_contiguous_chunks(space_descriptor, PAGES_IN_CHUNK, &mut sync);
 
         if page_offset == freelist::FAILURE {
             return Result::Err(PRAllocFail);
@@ -273,11 +283,11 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         })
     }
 
-    unsafe fn allocate_contiguous_chunks(
+    fn allocate_contiguous_chunks(
         &self,
         space_descriptor: SpaceDescriptor,
         pages: usize,
-        sync: &mut MutexGuard<FreeListPageResourceSync>,
+        sync: &mut FreeListPageResourceSync,
     ) -> i32 {
         let mut rtn = freelist::FAILURE;
         let required_chunks = crate::policy::space::required_chunks(pages);
@@ -306,7 +316,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         rtn
     }
 
-    unsafe fn free_contiguous_chunk(&self, chunk: Address, sync: &mut FreeListPageResourceSync) {
+    fn free_contiguous_chunk(&self, chunk: Address, sync: &mut FreeListPageResourceSync) {
         let num_chunks = self.vm_map().get_contiguous_region_chunks(chunk);
         /* nail down all pages associated with the chunk, so it is no longer on our free list */
         let mut chunk_start = conversions::bytes_to_pages_up(chunk - sync.start);
@@ -391,12 +401,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
             debug_assert!(next_region_start < freelist::MAX_UNITS as usize);
             if pages_freed == next_region_start - region_start {
                 let start = sync.start;
-                unsafe {
-                    self.free_contiguous_chunk(
-                        start + conversions::pages_to_bytes(region_start),
-                        sync,
-                    );
-                }
+                self.free_contiguous_chunk(start + conversions::pages_to_bytes(region_start), sync);
             }
         }
     }

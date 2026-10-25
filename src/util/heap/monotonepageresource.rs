@@ -183,9 +183,9 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
         MonotonePageResource {
             common: CommonPageResource::new(false, true, vm_map),
             sync: Mutex::new(MonotonePageResourceSync {
-                cursor: unsafe { Address::zero() },
-                current_chunk: unsafe { Address::zero() },
-                sentinel: unsafe { Address::zero() },
+                cursor: Address::ZERO,
+                current_chunk: Address::ZERO,
+                sentinel: Address::ZERO,
                 conditional: MonotonePageResourceConditional::Discontiguous,
             }),
             _p: PhantomData,
@@ -213,8 +213,12 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
         addr.align_down(BYTES_IN_REGION)
     }
 
+    /// Reset this page resource, reclaiming all pages and discontiguous chunks back to the global pool.
+    ///
     /// # Safety
-    /// TODO: I am not sure why this is unsafe.
+    /// The caller must ensure that no live objects or active allocator cursors still reference any
+    /// pages or chunks managed by this page resource, because resetting releases all discontiguous
+    /// chunks and clears their global chunk-descriptor and SFT mappings.
     pub unsafe fn reset(&self) {
         let mut guard = self.sync.lock().unwrap();
         self.common().accounting.reset();
@@ -222,7 +226,7 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
         drop(guard);
     }
 
-    pub unsafe fn get_current_chunk(&self) -> Address {
+    pub fn get_current_chunk(&self) -> Address {
         let guard = self.sync.lock().unwrap();
         guard.current_chunk
     }
@@ -316,7 +320,7 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
         }
     }
 
-    unsafe fn release_pages(&self, guard: &mut MutexGuard<MonotonePageResourceSync>) {
+    fn release_pages(&self, guard: &mut MutexGuard<MonotonePageResourceSync>) {
         // TODO: concurrent zeroing
         if self.common().contiguous {
             guard.cursor = match guard.conditional {
@@ -332,9 +336,9 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
                 self.release_pages_extent(guard.current_chunk, bytes);
             }
 
-            guard.current_chunk = Address::zero();
-            guard.sentinel = Address::zero();
-            guard.cursor = Address::zero();
+            guard.current_chunk = Address::ZERO;
+            guard.sentinel = Address::ZERO;
+            guard.cursor = Address::ZERO;
             self.common.release_all_chunks();
         }
     }

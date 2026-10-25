@@ -5,48 +5,51 @@ use crate::util::conversions;
 use crate::util::freelist::FreeList;
 use crate::util::heap::layout::heap_parameters::*;
 use crate::util::heap::layout::vm_layout::*;
-use crate::util::heap::space_descriptor::SpaceDescriptor;
+use crate::util::heap::space_descriptor::{AtomicSpaceDescriptor, SpaceDescriptor};
 use crate::util::os::*;
 use crate::util::raw_memory_freelist::RawMemoryFreeList;
 use crate::util::Address;
-use std::cell::UnsafeCell;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 const NON_MAP_FRACTION: f64 = 1.0 - 8.0 / 4096.0;
 
+#[derive(Clone, Copy)]
+struct SpaceState {
+    base_address: Address,
+    high_water: Address,
+}
+
 pub struct Map64 {
-    inner: UnsafeCell<Map64Inner>,
+    finalized: AtomicBool,
+    descriptor_map: [AtomicSpaceDescriptor; MAX_SPACES],
+    space_state: [Mutex<SpaceState>; MAX_SPACES],
 }
 
-struct Map64Inner {
-    finalized: bool,
-    descriptor_map: Vec<SpaceDescriptor>,
-    base_address: Vec<Address>,
-    high_water: Vec<Address>,
-}
-
-unsafe impl Send for Map64 {}
-unsafe impl Sync for Map64 {}
+assert_impl_all!(Map64: Send, Sync);
 
 impl Map64 {
     pub fn new() -> Self {
-        let mut high_water = vec![Address::ZERO; MAX_SPACES];
-        let mut base_address = vec![Address::ZERO; MAX_SPACES];
-
-        for i in 0..MAX_SPACES {
-            let base = unsafe { Address::from_usize(i << vm_layout().log_space_extent) };
-            high_water[i] = base;
-            base_address[i] = base;
-        }
-
-        let descriptor_map = vec![SpaceDescriptor::UNINITIALIZED; MAX_SPACES];
+        let log_space_extent = vm_layout().log_space_extent;
+        let space_state = std::array::from_fn(|i| {
+            // SAFETY: `i < MAX_SPACES` (`16`) and `vm_layout().validate()` ensures that in 64-bit
+            // contiguous layouts (`force_use_contiguous_spaces == true`),
+            // `log_space_extent <= log_address_space - LOG_MAX_SPACES < usize::BITS`, so
+            // `i << log_space_extent` is a non-overflowing virtual base address boundary.
+            // `Address::from_usize` only wraps the raw integer address without dereferencing it.
+            let base = unsafe { Address::from_usize(i << log_space_extent) };
+            Mutex::new(SpaceState {
+                base_address: base,
+                high_water: base,
+            })
+        });
+        let descriptor_map =
+            std::array::from_fn(|_| AtomicSpaceDescriptor::new(SpaceDescriptor::UNINITIALIZED));
 
         Self {
-            inner: UnsafeCell::new(Map64Inner {
-                descriptor_map,
-                high_water,
-                base_address,
-                finalized: false,
-            }),
+            finalized: AtomicBool::new(false),
+            descriptor_map,
+            space_state,
         }
     }
 }
@@ -56,14 +59,11 @@ impl VMMap for Map64 {
         debug_assert!(Self::is_space_start(start));
         debug_assert!(extent <= vm_layout().space_size_64());
         debug_assert!(extent >= self.min_contiguous_extent());
-        // Each space will call this on exclusive address ranges. It is fine to mutate the descriptor map,
-        // as each space will update different indices.
-        let self_mut = unsafe { self.mut_self() };
         let index = Self::space_index(start).unwrap();
-        self_mut.descriptor_map[index] = descriptor;
+        self.descriptor_map[index].store(descriptor, Ordering::Relaxed);
     }
 
-    fn create_freelist(&self, start: Address) -> CreateFreeListResult {
+    fn create_freelist(&'static self, start: Address) -> CreateFreeListResult {
         let units = vm_layout().space_size_64() >> LOG_BYTES_IN_PAGE;
         self.create_parent_freelist(start, units, units as _)
     }
@@ -78,9 +78,8 @@ impl VMMap for Map64 {
 
         assert!(units >= conversions::bytes_to_pages_up(self.min_contiguous_extent()));
 
-        // This is only called during creating a page resource/space/plan/mmtk instance, which is single threaded.
-        let self_mut = unsafe { self.mut_self() };
         let index = Self::space_index(start).unwrap();
+        let mut state = self.space_state[index].lock().unwrap();
 
         units = (units as f64 * NON_MAP_FRACTION) as _;
         let list_extent =
@@ -101,8 +100,8 @@ impl VMMap for Map64 {
         /* Adjust the base address and highwater to account for the allocated chunks for the map */
         let base = conversions::chunk_align_up(start + list_extent);
 
-        self_mut.high_water[index] = base;
-        self_mut.base_address[index] = base;
+        state.high_water = base;
+        state.base_address = base;
 
         let space_displacement = base - start;
         CreateFreeListResult {
@@ -111,9 +110,6 @@ impl VMMap for Map64 {
         }
     }
 
-    /// # Safety
-    ///
-    /// Caller must ensure that only one thread is calling this method.
     unsafe fn allocate_contiguous_chunks(
         &self,
         descriptor: SpaceDescriptor,
@@ -121,15 +117,14 @@ impl VMMap for Map64 {
         _head: Address,
         maybe_freelist: Option<&mut dyn FreeList>,
     ) -> Address {
-        debug_assert!(Self::space_index(descriptor.get_start()).unwrap() == descriptor.get_index());
-        // Each space will call this on exclusive address ranges. It is fine to mutate the descriptor map,
-        // as each space will update different indices.
-        let self_mut = self.mut_self();
+        debug_assert!(Self::space_index(descriptor.get_start()) == Some(descriptor.get_index()));
 
         let index = descriptor.get_index();
-        let rtn = self.inner().high_water[index];
+        let mut state = self.space_state[index].lock().unwrap();
+        let rtn = state.high_water;
         let extent = chunks << LOG_BYTES_IN_CHUNK;
-        self_mut.high_water[index] = rtn + extent;
+        state.high_water = rtn + extent;
+        let base_address = state.base_address;
 
         if let Some(freelist) = maybe_freelist {
             let Some(rmfl) = freelist.downcast_mut::<RawMemoryFreeList>() else {
@@ -140,7 +135,7 @@ impl VMMap for Map64 {
                 panic!("Map64 requires a growable free list implementation (RawMemoryFreeList).");
             };
             rmfl.grow_freelist(conversions::bytes_to_pages_up(extent) as _);
-            let base_page = conversions::bytes_to_pages_up(rtn - self.inner().base_address[index]);
+            let base_page = conversions::bytes_to_pages_up(rtn - base_address);
             for offset in (0..(chunks * PAGES_IN_CHUNK)).step_by(PAGES_IN_CHUNK) {
                 rmfl.set_uncoalescable((base_page + offset) as _);
                 /* The 32-bit implementation requires that pages are returned allocated to the caller */
@@ -184,25 +179,23 @@ impl VMMap for Map64 {
         _to: Address,
         _on_discontig_start_determined: &mut dyn FnMut(Address),
     ) {
-        // This is only called during boot process by a single thread.
-        // It is fine to get a mutable reference.
-        let self_mut: &mut Map64Inner = unsafe { self.mut_self() };
-
         // Note: When using Map64, the starting address of each space is adjusted as soon as the
         // `RawMemoryFreeList` instance in its underlying `FreeListPageResource` is created.  We no
         // longer need to adjust the starting address here.  So we ignore the
         // `_on_discontig_start_determined` callback which may adjust the starting address.
-
-        self_mut.finalized = true;
+        self.finalized.store(true, Ordering::Release);
     }
 
     fn is_finalized(&self) -> bool {
-        self.inner().finalized
+        self.finalized.load(Ordering::Acquire)
     }
 
     fn get_descriptor_for_address(&self, address: Address) -> SpaceDescriptor {
         if let Some(index) = Self::space_index(address) {
-            self.inner().descriptor_map[index]
+            self.descriptor_map
+                .get(index)
+                .map(|slot| slot.load(Ordering::Relaxed))
+                .unwrap_or(SpaceDescriptor::UNINITIALIZED)
         } else {
             SpaceDescriptor::UNINITIALIZED
         }
@@ -217,20 +210,6 @@ impl VMMap for Map64 {
 }
 
 impl Map64 {
-    /// # Safety
-    ///
-    /// The caller needs to guarantee there is no race condition. Either only one single thread
-    /// is using this method, or multiple threads are accessing mutally exclusive data (e.g. different indices in arrays).
-    /// In other cases, use mut_self_with_sync().
-    #[allow(clippy::mut_from_ref)]
-    unsafe fn mut_self(&self) -> &mut Map64Inner {
-        &mut *self.inner.get()
-    }
-
-    fn inner(&self) -> &Map64Inner {
-        unsafe { &*self.inner.get() }
-    }
-
     fn space_index(addr: Address) -> Option<usize> {
         if addr > vm_layout().heap_end {
             return None;

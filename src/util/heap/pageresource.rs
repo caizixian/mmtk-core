@@ -155,6 +155,12 @@ impl CommonPageResource {
     ) -> Address {
         let mut head_discontiguous_region = self.head_discontiguous_region.lock().unwrap();
 
+        // SAFETY: `self.head_discontiguous_region` is locked for the duration of this call,
+        // serializing all discontiguous chunk allocations and releases for this space so no other
+        // thread concurrently modifies this space's chunk list or `freelist`.
+        // `*head_discontiguous_region` is either `Address::ZERO` (when the space has no chunks yet)
+        // or a valid chunk-aligned head address previously returned by `allocate_contiguous_chunks`
+        // for this space.
         let new_head: Address = unsafe {
             self.vm_map.allocate_contiguous_chunks(
                 space_descriptor,
@@ -179,6 +185,9 @@ impl CommonPageResource {
         if chunk == *head_discontiguous_region {
             *head_discontiguous_region = self.vm_map.get_next_contiguous_region(chunk);
         }
+        // SAFETY: `self.head_discontiguous_region` is locked for the duration of this call,
+        // serializing all discontiguous chunk-list operations for this space, and `chunk` is a
+        // chunk-aligned start address of an allocated discontiguous region belonging to this space.
         unsafe {
             self.vm_map.free_contiguous_chunks(chunk);
         }

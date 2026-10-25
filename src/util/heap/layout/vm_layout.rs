@@ -1,9 +1,6 @@
 //! The module defines virutal memory layout parameters.
 
-use std::ptr::addr_of;
-use std::sync::atomic::AtomicBool;
-
-use atomic::Ordering;
+use std::sync::OnceLock;
 
 use super::heap_parameters::*;
 use crate::util::constants::*;
@@ -142,7 +139,13 @@ impl VMLayout {
     pub const fn new_32bit() -> Self {
         let layout32 = Self {
             log_address_space: 32,
+            // SAFETY: `0x8000_0000` is a hard-coded virtual address constant specifying the default
+            // 32-bit heap start boundary; `Address::from_usize` wraps the raw integer without
+            // dereferencing memory, and `layout32.validate()` verifies alignment and range bounds.
             heap_start: chunk_align_down(unsafe { Address::from_usize(0x8000_0000) }),
+            // SAFETY: `0xd000_0000` is a hard-coded virtual address constant specifying the default
+            // 32-bit heap end boundary; `Address::from_usize` wraps the raw integer without
+            // dereferencing memory, and `layout32.validate()` verifies alignment and range bounds.
             heap_end: chunk_align_up(unsafe { Address::from_usize(0xd000_0000) }),
             log_space_extent: 31,
             force_use_contiguous_spaces: false,
@@ -155,9 +158,15 @@ impl VMLayout {
     pub const fn new_64bit() -> Self {
         let layout64 = Self {
             log_address_space: 47,
+            // SAFETY: `0x0000_0200_0000_0000` is a hard-coded canonical virtual address constant
+            // specifying the default 64-bit heap start boundary; `Address::from_usize` wraps the raw
+            // integer without dereferencing memory, and `layout64.validate()` verifies bounds.
             heap_start: chunk_align_down(unsafe {
                 Address::from_usize(0x0000_0200_0000_0000usize)
             }),
+            // SAFETY: `0x0000_2200_0000_0000` is a hard-coded canonical virtual address constant
+            // specifying the default 64-bit heap end boundary; `Address::from_usize` wraps the raw
+            // integer without dereferencing memory, and `layout64.validate()` verifies bounds.
             heap_end: chunk_align_up(unsafe { Address::from_usize(0x0000_2200_0000_0000usize) }),
             log_space_extent: 41,
             force_use_contiguous_spaces: true,
@@ -169,16 +178,10 @@ impl VMLayout {
     /// Custom VM layout constants. VM bindings may use this function for compressed or 39-bit heap support.
     /// This function must be called before MMTk::new()
     pub(crate) fn set_custom_vm_layout(constants: VMLayout) {
-        if cfg!(debug_assertions) {
-            assert!(
-                !VM_LAYOUT_FETCHED.load(Ordering::SeqCst),
-                "vm_layout is already been used before setup"
-            );
-        }
         constants.validate();
-        unsafe {
-            VM_LAYOUT = constants;
-        }
+        VM_LAYOUT
+            .set(constants)
+            .expect("vm_layout is already been used before setup");
     }
 }
 
@@ -195,19 +198,12 @@ impl std::default::Default for VMLayout {
     }
 }
 
-#[cfg(target_pointer_width = "32")]
-static mut VM_LAYOUT: VMLayout = VMLayout::new_32bit();
-#[cfg(target_pointer_width = "64")]
-static mut VM_LAYOUT: VMLayout = VMLayout::new_64bit();
-
-static VM_LAYOUT_FETCHED: AtomicBool = AtomicBool::new(false);
+static VM_LAYOUT: OnceLock<VMLayout> = OnceLock::new();
 
 /// Get the current virtual memory layout in use.
 /// If the binding would like to set a custom virtual memory layout ([`crate::mmtk::MMTKBuilder::set_vm_layout`]), they should not
 /// call this function before they set a custom layout.
+#[inline]
 pub fn vm_layout() -> &'static VMLayout {
-    if cfg!(debug_assertions) {
-        VM_LAYOUT_FETCHED.store(true, Ordering::SeqCst);
-    }
-    unsafe { &*addr_of!(VM_LAYOUT) }
+    VM_LAYOUT.get_or_init(VMLayout::default)
 }

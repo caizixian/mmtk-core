@@ -19,8 +19,12 @@ pub struct CreateFreeListResult {
 pub trait VMMap: Sync {
     fn insert(&self, start: Address, extent: usize, descriptor: SpaceDescriptor);
 
-    /// Create a free-list for a discontiguous space. Must only be called at boot time.
-    fn create_freelist(&self, start: Address) -> CreateFreeListResult;
+    /// Create a free-list for a discontiguous space. Must only be called at boot time before
+    /// [`Self::finalize_static_space_map`].
+    ///
+    /// Requires `&'static self` because discontiguous child free lists (in `Map32`) store a
+    /// pointer into the global parent free list owned by `self`.
+    fn create_freelist(&'static self, start: Address) -> CreateFreeListResult;
 
     /// Create a free-list for a contiguous space. Must only be called at boot time.
     fn create_parent_freelist(
@@ -30,9 +34,13 @@ pub trait VMMap: Sync {
         grain: i32,
     ) -> CreateFreeListResult;
 
+    /// Allocate `chunks` contiguous chunks for the space identified by `descriptor`.
+    ///
     /// # Safety
     ///
-    /// Caller must ensure that only one thread is calling this method.
+    /// The caller must ensure that no other thread is concurrently allocating or freeing chunks
+    /// for the same space (`descriptor`), and that `head` is either [`Address::ZERO`] or a valid
+    /// chunk-aligned region start address previously allocated for this space.
     unsafe fn allocate_contiguous_chunks(
         &self,
         descriptor: SpaceDescriptor,
@@ -57,9 +65,13 @@ pub trait VMMap: Sync {
 
     fn free_all_chunks(&self, any_chunk: Address);
 
+    /// Free the contiguous region of chunks starting at `start`, returning the number of chunks freed.
+    ///
     /// # Safety
     ///
-    /// Caller must ensure that only one thread is calling this method.
+    /// The caller must ensure that no other thread is concurrently allocating or freeing chunks
+    /// for the space owning `start`, and that `start` is a valid chunk-aligned region start address
+    /// previously returned by [`Self::allocate_contiguous_chunks`].
     unsafe fn free_contiguous_chunks(&self, start: Address) -> usize;
 
     /// Finalize the globlal maps in the implementations of `VMMap`.  This should be called after

@@ -21,6 +21,9 @@ const LOG_MAPPABLE_BYTES: usize = 48;
 /// Address space size a user-space program is allowed to use.
 const MAPPABLE_BYTES: usize = 1 << LOG_MAPPABLE_BYTES;
 /// The limit of mappable address
+// SAFETY: `MAPPABLE_BYTES` (`1 << 48` on 64-bit targets) fits in `usize` and is used purely as an
+// exclusive upper-bound virtual address constant for `ChunkRange::is_within_limit` assertions;
+// `Address::from_usize` wraps the raw integer without dereferencing memory.
 const MAPPABLE_ADDRESS_LIMIT: Address = unsafe { Address::from_usize(MAPPABLE_BYTES) };
 
 /// Log number of bytes per slab. For a two-level array, it is advisable to choose the arithmetic
@@ -63,8 +66,8 @@ pub struct TwoLevelStateStorage {
     slabs: Vec<OnceOptionBox<Slab>>,
 }
 
-unsafe impl Send for TwoLevelStateStorage {}
-unsafe impl Sync for TwoLevelStateStorage {}
+assert_impl_all!(Slab: Send, Sync);
+assert_impl_all!(TwoLevelStateStorage: Send, Sync);
 
 impl fmt::Debug for TwoLevelStateStorage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

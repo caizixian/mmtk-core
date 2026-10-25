@@ -154,6 +154,9 @@ impl ChunkStateMmapper {
     fn mappable_limit(&self) -> Address {
         let log_mappable = self.storage.log_mappable_bytes() as u32;
         if log_mappable < usize::BITS {
+            // SAFETY: `log_mappable < usize::BITS` guarantees `1usize << log_mappable` does not
+            // overflow, and `Address::from_usize` only constructs the exclusive upper-bound
+            // virtual address sentinel for range comparisons without dereferencing it.
             unsafe { Address::from_usize(1usize << log_mappable) }
         } else {
             Address::MAX
