@@ -53,6 +53,7 @@ impl<VM: VMBinding, S: LinearScanObjectSize, const ATOMIC_LOAD_VO_BIT: bool> std
 {
     type Item = ObjectReference;
 
+    #[inline(always)]
     fn next(&mut self) -> Option<<Self as Iterator>::Item> {
         while self.cursor < self.end {
             let order = if ATOMIC_LOAD_VO_BIT {
@@ -86,6 +87,7 @@ pub trait LinearScanObjectSize {
 /// Default object size as ObjectModel::get_current_size()
 pub struct DefaultObjectSize<VM: VMBinding>(PhantomData<VM>);
 impl<VM: VMBinding> LinearScanObjectSize for DefaultObjectSize<VM> {
+    #[inline(always)]
     fn size(object: ObjectReference) -> usize {
         VM::VMObjectModel::get_current_size(object)
     }

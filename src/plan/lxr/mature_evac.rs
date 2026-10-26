@@ -28,6 +28,7 @@ use std::sync::atomic::AtomicUsize;
 pub struct RemSetEntry<VM: VMBinding>(VM::VMSlot, u8);
 
 impl<VM: VMBinding> RemSetEntry<VM> {
+    #[inline]
     fn encode(slot: VM::VMSlot, ix: bool) -> Self {
         let reuse = if ix {
             IX_LINE_REUSE_COUNT.load_atomic::<u8>(slot.to_address(), Ordering::SeqCst)
@@ -37,6 +38,7 @@ impl<VM: VMBinding> RemSetEntry<VM> {
         Self(slot, reuse)
     }
 
+    #[inline]
     pub fn decode(&self) -> (VM::VMSlot, u8) {
         (self.0, self.1)
     }
@@ -50,6 +52,7 @@ impl<VM: VMBinding> MatureEvecRemSet<VM> {
     }
 
     /// Record slot `s` into `worker`'s worker-local mature-evacuation remembered-set buffer.
+    #[inline]
     pub(super) fn record(
         &self,
         worker: &mut crate::scheduler::GCWorker<VM>,
@@ -57,7 +60,7 @@ impl<VM: VMBinding> MatureEvecRemSet<VM> {
         _o: ObjectReference,
         lxr: &LXR<VM>,
     ) {
-        assert!(
+        debug_assert!(
             std::ptr::eq(
                 worker.mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap(),
                 lxr

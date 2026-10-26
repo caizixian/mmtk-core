@@ -11,6 +11,7 @@ use crate::util::Address;
 use crate::MMAPPER;
 
 /// Performs address translation in contiguous metadata spaces (e.g. global and policy-specific in 64-bits, and global in 32-bits)
+#[inline(always)]
 pub(crate) fn address_to_contiguous_meta_address(
     metadata_spec: &SideMetadataSpec,
     data_addr: Address,
@@ -169,6 +170,7 @@ pub(super) fn try_mmap_contiguous_metadata_space(
 }
 
 /// Performs the translation of data address (`data_addr`) to metadata address for the specified metadata (`metadata_spec`).
+#[inline(always)]
 pub(crate) fn address_to_meta_address(
     metadata_spec: &SideMetadataSpec,
     data_addr: Address,
@@ -238,6 +240,7 @@ pub(crate) const CONTIGUOUS_DATA_MAX: usize = (1usize << VMLayout::LOG_ARCH_ADDR
 #[cfg(target_pointer_width = "32")]
 pub(crate) const CONTIGUOUS_DATA_MAX: usize = usize::MAX;
 
+#[inline(always)]
 pub(crate) fn meta_byte_lshift(metadata_spec: &SideMetadataSpec, data_addr: Address) -> u8 {
     let bits_num_log = metadata_spec.log_num_of_bits as i32;
     if bits_num_log >= 3 {
@@ -248,6 +251,7 @@ pub(crate) fn meta_byte_lshift(metadata_spec: &SideMetadataSpec, data_addr: Addr
         as u8
 }
 
+#[inline(always)]
 pub(super) fn meta_byte_mask(metadata_spec: &SideMetadataSpec) -> u8 {
     let bits_num_log = metadata_spec.log_num_of_bits;
     ((1usize << (1usize << bits_num_log)) - 1) as u8

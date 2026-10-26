@@ -1,3 +1,4 @@
+use crate::scheduler::GCWorker;
 use crate::util::constants::{BYTES_IN_PAGE, BYTES_IN_WORD, LOG_BITS_IN_BYTE, LOG_BYTES_IN_WORD};
 use crate::util::heap::layout::vm_layout::BYTES_IN_CHUNK;
 use crate::util::linear_scan::Region;
@@ -9,8 +10,8 @@ use crate::vm::object_model::ObjectModel;
 use crate::vm::VMBinding;
 use atomic::Ordering;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize};
+use std::sync::{Arc, RwLock};
 
 /// A [`OVCRegion`] is the granularity at which [`super::OVCSpace`]
 /// compacts the heap. Objects are allocated inside one region, and are only ever
@@ -208,7 +209,7 @@ impl MappedOVCRegion {
         self.cursor
     }
 
-    #[inline]
+    #[inline(always)]
     pub(super) fn contains(&self, addr: Address) -> bool {
         addr >= self.region.start() && addr < self.cursor
     }
@@ -246,7 +247,7 @@ impl MappedOVCRegion {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn scan_mark_bits_in_block_prefix(
         &self,
         block_idx: usize,
@@ -262,35 +263,32 @@ impl MappedOVCRegion {
         let words_before = (end - block_start) >> LOG_BYTES_IN_WORD;
         let full_bytes = words_before >> LOG_BITS_IN_BYTE;
         let rem_bits = (words_before & ((1usize << LOG_BITS_IN_BYTE) - 1)) as u32;
-        let bytes_needed = full_bytes + usize::from(rem_bits > 0);
 
         let base_byte = block_idx * MARK_BYTES_PER_BLOCK;
         let block_marks = &self.mark_bytes[base_byte..base_byte + MARK_BYTES_PER_BLOCK];
-        let mut snapshot = [0u8; MARK_BYTES_PER_BLOCK];
-        for (dst, cell) in snapshot[..bytes_needed]
-            .iter_mut()
-            .zip(block_marks[..bytes_needed].iter())
-        {
-            *dst = cell.load(Ordering::Relaxed);
-        }
 
-        for (byte_idx, &byte) in snapshot[..full_bytes].iter().enumerate() {
-            let mut bits = byte;
-            let byte_data_base = block_start + (byte_idx << LOG_DATA_BYTES_PER_MARK_BYTE);
-            while bits != 0 {
-                let bit = bits.trailing_zeros() as usize;
-                visit(byte_data_base + (bit << LOG_BYTES_IN_WORD));
-                bits &= bits - 1;
+        for (byte_idx, cell) in block_marks[..full_bytes].iter().enumerate() {
+            let mut bits = cell.load(Ordering::Relaxed);
+            if bits != 0 {
+                let byte_data_base = block_start + (byte_idx << LOG_DATA_BYTES_PER_MARK_BYTE);
+                while bits != 0 {
+                    let bit = bits.trailing_zeros() as usize;
+                    visit(byte_data_base + (bit << LOG_BYTES_IN_WORD));
+                    bits &= bits - 1;
+                }
             }
         }
 
         if rem_bits > 0 {
-            let mut bits = snapshot[full_bytes] & ((1u8 << rem_bits) - 1);
-            let byte_data_base = block_start + (full_bytes << LOG_DATA_BYTES_PER_MARK_BYTE);
-            while bits != 0 {
-                let bit = bits.trailing_zeros() as usize;
-                visit(byte_data_base + (bit << LOG_BYTES_IN_WORD));
-                bits &= bits - 1;
+            let mut bits =
+                block_marks[full_bytes].load(Ordering::Relaxed) & ((1u8 << rem_bits) - 1);
+            if bits != 0 {
+                let byte_data_base = block_start + (full_bytes << LOG_DATA_BYTES_PER_MARK_BYTE);
+                while bits != 0 {
+                    let bit = bits.trailing_zeros() as usize;
+                    visit(byte_data_base + (bit << LOG_BYTES_IN_WORD));
+                    bits &= bits - 1;
+                }
             }
         }
     }
@@ -310,7 +308,7 @@ impl MappedOVCRegion {
     }
 
     /// Compute the forwarded destination address for a word-aligned `address` in `[start, cursor)`.
-    #[inline]
+    #[inline(always)]
     pub(super) fn forward(&self, address: Address) -> Address {
         assert!(
             self.contains(address) && address.is_aligned_to(BYTES_IN_WORD),
@@ -338,16 +336,22 @@ impl MappedOVCRegion {
     /// each marked object.
     pub(super) fn scan_marked_objects(&self, f: &mut impl FnMut(ObjectReference)) {
         let mut in_object = false;
-        for block_idx in 0..self.offset_words.len() {
-            let block_end = self.region.start() + ((block_idx + 1) << Block::LOG_BYTES);
-            self.scan_mark_bits_in_block_prefix(block_idx, block_end, &mut |addr| {
+        let region_start = self.region.start();
+        crate::util::metadata::side_metadata::helpers::scan_non_zero_atomic_bits_in_slice(
+            self.mark_bytes,
+            0xff,
+            0xff,
+            |byte_idx, bit| {
                 if !in_object {
+                    let addr = region_start
+                        + (byte_idx << LOG_DATA_BYTES_PER_MARK_BYTE)
+                        + ((bit as usize) << LOG_BYTES_IN_WORD);
                     let object = ObjectReference::from_raw_address(addr).unwrap();
                     f(object);
                 }
                 in_object = !in_object;
-            });
-        }
+            },
+        );
     }
 }
 
@@ -371,6 +375,7 @@ struct Transducer {
     in_object: bool,
 }
 impl Transducer {
+    #[inline(always)]
     pub fn new(to: Address) -> Self {
         Self {
             to,
@@ -378,6 +383,7 @@ impl Transducer {
             in_object: false,
         }
     }
+    #[inline(always)]
     pub fn visit_mark_bit(&mut self, address: Address) {
         if self.in_object {
             // The size of an object is the distance between the end and
@@ -394,6 +400,7 @@ impl Transducer {
         self.last_bit_visited = address;
     }
 
+    #[inline(always)]
     pub fn encode(&self, region: OVCRegion, current_position: Address) -> usize {
         let to_offset_in_region = self.to - region.start();
         if self.in_object {
@@ -406,6 +413,7 @@ impl Transducer {
         }
     }
 
+    #[inline(always)]
     pub fn decode(offset: usize, region: OVCRegion, current_position: Address) -> Self {
         Transducer {
             to: region.start() + (offset & !1),
@@ -416,17 +424,103 @@ impl Transducer {
 }
 
 /// Snapshot entry for one allocated region in the current GC cycle (`alloc_index` in
-/// `RegionPageResource`, sorted by `mapped.region().start()` for $O(\log R)$ cross-region lookup).
+/// `RegionPageResource`, sorted by `mapped.region().start()`).
 #[derive(Clone, Copy)]
 pub(super) struct CalculatedRegionEntry {
     pub(super) alloc_index: usize,
     pub(super) mapped: MappedOVCRegion,
 }
 
+/// Immutable per-GC region table with an $O(1)$ dense region-index table when the span across
+/// allocated `OVCRegion`s is `<= 65_536` regions (`64 GiB`), falling back to binary search otherwise.
+pub(crate) struct CalculatedRegions {
+    entries: Box<[CalculatedRegionEntry]>,
+    dense_base: Address,
+    dense_index: Option<Box<[u32]>>,
+}
+
+impl CalculatedRegions {
+    const MAX_DENSE_SLOTS: usize = 65_536;
+
+    fn empty() -> Self {
+        Self {
+            entries: Box::new([]),
+            dense_base: Address::ZERO,
+            dense_index: Some(Box::new([])),
+        }
+    }
+
+    fn from_sorted_entries(entries: Vec<CalculatedRegionEntry>) -> Self {
+        let Some(first) = entries.first() else {
+            return Self::empty();
+        };
+        let dense_base = first.mapped.region().start();
+        let last_start = entries.last().unwrap().mapped.region().start();
+        let span_slots = ((last_start - dense_base) >> OVCRegion::LOG_BYTES).saturating_add(1);
+        let dense_index =
+            if span_slots <= Self::MAX_DENSE_SLOTS && entries.len() < u32::MAX as usize {
+                let mut table = vec![u32::MAX; span_slots].into_boxed_slice();
+                for (idx, entry) in entries.iter().enumerate() {
+                    let slot = (entry.mapped.region().start() - dense_base) >> OVCRegion::LOG_BYTES;
+                    table[slot] = idx as u32;
+                }
+                Some(table)
+            } else {
+                None
+            };
+        Self {
+            entries: entries.into_boxed_slice(),
+            dense_base,
+            dense_index,
+        }
+    }
+
+    #[inline(always)]
+    pub(super) fn entries(&self) -> &[CalculatedRegionEntry] {
+        &self.entries
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(super) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[inline(always)]
+    pub(super) fn find_region(&self, addr: Address) -> Option<&MappedOVCRegion> {
+        if let Some(dense) = &self.dense_index {
+            if addr >= self.dense_base {
+                let slot = (addr - self.dense_base) >> OVCRegion::LOG_BYTES;
+                if let Some(&entry_idx) = dense.get(slot) {
+                    if entry_idx != u32::MAX {
+                        let mapped = &self.entries[entry_idx as usize].mapped;
+                        return mapped.contains(addr).then_some(mapped);
+                    }
+                }
+            }
+            return None;
+        }
+        let region_start = addr.align_down(OVCRegion::BYTES);
+        let idx = self
+            .entries
+            .binary_search_by_key(&region_start, |entry| entry.mapped.region().start())
+            .ok()?;
+        let mapped = &self.entries[idx].mapped;
+        mapped.contains(addr).then_some(mapped)
+    }
+}
+
+static NEXT_OVC_EPOCH: AtomicU64 = AtomicU64::new(1);
+
 pub(super) struct ForwardingMetadata<VM> {
-    calculated: AtomicBool,
+    pending_epoch: AtomicU64,
+    ready_epoch: AtomicU64,
     pending_regions: AtomicUsize,
-    calculated_regions: Mutex<Arc<[CalculatedRegionEntry]>>,
+    calculated_regions: RwLock<Arc<CalculatedRegions>>,
     vm: PhantomData<VM>,
 }
 
@@ -455,35 +549,61 @@ impl<VM: VMBinding> ForwardingMetadata<VM> {
         // information, so relaxed consistency is okay.
         MARK_SPEC.fetch_or_atomic::<u8>(last_word_of_object, 1, Ordering::Relaxed);
     }
+
+    /// Return a borrow of `CalculatedRegions` cached in `worker.ovc_regions_cache` once the
+    /// current GC's offset vectors are ready (`0` locks, `0` atomic RMWs, `0` `Arc::clone`s after
+    /// the worker's first slot in each GC cycle).
+    #[inline(always)]
+    pub(super) fn calculated_regions_for_worker<'a>(
+        &self,
+        worker: &'a mut GCWorker<VM>,
+    ) -> Option<&'a CalculatedRegions> {
+        let epoch = self.ready_epoch.load(Ordering::Acquire);
+        if epoch == 0 {
+            return None;
+        }
+        let cached_matches =
+            matches!(&worker.ovc_regions_cache, Some((cached, _)) if *cached == epoch);
+        if !cached_matches {
+            worker.ovc_regions_cache = Some(self.calculated_regions_if_ready_with_epoch()?);
+        }
+        Some(worker.ovc_regions_cache.as_ref().unwrap().1.as_ref())
+    }
 }
 
 impl<VM> ForwardingMetadata<VM> {
     pub(super) fn new() -> ForwardingMetadata<VM> {
         ForwardingMetadata {
-            calculated: AtomicBool::new(false),
+            pending_epoch: AtomicU64::new(0),
+            ready_epoch: AtomicU64::new(0),
             pending_regions: AtomicUsize::new(0),
-            calculated_regions: Mutex::new(Arc::from(&[][..])),
+            calculated_regions: RwLock::new(Arc::new(CalculatedRegions::empty())),
             vm: PhantomData,
         }
     }
 
     /// Arm offset-vector calculation across `regions` (sorted in-place by `region.start()`).
     pub(super) fn begin_calculate(&self, mut regions: Vec<CalculatedRegionEntry>) {
+        let epoch = NEXT_OVC_EPOCH.fetch_add(1, Ordering::Relaxed);
+        assert_ne!(epoch, 0, "NEXT_OVC_EPOCH overflowed u64::MAX");
         regions.sort_unstable_by_key(|entry| entry.mapped.region().start());
         let num_regions = regions.len();
-        let mut guard = self.calculated_regions.lock().unwrap();
-        self.calculated.store(false, Ordering::Release);
-        *guard = Arc::from(regions);
+        let calc = Arc::new(CalculatedRegions::from_sorted_entries(regions));
+        let mut guard = self.calculated_regions.write().unwrap();
+        self.ready_epoch.store(0, Ordering::Release);
+        *guard = calc;
         if num_regions == 0 {
             self.pending_regions.store(0, Ordering::Release);
-            self.calculated.store(true, Ordering::Release);
+            self.pending_epoch.store(0, Ordering::Release);
+            self.ready_epoch.store(epoch, Ordering::Release);
         } else {
+            self.pending_epoch.store(epoch, Ordering::Release);
             self.pending_regions.store(num_regions, Ordering::Release);
         }
     }
 
-    /// Record completion of one region's offset-vector calculation, publishing
-    /// `calculated = true` (`Ordering::Release`) only when the final region completes.
+    /// Record completion of one region's offset-vector calculation, publishing `ready_epoch`
+    /// (`Ordering::Release`) only when the final region completes.
     pub(super) fn finish_region_calculation(&self) {
         let prev = self.pending_regions.fetch_sub(1, Ordering::AcqRel);
         assert!(
@@ -491,50 +611,52 @@ impl<VM> ForwardingMetadata<VM> {
             "ForwardingMetadata::finish_region_calculation underflow"
         );
         if prev == 1 {
-            self.calculated.store(true, Ordering::Release);
+            let epoch = self.pending_epoch.swap(0, Ordering::AcqRel);
+            assert_ne!(
+                epoch, 0,
+                "ForwardingMetadata::finish_region_calculation missing pending_epoch"
+            );
+            self.ready_epoch.store(epoch, Ordering::Release);
         }
     }
 
     pub(super) fn reset(&self) {
-        let mut guard = self.calculated_regions.lock().unwrap();
-        self.calculated.store(false, Ordering::Release);
+        let mut guard = self.calculated_regions.write().unwrap();
+        self.ready_epoch.store(0, Ordering::Release);
+        self.pending_epoch.store(0, Ordering::Release);
         self.pending_regions.store(0, Ordering::Release);
-        *guard = Arc::from(&[][..]);
+        *guard = Arc::new(CalculatedRegions::empty());
     }
 
     pub(super) fn release(&self) {
         self.reset();
     }
 
-    /// Return a reference-counted snapshot of the sorted `CalculatedRegionEntry` slice if offset
-    /// vectors have finished being calculated across all regions.
-    pub(super) fn calculated_regions_if_ready(&self) -> Option<Arc<[CalculatedRegionEntry]>> {
-        if !self.calculated.load(Ordering::Acquire) {
+    #[cold]
+    #[inline(never)]
+    fn calculated_regions_if_ready_with_epoch(&self) -> Option<(u64, Arc<CalculatedRegions>)> {
+        let e1 = self.ready_epoch.load(Ordering::Acquire);
+        if e1 == 0 {
             return None;
         }
-        let regions = Arc::clone(&self.calculated_regions.lock().unwrap());
-        if !self.calculated.load(Ordering::Acquire) {
+        let guard = self.calculated_regions.read().unwrap();
+        let e2 = self.ready_epoch.load(Ordering::Acquire);
+        if e2 == 0 || e2 != e1 {
             return None;
         }
-        Some(regions)
+        Some((e1, Arc::clone(&guard)))
     }
 
-    #[inline]
-    pub(super) fn find_region(
-        regions: &[CalculatedRegionEntry],
-        addr: Address,
-    ) -> Option<&MappedOVCRegion> {
-        let region_start = addr.align_down(OVCRegion::BYTES);
-        let idx = regions
-            .binary_search_by_key(&region_start, |entry| entry.mapped.region().start())
-            .ok()?;
-        let mapped = &regions[idx].mapped;
-        mapped.contains(addr).then_some(mapped)
+    /// Return a reference-counted snapshot of `CalculatedRegions` if offset vectors have finished
+    /// being calculated across all regions.
+    pub(super) fn calculated_regions_if_ready(&self) -> Option<Arc<CalculatedRegions>> {
+        self.calculated_regions_if_ready_with_epoch()
+            .map(|(_, regions)| regions)
     }
 
-    #[inline]
+    #[inline(always)]
     pub(super) fn forward_in_regions(
-        regions: &[CalculatedRegionEntry],
+        regions: &CalculatedRegions,
         object: ObjectReference,
     ) -> ObjectReference {
         let addr = object.to_raw_address();
@@ -542,7 +664,7 @@ impl<VM> ForwardingMetadata<VM> {
             addr.is_aligned_to(ObjectReference::ALIGNMENT) && addr.is_aligned_to(BYTES_IN_WORD),
             "Object {object} is not word/ObjectReference-aligned in OVCSpace"
         );
-        let mapped = Self::find_region(regions, addr).unwrap_or_else(|| {
+        let mapped = regions.find_region(addr).unwrap_or_else(|| {
             panic!(
                 "Object {object} is not within a mapped, calculated [region.start(), cursor) range of OVCSpace"
             )
@@ -551,7 +673,7 @@ impl<VM> ForwardingMetadata<VM> {
     }
 
     pub(super) fn has_calculated_forwarding_addresses(&self) -> bool {
-        self.calculated.load(Ordering::Acquire)
+        self.ready_epoch.load(Ordering::Acquire) != 0
     }
 }
 

@@ -71,6 +71,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
     }
 
+    #[inline]
     fn add_new_slot(&mut self, worker: &mut GCWorker<VM>, s: VM::VMSlot) {
         self.new_incs.push(s);
         self.new_incs_count += 1;
@@ -176,6 +177,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
     }
 
+    #[inline]
     fn promote(
         &mut self,
         worker: &mut GCWorker<VM>,
@@ -205,6 +207,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         self.scan_nursery_object(worker, o, los, !copied, depth, size);
     }
 
+    #[inline(always)]
     fn record_mature_evac_remset2(
         &mut self,
         worker: &mut GCWorker<VM>,
@@ -220,6 +223,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
     }
 
+    #[inline(always)]
     fn record_mature_evac_remset(
         &mut self,
         worker: &mut GCWorker<VM>,
@@ -232,6 +236,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         self.record_mature_evac_remset2(worker, self.lxr.address_in_defrag(s.to_address()), s, o);
     }
 
+    #[inline]
     fn scan_nursery_object(
         &mut self,
         worker: &mut GCWorker<VM>,
@@ -331,10 +336,12 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     }
 
     /// Return true if the object's ref count is incremented and the count was zero before the increment
+    #[inline(always)]
     fn inc(&self, o: ObjectReference) -> bool {
         self.rc.inc(o) == Ok(0)
     }
 
+    #[inline(always)]
     fn dont_evacuate(&self, o: ObjectReference, los: bool) -> bool {
         if los {
             return true;
@@ -358,6 +365,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         false
     }
 
+    #[inline]
     fn process_inc_and_evacuate(
         &mut self,
         worker: &mut GCWorker<VM>,
@@ -443,6 +451,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     }
 
     /// Return `None` if the increment of the slot should be delayed
+    #[inline(always)]
     fn unlog_and_load_rc_object<const K: EdgeKind>(
         &mut self,
         s: VM::VMSlot,
@@ -464,6 +473,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         o
     }
 
+    #[inline(always)]
     fn process_slot<const K: EdgeKind>(
         &mut self,
         worker: &mut GCWorker<VM>,

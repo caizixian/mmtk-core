@@ -19,8 +19,8 @@ pub struct CalculateForwardingAddress<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> GCWork<VM> for CalculateForwardingAddress<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        self.space.calculate_forwarding_pointer();
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        self.space.calculate_forwarding_pointer(worker);
     }
 }
 
@@ -89,20 +89,18 @@ impl<VM: VMBinding> UpdateReferences<VM> {
     }
 }
 
-/// compact live objects based on forwarding pointers calculated before
-pub struct Compact<VM: VMBinding> {
-    space: &'static Lisp2Space<VM>,
-}
-
-impl<VM: VMBinding> GCWork<VM> for Compact<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        self.space.compact();
-    }
-}
+/// Schedule single-threaded Lisp2 compaction inside `WorkerMonitor` right before
+/// [`WorkBucketStage::Compact`] opens, while `WorkersParked` statically proves no worker holds
+/// `&mut GCWorker<VM>`.
+pub struct Compact<VM: VMBinding>(PhantomData<fn() -> VM>);
 
 impl<VM: VMBinding> Compact<VM> {
-    pub fn new(space: &'static Lisp2Space<VM>) -> Self {
-        Self { space }
+    pub(super) fn schedule(scheduler: &GCWorkScheduler<VM>, space: &'static Lisp2Space<VM>) {
+        scheduler.work_buckets[WorkBucketStage::Compact].set_pre_open_hook(
+            move |_mmtk, _tls, parked| {
+                space.compact(parked);
+            },
+        );
     }
 }
 

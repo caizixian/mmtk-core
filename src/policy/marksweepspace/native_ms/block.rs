@@ -372,15 +372,18 @@ impl OwnedBlock {
         !self.0.load_free_list().is_zero()
     }
 
-    /// Pop and zero one cell of size `self.cell_size()`, returning `Address::ZERO` if empty.
-    #[inline]
-    pub(crate) fn alloc_cell(&mut self) -> Address {
-        assert_eq!(
+    /// Pop and zero one cell of known `cell_size` (`SIZE_TABLE(self.0) == cell_size`, capsule-
+    /// enforced by `BlockLists::push` on an `Unmarked` available block), returning `Address::ZERO`
+    /// if empty.
+    #[inline(always)]
+    pub(super) fn alloc_cell_known_size(&mut self, cell_size: usize) -> Address {
+        debug_assert_eq!(
             self.0.get_state(),
             BlockState::Unmarked,
             "Cannot allocate from unswept or unallocated block {:?}",
             self.0
         );
+        debug_assert_eq!(self.0.load_block_cell_size(), cell_size);
         let cell = self.0.load_free_list();
         if cell.is_zero() {
             return Address::ZERO;
@@ -396,8 +399,6 @@ impl OwnedBlock {
             self.0
         );
         self.0.store_free_list(next_cell);
-
-        let cell_size = self.0.load_block_cell_size();
         crate::util::memory::zero(cell, cell_size);
         cell
     }

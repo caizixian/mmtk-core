@@ -123,12 +123,12 @@ impl BlockList {
         self.first.as_ref().is_some_and(OwnedBlock::has_free_cells)
     }
 
-    /// Pop and zero one cell from the front block of `self` without unlinking the block,
-    /// returning `Address::ZERO` if `self` is empty or its front block has no free cells.
-    #[inline]
-    pub(crate) fn alloc_cell_from_head(&mut self) -> Address {
+    /// Pop and zero one cell of known `cell_size` from the front block of `self` without unlinking
+    /// the block, returning `Address::ZERO` if `self` is empty or its front block has no free cells.
+    #[inline(always)]
+    pub(super) fn alloc_cell_from_head(&mut self, cell_size: usize) -> Address {
         match self.first.as_mut() {
-            Some(head) => head.alloc_cell(),
+            Some(head) => head.alloc_cell_known_size(cell_size),
             None => Address::ZERO,
         }
     }
@@ -356,9 +356,9 @@ impl BlockLists {
     }
 
     /// Pop and zero one cell from the front block of `bin` without unlinking the block.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn alloc_cell_from_head(&mut self, bin: BinIndex) -> Address {
-        self.bins_mut()[bin].alloc_cell_from_head()
+        self.bins_mut()[bin].alloc_cell_from_head(bin_cell_size(bin))
     }
 
     /// Move all blocks from `other[bin]` onto the tail of `self[bin]`.
@@ -405,13 +405,14 @@ pub(crate) fn new_empty_block_lists() -> BlockLists {
 /// Align a byte size to a size in machine words
 /// i.e. byte size == `wsize*sizeof(void*)`
 /// adapted from _mi_wsize_from_size in mimalloc
+#[inline(always)]
 fn mi_wsize_from_size(size: usize) -> usize {
     size.div_ceil(MI_INTPTR_SIZE)
 }
 
 /// Compute the bounded [`BinIndex`] (`Fin<49>`, `1 <= bin <= MAX_BIN`) for `(size, align)`,
 /// panicking if the maximum aligned allocation size exceeds [`MAX_BIN_SIZE`].
-#[inline]
+#[inline(always)]
 pub(crate) fn mi_bin_bounded<VM: VMBinding>(size: usize, align: usize) -> BinIndex {
     let aligned_size = allocator::get_maximum_aligned_size::<VM>(size, align);
     assert!(
@@ -423,6 +424,7 @@ pub(crate) fn mi_bin_bounded<VM: VMBinding>(size: usize, align: usize) -> BinInd
         .expect("mi_bin_from_size must be <= MAX_BIN for aligned_size <= MAX_BIN_SIZE")
 }
 
+#[inline(always)]
 fn mi_bin_from_size(size: usize) -> usize {
     // adapted from _mi_bin in mimalloc
     let mut wsize: usize = mi_wsize_from_size(size);

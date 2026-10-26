@@ -76,10 +76,12 @@ impl HeaderMetadataSpec {
         }
     }
 
+    #[inline(always)]
     const fn byte_offset(&self) -> isize {
         self.bit_offset >> LOG_BITS_IN_BYTE
     }
 
+    #[inline(always)]
     fn meta_addr(&self, header: Address) -> Address {
         header + self.byte_offset()
     }
@@ -119,6 +121,7 @@ impl HeaderMetadataSpec {
 
     /// Get the bit shift (the bit distance from the lowest bit to the bits location defined in the spec),
     /// and the mask (used to extract value for the bits defined in the spec).
+    #[inline(always)]
     fn get_shift_and_mask_for_bits(&self) -> (isize, u8) {
         debug_assert!(self.num_of_bits < BITS_IN_BYTE);
         let byte_offset = self.byte_offset();
@@ -128,6 +131,7 @@ impl HeaderMetadataSpec {
     }
 
     /// Extract bits from a raw byte, and put it to the lowest bits.
+    #[inline(always)]
     fn get_bits_from_u8(&self, raw_byte: u8) -> u8 {
         debug_assert!(self.num_of_bits < BITS_IN_BYTE);
         let (bit_shift, mask) = self.get_shift_and_mask_for_bits();
@@ -135,6 +139,7 @@ impl HeaderMetadataSpec {
     }
 
     /// Set bits to a raw byte. `set_val` has the valid value in its lowest bits.
+    #[inline(always)]
     fn set_bits_to_u8(&self, raw_byte: u8, set_val: u8) -> u8 {
         debug_assert!(self.num_of_bits < BITS_IN_BYTE);
         debug_assert!(
@@ -157,6 +162,7 @@ impl HeaderMetadataSpec {
     ///   `self.num_of_bits < 8`).
     /// * This is a non-atomic load: no other thread may concurrently write to or atomically modify
     ///   the underlying header byte/word, and no live `&mut` reference may alias it.
+    #[inline(always)]
     pub unsafe fn load<T: MetadataValue>(&self, header: Address, optional_mask: Option<T>) -> T {
         self.assert_mask::<T>(optional_mask);
         self.assert_spec::<T>();
@@ -183,6 +189,7 @@ impl HeaderMetadataSpec {
     }
 
     /// This function provides a default implementation for the `load_metadata_atomic` method from the `ObjectModel` trait.
+    #[inline(always)]
     pub fn load_atomic<T: MetadataValue>(
         &self,
         header: Address,
@@ -207,6 +214,7 @@ impl HeaderMetadataSpec {
     /// * This is a non-atomic store (and a non-atomic read-modify-write for sub-byte or masked
     ///   specs): the caller must have exclusive access to the underlying header byte/word with no
     ///   concurrent reads, writes, atomic operations, or live Rust references (`&` or `&mut`).
+    #[inline(always)]
     pub unsafe fn store<T: MetadataValue>(
         &self,
         header: Address,
@@ -236,6 +244,7 @@ impl HeaderMetadataSpec {
     /// This function provides a default implementation for the `store_metadata_atomic` method from the `ObjectModel` trait.
     ///
     /// Note: for sub-byte or masked metadata, this function performs a compare-and-swap loop so the update always succeeds.
+    #[inline(always)]
     pub fn store_atomic<T: MetadataValue>(
         &self,
         header: Address,
@@ -252,6 +261,7 @@ impl HeaderMetadataSpec {
     /// This function provides a default implementation for the `compare_exchange_metadata` method from the `ObjectModel` trait.
     ///
     /// Note: this function only does fetch and exclusive store once, without any busy waiting in a loop.
+    #[inline(always)]
     pub fn compare_exchange<T: MetadataValue>(
         &self,
         header: Address,
@@ -274,6 +284,7 @@ impl HeaderMetadataSpec {
     }
 
     /// This function provides a default implementation for the `fetch_add` method from the `ObjectModel` trait.
+    #[inline(always)]
     pub fn fetch_add<T: MetadataValue>(&self, header: Address, val: T, order: Ordering) -> T {
         // SAFETY: `ObjectModel` contract guarantees `self.meta_addr(header)` is a mapped,
         // initialized, writable header cell accessed solely via atomics.
@@ -281,6 +292,7 @@ impl HeaderMetadataSpec {
     }
 
     /// This function provides a default implementation for the `fetch_sub` method from the `ObjectModel` trait.
+    #[inline(always)]
     pub fn fetch_sub<T: MetadataValue>(&self, header: Address, val: T, order: Ordering) -> T {
         // SAFETY: `ObjectModel` contract guarantees `self.meta_addr(header)` is a mapped,
         // initialized, writable header cell accessed solely via atomics.
@@ -288,6 +300,7 @@ impl HeaderMetadataSpec {
     }
 
     /// This function provides a default implementation for the `fetch_and` method from the `ObjectModel` trait.
+    #[inline(always)]
     pub fn fetch_and<T: MetadataValue>(&self, header: Address, val: T, order: Ordering) -> T {
         // SAFETY: `ObjectModel` contract guarantees `self.meta_addr(header)` is a mapped,
         // initialized, writable header cell accessed solely via atomics.
@@ -295,6 +308,7 @@ impl HeaderMetadataSpec {
     }
 
     /// This function provides a default implementation for the `fetch_or` method from the `ObjectModel` trait.
+    #[inline(always)]
     pub fn fetch_or<T: MetadataValue>(&self, header: Address, val: T, order: Ordering) -> T {
         // SAFETY: `ObjectModel` contract guarantees `self.meta_addr(header)` is a mapped,
         // initialized, writable header cell accessed solely via atomics.
@@ -303,6 +317,7 @@ impl HeaderMetadataSpec {
 
     /// This function provides a default implementation for the `fetch_update` method from the `ObjectModel` trait.
     /// The semantics is the same as Rust's `fetch_update` on atomic types.
+    #[inline(always)]
     pub fn fetch_update<T: MetadataValue, F: FnMut(T) -> Option<T> + Copy>(
         &self,
         header: Address,

@@ -244,8 +244,28 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
     }
 
     fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, dst: VM::VMMemorySlice) {
-        if dst.bytes() == 0 {
+        let bytes = dst.bytes();
+        if bytes == 0 {
             return;
+        }
+        #[cfg(not(feature = "extreme_assertions"))]
+        {
+            const _: () = assert!(LOGGED_VALUE == 0);
+            let step = VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC.heap_bytes_per_unlog_byte();
+            let start = dst.start();
+            let aligned_end = (start + bytes).align_up(step);
+            let mut cursor = start.align_down(step);
+            let mut any_unlogged = false;
+            while cursor < aligned_end {
+                if Self::UNLOG_BITS.load_raw_byte_atomic(cursor, Ordering::Relaxed) != 0 {
+                    any_unlogged = true;
+                    break;
+                }
+                cursor += step;
+            }
+            if !any_unlogged {
+                return;
+            }
         }
         for s in dst.iter_slots() {
             let _succ = self.enqueue_node(None, s, None);

@@ -57,6 +57,7 @@ impl<VM: VMBinding> Allocator<VM> for FreeListAllocator<VM> {
         &self.context
     }
 
+    #[inline(always)]
     fn alloc(&mut self, size: usize, align: usize, offset: usize) -> Address {
         debug_assert!(
             size <= MAX_BIN_SIZE,
@@ -67,29 +68,27 @@ impl<VM: VMBinding> Allocator<VM> for FreeListAllocator<VM> {
         debug_assert!(align >= VM::MIN_ALIGNMENT);
 
         let bin = mi_bin_bounded::<VM>(size, align);
-        if self.find_free_block_local(bin) {
-            let cell = self.available_blocks.alloc_cell_from_head(bin);
-            if !cell.is_zero() {
-                debug_assert!(
-                    !(*self.context.options.precise_stress
-                        && self.context.options.is_stress_test_gc_enabled())
-                );
+        let cell = self.available_blocks.alloc_cell_from_head(bin);
+        if !cell.is_zero() {
+            debug_assert!(
+                !(*self.context.options.precise_stress
+                    && self.context.options.is_stress_test_gc_enabled())
+            );
 
-                let res = allocator::align_allocation::<VM>(cell, align, offset);
-                #[cfg(debug_assertions)]
-                {
-                    let cell_size = bin_cell_size(bin);
-                    debug_assert!(
-                        res + size <= cell + cell_size,
-                        "Allocating (size = {}, align = {}, offset = {}) to the cell {} of size {}, but the end of the allocation region {} is beyond the cell end {}",
-                        size, align, offset, cell, cell_size, res + size, cell + cell_size
-                    );
-                }
-                return res;
+            let res = allocator::align_allocation::<VM>(cell, align, offset);
+            #[cfg(debug_assertions)]
+            {
+                let cell_size = bin_cell_size(bin);
+                debug_assert!(
+                    res + size <= cell + cell_size,
+                    "Allocating (size = {}, align = {}, offset = {}) to the cell {} of size {}, but the end of the allocation region {} is beyond the cell end {}",
+                    size, align, offset, cell, cell_size, res + size, cell + cell_size
+                );
             }
+            return res;
         }
 
-        self.alloc_slow(size, align, offset)
+        self.alloc_from_local_or_slow(bin, size, align, offset)
     }
 
     fn alloc_slow_once(&mut self, size: usize, align: usize, offset: usize) -> Address {
@@ -188,6 +187,37 @@ impl<VM: VMBinding> FreeListAllocator<VM> {
         }
     }
 
+    #[inline(never)]
+    fn alloc_from_local_or_slow(
+        &mut self,
+        bin: BinIndex,
+        size: usize,
+        align: usize,
+        offset: usize,
+    ) -> Address {
+        if self.find_free_block_local(bin) {
+            let cell = self.available_blocks.alloc_cell_from_head(bin);
+            if !cell.is_zero() {
+                debug_assert!(
+                    !(*self.context.options.precise_stress
+                        && self.context.options.is_stress_test_gc_enabled())
+                );
+                let res = allocator::align_allocation::<VM>(cell, align, offset);
+                #[cfg(debug_assertions)]
+                {
+                    let cell_size = bin_cell_size(bin);
+                    debug_assert!(
+                        res + size <= cell + cell_size,
+                        "Allocating (size = {}, align = {}, offset = {}) to the cell {} of size {}, but the end of the allocation region {} is beyond the cell end {}",
+                        size, align, offset, cell, cell_size, res + size, cell + cell_size
+                    );
+                }
+                return res;
+            }
+        }
+        self.alloc_slow(size, align, offset)
+    }
+
     fn find_free_block_stress(&mut self, bin: BinIndex, size: usize, align: usize) -> bool {
         Self::find_free_block_with(
             &mut self.available_blocks_stress,
@@ -220,6 +250,12 @@ impl<VM: VMBinding> FreeListAllocator<VM> {
     }
 
     fn add_to_available_blocks(&mut self, bin: BinIndex, block: OwnedBlock, stress: bool) {
+        assert_eq!(
+            block.id().get_state(),
+            BlockState::Unmarked,
+            "Cannot add unswept or unallocated block {:?} to available_blocks",
+            block.id()
+        );
         if stress {
             debug_assert!(*self.context.options.precise_stress);
             self.available_blocks_stress.push(bin, block);

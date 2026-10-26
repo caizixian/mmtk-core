@@ -153,6 +153,7 @@ pub(crate) fn try_side_metadata_reserved_range() -> Option<(Address, Address)> {
 // With the above functions called, side metadata is initialized, and the following functions can be used to query side metadata layout and addresses.
 
 /// Get the runtime side metadata base address.
+#[inline(always)]
 pub fn global_side_metadata_base_address() -> Address {
     #[cfg(debug_assertions)]
     {
@@ -175,6 +176,7 @@ pub fn global_side_metadata_base_address() -> Address {
 }
 
 // Local side metadata start address. This is derived from the end of global side metadata.
+#[inline(always)]
 pub(crate) fn local_side_metadata_base_address() -> Address {
     global_side_metadata_base_address() + global_side_metadata_bytes()
 }

@@ -47,6 +47,7 @@ impl SideMetadataSpec {
     }
 
     /// Get the starting address for a spec of contiguous side metadata.
+    #[inline(always)]
     pub fn get_starting_address(&self) -> Address {
         debug_assert!(self.uses_contiguous_side_metadata());
         let base = global_side_metadata_base_address();
@@ -80,6 +81,7 @@ impl SideMetadataSpec {
     /// should never be larger than this address. Otherwise, we are accessing the metadata that is laid out
     /// after this spec. This spec must be a contiguous side metadata spec (which uses address
     /// as offset).
+    #[inline(always)]
     pub fn upper_bound_address_for_contiguous(&self) -> Address {
         debug_assert!(self.uses_contiguous_side_metadata());
         self.get_starting_address() + metadata_address_range_size(self)
@@ -212,7 +214,7 @@ impl SideMetadataSpec {
     /// Validate `self`'s `<= 8`-bit geometry, byte-boundary alignment of `data_addr`, single-chunk
     /// containment (when chunked), startup reservation + spec-window bounds, and `MMAPPER` mapping
     /// of `[meta_addr, meta_addr + meta_bytes)`, returning `meta_addr`.
-    #[inline]
+    #[inline(always)]
     fn validate_mapped_atomic_bytes(&self, data_addr: Address, meta_bytes: usize) -> Address {
         assert!(
             self.log_num_of_bits <= LOG_BITS_IN_BYTE as usize
@@ -285,24 +287,41 @@ impl SideMetadataSpec {
         let meta_end = meta_addr + meta_bytes;
         helpers::assert_meta_range_in_spec_bounds(self, data_addr, meta_addr, meta_end);
         if meta_bytes > 0 {
-            let grain = MMAPPER.granularity();
-            let first_grain = meta_addr.align_down(grain);
-            let last_grain = (meta_end - 1usize).align_down(grain);
-            let mut cur_grain = first_grain;
-            loop {
+            // `Mmapper::granularity()` is guaranteed `>= BYTES_IN_PAGE`, so any slice within a
+            // single OS page resides inside a single `MMAPPER` grain without a vtable call to
+            // query `granularity()`.
+            let first_page = meta_addr.align_down(BYTES_IN_PAGE);
+            let last_page = (meta_end - 1usize).align_down(BYTES_IN_PAGE);
+            if first_page == last_page {
                 assert!(
-                    MMAPPER.is_mapped_address(cur_grain),
-                    "Unmapped side-metadata grain {} in [{}, {}) for {:?} (data_addr={})",
-                    cur_grain,
+                    MMAPPER.is_mapped_address(meta_addr),
+                    "Unmapped side-metadata page {} in [{}, {}) for {:?} (data_addr={})",
+                    first_page,
                     meta_addr,
                     meta_end,
                     self,
                     data_addr
                 );
-                if cur_grain == last_grain {
-                    break;
+            } else {
+                let grain = MMAPPER.granularity();
+                let first_grain = meta_addr.align_down(grain);
+                let last_grain = (meta_end - 1usize).align_down(grain);
+                let mut cur_grain = first_grain;
+                loop {
+                    assert!(
+                        MMAPPER.is_mapped_address(cur_grain),
+                        "Unmapped side-metadata grain {} in [{}, {}) for {:?} (data_addr={})",
+                        cur_grain,
+                        meta_addr,
+                        meta_end,
+                        self,
+                        data_addr
+                    );
+                    if cur_grain == last_grain {
+                        break;
+                    }
+                    cur_grain += grain;
                 }
-                cur_grain += grain;
             }
         }
         meta_addr
@@ -338,6 +357,7 @@ impl SideMetadataSpec {
     }
 
     /// Check with the mmapper to see if side metadata is mapped for the spec for the data address.
+    #[inline(always)]
     pub(crate) fn is_mapped(&self, data_addr: Address) -> bool {
         use crate::MMAPPER;
         let meta_addr = address_to_meta_address(self, data_addr);
@@ -475,18 +495,13 @@ impl SideMetadataSpec {
         &self,
         start: Address,
         size: usize,
-        update_meta_bits: unsafe fn(Address, u8, Address, u8),
+        mut update_meta_bits: impl FnMut(Address, u8, Address, u8),
     ) {
         if self.uses_contiguous_side_metadata() {
             if let Some((ms, msb, me, meb)) =
                 helpers::half_open_contiguous_meta_bit_range(self, start, size)
             {
-                // SAFETY: `half_open_contiguous_meta_bit_range` computed a valid ordered bit range
-                // (`msb < 8`, `meb < 8`) for `[start, start + size)`, and `bzero_metadata` /
-                // `bset_metadata`'s mapped-region contract ensures touched side-metadata bytes are
-                // non-null, mapped, and writable with exclusive whole-byte ownership and
-                // initialized `AtomicU8`-only boundary bytes.
-                unsafe { update_meta_bits(ms, msb, me, meb) };
+                update_meta_bits(ms, msb, me, meb);
             }
         } else {
             // On 32-bit targets, local policy-specific side metadata is chunked: adjacent data chunks
@@ -511,14 +526,7 @@ impl SideMetadataSpec {
                     meta_end_shift -= BITS_IN_BYTE as u8;
                     meta_end += 1usize;
                 }
-                // SAFETY: `for_each_spec_data_span` split `[start, start + size)` into single-chunk
-                // spans with `meta_start_shift < 8`, `meta_end_shift < 8`, and `(meta_start,
-                // meta_start_shift) <= (meta_end, meta_end_shift)`, and `bzero_metadata` /
-                // `bset_metadata`'s mapped-region contract ensures non-null, mapped, writable side
-                // metadata with exclusive whole bytes and initialized `AtomicU8`-only boundary bytes.
-                unsafe {
-                    update_meta_bits(meta_start, meta_start_shift, meta_end, meta_end_shift);
-                }
+                update_meta_bits(meta_start, meta_start_shift, meta_end, meta_end_shift);
             });
         }
     }
@@ -539,7 +547,13 @@ impl SideMetadataSpec {
         #[cfg(feature = "extreme_assertions")]
         sanity::verify_bzero(self, start, size);
 
-        self.bulk_update_metadata(start, size, Self::zero_meta_bits)
+        self.bulk_update_metadata(start, size, |ms, msb, me, meb| {
+            // SAFETY: `bulk_update_metadata` produces an ordered `[ms:msb, me:meb)` bit range
+            // (`msb < 8`, `meb < 8`) within a single contiguous or chunked span, and
+            // `bzero_metadata`'s mapped-region contract ensures non-null, mapped, writable side
+            // metadata with exclusive whole bytes and initialized `AtomicU8`-only boundary bytes.
+            unsafe { Self::zero_meta_bits(ms, msb, me, meb) };
+        })
     }
 
     /// Bulk set a specific metadata for a memory region. Note that this method is more sophisiticated than a simple memset, especially in the following
@@ -558,7 +572,13 @@ impl SideMetadataSpec {
         #[cfg(feature = "extreme_assertions")]
         sanity::verify_bset(self, start, size);
 
-        self.bulk_update_metadata(start, size, Self::set_meta_bits)
+        self.bulk_update_metadata(start, size, |ms, msb, me, meb| {
+            // SAFETY: `bulk_update_metadata` produces an ordered `[ms:msb, me:meb)` bit range
+            // (`msb < 8`, `meb < 8`) within a single contiguous or chunked span, and
+            // `bset_metadata`'s mapped-region contract ensures non-null, mapped, writable side
+            // metadata with exclusive whole bytes and initialized `AtomicU8`-only boundary bytes.
+            unsafe { Self::set_meta_bits(ms, msb, me, meb) };
+        })
     }
 
     /// Bulk copy the `other` side metadata for a memory region to this side metadata.
@@ -651,6 +671,7 @@ impl SideMetadataSpec {
     /// `assert_value_type` checks spec width and offset alignment unconditionally (constant-folded
     /// to zero instructions for `const` specs in release builds), while debug/extreme-assertion
     /// builds additionally check runtime value bounds, mapping, and the sanity map.
+    #[inline(always)]
     #[allow(unused_variables)] // data_addr is not used in release build
     fn side_metadata_access<
         const CHECK_VALUE: bool,
@@ -700,6 +721,7 @@ impl SideMetadataSpec {
     /// * No other thread may concurrently write to or atomically modify the underlying metadata
     ///   byte/word (including adjacent regions sharing the same byte when `self.log_num_of_bits < 3`),
     ///   and no live `&mut` reference may alias that location.
+    #[inline(always)]
     pub unsafe fn load<T: MetadataValue>(&self, data_addr: Address) -> T {
         self.side_metadata_access::<true, T, _, _, _>(
             data_addr,
@@ -737,6 +759,7 @@ impl SideMetadataSpec {
     /// * Caller must have exclusive access to the underlying metadata byte/word: no other thread
     ///   may concurrently read, write, or atomically access it (including adjacent regions sharing
     ///   the same byte when `self.log_num_of_bits < 3`), and no live Rust reference may alias it.
+    #[inline(always)]
     pub unsafe fn store<T: MetadataValue>(&self, data_addr: Address, metadata: T) {
         self.side_metadata_access::<true, T, _, _, _>(
             data_addr,
@@ -775,6 +798,7 @@ impl SideMetadataSpec {
     ///   initialized.
     /// * No other thread may concurrently write to or atomically modify that metadata byte for the
     ///   duration of this call, and no live `&mut` reference may alias it.
+    #[inline(always)]
     pub unsafe fn load_byte(&self, data_addr: Address) -> u8 {
         let meta_addr = address_to_meta_address(self, data_addr);
         // SAFETY: Caller guarantees `meta_addr` is non-null, mapped, initialized (`u8` alignment 1),
@@ -790,6 +814,7 @@ impl SideMetadataSpec {
     /// * No other thread may concurrently read, write, or atomically access that metadata byte
     ///   (note that writing the whole byte overwrites all regions sharing it when
     ///   `self.log_num_of_bits < 3`), and no live Rust reference may alias it.
+    #[inline(always)]
     pub unsafe fn store_byte_relaxed(&self, data_addr: Address, byte: u8) {
         let meta_addr = address_to_meta_address(self, data_addr);
         // SAFETY: Caller guarantees `meta_addr` is non-null, mapped, writable (`u8` alignment 1),
@@ -801,6 +826,7 @@ impl SideMetadataSpec {
 
     /// Loads a value from the side metadata for the given address.
     /// This method has similar semantics to `load` in Rust atomics.
+    #[inline(always)]
     pub fn load_atomic<T: MetadataValue>(&self, data_addr: Address, order: Ordering) -> T {
         self.side_metadata_access::<true, T, _, _, _>(
             data_addr,
@@ -819,6 +845,7 @@ impl SideMetadataSpec {
 
     /// Store the given value to the side metadata for the given address.
     /// This method has similar semantics to `store` in Rust atomics.
+    #[inline(always)]
     pub fn store_atomic<T: MetadataValue>(&self, data_addr: Address, metadata: T, order: Ordering) {
         self.side_metadata_access::<true, T, _, _, _>(
             data_addr,
@@ -844,6 +871,7 @@ impl SideMetadataSpec {
     ///   writable, and aligned for its width (`self.log_num_of_bits <= 6`).
     /// * No other thread may concurrently read, write, or atomically access the underlying
     ///   metadata byte/word, and no live Rust reference may alias it.
+    #[inline(always)]
     pub unsafe fn set_zero(&self, data_addr: Address) {
         use num_traits::Zero;
         // SAFETY: Caller upholds `SideMetadataSpec::store` exclusive-access and mapped invariants
@@ -861,6 +889,7 @@ impl SideMetadataSpec {
 
     /// Atomically store zero to the side metadata for the given address.
     /// This method mainly facilitates clearing multiple metadata specs for the same address in a loop.
+    #[inline(always)]
     pub fn set_zero_atomic(&self, data_addr: Address, order: Ordering) {
         use num_traits::Zero;
         match self.log_num_of_bits {
@@ -887,6 +916,7 @@ impl SideMetadataSpec {
     ///   a side effect; the caller must ensure setting adjacent entries in that byte to all-ones is
     ///   sound for the protocol and must not rely on adjacent bits being set (under
     ///   `extreme_assertions`, only `data_addr`'s entry is set).
+    #[inline(always)]
     pub unsafe fn set_raw_byte_atomic(&self, data_addr: Address, order: Ordering) {
         assert!(self.log_num_of_bits < 3);
         cfg_if::cfg_if! {
@@ -913,12 +943,34 @@ impl SideMetadataSpec {
         }
     }
 
+    /// Atomically load the entire `AtomicU8` side-metadata byte containing `data_addr`'s entry for
+    /// a `<= 8`-bit spec (`self.log_num_of_bits <= 3`), without masking or shifting out adjacent
+    /// entries in that byte.
+    #[inline(always)]
+    pub(crate) fn load_raw_byte_atomic(&self, data_addr: Address, order: Ordering) -> u8 {
+        assert!(self.log_num_of_bits <= 3);
+        self.side_metadata_access::<false, u8, _, _, _>(
+            data_addr,
+            None,
+            || {
+                let meta_addr = address_to_meta_address(self, data_addr);
+                // SAFETY: `self.log_num_of_bits <= 3` verified above (`AtomicU8` has alignment 1),
+                // `assert_atomic_align::<u8>` inside `MetadataValue::load_atomic` checks non-null,
+                // and `SideMetadataSpec`'s mapped-region contract guarantees `meta_addr` is mapped,
+                // initialized, and accessed atomically at `AtomicU8` width without non-atomic aliases.
+                unsafe { <u8 as MetadataValue>::load_atomic(meta_addr, order) }
+            },
+            |_| {},
+        )
+    }
+
     /// Load the raw byte in the side metadata byte that is mapped to the data address.
     ///
     /// # Safety
     /// * `self`'s side-metadata byte for `data_addr` must be non-null, mapped, and initialized.
     /// * No other thread may concurrently write to or atomically modify that metadata byte, and no
     ///   live `&mut` reference may alias it.
+    #[inline(always)]
     pub unsafe fn load_raw_byte(&self, data_addr: Address) -> u8 {
         assert!(self.log_num_of_bits < 3);
         self.side_metadata_access::<false, u8, _, _, _>(
@@ -941,6 +993,7 @@ impl SideMetadataSpec {
     ///   must be non-null, mapped, and initialized across all `BYTES_IN_ADDRESS` bytes.
     /// * No other thread may concurrently write to or atomically modify any byte in that word, and
     ///   no live `&mut` reference may alias it.
+    #[inline(always)]
     pub unsafe fn load_raw_word(&self, data_addr: Address) -> usize {
         use crate::util::constants::*;
         assert!(self.log_num_of_bits < (LOG_BITS_IN_BYTE + LOG_BYTES_IN_ADDRESS) as usize);
@@ -963,6 +1016,7 @@ impl SideMetadataSpec {
     /// This method has similar semantics to `compare_exchange` in Rust atomics.
     /// The return value is a result indicating whether the new value was written and containing the previous value.
     /// On success this value is guaranteed to be equal to current.
+    #[inline(always)]
     pub fn compare_exchange_atomic<T: MetadataValue>(
         &self,
         data_addr: Address,
@@ -997,6 +1051,7 @@ impl SideMetadataSpec {
     /// Adds the value to the current value for this side metadata for the given address.
     /// This method has similar semantics to `fetch_add` in Rust atomics.
     /// Returns the previous value.
+    #[inline(always)]
     pub fn fetch_add_atomic<T: MetadataValue>(
         &self,
         data_addr: Address,
@@ -1021,6 +1076,7 @@ impl SideMetadataSpec {
     /// Subtracts the value from the current value for this side metadata for the given address.
     /// This method has similar semantics to `fetch_sub` in Rust atomics.
     /// Returns the previous value.
+    #[inline(always)]
     pub fn fetch_sub_atomic<T: MetadataValue>(
         &self,
         data_addr: Address,
@@ -1045,6 +1101,7 @@ impl SideMetadataSpec {
     /// Bitwise 'and' the value with the current value for this side metadata for the given address.
     /// This method has similar semantics to `fetch_and` in Rust atomics.
     /// Returns the previous value.
+    #[inline(always)]
     pub fn fetch_and_atomic<T: MetadataValue>(
         &self,
         data_addr: Address,
@@ -1069,6 +1126,7 @@ impl SideMetadataSpec {
     /// Bitwise 'or' the value with the current value for this side metadata for the given address.
     /// This method has similar semantics to `fetch_or` in Rust atomics.
     /// Returns the previous value.
+    #[inline(always)]
     pub fn fetch_or_atomic<T: MetadataValue>(
         &self,
         data_addr: Address,
@@ -1093,6 +1151,7 @@ impl SideMetadataSpec {
     /// Fetches the value for this side metadata for the given address, and applies a function to it that returns an optional new value.
     /// This method has similar semantics to `fetch_update` in Rust atomics.
     /// Returns a Result of Ok(previous_value) if the function returned Some(_), else Err(previous_value).
+    #[inline(always)]
     pub fn fetch_update_atomic<T: MetadataValue, F: FnMut(T) -> Option<T>>(
         &self,
         data_addr: Address,

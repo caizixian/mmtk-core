@@ -23,6 +23,7 @@ use enum_map::{Enum, EnumMap};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+#[derive(Debug, PartialEq, Eq)]
 enum BucketUpdateResult {
     NoWork,
     OpenedWithPackets(usize),
@@ -336,10 +337,19 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     /// Open buckets if their conditions are met, executing any registered pre-open hook first
     /// while all workers are parked inside `WorkerMonitor`.
+    #[inline]
     fn update_buckets(
         &self,
         mmtk: &'static MMTK<VM>,
         tls: VMWorkerThread,
+        parked: &mut WorkersParked<'_>,
+    ) -> BucketUpdateResult {
+        self.update_buckets_inner(|hook, parked| hook(mmtk, tls, parked), parked)
+    }
+
+    fn update_buckets_inner(
+        &self,
+        mut run_hook: impl FnMut(PreOpenHook<VM>, &mut WorkersParked<'_>),
         parked: &mut WorkersParked<'_>,
     ) -> BucketUpdateResult {
         debug!("update_buckets");
@@ -357,17 +367,17 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             if bucket.can_open(self) {
                 if let Some(hook) = bucket.take_pre_open_hook() {
                     debug!("Running pre-open hook before opening {:?}", id);
-                    hook(mmtk, tls, parked);
-                    if self.worker_group.has_designated_work() || !self.are_open_buckets_empty() {
-                        // Drain designated collector work or packets pushed to already-open
-                        // buckets (e.g. `Unconstrained`) before opening `bucket` on the next park
-                        // cycle.
+                    run_hook(hook, parked);
+                    if !self.are_open_buckets_empty() {
+                        // Drain packets pushed to already-open buckets (such as `Unconstrained`)
+                        // before opening `bucket` on the next park cycle.
                         return BucketUpdateResult::WakeAll;
                     }
                 }
                 debug!("Opening work bucket: {:?}", id);
                 bucket.open();
                 probe!(mmtk, bucket_opened, id);
+                let has_designated = self.worker_group.has_designated_work();
                 if !bucket.is_drained() {
                     // Quit the loop. There are already new packets in the newly opened bucket.
                     let new_packets = bucket.len();
@@ -376,12 +386,26 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                         new_packets,
                         id
                     );
-                    return BucketUpdateResult::OpenedWithPackets(new_packets);
+                    return if has_designated {
+                        BucketUpdateResult::WakeAll
+                    } else {
+                        BucketUpdateResult::OpenedWithPackets(new_packets)
+                    };
                 }
                 if bucket.maybe_schedule_sentinel() {
                     // Quit the loop. A sentinel packet is added to the newly opened bucket.
                     trace!("Sentinel is scheduled at stage {:?}.  Break.", id);
-                    return BucketUpdateResult::OpenedWithPackets(1);
+                    return if has_designated {
+                        BucketUpdateResult::WakeAll
+                    } else {
+                        BucketUpdateResult::OpenedWithPackets(1)
+                    };
+                }
+                if has_designated {
+                    // `bucket` opened empty with no sentinel, while the pre-open hook queued
+                    // per-worker designated work; wake all workers now so later stages do not open
+                    // until that designated work finishes.
+                    return BucketUpdateResult::WakeAll;
                 }
             }
         }
@@ -874,5 +898,48 @@ mod tests {
         assert!(concurrent.drain_all_packets().is_empty());
         let moved = scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].drain_all_packets();
         assert_eq!(moved.len(), 3);
+    }
+
+    #[test]
+    fn pre_open_hook_opens_stage_in_same_park_cycle_unless_open_bucket_gains_work() {
+        // Case 1: Pre-open hook queues work for the opening stage and per-worker designated work.
+        // `Prepare` must open in the same park cycle and wake all workers without a second park.
+        let scheduler = GCWorkScheduler::<MockVM>::new(1, AffinityKind::OsDefault);
+        scheduler.work_buckets[WorkBucketStage::FIRST_STW_STAGE].open();
+        scheduler.work_buckets[WorkBucketStage::Prepare]
+            .set_pre_open_hook(|_mmtk, _tls, _parked| {});
+
+        let result = scheduler.worker_monitor.test_with_single_parked(|parked| {
+            scheduler.update_buckets_inner(
+                |_hook, _parked| {
+                    scheduler.work_buckets[WorkBucketStage::Prepare].add_no_notify(DummyWork);
+                    assert!(scheduler.worker_group.workers_shared[0]
+                        .designated_work
+                        .push(Box::new(DummyWork))
+                        .is_ok());
+                },
+                parked,
+            )
+        });
+        assert_eq!(result, BucketUpdateResult::WakeAll);
+        assert!(scheduler.work_buckets[WorkBucketStage::Prepare].is_open());
+
+        // Case 2: Pre-open hook pushes to an already-open bucket (`Unconstrained`).
+        // `Prepare` must remain closed until `Unconstrained` drains on the next park cycle.
+        let scheduler = GCWorkScheduler::<MockVM>::new(1, AffinityKind::OsDefault);
+        scheduler.work_buckets[WorkBucketStage::FIRST_STW_STAGE].open();
+        scheduler.work_buckets[WorkBucketStage::Prepare]
+            .set_pre_open_hook(|_mmtk, _tls, _parked| {});
+
+        let result = scheduler.worker_monitor.test_with_single_parked(|parked| {
+            scheduler.update_buckets_inner(
+                |_hook, _parked| {
+                    scheduler.work_buckets[WorkBucketStage::Unconstrained].add_no_notify(DummyWork);
+                },
+                parked,
+            )
+        });
+        assert_eq!(result, BucketUpdateResult::WakeAll);
+        assert!(!scheduler.work_buckets[WorkBucketStage::Prepare].is_open());
     }
 }

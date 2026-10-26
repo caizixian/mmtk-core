@@ -20,6 +20,7 @@ const FORWARDING_POINTER_MASK: usize = 0xffff_fffc;
 
 /// Attempt to become the worker thread who will forward the object.
 /// The successful worker will set the object forwarding bits to BEING_FORWARDED, preventing other workers from forwarding the same object.
+#[inline(always)]
 pub fn attempt_to_forward<VM: VMBinding>(object: ObjectReference) -> u8 {
     loop {
         let old_value = get_forwarding_status::<VM>(object);
@@ -49,6 +50,7 @@ pub fn attempt_to_forward<VM: VMBinding>(object: ObjectReference) -> u8 {
 ///
 /// Returns a reference to the new object.
 ///
+#[inline(always)]
 pub fn spin_and_get_forwarded_object<VM: VMBinding>(
     object: ObjectReference,
     forwarding_bits: u8,
@@ -74,6 +76,7 @@ pub fn spin_and_get_forwarded_object<VM: VMBinding>(
     }
 }
 
+#[inline(always)]
 pub fn try_forward_object<VM: VMBinding>(
     object: ObjectReference,
     semantics: CopySemantics,
@@ -117,6 +120,7 @@ pub fn try_forward_object<VM: VMBinding>(
 /// *   `on_after_forwarding`: A callback function that is called after `object` is copied, but
 ///     before the forwarding bits are set.  Its argument is a reference to the new copy of
 ///     `object`.
+#[inline(always)]
 pub fn forward_object<VM: VMBinding>(
     object: ObjectReference,
     semantics: CopySemantics,
@@ -145,6 +149,7 @@ pub fn forward_object<VM: VMBinding>(
 }
 
 /// Return the forwarding bits for a given `ObjectReference`.
+#[inline(always)]
 pub fn get_forwarding_status<VM: VMBinding>(object: ObjectReference) -> u8 {
     VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC.load_atomic::<VM, u8>(
         object,
@@ -153,28 +158,34 @@ pub fn get_forwarding_status<VM: VMBinding>(object: ObjectReference) -> u8 {
     )
 }
 
+#[inline(always)]
 pub fn is_forwarded<VM: VMBinding>(object: ObjectReference) -> bool {
     get_forwarding_status::<VM>(object) == FORWARDED
 }
 
+#[inline(always)]
 pub fn is_being_forwarded<VM: VMBinding>(object: ObjectReference) -> bool {
     get_forwarding_status::<VM>(object) == BEING_FORWARDED
 }
 
+#[inline(always)]
 pub fn is_forwarded_or_being_forwarded<VM: VMBinding>(object: ObjectReference) -> bool {
     get_forwarding_status::<VM>(object) != FORWARDING_NOT_TRIGGERED_YET
 }
 
+#[inline(always)]
 pub fn state_is_forwarded_or_being_forwarded(forwarding_bits: u8) -> bool {
     forwarding_bits != FORWARDING_NOT_TRIGGERED_YET
 }
 
+#[inline(always)]
 pub fn state_is_being_forwarded(forwarding_bits: u8) -> bool {
     forwarding_bits == BEING_FORWARDED
 }
 
 /// Zero the forwarding bits of an object.
 /// This function is used on new objects.
+#[inline(always)]
 pub fn clear_forwarding_bits<VM: VMBinding>(object: ObjectReference) {
     VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC.store_atomic::<VM, u8>(
         object,
@@ -186,6 +197,7 @@ pub fn clear_forwarding_bits<VM: VMBinding>(object: ObjectReference) {
 
 /// Read the forwarding pointer of an object.
 /// This function is called on forwarded objects.
+#[inline(always)]
 pub fn read_forwarding_pointer<VM: VMBinding>(object: ObjectReference) -> ObjectReference {
     debug_assert!(
         is_forwarded::<VM>(object),
@@ -207,6 +219,7 @@ pub fn read_forwarding_pointer<VM: VMBinding>(object: ObjectReference) -> Object
 
 /// Write the forwarding pointer of an object.
 /// This function is called on being_forwarded objects.
+#[inline(always)]
 pub fn write_forwarding_pointer<VM: VMBinding>(
     object: ObjectReference,
     new_object: ObjectReference,
@@ -235,6 +248,7 @@ pub fn write_forwarding_pointer<VM: VMBinding>(
 /// Otherwise, returns `Some(shift)`, where `shift` is the left shift needed on forwarding bits.
 ///
 #[cfg(target_endian = "little")]
+#[inline(always)]
 pub(super) fn forwarding_bits_offset_in_forwarding_pointer<VM: VMBinding>() -> Option<isize> {
     use std::ops::Deref;
     // if both forwarding bits and forwarding pointer are in-header

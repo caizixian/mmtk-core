@@ -1254,6 +1254,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// return a tuple of the start line and the end line (non-inclusive).
     ///
     /// Returns None if the search could not find any more holes.
+    #[inline]
     #[allow(clippy::assertions_on_constants)]
     pub(crate) fn get_next_available_lines(
         &self,
@@ -1276,6 +1277,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Search holes by ref-counts instead of line marks.
+    #[inline]
     #[allow(clippy::assertions_on_constants)]
     fn rc_get_next_available_lines(
         &self,
@@ -1364,6 +1366,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Scan `block`'s `Line::MARK_TABLE` starting at `start_cursor` for the next available hole.
+    #[inline]
     #[allow(clippy::assertions_on_constants)]
     fn normal_get_next_available_lines_in_block(
         &self,
@@ -1571,11 +1574,6 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk {
         let mut unreused_blocks = 0;
 
         with_immix_space(mmtk, self.space_descriptor, |space| {
-            assert!(
-                space.address_in_space(self.chunk.start())
-                    && space.chunk_map.is_allocated_checked(self.chunk)
-            );
-
             let mut histogram = space.defrag.new_histogram();
             let line_mark_state = if super::BLOCK_ONLY {
                 None

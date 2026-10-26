@@ -441,7 +441,7 @@ impl Block {
         line_mark_state: Option<u8>,
     ) -> BlockSweepResult {
         assert!(!space.rc_enabled);
-        assert!(
+        debug_assert!(
             space.has_allocated_block(*self),
             "Block::sweep_allocated requires an allocated block in space: {:?}",
             self

@@ -254,10 +254,11 @@ impl WorkerMonitor {
         // Fast path: no worker is parked, so there is nothing to notify and no reason to
         // serialise on the monitor lock.  Every `WorkBucket::add` during a GC comes through here,
         // so this is the difference between one load and a global lock acquisition per packet.
-        if self.parker.parked_workers() == 0 {
+        let parked = self.parker.parked_workers();
+        if parked == 0 {
             return;
         }
-        if IN_LAST_PARKED.with(|cur| std::ptr::eq(cur.get(), self)) {
+        if parked == self.worker_count && IN_LAST_PARKED.with(|cur| std::ptr::eq(cur.get(), self)) {
             return;
         }
         // We must hold the lock while notifying.  Otherwise a worker that is between checking
@@ -317,6 +318,21 @@ impl WorkerMonitor {
             "GCWorker belongs to a different WorkerMonitor"
         );
         self.park_and_wait_by_ordinal(worker.ordinal, on_last_parked)
+    }
+
+    #[cfg(all(test, feature = "mock_test"))]
+    pub(super) fn test_with_single_parked<R>(
+        &self,
+        f: impl FnOnce(&mut WorkersParked<'_>) -> R,
+    ) -> R {
+        assert_eq!(self.worker_count, 1);
+        let mut out = None;
+        self.park_and_wait_by_ordinal(0, |_goals, parked| {
+            out = Some(f(parked));
+            LastParkedResult::WakeSelf
+        })
+        .unwrap();
+        out.unwrap()
     }
 
     fn park_and_wait_by_ordinal<F>(

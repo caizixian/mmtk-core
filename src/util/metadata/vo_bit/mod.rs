@@ -70,28 +70,33 @@ cfg_if::cfg_if! {
 
 /// The base address for VO bit side metadata on 64 bits platforms.
 #[cfg(target_pointer_width = "64")]
+#[inline(always)]
 pub fn vo_bit_side_metadata_addr() -> Address {
     VO_BIT_SIDE_METADATA_SPEC.get_starting_address()
 }
 
 /// Atomically set the VO bit for an object.
+#[inline(always)]
 pub(crate) fn set_vo_bit(object: ObjectReference) {
     debug_assert!(!is_vo_bit_set(object), "{:x}: VO bit already set", object);
     VO_BIT_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_raw_address(), 1, Ordering::SeqCst);
 }
 
 /// Atomically unset the VO bit for an object.
+#[inline(always)]
 pub(crate) fn unset_vo_bit(object: ObjectReference) {
     debug_assert!(is_vo_bit_set(object), "{:x}: VO bit not set", object);
     VO_BIT_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_raw_address(), 0, Ordering::SeqCst);
 }
 
 /// Atomically unset the VO bit for an object, regardless whether the bit is set or not.
+#[inline(always)]
 pub(crate) fn unset_vo_bit_nocheck(object: ObjectReference) {
     VO_BIT_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_raw_address(), 0, Ordering::SeqCst);
 }
 
 /// Check if the VO bit is set for an object.
+#[inline(always)]
 pub(crate) fn is_vo_bit_set(object: ObjectReference) -> bool {
     VO_BIT_SIDE_METADATA_SPEC.load_atomic::<u8>(object.to_raw_address(), Ordering::SeqCst) == 1
 }
@@ -100,6 +105,7 @@ pub(crate) fn is_vo_bit_set(object: ObjectReference) -> bool {
 /// If so, return `Some(object)`. Otherwise return `None`.
 ///
 /// The `address` must be word-aligned.
+#[inline(always)]
 pub(crate) fn is_vo_bit_set_for_addr(address: Address) -> Option<ObjectReference> {
     is_vo_bit_set_for_addr_order(address, Ordering::SeqCst)
 }
@@ -108,6 +114,7 @@ pub(crate) fn is_vo_bit_set_for_addr(address: Address) -> Option<ObjectReference
 /// with the given memory ordering.
 ///
 /// The `address` must be word-aligned.
+#[inline(always)]
 pub(crate) fn is_vo_bit_set_for_addr_order(
     address: Address,
     order: Ordering,
@@ -117,6 +124,7 @@ pub(crate) fn is_vo_bit_set_for_addr_order(
     })
 }
 
+#[inline(always)]
 fn check_vo_bit(addr: Address, load_vo_bit: impl FnOnce(Address) -> u8) -> Option<ObjectReference> {
     debug_assert!(
         addr.is_aligned_to(ObjectReference::ALIGNMENT),

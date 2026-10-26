@@ -2,7 +2,7 @@ use crate::plan::tracing::OptionObjectQueue;
 use crate::policy::gc_work::{TraceKind, TRACE_KIND_TRANSITIVE_PIN};
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::ovc::forwarding::{
-    self, CalculatedRegionEntry, ForwardingMetadata, MappedOVCRegion,
+    self, CalculatedRegionEntry, CalculatedRegions, ForwardingMetadata, MappedOVCRegion,
 };
 use crate::policy::sft::{GCWorkerMutRef, SFT};
 use crate::policy::space::{CommonSpace, Space};
@@ -192,12 +192,13 @@ impl<VM: VMBinding> Space<VM> for OVCSpace<VM> {
 }
 
 impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for OVCSpace<VM> {
+    #[inline(always)]
     fn trace_object<Q: ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(
         &self,
         queue: &mut Q,
         object: ObjectReference,
         _copy: Option<CopySemantics>,
-        _worker: &mut GCWorker<VM>,
+        worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
         debug_assert!(
             KIND != TRACE_KIND_TRANSITIVE_PIN,
@@ -206,7 +207,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for OVCSpace<V
         if KIND == TRACE_KIND_MARK {
             self.trace_mark_object(queue, object)
         } else if KIND == TRACE_KIND_FORWARD_ROOT {
-            self.trace_forward_root(queue, object)
+            self.trace_forward_root(queue, object, worker)
         } else {
             unreachable!()
         }
@@ -248,28 +249,34 @@ impl<VM: VMBinding> OVCSpace<VM> {
         }
     }
 
+    #[inline]
     fn assert_mark_mapped_in_space(&self, object: ObjectReference) {
         let addr = object.to_raw_address();
         let valid = self.in_space(object)
             && addr.is_aligned_to(ObjectReference::ALIGNMENT)
             && addr.is_aligned_to(BYTES_IN_WORD)
-            && forwarding::MARK_SPEC.is_mapped(addr)
-            && (self
+            && forwarding::MARK_SPEC.is_mapped(addr);
+        assert!(
+            valid,
+            "Object {object} is not in a mapped allocated OVCSpace region"
+        );
+        #[cfg(debug_assertions)]
+        {
+            let in_allocated_prefix = self
                 .forwarding
                 .calculated_regions_if_ready()
-                .is_some_and(|regions| {
-                    ForwardingMetadata::<VM>::find_region(&regions, addr).is_some()
-                })
+                .is_some_and(|regions| regions.find_region(addr).is_some())
                 || self.pr.with_regions(&mut |regions| {
                     let target_start = addr.align_down(forwarding::OVCRegion::BYTES);
                     regions
                         .iter()
                         .any(|r| r.region.start() == target_start && addr < r.cursor())
-                }));
-        assert!(
-            valid,
-            "Object {object} is not in a mapped allocated OVCSpace region"
-        );
+                });
+            debug_assert!(
+                in_allocated_prefix,
+                "Object {object} falls outside allocated [region.start(), cursor) in OVCSpace"
+            );
+        }
     }
 
     pub(crate) fn prepare(&self) {
@@ -284,6 +291,7 @@ impl<VM: VMBinding> OVCSpace<VM> {
         self.forwarding.release();
     }
 
+    #[inline(always)]
     fn trace_mark_object<Q: ObjectQueue>(
         &self,
         queue: &mut Q,
@@ -302,10 +310,12 @@ impl<VM: VMBinding> OVCSpace<VM> {
         object
     }
 
+    #[inline(always)]
     fn trace_forward_root<Q: ObjectQueue>(
         &self,
         _queue: &mut Q,
         object: ObjectReference,
+        worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
         if !self.in_space(object) {
             return object;
@@ -318,11 +328,12 @@ impl<VM: VMBinding> OVCSpace<VM> {
         );
         let regions = self
             .forwarding
-            .calculated_regions_if_ready()
+            .calculated_regions_for_worker(worker)
             .expect("OVCSpace::trace_forward_root called before offset vector calculation");
-        ForwardingMetadata::<VM>::forward_in_regions(&regions, object)
+        ForwardingMetadata::<VM>::forward_in_regions(regions, object)
     }
 
+    #[inline(always)]
     fn test_and_mark(object: ObjectReference) -> bool {
         forwarding::MARK_SPEC
             .fetch_update_atomic::<u8, _>(
@@ -340,6 +351,7 @@ impl<VM: VMBinding> OVCSpace<VM> {
             .is_ok()
     }
 
+    #[inline(always)]
     fn is_marked(object: ObjectReference) -> bool {
         let mark_bit =
             forwarding::MARK_SPEC.load_atomic::<u8>(object.to_raw_address(), Ordering::SeqCst);
@@ -369,11 +381,11 @@ impl<VM: VMBinding> OVCSpace<VM> {
         self.forwarding.finish_region_calculation();
     }
 
-    #[inline]
+    #[inline(always)]
     fn forward_slot_target(
         &self,
         local_region: &MappedOVCRegion,
-        all_regions: &[CalculatedRegionEntry],
+        all_regions: &CalculatedRegions,
         object: ObjectReference,
     ) -> ObjectReference {
         if !self.in_space(object) {
@@ -390,11 +402,12 @@ impl<VM: VMBinding> OVCSpace<VM> {
         ForwardingMetadata::<VM>::forward_in_regions(all_regions, object)
     }
 
+    #[inline]
     fn update_references(
         &self,
         worker: &mut GCWorker<VM>,
         local_region: &MappedOVCRegion,
-        all_regions: &[CalculatedRegionEntry],
+        all_regions: &CalculatedRegions,
         object: ObjectReference,
     ) {
         if VM::VMScanning::support_slot_enqueuing(worker.tls, object) {
@@ -416,6 +429,7 @@ impl<VM: VMBinding> OVCSpace<VM> {
             .calculated_regions_if_ready()
             .expect("OVCSpace::add_compact_tasks called before offset vector calculation");
         let compact_packets: Vec<Box<dyn GCWork<VM>>> = regions
+            .entries()
             .iter()
             .map(|entry| {
                 Box::new(Compact::<VM>::new(
@@ -434,7 +448,7 @@ impl<VM: VMBinding> OVCSpace<VM> {
         worker: &mut GCWorker<VM>,
         alloc_index: usize,
         region: MappedOVCRegion,
-        all_regions: &[CalculatedRegionEntry],
+        all_regions: &CalculatedRegions,
     ) {
         assert!(
             self.forwarding.has_calculated_forwarding_addresses(),
@@ -538,7 +552,7 @@ pub struct Compact<VM: VMBinding> {
     ovc_space: &'static OVCSpace<VM>,
     alloc_index: usize,
     region: MappedOVCRegion,
-    all_regions: Arc<[CalculatedRegionEntry]>,
+    all_regions: Arc<CalculatedRegions>,
 }
 
 impl<VM: VMBinding> GCWork<VM> for Compact<VM> {
@@ -553,7 +567,7 @@ impl<VM: VMBinding> Compact<VM> {
         ovc_space: &'static OVCSpace<VM>,
         alloc_index: usize,
         region: MappedOVCRegion,
-        all_regions: Arc<[CalculatedRegionEntry]>,
+        all_regions: Arc<CalculatedRegions>,
     ) -> Self {
         Self {
             ovc_space,

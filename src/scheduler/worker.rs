@@ -101,6 +101,11 @@ pub struct GCWorker<VM: VMBinding> {
     copy_initialized: bool,
     /// Worker-local LXR mature-evacuation remembered-set slot buffer.
     pub(crate) lxr_evac_slots: Vec<RemSetEntry<VM>>,
+    /// Worker-local `(ready_epoch, CalculatedRegions)` cache for `OVCSpace` root/edge forwarding.
+    pub(crate) ovc_regions_cache:
+        Option<(u64, Arc<crate::policy::ovc::forwarding::CalculatedRegions>)>,
+    /// Worker-local `(spans_epoch, mapped_spans)` cache for `>= 3`-span `Lisp2Space` forwarding.
+    pub(crate) lisp2_spans_cache: Option<(u64, crate::policy::lisp2space::ValidatedSpans)>,
     /// The reference to the MMTk instance.
     pub mmtk: &'static MMTK<VM>,
     /// Reference to the shared part of the GC worker.  It is used for synchronization.
@@ -151,6 +156,8 @@ impl<VM: VMBinding> GCWorker<VM> {
             copy: GCWorkerCopyContext::new_non_copy(),
             copy_initialized: false,
             lxr_evac_slots: Vec::new(),
+            ovc_regions_cache: None,
+            lisp2_spans_cache: None,
             scheduler,
             mmtk,
             shared,

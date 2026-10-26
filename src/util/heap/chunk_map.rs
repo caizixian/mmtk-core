@@ -165,6 +165,7 @@ impl ChunkMap {
         }
     }
 
+    #[inline(always)]
     pub fn is_allocated(&self, chunk: Chunk) -> bool {
         self.get(chunk)
             .map(|state| state.is_allocated())
@@ -173,7 +174,7 @@ impl ChunkMap {
 
     /// Safely check whether `chunk` is non-zero, has mapped `ALLOC_TABLE` side metadata within
     /// bounds, and is currently allocated in this `ChunkMap`.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn is_allocated_checked(&self, chunk: Chunk) -> bool {
         if chunk == Chunk::ZERO {
             return false;
@@ -188,12 +189,14 @@ impl ChunkMap {
     }
 
     /// Get chunk state. Return None if the chunk does not belong to the space.
+    #[inline(always)]
     pub fn get(&self, chunk: Chunk) -> Option<ChunkState> {
         let state = self.get_internal(chunk);
         (state.is_allocated() && state.get_space_index() == self.space_index).then_some(state)
     }
 
     /// Get chunk state, regardless of the space. This should always be private.
+    #[inline(always)]
     fn get_internal(&self, chunk: Chunk) -> ChunkState {
         ChunkState(Self::ALLOC_TABLE.load_atomic::<u8>(chunk.start(), Ordering::Acquire))
     }

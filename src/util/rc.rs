@@ -70,6 +70,7 @@ impl<VM: VMBinding> RefCountHelper<VM> {
 
     /// Atomically updates the reference count of object `o` by applying `f` to its current
     /// value, following the same semantics as `AtomicU8::fetch_update`.
+    #[inline(always)]
     pub fn fetch_update(
         &self,
         o: ObjectReference,
@@ -80,6 +81,7 @@ impl<VM: VMBinding> RefCountHelper<VM> {
 
     /// Increments object `o`'s reference count by one, leaving it unchanged (saturating) once
     /// it has reached `MAX_REF_COUNT`.
+    #[inline(always)]
     pub fn inc(&self, o: ObjectReference) -> Result<u8, u8> {
         #[cfg(feature = "vo_bit")]
         debug_assert!(
@@ -98,11 +100,13 @@ impl<VM: VMBinding> RefCountHelper<VM> {
     }
 
     /// Atomically sets object `o`'s reference count to `count`.
+    #[inline(always)]
     pub fn set(&self, o: ObjectReference, count: u8) {
         RC_TABLE.store_atomic(o.to_raw_address(), count, Ordering::Relaxed)
     }
 
     /// Returns object `o`'s current reference count.
+    #[inline(always)]
     pub fn count(&self, o: ObjectReference) -> u8 {
         RC_TABLE.load_atomic(o.to_raw_address(), Ordering::Relaxed)
     }
@@ -110,12 +114,14 @@ impl<VM: VMBinding> RefCountHelper<VM> {
     /// Returns the reference count stored in the RC table at address `addr`. If this
     /// returns a non-zero value, it indicates that `addr` is the address of an object reference,
     /// or the start of a straddle line.
+    #[inline(always)]
     pub fn count_by_address(&self, addr: Address) -> u8 {
         RC_TABLE.load_atomic(addr, Ordering::Relaxed)
     }
 
     /// Returns `true` if object `o`'s reference count is zero.
     #[allow(unused)]
+    #[inline(always)]
     pub fn is_dead(&self, o: ObjectReference) -> bool {
         let v: u8 = RC_TABLE.load_atomic(o.to_raw_address(), Ordering::Relaxed);
         v == 0
@@ -123,12 +129,14 @@ impl<VM: VMBinding> RefCountHelper<VM> {
 
     /// Returns `true` if object `o`'s reference count is zero (dead) or has saturated at
     /// `MAX_REF_COUNT` (sticky).
+    #[inline(always)]
     pub fn is_dead_or_stuck(&self, o: ObjectReference) -> bool {
         let v: u8 = RC_TABLE.load_atomic(o.to_raw_address(), Ordering::Relaxed);
         v == 0 || v == MAX_REF_COUNT
     }
 
     /// Returns `true` if object `o` is in a straddle line. The function does not check rc table.
+    #[inline(always)]
     pub fn object_is_in_straddle_line_no_rc_check(&self, o: ObjectReference) -> bool {
         // Directly reads line-granularity straddle line metadata atomically; `SideMetadataSpec`
         // shifts `o.to_raw_address()` by `Line::LOG_BYTES` to index the containing line's byte.
@@ -137,6 +145,7 @@ impl<VM: VMBinding> RefCountHelper<VM> {
 
     /// Returns `true` if address `a` falls within a live object whose containing line is marked
     /// as a straddle line.
+    #[inline(always)]
     pub fn object_is_in_straddle_line(&self, o: ObjectReference) -> bool {
         let line = Line::from_unaligned_address(o.to_raw_address());
         self.count(o) != 0
@@ -198,6 +207,7 @@ impl<VM: VMBinding> RefCountHelper<VM> {
 
     /// Marks object `o` as a straddle object when promoted to mature space if its supplied `size`
     /// spans more than one line.
+    #[inline(always)]
     pub fn promote_with_size(&self, o: ObjectReference, size: usize) {
         if size > Line::BYTES {
             self.mark_straddle_object_with_size(o, size);

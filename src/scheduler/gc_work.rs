@@ -211,6 +211,8 @@ pub struct ReleaseCollector;
 impl<VM: VMBinding> GCWork<VM> for ReleaseCollector {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         trace!("Release Collector");
+        worker.ovc_regions_cache = None;
+        worker.lisp2_spans_cache = None;
         worker.get_copy_context_mut().release();
     }
 }

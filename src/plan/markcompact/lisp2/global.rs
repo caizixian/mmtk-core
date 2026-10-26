@@ -95,7 +95,7 @@ impl<VM: VMBinding> Plan for Lisp2<VM> {
             .add(CalculateForwardingAddress::<VM>::new(&self.lisp2_space));
         // do another trace to update references
         UpdateReferences::<VM>::schedule(scheduler);
-        scheduler.work_buckets[WorkBucketStage::Compact].add(Compact::<VM>::new(&self.lisp2_space));
+        Compact::<VM>::schedule(scheduler, &self.lisp2_space);
 
         // Release global/collectors/mutators
         Release::<Lisp2GCWorkContext<VM>>::schedule(scheduler);
