@@ -1,12 +1,12 @@
 # Final Design and Rationale: Multi-Round `unsafe` Refactoring in `mmtk-core`
 
-Five engineering rounds refactored the `mmtk-core` garbage-collector framework from the `ed89711964` baseline commit to the `4f41d44178` (`4f41d4417885cb6935f3c784aa5148fbd2805bc0`) `master` commit. The refactoring audited all 322 `.rs` files under Rust 1.84. It cut code `unsafe` items by 66.4% (`777` to `261`) and cut `unsafe impl` items by 91.9% (`62` to `5`). In total, 80.4% of `.rs` files (`259` of `322`) now contain zero `unsafe` code.
+Five engineering rounds and an OpenJDK 21 performance pass refactored `mmtk-core` from the `ed89711964` baseline commit to the `3365f40174` (`3365f40174ed6d1f898d7f8341a64b86b880f209`) commit. The refactoring audited all 322 `.rs` files under Rust 1.84. It cut code `unsafe` items by 66.4% (`777` to `261`) and cut `unsafe impl` items by 91.9% (`62` to `5`). In total, 80.4% of `.rs` files (`259` of `322`) now contain zero `unsafe` code.
 
 ---
 
 ## 1. Executive Summary and Multi-Round Trajectory
 
-The refactoring progressed through two initial containment stages and three structural simplification rounds. Stage 1 (`ad1de8ffe3`) documented safety invariants inside folder boundaries and promoted unchecked helpers to `unsafe fn` contracts. Stage 2 (`41fbae59b6`) introduced cross-folder capability wrappers, which stalled total `unsafe` items at `786` and added `9,268` net lines of code (LOC). Rounds 3 through 5 replaced those wrappers with garbage-collector-native ownership types. Those three rounds cut `525` `unsafe` items (`-66.8%`) and `4,691` net LOC relative to Stage 2.
+The refactoring progressed through two initial containment stages, three structural simplification rounds, and a profile-guided performance pass. Stage 1 (`ad1de8ffe3`) documented safety invariants inside folder boundaries and promoted unchecked helpers to `unsafe fn` contracts. Stage 2 (`41fbae59b6`) introduced cross-folder capability wrappers, which stalled total `unsafe` items at `786` and added `9,268` net lines of code (LOC). Rounds 3 through 5 and the performance pass replaced those wrappers with garbage-collector-native ownership types. Those changes cut `525` `unsafe` items (`-66.8%`) and `3,939` net LOC relative to Stage 2.
 
 ```mermaid
 flowchart LR
@@ -14,35 +14,36 @@ flowchart LR
     S1 --> S2["Stage 2 41fbae59b6: 786 unsafe (+9,268 LOC)"]
     S2 --> R3["Round 3 55305b9687: 264 unsafe (-4,783 LOC vs S2)"]
     R3 --> R4["Round 4 0ae0038a8b: 242 unsafe (-4,867 LOC vs S2)"]
-    R4 --> R5["Final Round 5 4f41d44178: 261 unsafe (-66.4% vs Base)"]
+    R4 --> R5["Round 5 + Perf 3365f40174: 261 unsafe (-66.4% vs Base)"]
 ```
 
 ### 1.1 Multi-Round Milestone Metrics
 
-| Milestone (`master` SHA) | Code `unsafe` | Prod (`{} / fn / impl / tr`) | Test and Bench (`{} / fn / impl / tr`) | `unsafe {}` | `unsafe fn` | `unsafe impl` | `unsafe trait` | Zero-`unsafe` `.rs` Files | Net LOC vs Baseline |
+| Milestone (Commit SHA) | Code `unsafe` | Prod (`{} / fn / impl / tr`) | Test and Bench (`{} / fn / impl / tr`) | `unsafe {}` | `unsafe fn` | `unsafe impl` | `unsafe trait` | Zero-`unsafe` `.rs` Files | Net LOC vs Baseline |
 | :--- | ---: | :---: | :---: | ---: | ---: | ---: | ---: | :---: | ---: |
 | Baseline (`ed89711964`) | `777` | `572` (`426 / 98 / 48 / 0`) | `205` (`191 / 0 / 14 / 0`) | `617` | `98` | `62` | `0` | `194 / 322` (`60.2%`) | `0` |
 | Stage 1 (`ad1de8ffe3`) | `798` | `668` (`480 / 172 / 15 / 1`) | `130` (`127 / 1 / 2 / 0`) | `607` | `173` | `17` | `1` | `233 / 322` (`72.4%`) | `+3,845` |
 | Stage 2 (`41fbae59b6`) | `786` | `584` (`393 / 174 / 17 / 0`) | `202` (`200 / 1 / 1 / 0`) | `593` | `175` | `18` | `0` | `238 / 327` (`72.8%`) | `+9,268` |
 | Round 3 (`55305b9687`) | `264` | `211` (`142 / 63 / 6 / 0`) | `53` (`51 / 1 / 1 / 0`) | `193` | `64` | `7` | `0` | `256 / 322` (`79.5%`) | `+4,485` (`-4,783` vs S2) |
 | Round 4 (`0ae0038a8b`) | `242` | `195` (`130 / 60 / 5 / 0`) | `47` (`45 / 1 / 1 / 0`) | `175` | `61` | `6` | `0` | `260 / 322` (`80.7%`) | `+4,401` (`-4,867` vs S2) |
-| Final Round 5 (`4f41d44178`) | `261` | `200` (`132 / 64 / 4 / 0`) | `61` (`57 / 3 / 1 / 0`) | `189` | `67` | `5` | `0` | `259 / 322` (`80.4%`) | `+4,577` (`-4,691` vs S2) |
-| **Final Delta vs Baseline** | **`-516` (`-66.4%`)** | **`-372` (`-65.0%`)** | **`-144` (`-70.2%`)** | **`-428` (`-69.4%`)** | **`-31` (`-31.6%`)** | **`-57` (`-91.9%`)** | **`0`** | **`+65` files (`+20.2 pp`)** | **`+4,577`** |
+| Round 5 (`4f41d44178`) | `261` | `200` (`132 / 64 / 4 / 0`) | `61` (`57 / 3 / 1 / 0`) | `189` | `67` | `5` | `0` | `259 / 322` (`80.4%`) | `+4,577` (`-4,691` vs S2) |
+| Final Perf (`3365f40174`) | `261` | `200` (`133 / 63 / 4 / 0`) | `61` (`57 / 3 / 1 / 0`) | `190` | `66` | `5` | `0` | `259 / 322` (`80.4%`) | `+5,329` (`-3,939` vs S2) |
+| **Final Delta vs Baseline** | **`-516` (`-66.4%`)** | **`-372` (`-65.0%`)** | **`-144` (`-70.2%`)** | **`-427` (`-69.2%`)** | **`-32` (`-32.7%`)** | **`-57` (`-91.9%`)** | **`0`** | **`+65` files (`+20.2 pp`)** | **`+5,329`** |
 
-On the final `4f41d44178` commit, raw `\bunsafe\b` matches across `.rs` files fell from `802` to `282` (`261` code tokens plus `21` comment mentions). The final diff spans `200` files (`14,438` insertions and `9,861` deletions). That `+4,577` net LOC delta adds `# Safety` contracts and `// SAFETY:` proofs on all `261` items, regression tests, and `0.34.0` migration notes.
+On the final `3365f40174` commit, raw `\bunsafe\b` matches across `.rs` files fell from `802` to `282` (`261` code tokens plus `21` comment mentions). Excluding design documents, the final diff spans `200` files (`15,221` insertions and `9,892` deletions). That `+5,329` net LOC delta adds `# Safety` contracts and `// SAFETY:` proofs on all `261` items, regression tests, hot-path specializations, and `0.34.0` migration notes.
 
-### 1.2 Per-Subsystem Slice Outcome (`ed89711964` to `4f41d44178`)
+### 1.2 Per-Subsystem Slice Outcome (`ed89711964` to `3365f40174`)
 
 | Subsystem Slice | Baseline (`Prod + Test` \| `{} / fn / impl / tr`) | Stage 2 (`41fbae59b6`) | Final (`Prod + Test` \| `{} / fn / impl / tr`) | Net Delta vs Baseline |
 | :--- | :---: | ---: | :---: | ---: |
-| `meta` (`src/util/metadata/**`, `bulk_meta/**`) | `297` (`174 + 123` \| `261 / 36 / 0 / 0`) | `295` | `117` (`90 + 27` \| `84 / 33 / 0 / 0`) | `-180` (`-60.6%`) |
+| `meta` (`src/util/metadata/**`, `bulk_meta/**`) | `297` (`174 + 123` \| `261 / 36 / 0 / 0`) | `295` | `117` (`90 + 27` \| `85 / 32 / 0 / 0`) | `-180` (`-60.6%`) |
 | `util` (`src/util/**`, `tests/test_address.rs`) | `97` (`78 + 19` \| `78 / 12 / 7 / 0`) | `115` | `55` (`46 + 9` \| `38 / 15 / 2 / 0`) | `-42` (`-43.3%`) |
 | `heap` (`src/util/heap/**`, `mock_bench/**`) | `67` (`64 + 3` \| `43 / 15 / 9 / 0`) | `33` | `5` (`4 + 1` \| `5 / 0 / 0 / 0`) | `-62` (`-92.5%`) |
 | `policy` (`src/policy/**`, `alloc/**`, `copy/**`) | `143` (`143 + 0` \| `111 / 26 / 6 / 0`) | `244` | `24` (`24 + 0` \| `22 / 2 / 0 / 0`) | `-119` (`-83.2%`) |
 | `plan` (`mmtk.rs`, `plan/**`, `scheduler/**`) | `91` (`91 + 0` \| `60 / 7 / 24 / 0`) | `33` | `15` (`15 + 0` \| `6 / 7 / 2 / 0`) | `-76` (`-83.5%`) |
 | `vm` (`src/vm/**`, `test_util/**`, `docs/dummyvm/**`) | `82` (`22 + 60` \| `64 / 2 / 16 / 0`) | `66` | `45` (`21 + 24` \| `34 / 10 / 1 / 0`) | `-37` (`-45.1%`) |
 | `Other` (crate root and integration harnesses) | `0` (`0 + 0` \| `0 / 0 / 0 / 0`) | `0` | `0` (`0 + 0` \| `0 / 0 / 0 / 0`) | `0` (`0.0%`) |
-| **Total (`322` `.rs` files)** | **`777` (`572 + 205` \| `617 / 98 / 62 / 0`)** | **`786`** | **`261` (`200 + 61` \| `189 / 67 / 5 / 0`)** | **`-516` (`-66.4%`)** |
+| **Total (`322` `.rs` files)** | **`777` (`572 + 205` \| `617 / 98 / 62 / 0`)** | **`786`** | **`261` (`200 + 61` \| `190 / 66 / 5 / 0`)** | **`-516` (`-66.4%`)** |
 
 ### 1.3 Why Round 5 Added `+19` Honest `unsafe` Tokens (`242` to `261`)
 
@@ -58,7 +59,7 @@ Accepting `+20` explicit `unsafe` annotations alongside `-1` removed `unsafe imp
 
 ## 2. Architectural Post-Mortem: Ceremonial Wrappers vs Intrinsic GC Structure
 
-Comparing Stage 2 (`41fbae59b6`) against Rounds 3 through 5 (`4f41d44178`) shows why type-level proof ceremony failed where garbage-collector-native data structures succeeded.
+Comparing Stage 2 (`41fbae59b6`) against the final `3365f40174` commit shows why type-level proof ceremony failed where garbage-collector-native data structures succeeded.
 
 ### 2.1 Why Stage 2 Ceremonial Wrappers Failed (`786` `unsafe`, `+9,268` LOC)
 
@@ -71,9 +72,9 @@ Stage 2 attempted to encode runtime phase protocols as zero-sized capability tok
 - **Parallel typed metadata and address newtypes (`550+` LOC)**. `TypedSideSpec`, `BitWidth`, and `MetadataCodec` (`347` LOC) duplicated `SideMetadataSpec` APIs, and `NonZeroAddress` plus `AlignedAddress` wrapped `NonNull<u8>` with four manual `Send` and `Sync` impls.
 - **Typestate block mirrors in `policy` (`143` to `244` `unsafe` items)**. `SweptBlock`, `UnsweptBlock`, `UnsweptBlockLists`, `MappedBlock`, `MallocExclusiveChunk`, and `MallocChunkTables` forced repeated `unsafe` conversions at every space, allocator, and side-metadata seam.
 
-### 2.2 Five GC-Native Abstractions That Succeeded (`786` to `261` `unsafe`, `-4,691` LOC)
+### 2.2 Five GC-Native Abstractions That Succeeded (`786` to `261` `unsafe`, `-3,939` LOC)
 
-Rounds 3 through 5 removed every ceremonial layer listed in Section 2.1 and restructured storage around five invariants already native to MMTk:
+Rounds 3 through 5 and the performance pass removed every ceremonial layer in Section 2.1. They restructured storage around five invariants native to MMTk:
 
 - **Niche-optimized `Option<&'static Space>` in `Allocators<VM>` and `GCWorkerCopyContext<VM>`**. Safe `MAX_*`-element `Option<Allocator>` arrays replaced `MaybeUninit<Allocator>` unions in [allocators.rs](../../src/util/alloc/allocators.rs#L34-L90) and [mod.rs](../../src/util/copy/mod.rs#L53-L90). Allocators in [bumpallocator.rs](../../src/util/alloc/bumpallocator.rs#L19-L65) and [free_list_allocator.rs](../../src/util/alloc/free_list_allocator.rs#L32-L75) store `Option<&'static Space>` using the non-null niche. `Allocators<VM>` keeps its `648 B` 64-bit size (`324 B` on 32-bit), and `Mutator<VM>` keeps identical field offsets. `BumpAllocator<VM>` also keeps its `48 B` (`0x30`) array stride with zero `unsafe` blocks in `allocators.rs` or `copy/mod.rs`.
 - **Linear `!Copy` `OwnedBlock` tokens in `native_ms`**. Copyable `Block` IDs stay separate from `!Copy` `OwnedBlock` handles in [block.rs](../../src/policy/marksweepspace/native_ms/block.rs#L23-L320) and [block_list.rs](../../src/policy/marksweepspace/native_ms/block_list.rs#L33-L120). Moving blocks by value removed three side-metadata link specs (`MS_BLOCK_LIST`, `MS_BLOCK_PREV`, and `MS_BLOCK_TLS`). `#[repr(C)]` `BlockList` shrank from `32 B` (`24 B` in Stage 2) to `16 B` (`8 B` on 32-bit). That design cut `native_ms` from `87` `unsafe` items to `11`.
@@ -101,14 +102,14 @@ All `261` remaining `unsafe` items (`200` production and `61` test or benchmark 
 
 | Intrinsic Cluster (Slice) | Files | `unsafe fn` | `unsafe impl` | `unsafe {}` | Total (`Prod + Test`) | Irreducible Boundary |
 | :--- | ---: | ---: | ---: | ---: | :---: | :--- |
-| Side, header, VO-bit, and log-bit metadata (`meta`) | `12` | `33` | `0` | `84` | `117` (`90 + 27`) | `SideMetadataSpec`, `MetadataValue`, `HeaderMetadataSpec`, `MetadataByteArrayRef::get`, `&[AtomicU8]` grain projection, and bulk benchmarks |
+| Side, header, VO-bit, and log-bit metadata (`meta`) | `12` | `32` | `0` | `85` | `117` (`90 + 27`) | `SideMetadataSpec`, `MetadataValue`, `HeaderMetadataSpec`, `MetadataByteArrayRef::get`, `&[AtomicU8]` grain projection, and bulk benchmarks |
 | Raw `Address`, `ObjectReference`, and slab primitives (`util`) | `8` | `11` | `0` | `18` | `29` (`26 + 3`) | Frozen `Address` and `ObjectReference` memory loads/stores, pointer provenance casts, `memory::set`, and `RawMemoryFreeList` `&[AtomicI32]` slab |
 | OS virtual memory, C `malloc`, `OpaquePointer`, and `test_private` (`util`) | `7` | `4` | `2` | `20` | `26` (`20 + 6`) | `mmap`, `munmap`, `mprotect`, `prctl`, `madvise`, `sched_setaffinity`, `calloc`/`posix_memalign`/`free`, `OpaquePointer`, and `test_private` bit helpers |
 | Heap virtual-address layout constants (`heap`) | `4` | `0` | `0` | `5` | `5` (`4 + 1`) | Compile-time `VMLayout` bounds, `Map64` space base calculation, `SpaceDescriptor::get_start`, and synthetic `mmapper` benchmark addresses |
 | Policy spaces, allocators, and SFT atomics (`policy`) | `10` | `2` | `0` | `22` | `24` (`24 + 0`) | `OwnedBlock` intrusive free cells, `malloc_ms` FFI calls, `SFTRefStorage` fat-pointer atomics, Immix/OVC mapped slices, Lisp2 forwarding cells, and alignment fill |
 | `MMTK<VM>`, `Mutator` FFI delegates, and LXR sweep (`plan`) | `4` | `7` | `2` | `6` | `15` (`15 + 0`) | `MMTK<VM>: Send + Sync`, `MMTK::get_plan_mut` (`UnsafeCell<dyn Plan>`), `6` frozen `pub unsafe fn` `Mutator` methods, and LXR dead-object payload zeroing |
 | `ObjectModel`, `SimpleSlot`, `DummyVM` C FFI, and `MockVM` (`vm`) | `18` | `10` | `1` | `34` | `45` (`21 + 24`) | `ObjectModel` metadata defaults, `SimpleSlot` raw heap slots, `7` `pub unsafe extern "C" fn` C entry points, `MutatorHandle`, and explicit `Address::from_usize` tests |
-| **Total (`259 / 322` zero-`unsafe` `.rs` files)** | **`63`** | **`67`** | **`5`** | **`189`** | **`261` (`200 + 61`)** | **100% intrinsic to GC memory management, OS/C FFI, or frozen VM-binding contracts** |
+| **Total (`259 / 322` zero-`unsafe` `.rs` files)** | **`63`** | **`66`** | **`5`** | **`190`** | **`261` (`200 + 61`)** | **100% intrinsic to GC memory management, OS/C FFI, or frozen VM-binding contracts** |
 
 Rust's type system requires each of the five remaining `unsafe impl` items:
 
@@ -154,7 +155,28 @@ The final codebase passed every static, dynamic, documentation, and code-generat
 - **Unit and integration test matrix**. `cargo test --lib` (`577` passed, `578` with `vo_bit,extreme_assertions`), `8/8` `for_all_features` sweeps, `perf_counter` tests, and `bzero_bset` benchmark tests passed. All **`247/247` `ci-test.sh` integration suite runs** (`430` `MockVM` executions across all `47` `mock_test_*.rs` modules and all `11` GC plans) also passed with `0` failures.
 - **Release x86-64 assembly checks**. Disassembly of `libmmtk_dummyvm.so` and `libmmtk.rlib` showed zero fast-path calls in `BumpAllocator::alloc` (`add`, `cmp`, and `mov`). `Allocators` indexing kept its `48 B` (`0x30`) `BumpAllocator` stride and single-instruction niche checks (`cmp QWORD PTR [rdi+rax+0x18], 0x0`). `BlockList` compiled to `16 B` (`2 * usize`), `assert_spec::<T>()` constant-folded to `0` instructions, and `global_side_metadata_base_address()` compiled to a single `mov rdx, QWORD PTR [SIDE_METADATA_BASE_PTR]` load.
 
-### 5.3 Summary of `0.34.0` VM-Binding Migration Notes
+### 5.3 OpenJDK 21 DaCapo `23.11-MR2-chopin` Performance Validation
+
+An OpenJDK 21 campaign tested `ed89711964` (`trunk`) against `3365f40174` (`branch`) on 24 isolated Zen 3 cores. It used `mmtk-openjdk` (`1889a36c4a`), `ci-perf-kit` `0.9.4`, `running-ng`, and Rust `1.92.0` profile-guided optimization (PGO) builds. Initial `fop` screening (`10` paired invocations across all `11` plans) and `async-profiler` flamegraphs caught six hot-path overheads in `603d08046a`. Those fixes kept code `unsafe` unchanged at `261`:
+
+- **Stop-the-world stage opening**. `GCWorkScheduler::poll_schedulable_work` moved `are_buckets_drained` and `pre_open_hook` into `GCWorkerMonitor::park_and_wait`, stopping premature `Prepare` barrier wakes.
+- **Side-metadata hot paths**. `SideMetadataSpec` promoted `assert_metadata_spec` to a compile-time `const` block, specialized `u8` loads, and monomorphized `bulk_update_metadata::<IS_SET>`.
+- **`Lisp2Space` span validation**. `Lisp2Space` sorts descending `MonotonePageResource` chunks before coalescing and caches up to two spans inline (`fast_span0` and `fast_span1`).
+- **`OVCSpace` region caching**. `GCWorker::ovc_regions_cache` caches `Arc<CalculatedRegions>` per pause epoch, and `MappedOVCRegion` reads `AtomicIsize` offsets directly.
+- **`MarkSweep` fast-path allocation and `LXR` field unlogging**. `FreeListAllocator::alloc` pops directly from the front block with known `bin_cell_size(bin)` without per-object `SIZE_TABLE` or `BLOCK_STATE_TABLE` reloads. `FieldLogging` also specialized 8-bit `GLOBAL_FIELD_UNLOG_BIT_SPEC` checks.
+
+On `fop` (`10` paired invocations, `11` plans) and `biojava` (`5` paired invocations, `7` plans), `3365f40174` showed zero regressions. It sped up `Lisp2` (`-20.49%` on `fop`, `-19.13%` on `biojava`), `MarkSweep` (`-13.62%` on `fop`, `-18.57%` on `biojava`), `OVC` (`-5.13%`), and `NoGC` (`-19.34%`). Full 22-benchmark DaCapo `23.11-MR2-chopin` runs (`3` paired randomized invocations per plan) then showed parity or speedups across all six tracked plans:
+
+| Plan (`ci-perf-kit` Heap Factor) | Benchmarks | Total Time Geomean (`95%` CI) | Mutator Time Geomean (`95%` CI) | STW Pause Geomean (`95%` CI) | `p50` Pause Geomean |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| `StickyImmix` (`2.5x`) | `22 / 22` | `-0.96%` (`[-2.05%, +0.18%]`) | `-0.65%` (`[-1.70%, +0.38%]`) | `-2.52%` (`[-7.25%, +2.42%]`) | `-2.57%` |
+| `LXR` (`2.5x`) | `22 / 22` | `-2.58%` (`[-3.45%, -1.67%]`) | `-1.88%` (`[-2.90%, -0.88%]`) | `-16.17%` (`[-18.64%, -13.40%]`) | `-17.79%` |
+| `GenImmix` (`2.5x`) | `21 / 21` | `-2.96%` (`[-3.95%, -2.06%]`) | `-2.16%` (`[-3.03%, -1.30%]`) | `-4.51%` (`[-8.16%, -1.45%]`) | `-5.52%` |
+| `Immix` (`2.5x`) | `22 / 22` | `-2.29%` (`[-3.02%, -1.58%]`) | `-2.54%` (`[-3.30%, -1.81%]`) | `-1.65%` (`[-3.44%, +0.31%]`) | `-0.08%` |
+| `MarkSweep` (`5.0x`) | `22 / 22` | `-8.74%` (`[-9.86%, -7.58%]`) | `-8.66%` (`[-9.87%, -7.39%]`) | `-10.59%` (`[-11.81%, -9.36%]`) | `-12.92%` |
+| `SemiSpace` (`2.5x`) | `21 / 21` | `-1.32%` (`[-2.20%, -0.49%]`) | `-0.69%` (`[-1.14%, -0.20%]`) | `-4.57%` (`[-7.25%, -1.49%]`) | `-3.85%` |
+
+### 5.4 Summary of `0.34.0` VM-Binding Migration Notes
 
 The [prefix.md](../../docs/userguide/src/migration/prefix.md#L33-L120) guide documents all external adjustments introduced for `0.34.0`:
 
